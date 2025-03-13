@@ -2,30 +2,36 @@ import json
 import subprocess
 from time import sleep
 from . import models
+import requests
+
+def queryJobStats(jobId: int) -> dict:
+    stats = requests.post("http://127.0.0.1:5572/core/stats", json={
+        "group": "job/" + str(jobId)
+    })
+    stats.raise_for_status()
+    
+    stats = stats.json()
+    # Remove the "transferring" and "eta" key if it exists
+    stats.pop("transferring", None)
+    stats.pop("eta", None)
+    
+    return stats
+
+def queryJobStatus(jobId: int) -> dict:
+    status = requests.post("http://127.0.0.1:5572/job/status", json={
+        "jobid": jobId
+    })
+    status.raise_for_status()
+    
+    status = status.json()
+    # Rename id to rcloneId
+    status["rcloneId"] = status.pop("id")
+    
+    return status
 
 def queryJob(jobId: int) -> dict:
-    statusQuery = subprocess.run(["rclone", "rc",
-                             "job/status",
-                             "jobid=" + str(jobId),
-                             "--rc-addr=127.0.0.1:5572"],
-                            check=True,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,)
-    statusQuery = json.loads(statusQuery.stdout.decode())
-    
-    statsQuery = subprocess.run(["rclone", "rc",
-                             "core/stats",
-                             "group=job/" + str(jobId),
-                             "--rc-addr=127.0.0.1:5572"],
-                            check=True,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,)
-    statsQuery = json.loads(statsQuery.stdout.decode())
-    # Remove the "transferring" and "eta" key if it exists
-    statsQuery.pop("transferring", None)
-    statsQuery.pop("eta", None)
-    # Rename id to rcloneId
-    statusQuery["rcloneId"] = statusQuery.pop("id")
+    statusQuery = queryJobStatus(jobId)
+    statsQuery = queryJobStats(jobId)
     
     combinedQuery = {**statusQuery, **statsQuery}
     
@@ -41,23 +47,22 @@ def createJobObject(jobId: int, request) -> int:
     
     jobObject.save()
     
-    return jobObject.id
+    return jobObject
 
-def queryJobStatus(jobId: int, modelId) -> None:
-    jobObject = models.Job.objects.get(id=modelId)
-    
+def autoQueryRunningJob(jobObject) -> None:
     while(True):
-        combinedQuery = queryJob(jobId)
+        combinedQuery = queryJob(jobObject.rcloneId)
         
         # Update the model with the new information
         # It may not be effient to do this way
         for key, value in combinedQuery.items():
             setattr(jobObject, key, value)
+        jobObject.save()
         
         # If the job is finished, break the loop
         if combinedQuery.get("finished"):
             print("Job finished")
             break
         
-        print(f"Updated job {jobId}")
+        print(f"Updated job {jobObject.rcloneId}")
         sleep(1) # Only check every second
