@@ -6,6 +6,9 @@ from django.views import View
 import json
 
 import subprocess
+import threading
+
+from . import utils
 
 class IndexView(View):
     def get(self, request):
@@ -46,6 +49,9 @@ class IndexView(View):
         jobId = json.loads(copy.stdout.decode()).get("jobid")
         print(f"Job ID: {jobId}")
         
+        modelId = utils.createJobModel(jobId, request)
+        threading.Thread(target=utils.queryJobStatus, args=(jobId, modelId)).start()
+        
         status = subprocess.run(["rclone", "rc",
                                  "core/stats",
                                  "group=job/" + str(jobId),
@@ -69,19 +75,10 @@ class jobStatus(View):
         
 class jobStats(View):
     def get(self, request, jobId):
-            status = subprocess.run(["rclone", "rc",
+            stats = subprocess.run(["rclone", "rc",
                              "core/stats",
                              "group=job/" + str(jobId),
                              "--rc-addr=127.0.0.1:5572"],
                             check=True,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE,)
-    
-class test2Htmx(View):
-    def get(self, request):
-        return render(request, 'sync/index.html')
-    
-class testHtmx(View):
-    def get(self, request):
-        # Return an html page with a random generated number
-        return HttpResponse(f"<h1>{random.randint(0, 100)}</h1>")

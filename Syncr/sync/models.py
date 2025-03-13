@@ -1,7 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import User
 
-class job(models.Model):
+class Job(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     
     # Status dependent
@@ -17,9 +17,11 @@ class job(models.Model):
     
     # Stats dependent
     # Gathred via rclone rc core/stats group=job/<id> --rc-addr=
+    # output and eta does not need to be saved, but for the sake of simplicity, they are, for now
     # It is NOT saved:
-    # eta (Not relevant)
-    # elapsedTime (Already has duration)
+    output = models.TextField(max_length=1023, null=True)
+    # eta = models.IntegerField(null=True) # Does not need to be saved
+    elapsedTime = models.IntegerField()
     bytes = models.IntegerField()
     checks = models.IntegerField()
     deletedDirs = models.IntegerField()
