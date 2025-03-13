@@ -42,10 +42,9 @@ def queryJobStats(jobId: int) -> dict:
     stats.raise_for_status()
     
     stats = stats.json()
-    # Remove the "transferring", "eta" and "checking" keys
+    # Remove the "transferring" and "checking" keys
     stats.pop("transferring", None)
     stats.pop("checking", None)
-    stats.pop("eta", None)
     
     return stats
 
