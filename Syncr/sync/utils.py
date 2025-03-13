@@ -24,12 +24,14 @@ def queryJob(jobId: int) -> dict:
     # Remove the "transferring" and "eta" key if it exists
     statsQuery.pop("transferring", None)
     statsQuery.pop("eta", None)
+    # Rename id to rcloneId
+    statusQuery["rcloneId"] = statusQuery.pop("id")
     
     combinedQuery = {**statusQuery, **statsQuery}
     
     return combinedQuery
 
-def createJobModel(jobId: int, request) -> int:
+def createJobObject(jobId: int, request) -> int:
     combinedQuery = queryJob(jobId)
     # It only works if the keys are the same in the queries and the model
     jobObject = models.Job(

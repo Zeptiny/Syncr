@@ -49,7 +49,7 @@ class IndexView(View):
         jobId = json.loads(copy.stdout.decode()).get("jobid")
         print(f"Job ID: {jobId}")
         
-        modelId = utils.createJobModel(jobId, request)
+        modelId = utils.createJobObject(jobId, request)
         threading.Thread(target=utils.queryJobStatus, args=(jobId, modelId)).start()
         
         status = subprocess.run(["rclone", "rc",
