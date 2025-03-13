@@ -17,10 +17,8 @@ class Job(models.Model):
     
     # Stats dependent
     # Gathred via rclone rc core/stats group=job/<id> --rc-addr=
-    # output and eta does not need to be saved, but for the sake of simplicity, they are, for now
-    # It is NOT saved:
+    # eta does not need to be saved, as sometimes it is not accurate (I need to check how to fix)
     output = models.TextField(max_length=1023, null=True)
-    # eta = models.IntegerField(null=True) # Does not need to be saved
     elapsedTime = models.IntegerField()
     bytes = models.IntegerField()
     checks = models.IntegerField()
