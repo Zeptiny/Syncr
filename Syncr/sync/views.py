@@ -10,6 +10,7 @@ import threading
 import requests
 
 from . import utils
+from . import models
 
 class IndexView(View):
     def get(self, request):
@@ -32,9 +33,27 @@ class IndexView(View):
         #                         check=True,
         #                         stdout=subprocess.PIPE,
         #                         stderr=subprocess.PIPE,)
+        
+        # jsonTestRemote = {
+        #     "type": "s3",
+        #     "parameters": {
+        #         "access_key_id": "383f6df5fba416fd4e81c5bd4b6dcc5d",
+        #         "secret_access_key": "f642f1f0b7b30b7e6da6aa0a767d69e689296ac3bcdff06c528d201d8914df5d",
+        #         "region": "auto",
+        #         "endpoint": "https://5bd9c44a6593fe4c511716bc21c06441.r2.cloudflarestorage.com"
+        #     },
+        #     # Formatter specific options
+        #     "bucket": "rclone-django-testing/local" # It's not an actual option
+        # }
+        
+        # Test converter
+        jsonTestRemoteFormatted = utils.createOnTheFlyRemote(models.Remote.objects.get(pk=1).config)
+
+        print(jsonTestRemoteFormatted)
         copy = requests.post("http://127.0.0.1:5572/sync/copy", json={
             "srcFs": ":local:/home/nyuu/test2-2",
-            "dstFs": ":s3,access_key_id=383f6df5fba416fd4e81c5bd4b6dcc5d,secret_access_key=f642f1f0b7b30b7e6da6aa0a767d69e689296ac3bcdff06c528d201d8914df5d,region=auto,endpoint='https://5bd9c44a6593fe4c511716bc21c06441.r2.cloudflarestorage.com':rclone-django-testing/local",
+            "dstFs": jsonTestRemoteFormatted,
+            #"dstFs": ":s3,access_key_id=383f6df5fba416fd4e81c5bd4b6dcc5d,secret_access_key=f642f1f0b7b30b7e6da6aa0a767d69e689296ac3bcdff06c528d201d8914df5d,region=auto,endpoint='https://5bd9c44a6593fe4c511716bc21c06441.r2.cloudflarestorage.com':rclone-django-testing/local",
             "_async": "true"
         })
         

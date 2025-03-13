@@ -6,3 +6,5 @@ class jobAdmin(admin.ModelAdmin):
     list_filter = ['user', 'startTime', 'endTime', 'finished', 'success', 'fatalError', 'retryError']
 
 admin.site.register(models.Job, jobAdmin)
+
+admin.site.register(models.Remote)

@@ -1,6 +1,12 @@
 from django.db import models
 from django.contrib.auth.models import User
 
+class Remote(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    
+    # I'm unsure what would be the best way to store the config, however, it is what it is
+    config = models.JSONField()
+
 class Job(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     

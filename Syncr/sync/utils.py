@@ -4,6 +4,37 @@ from time import sleep
 from . import models
 import requests
 
+# Remote formating functions
+def createOnTheFlyRemote(config: json) -> str:
+    # Each config type has it own format
+    # Is it efficient? Hell no, but it works
+    if config['type'] == "s3":
+        # Example
+        #     "type": "s3",
+        #     "parameters": {
+        #         "access_key_id": "<REDACTED>",
+        #         "secret_access_key": "<REDACTED>",
+        #         "region": "auto",
+        #         "endpoint": "https://<REDACTED>.r2.cloudflarestorage.com"
+        #     },
+        #     # Formatter specific options
+        #     "bucket": "bucket/path"
+        # }
+        
+        
+        formattedRemote = (
+            f":{config['type']}," +
+            ",".join(f"{key}=\"{value}\"" for key, value in config['parameters'].items() 
+                     if key != "bucket" 
+                     and key != "endpoint") +
+            f",endpoint=\"{config['parameters']['endpoint']}\"" +
+            f":{config['bucket']}" # Append bucket and path correctly, endpoint NEEDS to be the last parameter
+        )
+        
+        return formattedRemote
+        
+
+# Job query functions
 def queryJobStats(jobId: int) -> dict:
     stats = requests.post("http://127.0.0.1:5572/core/stats", json={
         "group": "job/" + str(jobId)
