@@ -11,8 +11,9 @@ def queryJobStats(jobId: int) -> dict:
     stats.raise_for_status()
     
     stats = stats.json()
-    # Remove the "transferring" and "eta" key if it exists
+    # Remove the "transferring", "eta" and "checking" keys
     stats.pop("transferring", None)
+    stats.pop("checking", None)
     stats.pop("eta", None)
     
     return stats
