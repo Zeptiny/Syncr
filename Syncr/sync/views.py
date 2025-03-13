@@ -14,6 +14,10 @@ from . import models
 
 class IndexView(View):
     def get(self, request):
+        return render(request, 'sync/index.html')
+    
+class testView(View):
+    def get(self, request):
         # Listing files in the remote
         # listing = subprocess.run(["rclone", "rc",
         #                          "operations/list",
@@ -95,7 +99,7 @@ class IndexView(View):
         
         return render(request, 'sync/index.html')
     
-class jobStatus(View):
+class ajaxJobStatus(View):
     def get(self, request, jobId):
         # status = subprocess.run(["rclone", "rc",
         #                          "job/status",
@@ -109,7 +113,7 @@ class jobStatus(View):
         })
         status.raise_for_status()
         
-class jobStats(View):
+class ajaxJobStats(View):
     def get(self, request, jobId):
         # stats = subprocess.run(["rclone", "rc",
         #                  "core/stats",
@@ -122,3 +126,12 @@ class jobStats(View):
             "group": "job/" + str(jobId)
         })
         stats.raise_for_status()
+        
+class ajaxRunningJobs(View):
+    def get(self, request):
+        runningJobs = models.Job.objects.filter(finished=False, user=request.user)
+        context = {
+            'runningJobs': runningJobs
+        }
+        
+        return render(request, 'sync/runningJobs.html', context)
