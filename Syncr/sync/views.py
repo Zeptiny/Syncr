@@ -59,7 +59,7 @@ class IndexView(View):
         print(f"Job ID: {jobId}")
         
         jobObject = utils.createJobObject(jobId, request)
-        threading.Thread(target=utils.autoQueryRunningJob, args=(jobObject)).start()
+        threading.Thread(target=utils.autoQueryRunningJob, args=(jobObject,)).start()
         
         # status = subprocess.run(["rclone", "rc",
         #                          "core/stats",
