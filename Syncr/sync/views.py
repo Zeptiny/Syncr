@@ -134,4 +134,4 @@ class ajaxRunningJobs(View):
             'runningJobs': runningJobs
         }
         
-        return render(request, 'sync/runningJobs.html', context)
+        return render(request, 'sync/ajax/runningJobs.html', context)
