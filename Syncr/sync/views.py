@@ -101,13 +101,6 @@ class testView(View):
     
 class ajaxJobStatus(View):
     def get(self, request, jobId):
-        # status = subprocess.run(["rclone", "rc",
-        #                          "job/status",
-        #                          "jobid=" + str(jobId),
-        #                          "--rc-addr=127.0.0.1:5572"],
-        #                         check=True,
-        #                         stdout=subprocess.PIPE,
-        #                         stderr=subprocess.PIPE,)
         status = requests.post("http://127.0.0.1:5572/job/status", json={
             "jobid": jobId
         })
@@ -115,13 +108,6 @@ class ajaxJobStatus(View):
         
 class ajaxJobStats(View):
     def get(self, request, jobId):
-        # stats = subprocess.run(["rclone", "rc",
-        #                  "core/stats",
-        #                  "group=job/" + str(jobId),
-        #                  "--rc-addr=127.0.0.1:5572"],
-        #                 check=True,
-        #                 stdout=subprocess.PIPE,
-        #                 stderr=subprocess.PIPE,)
         stats = requests.post("http://127.0.0.1:5572/core/stats", json={
             "group": "job/" + str(jobId)
         })
