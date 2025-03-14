@@ -3,6 +3,7 @@ import subprocess
 from time import sleep
 from . import models
 import requests
+import threading
 
 # Remote formating functions
 def createOnTheFlyRemote(config: json) -> str:
@@ -32,6 +33,32 @@ def createOnTheFlyRemote(config: json) -> str:
         )
         
         return formattedRemote
+    
+# Job creation functions
+def createJobHandler(type: str, srcFs, dstFs, request) -> None:
+    # Start the job
+    if type == "sync/copy":
+        job = requests.post("http://127.0.0.1:5572/sync/copy", json={
+            "srcFs": createOnTheFlyRemote(srcFs.config),
+            "dstFs": createOnTheFlyRemote(dstFs.config),
+            "_async": "true"
+        })
+        
+    # Get the jobId
+    jobId = job.json().get("jobid")
+    
+    # Create the job object after starting the job
+    combinedQuery = queryJob(jobId)
+    # It only works if the keys are the same in the queries and the model
+    jobObject = models.Job(
+        user=request.user,
+        **combinedQuery
+    )
+    
+    jobObject.save()
+    
+    # Start the auto query thread
+    threading.Thread(target=autoQueryRunningJob, args=(jobObject,)).start()
         
 
 # Job query functions
@@ -68,21 +95,10 @@ def queryJob(jobId: int) -> dict:
     
     return combinedQuery
 
-def createJobObject(jobId: int, request) -> int:
-    combinedQuery = queryJob(jobId)
-    # It only works if the keys are the same in the queries and the model
-    jobObject = models.Job(
-        user=request.user,
-        **combinedQuery
-    )
-    
-    jobObject.save()
-    
-    return jobObject
-
 def autoQueryRunningJob(jobObject) -> None:
     while(True):
         combinedQuery = queryJob(jobObject.rcloneId)
+        print(combinedQuery)
         
         # Update the model with the new information
         # It may not be effient to do this way

@@ -1,7 +1,7 @@
 import random
 from django.http import HttpResponse
 from time import sleep
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.views import View
 import json
 
@@ -11,11 +11,79 @@ import requests
 
 from . import utils
 from . import models
+from . import forms
 
 class IndexView(View):
     def get(self, request):
         return render(request, 'sync/index.html')
     
+class createJobView(View):
+    def get(self, request):
+        form = forms.jobCreateForm(request=request)
+        
+        context = {
+            'form': form
+        }
+        
+        return render(request, 'sync/create.html', context)
+    
+    def post(self, request):
+        form = forms.jobCreateForm(request.POST, request=request)
+        
+        if form.is_valid():
+            # Get the form data
+            type = form.cleaned_data['type']
+            srcFs = form.cleaned_data['srcFs']
+            dstFs = form.cleaned_data['dstFs']
+            
+            # Create the job
+            utils.createJobHandler(type, srcFs, dstFs, request)
+            
+            return redirect('sync:index')
+        
+        else:
+            context = {
+                'form': form
+            }
+            return render(request, 'sync/create.html', context)
+
+# class detailView(View):
+#     def get(self, request):
+#         return render(request, 'sync/detail.html')
+
+# Ajax Views Below
+
+
+
+class ajaxJobStatus(View):
+    def get(self, request, jobId):
+        status = requests.post("http://127.0.0.1:5572/job/status", json={
+            "jobid": jobId
+        })
+        status.raise_for_status()
+        
+class ajaxJobStats(View):
+    def get(self, request, jobId):
+        stats = requests.post("http://127.0.0.1:5572/core/stats", json={
+            "group": "job/" + str(jobId)
+        })
+        stats.raise_for_status()
+        
+class ajaxRunningJobs(View):
+    def get(self, request):
+        runningJobs = models.Job.objects.filter(finished=False, user=request.user)
+        context = {
+            'runningJobs': runningJobs
+        }
+        
+        return render(request, 'sync/ajax/runningJobs.html', context)
+
+
+
+
+
+
+
 class testView(View):
     def get(self, request):
         # Listing files in the remote
@@ -98,26 +166,3 @@ class testView(View):
         print(status.json())
         
         return render(request, 'sync/index.html')
-    
-class ajaxJobStatus(View):
-    def get(self, request, jobId):
-        status = requests.post("http://127.0.0.1:5572/job/status", json={
-            "jobid": jobId
-        })
-        status.raise_for_status()
-        
-class ajaxJobStats(View):
-    def get(self, request, jobId):
-        stats = requests.post("http://127.0.0.1:5572/core/stats", json={
-            "group": "job/" + str(jobId)
-        })
-        stats.raise_for_status()
-        
-class ajaxRunningJobs(View):
-    def get(self, request):
-        runningJobs = models.Job.objects.filter(finished=False, user=request.user)
-        context = {
-            'runningJobs': runningJobs
-        }
-        
-        return render(request, 'sync/ajax/runningJobs.html', context)

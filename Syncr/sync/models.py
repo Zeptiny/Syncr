@@ -23,7 +23,7 @@ class Job(models.Model):
     
     # Stats dependent
     # Gathred via rclone rc core/stats group=job/<id> --rc-addr=
-    eta = models.IntegerField()
+    eta = models.IntegerField(null=True)
     output = models.TextField(max_length=1023, null=True)
     elapsedTime = models.IntegerField()
     bytes = models.IntegerField()
