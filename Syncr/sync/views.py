@@ -39,7 +39,7 @@ class createJobView(View):
             # Create the job
             utils.createJobHandler(type, srcFs, dstFs, request)
             
-            return redirect('sync:index')
+            return redirect('index')
         
         else:
             context = {
@@ -47,27 +47,50 @@ class createJobView(View):
             }
             return render(request, 'sync/create.html', context)
 
-# class detailView(View):
-#     def get(self, request):
-#         return render(request, 'sync/detail.html')
+class detailView(View):
+    def get(self, request, jobId):
+        job = models.Job.objects.get(pk=jobId)
+        context = {
+            'job': job
+        }
+        return render(request, 'sync/detail.html', context)
 
 # Ajax Views Below
 
 
-
-class ajaxJobStatus(View):
+# We are not using utils.queryJob as we need the transferring and checking
+class ajaxJobQuery(View):
     def get(self, request, jobId):
-        status = requests.post("http://127.0.0.1:5572/job/status", json={
-            "jobid": jobId
-        })
-        status.raise_for_status()
         
-class ajaxJobStats(View):
-    def get(self, request, jobId):
-        stats = requests.post("http://127.0.0.1:5572/core/stats", json={
-            "group": "job/" + str(jobId)
-        })
-        stats.raise_for_status()
+        # If the job is finished, reload the user page to query from the database
+        job = models.Job.objects.get(pk=jobId)
+        if job.finished:
+            return redirect('detail', jobId=jobId)
+        
+        # If the job is not finished, query the job directly from rclone
+        # We do not query from the database to transfer the load to the rclone server
+        else:
+            rcloneJobId = job.rcloneId
+            
+            status = requests.post("http://127.0.0.1:5572/job/status", json={
+                "jobid": rcloneJobId
+            })
+            status.raise_for_status()
+            stats = requests.post("http://127.0.0.1:5572/core/stats", json={
+                "group": "job/" + str(rcloneJobId)
+            })
+            stats.raise_for_status()
+            
+            query = {
+                **status.json(),
+                **stats.json()
+            }
+            
+            context = {
+                'query': query
+            }
+            return render(request, 'sync/ajax/jobQuery.html', context)
+
         
 class ajaxRunningJobs(View):
     def get(self, request):
@@ -77,6 +100,15 @@ class ajaxRunningJobs(View):
         }
         
         return render(request, 'sync/ajax/runningJobs.html', context)
+
+class ajaxFinishedJobs(View):
+    def get(self, request):
+        finishedJobs = models.Job.objects.filter(finished=True, user=request.user)
+        context = {
+            'finishedJobs': finishedJobs
+        }
+        
+        return render(request, 'sync/ajax/finishedJobs.html', context)
 
 
 

@@ -1,0 +1,9 @@
+<div>
+    <h1>Eta: {{query.eta}}</h1>
+    <h1>Elapsed Time: {{query.elapsedTime}}</h1>
+    <h1>MB/TotalMB: {% widthratio query.bytes 1000000 1 %} / {% widthratio query.totalBytes 1000000 1 %}</h1>
+    <h1>Bytes/TotalBytes: {{query.bytes}} / {{query.totalBytes}}</h1>
+    <h1>Speed: {{query.speed}}</h1>
+    <h1>Speed Mbit/s: {% widthratio query.speed 125000 1 %}</h1> {% comment %} Bytes to megabits {% endcomment %}
+    <h1>Speed MB/s: {% widthratio query.speed 1000000 1 %}</h1> {% comment %} Bytes to megabytes {% endcomment %}
+</div>

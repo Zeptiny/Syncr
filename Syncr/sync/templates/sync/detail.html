@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+    {% if job.finished %}
+        {% comment %} QUERY FROM THE DATABASE {% endcomment %}
+        <div>
+            <h1>Finished</h1>
+            <p>Duration {{job.duration}}</p>
+            <p>Bytes {{job.bytes}}</p>
+            <p>Success {{job.success}}</p>
+            <p>Errors {{job.errors}}</p>
+        </div>
+    {% else %}
+        {% comment %} QUERY FROM RCLONE {% endcomment %}
+        <div hx-get="{% url 'jobQuery' job.id %}" hx-trigger="every 5s, load"></div>
+    {% endif %}
+</body>
+</html>

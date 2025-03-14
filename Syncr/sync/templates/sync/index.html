@@ -10,6 +10,9 @@
     <h1>Working</h1>
 
     <h2>Running Jobs</h2>
-    <div hx-get="{% url 'runningJobs' %}" hx-trigger="every 1s"></div>
+    <div hx-get="{% url 'runningJobs' %}" hx-trigger="every 5s, load"></div>
+
+    <h2>Finished Jobs</h2>
+    <div hx-get="{% url 'finishedJobs' %}" hx-trigger="every 5s, load"></div>
 </body>
 </html>
