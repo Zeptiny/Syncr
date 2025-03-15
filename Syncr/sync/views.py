@@ -25,7 +25,7 @@ class createJobView(View):
             'form': form
         }
         
-        return render(request, 'sync/create.html', context)
+        return render(request, 'sync/jobCreate.html', context)
     
     def post(self, request):
         form = forms.jobCreateForm(request.POST, request=request)
@@ -45,7 +45,7 @@ class createJobView(View):
             context = {
                 'form': form
             }
-            return render(request, 'sync/create.html', context)
+            return render(request, 'sync/jobCreate.html', context)
 
 class createTaskView(View):
     def get(self, request):
@@ -55,7 +55,7 @@ class createTaskView(View):
             'form': form
         }
         
-        return render(request, 'sync/createTask.html', context)
+        return render(request, 'sync/taskCreate.html', context)
     def post(self, request):
         form = forms.taskCreateForm(request.POST, request=request)
         
@@ -71,7 +71,7 @@ class createTaskView(View):
             context = {
                 'form': form
             }
-            return render(request, 'sync/createTask.html', context)
+            return render(request, 'sync/taskCreate.html', context)
 
 class detailView(View):
     def get(self, request, jobId):
