@@ -25,10 +25,10 @@ def createOnTheFlyRemote(config: json) -> str:
         
         formattedRemote = (
             f":{config['type']}," +
-            ",".join(f"{key}=\"{value}\"" for key, value in config['parameters'].items() 
-                     if key != "bucket") +
+            ",".join(f"{key}=\"{value}\"" for key, value in config['parameters'].items()) +
             f":{config['bucket']}" # Append bucket and path correctly
         )
+        print(formattedRemote)
         
         return formattedRemote
     
