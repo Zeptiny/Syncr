@@ -47,6 +47,32 @@ class createJobView(View):
             }
             return render(request, 'sync/create.html', context)
 
+class createTaskView(View):
+    def get(self, request):
+        form = forms.taskCreateForm(request=request)
+        
+        context = {
+            'form': form
+        }
+        
+        return render(request, 'sync/createTask.html', context)
+    def post(self, request):
+        form = forms.taskCreateForm(request.POST, request=request)
+        
+        if form.is_valid():
+            task = form.save(commit=False)
+            task.user = request.user
+            
+            task.save()
+            
+            return redirect('index')
+        
+        else:
+            context = {
+                'form': form
+            }
+            return render(request, 'sync/createTask.html', context)
+
 class detailView(View):
     def get(self, request, jobId):
         job = models.Job.objects.get(pk=jobId)

@@ -1,14 +1,29 @@
 from django.db import models
 from django.contrib.auth.models import User
 
+from .settings import TASK_TYPES
+
 class Remote(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     
     # I'm unsure what would be the best way to store the config, however, it is what it is
     config = models.JSONField()
 
+# The tasks created by the user
+class Task(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    name = models.CharField(max_length=127)
+    
+    type = models.CharField(choices=TASK_TYPES.items(), max_length=127) # There is a list of allowed tasks
+    
+    cron = models.CharField(max_length=127) # A string that represents the cron frequency
+    
+    srcFs = models.ForeignKey(Remote, on_delete=models.CASCADE, related_name='srcFs')
+    dstFs = models.ForeignKey(Remote, on_delete=models.CASCADE, related_name='dstFs')
+
 class Job(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, null=True)# The task that called the job, if it's null, it was created manually/forced
     
     # Status dependent
     # Gathered via rclone rc job/status jobid=<id> --rc-addr=
