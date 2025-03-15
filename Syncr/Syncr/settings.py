@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 from pathlib import Path
+import logging # Huey
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -32,6 +33,11 @@ ALLOWED_HOSTS = []
 
 INSTALLED_APPS = [
     'sync',
+    
+    # 3 party apps
+    'huey.contrib.djhuey',
+    
+    
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -122,3 +128,17 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+HUEY = {
+    'huey_class': 'huey.SqliteHuey',
+    'name': 'Syncr-Huey',
+    'immediate': False,  # If DEBUG=True, run synchronously.
+    'consumer': {
+        'blocking': True,  # Use blocking list pop instead of polling Redis.
+        'loglevel': logging.DEBUG,
+        'workers': 4,
+        'scheduler_interval': 1,
+        'simple_log': True,
+    },
+}
