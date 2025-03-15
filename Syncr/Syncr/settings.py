@@ -129,7 +129,7 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-
+# python manage.py run_huey
 HUEY = {
     'huey_class': 'huey.SqliteHuey',
     'name': 'Syncr-Huey',
