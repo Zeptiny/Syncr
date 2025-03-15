@@ -5,58 +5,61 @@ from . import models
 import requests
 import threading
 
-# Remote formating functions
-def createOnTheFlyRemote(config: json) -> str:
-    # Each config type has it own format
-    # Is it efficient? Hell no, but it works
-    if config['type'] == "s3":
-        # Example
-        #     "type": "s3",
-        #     "parameters": {
-        #         "access_key_id": "<REDACTED>",
-        #         "secret_access_key": "<REDACTED>",
-        #         "region": "auto",
-        #         "endpoint": "https://<REDACTED>.r2.cloudflarestorage.com"
-        #     },
-        #     # Formatter specific options
-        #     "bucket": "bucket/path"
-        # }
-        
-        
-        formattedRemote = (
-            f":{config['type']}," +
-            ",".join(f"{key}=\"{value}\"" for key, value in config['parameters'].items()) +
-            f":{config['bucket']}" # Append bucket and path correctly
-        )
-        print(formattedRemote)
-        
-        return formattedRemote
-    
+
 # Job creation functions
-def createJobHandler(type: str, srcFs, dstFs, request) -> None:
+def createJobHandler(type: str, srcFs, dstFs, request, **kwargs) -> None:
     # Start the job
     if type == "sync/copy":
         job = requests.post("http://127.0.0.1:5572/sync/copy", json={
-            "srcFs": createOnTheFlyRemote(srcFs.config),
-            "dstFs": createOnTheFlyRemote(dstFs.config),
+            "srcFs": createOnTheFlyRemote(srcFs, 
+                                          bucket=kwargs.get("srcFsBucket"), 
+                                          path=kwargs.get("srcFsPath")),
+            "dstFs": createOnTheFlyRemote(dstFs, 
+                                          bucket=kwargs.get("dstFsBucket"), 
+                                          path=kwargs.get("dstFsPath")),
             "_async": "true"
         })
-        
-    # Get the jobId
-    jobId = job.json().get("jobid")
+    else:
+        raise ValueError("Invalid job type")    
     
-    # Create the job object after starting the job
+    job.raise_for_status()
+    jobId = job.json().get("jobid")
     combinedQuery = queryJob(jobId)
     # It only works if the keys are the same in the queries and the model
     jobObject = models.Job(
         user=request.user,
         **combinedQuery
     )
-    
     jobObject.save()
     
     # Start the auto query thread
     threading.Thread(target=autoQueryRunningJob, args=(jobObject,)).start()
+    
+
+# Remote formating functions
+def createOnTheFlyRemote(remote, **kwargs) -> str:
+    # Each config type has it own format
+    # Is it efficient? Hell no, but it works
+    if remote.type == "s3":
+        # Example config:
+        #{
+        #     "access_key_id": "<REDACTED>",
+        #     "secret_access_key": "<REDACTED>",
+        #     "region": "auto",
+        #     "endpoint": "https://<REDACTED>.r2.cloudflarestorage.com"
+        #     "buckets": ["bucket1", "bucket2"]
+        #}
+        
+        
+        formattedRemote = (
+            f":{remote.type}," +
+            ",".join(f"{key}=\"{value}\"" for key, value in remote.config.items()
+                     if key != "buckets") +
+            f":{kwargs.get("bucket")/{kwargs.get("path")}}" # Append bucket and path correctly
+        )
+        print(formattedRemote)
+        
+        return formattedRemote
         
 
 # Job query functions

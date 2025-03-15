@@ -1,13 +1,14 @@
 from django.db import models
 from django.contrib.auth.models import User
 
-from .settings import TASK_TYPES
+from .settings import TASK_TYPES, REMOTE_TYPES
 
 class Remote(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     
+    type = models.CharField(choices=REMOTE_TYPES.items(), max_length=127) # There is a list of allowed remotes
     # I'm unsure what would be the best way to store the config, however, it is what it is
-    config = models.JSONField()
+    config = models.JSONField() # Examples configs can be seen on utils.py
 
 # The tasks created by the user
 class Task(models.Model):
