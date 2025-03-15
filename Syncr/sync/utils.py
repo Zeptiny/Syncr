@@ -26,10 +26,8 @@ def createOnTheFlyRemote(config: json) -> str:
         formattedRemote = (
             f":{config['type']}," +
             ",".join(f"{key}=\"{value}\"" for key, value in config['parameters'].items() 
-                     if key != "bucket" 
-                     and key != "endpoint") +
-            f",endpoint=\"{config['parameters']['endpoint']}\"" +
-            f":{config['bucket']}" # Append bucket and path correctly, endpoint NEEDS to be the last parameter
+                     if key != "bucket") +
+            f":{config['bucket']}" # Append bucket and path correctly
         )
         
         return formattedRemote
