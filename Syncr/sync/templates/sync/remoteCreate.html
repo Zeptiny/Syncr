@@ -39,12 +39,12 @@
             function addDynamicField(labelText, fieldName) {
                 const label = document.createElement('label');
                 label.textContent = labelText;
-                //label.classList.add('dynamic-field');
+                label.classList.add('dynamic-field');
 
                 const input = document.createElement('input');
                 input.type = 'text';
                 input.name = fieldName;
-                //input.classList.add('dynamic-field');
+                input.classList.add('dynamic-field');
                 input.setAttribute('required', '');
 
                 dynamicFieldsContainer.appendChild(label);
