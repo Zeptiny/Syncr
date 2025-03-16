@@ -54,7 +54,7 @@ def createOnTheFlyRemote(remote, **kwargs) -> str:
         formattedRemote = (
             f":{remote.type}," +
             ",".join(f"{key}=\"{value}\"" for key, value in remote.config.items()
-                     if key != "buckets") +
+                     if key != "bucket") +
             f":{kwargs.get("bucket")/{kwargs.get("path")}}" # Append bucket and path correctly
         )
         print(formattedRemote)
