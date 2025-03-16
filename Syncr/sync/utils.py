@@ -5,7 +5,6 @@ from . import models
 import requests
 import threading
 
-
 # Job creation functions
 def createJobHandler(type: str, srcFs, dstFs, request, **kwargs) -> None:
     # Start the job
@@ -54,10 +53,30 @@ def createOnTheFlyRemote(remote) -> str:
                      if key != "bucket") +
             f":{remote.config['bucket']}"
         )
-        print(formattedRemote)
         
-        return formattedRemote
+    elif remote.type == "sftp":
+        formattedRemote = (
+            f":{remote.type}," +
+            ",".join(f"{key}=\"{value}\"" for key, value in remote.config.items()
+                     if key != "pass") + 
+            f",pass={obscure(remote.config['pass'])}" +
+            ":"
+        )
         
+    print(f"REMOTE TYPE: {remote.type}")
+    print(formattedRemote)
+    
+    return formattedRemote
+
+def obscure(plainPass):
+    password = requests.post("http://127.0.0.1:5572/core/obscure", json={
+        "clear": plainPass
+    })
+    password.raise_for_status()
+    
+    return password.json().get("obscured")
+
+
 
 # Job query functions
 def queryJobStats(jobId: int) -> dict:
