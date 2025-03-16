@@ -5,6 +5,7 @@ TASK_TYPES = {
 
 REMOTE_TYPES = {
     "s3": "S3",
+    "ftp": "FTP",
 }
 
 REMOTE_FIELDS = {
@@ -14,6 +15,12 @@ REMOTE_FIELDS = {
         "bucket",
         "provider",
         "region",
-        "endpoint"
+        "endpoint",
+    ],
+    "ftp": [
+        "username",
+        "password",
+        "host",
+        "port",
     ]
 }
