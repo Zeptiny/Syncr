@@ -2,10 +2,10 @@ TASK_TYPES = {
     "sync/copy": "copy",
 }
 
-
+# FTP is disabled, as rclone obscure appears to not be working, or the proccess hangs
 REMOTE_TYPES = {
     "s3": "S3",
-    "ftp": "FTP",
+    # "ftp": "FTP",
 }
 
 REMOTE_FIELDS = {
@@ -17,10 +17,10 @@ REMOTE_FIELDS = {
         "region",
         "endpoint",
     ],
-    "ftp": [
-        "username",
-        "password",
-        "host",
-        "port",
-    ]
+    # "ftp": [
+    #     "user",
+    #     "pass",
+    #     "host",
+    #     "port",
+    # ]
 }
