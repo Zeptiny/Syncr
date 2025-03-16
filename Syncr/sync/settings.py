@@ -10,8 +10,8 @@ REMOTE_TYPES = {
 
 REMOTE_FIELDS = {
     "s3": [
-        "access_key",
-        "secret_key",
+        "access_key_id",
+        "secret_access_key",
         "bucket",
         "provider",
         "region",

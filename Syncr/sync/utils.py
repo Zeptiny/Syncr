@@ -9,14 +9,11 @@ import threading
 # Job creation functions
 def createJobHandler(type: str, srcFs, dstFs, request, **kwargs) -> None:
     # Start the job
+    print(createOnTheFlyRemote(remote=srcFs))
     if type == "sync/copy":
         job = requests.post("http://127.0.0.1:5572/sync/copy", json={
-            "srcFs": createOnTheFlyRemote(remote=srcFs, 
-                                          bucket=kwargs.get("srcFsBucket"), 
-                                          path=kwargs.get("srcFsPath")),
-            "dstFs": createOnTheFlyRemote(remote=dstFs, 
-                                          bucket=kwargs.get("dstFsBucket"), 
-                                          path=kwargs.get("dstFsPath")),
+            "srcFs": createOnTheFlyRemote(remote=srcFs),
+            "dstFs": createOnTheFlyRemote(remote=dstFs),
             "_async": "true"
         })
     else:
@@ -37,7 +34,7 @@ def createJobHandler(type: str, srcFs, dstFs, request, **kwargs) -> None:
     
 
 # Remote formating functions
-def createOnTheFlyRemote(remote, **kwargs) -> str:
+def createOnTheFlyRemote(remote) -> str:
     # Each config type has it own format
     # Is it efficient? Hell no, but it works
     if remote.type == "s3":
@@ -55,7 +52,7 @@ def createOnTheFlyRemote(remote, **kwargs) -> str:
             f":{remote.type}," +
             ",".join(f"{key}=\"{value}\"" for key, value in remote.config.items()
                      if key != "bucket") +
-            f":{kwargs.get("bucket")/{kwargs.get("path")}}" # Append bucket and path correctly
+            f":{remote.config['bucket']}"
         )
         print(formattedRemote)
         
