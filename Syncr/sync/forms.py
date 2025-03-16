@@ -3,6 +3,19 @@ from . import models
 
 from .settings import TASK_TYPES
 
+class remoteCreateForm(forms.ModelForm):
+    class Meta:
+        model = models.Remote
+        fields = ['type', 'name', 'config']
+        labels = {
+            'type': 'Remote Type',
+            'name': 'Remote Name',
+            'config': 'Remote Configuration'
+        }
+    def __init__(self, *args, **kwargs):
+        super(remoteCreateForm, self).__init__(*args, **kwargs)
+        self.fields['config'].widget = forms.HiddenInput()
+
 class jobCreateForm(forms.Form):
     type = forms.ChoiceField(choices=
         list(TASK_TYPES.items())

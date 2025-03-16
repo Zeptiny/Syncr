@@ -12,11 +12,51 @@ import requests
 from . import utils
 from . import models
 from . import forms
+from .settings import REMOTE_FIELDS
 
 class IndexView(View):
     def get(self, request):
         return render(request, 'sync/index.html')
+
+class createRemoteView(View):
+    def get(self, request):
+        form = forms.remoteCreateForm()
+        
+        context = {
+            'form': form,
+            'remote_fields': REMOTE_FIELDS
+        }
+        
+        return render(request, 'sync/remoteCreate.html', context)
     
+    def post(self, request):
+        form = forms.remoteCreateForm(request.POST)
+        
+        if form.is_valid():
+            remote = form.save(commit=False)
+            config_data = {}
+
+            # Capture dynamic fields based on the remote type
+            remote_type = form.cleaned_data['type']
+            fields = REMOTE_FIELDS.get(remote_type, [])
+            for field in fields:
+                config_data[field] = request.POST.get(field, "") # Defaults to nothing if the field is not present
+            # Add more conditions for other remote types as needed
+
+            # Store the config data as JSON
+            remote.config = config_data
+            remote.user = request.user
+            remote.save()
+            
+            return redirect('index')
+        
+        else:
+            context = {
+                'form': form,
+                'remote_fields': REMOTE_FIELDS
+            }
+            return render(request, 'sync/remoteCreate.html', context)
+
 class createJobView(View):
     def get(self, request):
         form = forms.jobCreateForm(request=request)

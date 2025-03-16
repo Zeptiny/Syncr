@@ -11,10 +11,10 @@ def createJobHandler(type: str, srcFs, dstFs, request, **kwargs) -> None:
     # Start the job
     if type == "sync/copy":
         job = requests.post("http://127.0.0.1:5572/sync/copy", json={
-            "srcFs": createOnTheFlyRemote(srcFs, 
+            "srcFs": createOnTheFlyRemote(remote=srcFs, 
                                           bucket=kwargs.get("srcFsBucket"), 
                                           path=kwargs.get("srcFsPath")),
-            "dstFs": createOnTheFlyRemote(dstFs, 
+            "dstFs": createOnTheFlyRemote(remote=dstFs, 
                                           bucket=kwargs.get("dstFsBucket"), 
                                           path=kwargs.get("dstFsPath")),
             "_async": "true"

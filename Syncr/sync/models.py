@@ -6,9 +6,13 @@ from .settings import TASK_TYPES, REMOTE_TYPES
 class Remote(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     
+    name = models.CharField(max_length=127)
     type = models.CharField(choices=REMOTE_TYPES.items(), max_length=127) # There is a list of allowed remotes
     # I'm unsure what would be the best way to store the config, however, it is what it is
     config = models.JSONField() # Examples configs can be seen on utils.py
+    
+    def __str__(self):
+        return f"{self.type} | {self.name}"
 
 # The tasks created by the user
 class Task(models.Model):

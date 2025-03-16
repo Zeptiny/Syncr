@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create Remote</title>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const remoteTypeField = document.querySelector('select[name="type"]');
+            const configField = document.querySelector('input[name="config"]');
+            const form = document.querySelector('form');
+            const dynamicFieldsContainer = document.querySelector('#dynamic-fields-container');
+            const remoteFields = {{ remote_fields|safe }};
+
+            remoteTypeField.addEventListener('change', function() {
+                const selectedType = remoteTypeField.value;
+                updateConfigField(selectedType);
+            });
+
+            form.addEventListener('submit', function(event) {
+                serializeConfigField();
+            });
+
+            function updateConfigField(type) {
+                // Clear the current config field
+                configField.value = '';
+
+                // Remove any existing dynamic fields
+                const dynamicFields = document.querySelectorAll('.dynamic-field');
+                dynamicFields.forEach(field => field.remove());
+
+                // Add new fields based on the selected type
+                const fields = remoteFields[type] || [];
+                fields.forEach(field => {
+                    addDynamicField(field.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()), field);
+                });
+            }
+
+            function addDynamicField(labelText, fieldName) {
+                const label = document.createElement('label');
+                label.textContent = labelText;
+                //label.classList.add('dynamic-field');
+
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.name = fieldName;
+                //input.classList.add('dynamic-field');
+                input.setAttribute('required', '');
+
+                dynamicFieldsContainer.appendChild(label);
+                dynamicFieldsContainer.appendChild(input);
+            }
+
+            function serializeConfigField() {
+                const dynamicFields = document.querySelectorAll('.dynamic-field');
+                const configData = {};
+                dynamicFields.forEach(field => {
+                    configData[field.name] = field.value;
+                });
+                configField.value = JSON.stringify(configData);
+            }
+        });
+    </script>
+</head>
+<body>
+    <form action="" method="POST">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <div id="dynamic-fields-container"></div>
+        <button type="submit">Submit</button>
+    </form>
+</body>
+</html>
