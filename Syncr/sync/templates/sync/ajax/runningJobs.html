@@ -1,6 +1,17 @@
-{% for job in runningJobs %}
-    <div class="job">
-        <p>Bytes: {{ job.bytes }}</p>
-        <p>Speed: {{ job.speed }}</p>
-    </div>
-{% endfor %}
+{% load custom_filters %}
+<table>
+    <tr>
+        <th>ID</th>
+        <th>Elapsed Time</th>
+        <th>Speed</th>
+        <th>GB/Total GB</th>
+    </tr>
+    {% for job in runningJobs %}
+    <tr onclick="window.location='{% url 'detail' job.id %}'">
+        <td>{{job.id}}</td>
+        <td>{{job.elapsedTime}}</td>
+        <td>{{job.speed}}</td>
+        <td>{{ job.bytes|divide:1000000000|floatformat:2 }} / {{ job.totalBytes|divide:1000000000|floatformat:2 }}</td>
+    </tr>
+    {% endfor %}
+</table>
