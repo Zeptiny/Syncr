@@ -11,16 +11,22 @@
                     ID
                 </th>
                 <th scope="col" class="px-6 py-3">
-                    Elapsed Time
+                    Duration
                 </th>
                 <th scope="col" class="px-6 py-3">
-                    Speed
+                    Checks
                 </th>
                 <th scope="col" class="px-6 py-3">
-                    GB/Total GB
+                    Transfers
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Size
                 </th>
                 <th scope="col" class="px-6 py-3">
                     End Time
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Success
                 </th>
             </tr>
         </thead>
@@ -34,13 +40,23 @@
                     {{job.elapsedTime}}s
                 </td>
                 <td class="px-6 py-4">
-                    {{job.speed|divide:1000000|floatformat:2}} MB/s
+                    {{job.totalChecks}}
                 </td>
                 <td class="px-6 py-4">
-                    {{ job.bytes|divide:1000000000|floatformat:2 }} / {{ job.totalBytes|divide:1000000000|floatformat:2 }} GB
+                    {{job.totalTransfers}}
+                </td>
+                <td class="px-6 py-4">
+                    {{ job.bytes|divide:1000000000|floatformat:2 }} GB
                 </td>
                 <td class="px-6 py-4">
                     {{job.endTime|date:"d-m-Y H:i"}}
+                </td>
+                <td class="px-6 py-4">
+                    {% if job.success %}
+                    <p class="text-green-200">Yup</p>
+                    {% else %}
+                    <p class="text-red-200">Oh no</p>
+                    {% endif %}
                 </td>
             </tr>
             {% endfor %}

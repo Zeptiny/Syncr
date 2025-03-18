@@ -11,7 +11,13 @@
                     ID
                 </th>
                 <th scope="col" class="px-6 py-3">
-                    Elapsed Time
+                    Duration
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Checks
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Transfers
                 </th>
                 <th scope="col" class="px-6 py-3">
                     Speed
@@ -29,6 +35,12 @@
                 </th>
                 <td class="px-6 py-4">
                     {{job.elapsedTime}}
+                </td>
+                <td class="px-6 py-4">
+                    {{job.totalChecks}}
+                </td>
+                <td class="px-6 py-4">
+                    {{job.totalTransfers}}
                 </td>
                 <td class="px-6 py-4">
                     {{job.speed|divide:1000000|floatformat:2}} MB/s
