@@ -6,7 +6,8 @@ app_name = "sync"
 urlpatterns = [
     path('', views.IndexView.as_view(), name='index'),
     path('job/run/', views.createJobView.as_view(), name='runJob'),
-    path('task/create/', views.createTaskView.as_view(), name='createTask'),
+    path('schedule/create/', views.createTaskView.as_view(), name='createTask'),
+    
     path('remote/create/', views.createRemoteView.as_view(), name='createRemote'),
     path('detail/<int:jobId>', views.detailView.as_view(), name='detail'),
     
