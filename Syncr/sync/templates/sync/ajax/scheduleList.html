@@ -1,0 +1,54 @@
+{% if schedules.count < 1 %}
+<p>No schedules set</p>
+{% else %}
+<div class="relative overflow-x-auto">
+    <table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+            <tr>
+                <th scope="col" class="px-6 py-3">
+                    Name
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Type
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Cron
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Source
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Destination
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Edit/Delete
+                </th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for schedule in schedules %}
+            <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700 border-gray-200">
+                <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white">
+                    {{schedule.name}}
+                </th>
+                <td class="px-6 py-4">
+                    {{schedule.type}}
+                </td>
+                <td class="px-6 py-4">
+                    {{schedule.cron}}
+                </td>
+                <td class="px-6 py-4">
+                    {{schedule.srcFs.name}}
+                </td>
+                <td class="px-6 py-4">
+                    {{schedule.dstFs.name}}
+                </td>
+                <td class="px-6 py-4">
+                    TO-DO
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}

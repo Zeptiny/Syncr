@@ -87,6 +87,19 @@ class createJobView(View):
             }
             return render(request, 'sync/jobCreate.html', context)
 
+class detailView(View):
+    def get(self, request, jobId):
+        job = models.Job.objects.get(pk=jobId)
+        context = {
+            'job': job
+        }
+        return render(request, 'sync/detail.html', context)
+    
+# Schedules
+class scheduleView(View):
+    def get(self, request):
+        return render(request, 'sync/schedule.html')
+
 class createTaskView(View):
     def get(self, request):
         form = forms.taskCreateForm(request=request)
@@ -112,14 +125,15 @@ class createTaskView(View):
                 'form': form
             }
             return render(request, 'sync/taskCreate.html', context)
-
-class detailView(View):
-    def get(self, request, jobId):
-        job = models.Job.objects.get(pk=jobId)
+        
+class ajaxScheduleListView(View):
+    def get(self, request):
+        schedules = models.Task.objects.filter(user=request.user)
         context = {
-            'job': job
+            'schedules': schedules
         }
-        return render(request, 'sync/detail.html', context)
+        
+        return render(request, 'sync/ajax/scheduleList.html', context)
 
 # Ajax Views Below
 
