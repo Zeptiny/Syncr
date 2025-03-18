@@ -1,9 +1,11 @@
 from django.urls import path
 from . import views
 
+app_name = "sync"
+
 urlpatterns = [
     path('', views.IndexView.as_view(), name='index'),
-    path('job/create/', views.createJobView.as_view(), name='create'),
+    path('job/run/', views.createJobView.as_view(), name='runJob'),
     path('task/create/', views.createTaskView.as_view(), name='createTask'),
     path('remote/create/', views.createRemoteView.as_view(), name='createRemote'),
     path('detail/<int:jobId>', views.detailView.as_view(), name='detail'),

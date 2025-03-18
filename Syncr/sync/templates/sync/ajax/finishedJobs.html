@@ -1,17 +1,50 @@
 {% load custom_filters %}
-<table>
-    <tr>
-        <th>ID</th>
-        <th>Elapsed Time</th>
-        <th>Speed</th>
-        <th>GB/Total GB</th>
-    </tr>
-    {% for job in finishedJobs %}
-    <tr onclick="window.location='{% url 'detail' job.id %}'">
-        <td>{{job.id}}</td>
-        <td>{{job.elapsedTime}}</td>
-        <td>{{job.speed}}</td>
-        <td>{{ job.bytes|divide:1000000000|floatformat:2 }} / {{ job.totalBytes|divide:1000000000|floatformat:2 }}</td>
-    </tr>
-    {% endfor %}
-</table>
+
+{% if finishedJobs.count < 1 %}
+<p>No jobs finished</p>
+{% else %}
+<div class="relative overflow-x-auto">
+    <table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+            <tr>
+                <th scope="col" class="px-6 py-3">
+                    ID
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Elapsed Time
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Speed
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    GB/Total GB
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    End Time
+                </th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for job in finishedJobs %}
+            <tr onclick="window.location='{% url 'sync:detail' job.id %}'" class="hover:cursor-pointer bg-white border-b hover:dark:bg-gray-700 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 border-gray-200">
+                <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white">
+                    {{job.id}}
+                </th>
+                <td class="px-6 py-4">
+                    {{job.elapsedTime}}s
+                </td>
+                <td class="px-6 py-4">
+                    {{job.speed|divide:1000000|floatformat:2}} MB/s
+                </td>
+                <td class="px-6 py-4">
+                    {{ job.bytes|divide:1000000000|floatformat:2 }} / {{ job.totalBytes|divide:1000000000|floatformat:2 }} GB
+                </td>
+                <td class="px-6 py-4">
+                    {{job.endTime|date:"d-m-Y H:i"}}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
