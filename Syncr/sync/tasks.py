@@ -5,19 +5,24 @@ import requests
 from cron_validator import CronValidator
 from datetime import datetime
 from .models import Job, Task
+from .utils import createJobHandler
 
 @periodic_task(crontab(minute='*/1'))
-def check_tasks_cron():
-    tasks = Task.objects.all()
+def check_schedules_cron():
+    schedules = Task.objects.all()
     dt = datetime.now()
-    print(dt)
-    for task in tasks:
-        if CronValidator.parse(task.cron) is not None:
-            print(f'Valid: {task.cron}')
-        if CronValidator.match_datetime(task.cron, dt):
-            print(f'Matched: {task.cron}')
-        else:
-            print(f'Unmatched: {task.cron}')
+    for schedule in schedules:
+        # if CronValidator.parse(task.cron) is not None:
+        #     print(f'Valid: {task.cron}')
+        if CronValidator.match_datetime(schedule.cron, dt):
+            # Run the task
+            createJobHandler(type=schedule.type, 
+                             srcFs=schedule.srcFs, 
+                             dstFs=schedule.dstFs, 
+                             user=schedule.user,
+                             # Kwargs below
+                             task=schedule)
+            print(f"Starting schedule {schedule.id} - {schedule.name}")
 
 
 # This task will check if I job has failed

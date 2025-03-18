@@ -3,7 +3,9 @@ from django.http import HttpResponse
 from time import sleep
 from django.shortcuts import render, redirect
 from django.views import View
-import json
+from django.db.models import Sum
+from django.utils import timezone
+from datetime import timedelta
 
 import subprocess
 import threading
@@ -17,6 +19,16 @@ from .settings import REMOTE_FIELDS
 class IndexView(View):
     def get(self, request):
         return render(request, 'sync/index.html')
+    
+class ajaxIndexStatsView(View):
+    def get(self, request):
+        context = {
+            'runningJobs': models.Job.objects.filter(finished=False, user=request.user).count(),
+            'scheduledJobs': models.Task.objects.filter(user=request.user).count(),
+            'erroredJobs': models.Job.objects.filter(success=False, user=request.user, startTime__gte=(timezone.now() - timedelta(days=30))).count(),
+            'totalBandwidth': models.Job.objects.filter(user=request.user, startTime__gte=(timezone.now() - timedelta(days=30))).aggregate(totalBandwidth=Sum('bytes'))['totalBandwidth'] or 0
+        }
+        return render(request, 'sync/ajax/indexStats.html', context)
 
 class createRemoteView(View):
     def get(self, request):
@@ -77,7 +89,7 @@ class createJobView(View):
             dstFs = form.cleaned_data['dstFs']
             
             # Create the job
-            utils.createJobHandler(type, srcFs, dstFs, request)
+            utils.createJobHandler(type, srcFs, dstFs, request.user)
             
             return redirect('index')
         
@@ -174,7 +186,7 @@ class ajaxJobQuery(View):
         
 class ajaxRunningJobs(View):
     def get(self, request):
-        runningJobs = models.Job.objects.filter(finished=False, user=request.user)
+        runningJobs = models.Job.objects.filter(finished=False, user=request.user).order_by('-startTime')
         context = {
             'runningJobs': runningJobs
         }
@@ -183,7 +195,7 @@ class ajaxRunningJobs(View):
 
 class ajaxFinishedJobs(View):
     def get(self, request):
-        finishedJobs = models.Job.objects.filter(finished=True, user=request.user)
+        finishedJobs = models.Job.objects.filter(finished=True, user=request.user).order_by('-startTime')
         context = {
             'finishedJobs': finishedJobs
         }

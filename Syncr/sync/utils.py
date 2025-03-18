@@ -6,9 +6,8 @@ import requests
 import threading
 
 # Job creation functions
-def createJobHandler(type: str, srcFs, dstFs, request, **kwargs) -> None:
+def createJobHandler(type: str, srcFs, dstFs, user, **kwargs) -> None:
     # Start the job
-    print(createOnTheFlyRemote(remote=srcFs))
     if type == "sync/copy":
         job = requests.post("http://127.0.0.1:5572/sync/copy", json={
             "srcFs": createOnTheFlyRemote(remote=srcFs),
@@ -23,7 +22,8 @@ def createJobHandler(type: str, srcFs, dstFs, request, **kwargs) -> None:
     combinedQuery = queryJob(jobId)
     # It only works if the keys are the same in the queries and the model
     jobObject = models.Job(
-        user=request.user,
+        user=user,
+        task=kwargs.get("task"),
         **combinedQuery
     )
     jobObject.save()

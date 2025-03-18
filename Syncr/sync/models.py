@@ -14,12 +14,12 @@ class Remote(models.Model):
     def __str__(self):
         return f"{self.type} | {self.name}"
 
-# The tasks created by the user
+# RENAME TO SCHEDULE
 class Task(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     name = models.CharField(max_length=127)
     
-    type = models.CharField(choices=TASK_TYPES.items(), max_length=127) # There is a list of allowed tasks
+    type = models.CharField(choices=TASK_TYPES.items(), max_length=127)
     
     cron = models.CharField(max_length=127) # A string that represents the cron frequency
     
