@@ -1,4 +1,7 @@
 {% load custom_filters %}
+{% if runningJobs.count < 1 %}
+<p>No jobs running</p>
+{% else %}
 <table>
     <tr>
         <th>ID</th>
@@ -15,3 +18,4 @@
     </tr>
     {% endfor %}
 </table>
+{% endif %}
