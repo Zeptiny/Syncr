@@ -30,6 +30,8 @@ class ajaxIndexStatsView(View):
         }
         return render(request, 'sync/ajax/indexStats.html', context)
 
+# Remotes
+
 class createRemoteView(View):
     def get(self, request):
         form = forms.remoteCreateForm()
@@ -68,6 +70,20 @@ class createRemoteView(View):
                 'remote_fields': REMOTE_FIELDS
             }
             return render(request, 'sync/remoteCreate.html', context)
+
+class remoteView(View):
+    def get(self, request):
+        return render(request, 'sync/remote.html')
+
+class ajaxRemoteList(View):
+    def get(self, request):
+        remotes = models.Remote.objects.filter(user=request.user)
+        context = {
+            'remotes': remotes
+        }
+        
+        return render(request, 'sync/ajax/remoteList.html', context)
+# Jobs
 
 class createJobView(View):
     def get(self, request):

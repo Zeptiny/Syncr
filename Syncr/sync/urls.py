@@ -24,5 +24,9 @@ urlpatterns = [
     
     
     # Remotes
+    path('remote/', views.remoteView.as_view(), name='remote'),
     path('remote/create/', views.createRemoteView.as_view(), name='createRemote'),
+    
+    
+    path('ajax/remote/list/', views.ajaxRemoteList.as_view(), name='remoteList'),
 ]
