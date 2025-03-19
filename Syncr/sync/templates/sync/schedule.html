@@ -2,8 +2,16 @@
 
 {% block content %}
 
-<h2 class="text-2xl font-bold dark:text-gray-200">
-    Schedules
-</h2>
+<div class="flex justify-between items-center mt-2 dark:bg-gray-700 p-2">
+    <div>
+        <h1 class="text-2xl font-bold dark:text-gray-200 mt-2">
+            Schedules
+        </h1>
+        {% comment %} <p class="mt-1 text-sm font-normal text-gray-500 dark:text-gray-400">Only the last 20 entries are shown here</p> {% endcomment %}
+    </div>
+    <div>
+        <a href="{% url 'sync:createSchedule' %}" class="p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">Create New Schedule</a>
+    </div>
+</div>
 <div hx-get="{% url 'sync:scheduleList' %}" hx-trigger="load"></div>
 {% endblock content %}

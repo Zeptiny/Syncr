@@ -45,9 +45,6 @@ class scheduleCreateForm(forms.ModelForm):
     class Meta:
         model = models.Schedule
         fields = ['name', 'type', 'cron', 'srcFs', 'dstFs']
-        widgets = {
-            'cron': forms.TextInput(attrs={'placeholder': '0 */8 * * *'}),
-        }
         labels = {
             'name': 'Schedule Name',
             'type': 'Schedule Type',
@@ -55,12 +52,26 @@ class scheduleCreateForm(forms.ModelForm):
             'srcFs': 'Source Remote',
             'dstFs': 'Destination Remote'
         }
+        
+        
+        widgets = {
+            'cron': forms.TextInput(attrs={'placeholder': '0 */8 * * *', 'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
+            'name': forms.TextInput(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
+            'type': forms.Select(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
+        }
 
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop('request')
         super(scheduleCreateForm, self).__init__(*args, **kwargs)
-        self.fields['srcFs'].queryset = models.Remote.objects.filter(user=self.request.user)
-        self.fields['dstFs'].queryset = models.Remote.objects.filter(user=self.request.user)
+        
+        self.fields['srcFs'] = forms.ModelChoiceField(
+            queryset=models.Remote.objects.filter(user=self.request.user),
+            widget=forms.Select(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+        )
+        self.fields['dstFs'] = forms.ModelChoiceField(
+            queryset=models.Remote.objects.filter(user=self.request.user),
+            widget=forms.Select(attrs={'class': 'fbg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+        )
         
     # TO-DO
     # ENSURE THE CRON IS CORRECTLY FORMATTED
