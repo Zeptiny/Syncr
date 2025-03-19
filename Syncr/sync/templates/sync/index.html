@@ -3,20 +3,31 @@
 {% block content %}
 <div hx-get="{% url 'sync:indexStats' %}" hx-trigger="every 5s, load"></div>
 
-<h2 class="flex justify-between items-center my-2">
+<div class="flex justify-between items-center mt-2 dark:bg-gray-700 px-2">
     <div>
-        <h1 class="text-2xl font-bold dark:text-gray-200">
+        <h1 class="text-2xl font-bold dark:text-gray-200 mt-2">
             Running Jobs
         </h1>
+        <p class="mt-1 text-sm font-normal text-gray-500 dark:text-gray-400">Updated every 5 seconds</p>
     </div>
     <div>
-        <a href="{% url 'sync:runJob' %}" class="p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">Run manual job</a>
+        <a href="{% url 'sync:runJob' %}" class="p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">Run Manual Job</a>
     </div>
-</h2>
+</div>
 <div hx-get="{% url 'sync:runningJobs' %}" hx-trigger="every 5s, load"></div>
 
-<h2 class="text-2xl font-bold dark:text-gray-200 my-2">
-    Finished Jobs
-</h2>
+
+<div class="flex justify-between items-center mt-2 dark:bg-gray-700 px-2">
+    <div>
+        <h1 class="text-2xl font-bold dark:text-gray-200 mt-2">
+            Finished Jobs
+        </h1>
+        <p class="mt-1 text-sm font-normal text-gray-500 dark:text-gray-400">Only the last 20 entries are shown here</p>
+    </div>
+    <div>
+        <a href="{% url 'sync:runJob' %}" class="p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">View All</a>
+    </div>
+</div>
+
 <div hx-get="{% url 'sync:finishedJobs' %}" hx-trigger="every 5s, load"></div>
 {% endblock content %}
