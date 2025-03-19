@@ -195,7 +195,7 @@ class ajaxRunningJobs(View):
 
 class ajaxFinishedJobs(View):
     def get(self, request):
-        finishedJobs = models.Job.objects.filter(finished=True, user=request.user).order_by('-startTime')[:20] # Only get the last 20
+        finishedJobs = models.Job.objects.filter(finished=True, user=request.user).order_by('-endTime')[:20] # Only get the last 20
         context = {
             'finishedJobs': finishedJobs
         }
