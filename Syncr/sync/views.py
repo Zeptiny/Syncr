@@ -60,7 +60,7 @@ class createRemoteView(View):
             remote.user = request.user
             remote.save()
             
-            return redirect('index')
+            return redirect('sync:remote')
         
         else:
             context = {
@@ -91,7 +91,7 @@ class createJobView(View):
             # Create the job
             utils.createJobHandler(type, srcFs, dstFs, request.user)
             
-            return redirect('index')
+            return redirect('sync:index')
         
         else:
             context = {
@@ -130,7 +130,7 @@ class createScheduleView(View):
             
             schedule.save()
             
-            return redirect('index')
+            return redirect('sync:schedule')
         
         else:
             context = {
@@ -157,7 +157,7 @@ class ajaxJobQuery(View):
         # If the job is finished, reload the user page to query from the database
         job = models.Job.objects.get(pk=jobId)
         if job.finished:
-            return redirect('detail', jobId=jobId)
+            return redirect('sync:detail', jobId=jobId)
         
         # If the job is not finished, query the job directly from rclone
         # We do not query from the database to transfer the load to the rclone server
