@@ -25,8 +25,4 @@ urlpatterns = [
     
     # Remotes
     path('remote/create/', views.createRemoteView.as_view(), name='createRemote'),
-    
-    
-    
-    path('test/', views.testView.as_view(), name='test'),
 ]

@@ -66,8 +66,8 @@ def createOnTheFlyRemote(remote) -> str:
             ":"
         )
         
-    print(f"REMOTE TYPE: {remote.type}")
-    print(formattedRemote)
+    # print(f"REMOTE TYPE: {remote.type}")
+    # print(formattedRemote)
     
     return formattedRemote
 
@@ -118,7 +118,7 @@ def queryJob(jobId: int) -> dict:
 def autoQueryRunningJob(jobObject) -> None:
     while(True):
         combinedQuery = queryJob(jobObject.rcloneId)
-        print(combinedQuery)
+        # print(combinedQuery)
         
         # Update the model with the new information
         # It may not be effient to do this way
@@ -128,7 +128,7 @@ def autoQueryRunningJob(jobObject) -> None:
         
         # If the job is finished, break the loop
         if combinedQuery.get("finished"):
-            print("Job finished")
+            print(f"Job {jobObject.rcloneId} finished")
             break
         
         print(f"Updated job {jobObject.rcloneId}")
