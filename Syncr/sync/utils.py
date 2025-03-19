@@ -23,7 +23,10 @@ def createJobHandler(type: str, srcFs, dstFs, user, **kwargs) -> None:
     # It only works if the keys are the same in the queries and the model
     jobObject = models.Job(
         user=user,
-        task=kwargs.get("task"),
+        schedule=kwargs.get("schedule"),
+        type=type,
+        srcFs=srcFs,
+        dstFs=dstFs,
         **combinedQuery
     )
     jobObject.save()

@@ -41,16 +41,16 @@ class jobCreateForm(forms.Form):
         )
         
 
-class taskCreateForm(forms.ModelForm):
+class scheduleCreateForm(forms.ModelForm):
     class Meta:
-        model = models.Task
+        model = models.Schedule
         fields = ['name', 'type', 'cron', 'srcFs', 'dstFs']
         widgets = {
             'cron': forms.TextInput(attrs={'placeholder': '0 */8 * * *'}),
         }
         labels = {
-            'name': 'Task Name',
-            'type': 'Task Type',
+            'name': 'Schedule Name',
+            'type': 'Schedule Type',
             'cron': 'Cron Frequency',
             'srcFs': 'Source Remote',
             'dstFs': 'Destination Remote'
@@ -58,7 +58,7 @@ class taskCreateForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop('request')
-        super(taskCreateForm, self).__init__(*args, **kwargs)
+        super(scheduleCreateForm, self).__init__(*args, **kwargs)
         self.fields['srcFs'].queryset = models.Remote.objects.filter(user=self.request.user)
         self.fields['dstFs'].queryset = models.Remote.objects.filter(user=self.request.user)
         

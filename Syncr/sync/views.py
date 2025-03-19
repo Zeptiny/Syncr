@@ -24,7 +24,7 @@ class ajaxIndexStatsView(View):
     def get(self, request):
         context = {
             'runningJobs': models.Job.objects.filter(finished=False, user=request.user).count(),
-            'scheduledJobs': models.Task.objects.filter(user=request.user).count(),
+            'scheduledJobs': models.Schedule.objects.filter(user=request.user).count(),
             'erroredJobs': models.Job.objects.filter(success=False, user=request.user, startTime__gte=(timezone.now() - timedelta(days=30))).count(),
             'totalBandwidth': models.Job.objects.filter(user=request.user, startTime__gte=(timezone.now() - timedelta(days=30))).aggregate(totalBandwidth=Sum('bytes'))['totalBandwidth'] or 0
         }
@@ -112,23 +112,23 @@ class scheduleView(View):
     def get(self, request):
         return render(request, 'sync/schedule.html')
 
-class createTaskView(View):
+class createScheduleView(View):
     def get(self, request):
-        form = forms.taskCreateForm(request=request)
+        form = forms.scheduleCreateForm(request=request)
         
         context = {
             'form': form
         }
         
-        return render(request, 'sync/taskCreate.html', context)
+        return render(request, 'sync/scheduleCreate.html', context)
     def post(self, request):
-        form = forms.taskCreateForm(request.POST, request=request)
+        form = forms.scheduleCreateForm(request.POST, request=request)
         
         if form.is_valid():
-            task = form.save(commit=False)
-            task.user = request.user
+            schedule = form.save(commit=False)
+            schedule.user = request.user
             
-            task.save()
+            schedule.save()
             
             return redirect('index')
         
@@ -136,11 +136,11 @@ class createTaskView(View):
             context = {
                 'form': form
             }
-            return render(request, 'sync/taskCreate.html', context)
+            return render(request, 'sync/scheduleCreate.html', context)
         
 class ajaxScheduleListView(View):
     def get(self, request):
-        schedules = models.Task.objects.filter(user=request.user)
+        schedules = models.Schedule.objects.filter(user=request.user)
         context = {
             'schedules': schedules
         }

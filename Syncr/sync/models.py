@@ -14,22 +14,26 @@ class Remote(models.Model):
     def __str__(self):
         return f"{self.type} | {self.name}"
 
-# RENAME TO SCHEDULE
-class Task(models.Model):
+class Schedule(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     name = models.CharField(max_length=127)
     
-    type = models.CharField(choices=TASK_TYPES.items(), max_length=127)
-    
     cron = models.CharField(max_length=127) # A string that represents the cron frequency
     
-    srcFs = models.ForeignKey(Remote, on_delete=models.CASCADE, related_name='srcFs')
-    dstFs = models.ForeignKey(Remote, on_delete=models.CASCADE, related_name='dstFs')
-
+    type = models.CharField(choices=TASK_TYPES.items(), max_length=127, default="sync/copy")
+    
+    srcFs = models.ForeignKey(Remote, on_delete=models.CASCADE, null=True, related_name='schedule_srcfFs')
+    dstFs = models.ForeignKey(Remote, on_delete=models.CASCADE, null=True, related_name='schedule_dstfFs') 
+    
 class Job(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
-    task = models.ForeignKey(Task, on_delete=models.CASCADE, null=True)# The task that called the job, if it's null, it was created manually/forced
+    schedule = models.ForeignKey(Schedule, on_delete=models.CASCADE, null=True, related_name="jobs")# The schedule that called the job, if it's null, it was created manually/forced
     
+    type = models.CharField(choices=TASK_TYPES.items(), max_length=127, default="sync/copy")
+    
+    srcFs = models.ForeignKey(Remote, on_delete=models.CASCADE, null=True, related_name='job_srcFs')
+    dstFs = models.ForeignKey(Remote, on_delete=models.CASCADE, null=True, related_name='job_dstFs') # There are jobs that may not require a destination (Eg. delete)
+
     # Status dependent
     # Gathered via rclone rc job/status jobid=<id> --rc-addr=
     startTime = models.DateTimeField(auto_now_add=True)

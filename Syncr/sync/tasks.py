@@ -4,12 +4,12 @@ import requests
 
 from cron_validator import CronValidator
 from datetime import datetime
-from .models import Job, Task
+from .models import Job, Schedule
 from .utils import createJobHandler
 
 @periodic_task(crontab(minute='*/1'))
 def check_schedules_cron():
-    schedules = Task.objects.all()
+    schedules = Schedule.objects.all()
     dt = datetime.now()
     for schedule in schedules:
         # if CronValidator.parse(task.cron) is not None:
@@ -21,7 +21,7 @@ def check_schedules_cron():
                              dstFs=schedule.dstFs, 
                              user=schedule.user,
                              # Kwargs below
-                             task=schedule)
+                             schedule=schedule)
             print(f"Starting schedule {schedule.id} - {schedule.name}")
 
 

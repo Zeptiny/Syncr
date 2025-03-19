@@ -9,4 +9,4 @@ admin.site.register(models.Job, jobAdmin)
 
 admin.site.register(models.Remote)
 
-admin.site.register(models.Task)
+admin.site.register(models.Schedule)
