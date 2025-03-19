@@ -1,9 +1,20 @@
 {% extends "base.html" %}
 
 {% block content %}
-<form action="" method="post">
+<form action="" method="post" class="max-w-sm mx-auto">
     {% csrf_token %}
-    {{form}}
-    <button>Submit</button>
+    <div>
+        <label for="{{ form.type.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ form.type.label }}</label>
+        {{ form.type }}
+    </div>
+    <div>
+        <label for="{{ form.srcFs.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ form.srcFs.label }}</label>
+        {{ form.srcFs }}
+    </div>
+    <div>
+        <label for="{{ form.dstFs.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ form.dstFs.label }}</label>
+        {{ form.dstFs }}
+    </div>
+    <button type="submit" class="mt-2 hover:cursor-pointer text-white bg-gray-800 hover:bg-gray-900 focus:outline-none focus:ring-4 focus:ring-gray-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-gray-800 dark:hover:bg-gray-700 dark:focus:ring-gray-700 dark:border-gray-700">Run Job</button>
 </form>
 {% endblock content %}
