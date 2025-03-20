@@ -69,3 +69,11 @@ class Job(models.Model):
     transferTime = models.FloatField()
     transfers = models.IntegerField()
 
+class DailyStatistics(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    date = models.DateField(auto_now_add=True)
+    bytes = models.BigIntegerField(default=0)
+    serverSideCopyBytes = models.BigIntegerField(default=0)
+    serverSideMoveBytes = models.BigIntegerField(default=0)
+    jobs_run = models.IntegerField(default=0)
+    errored_jobs = models.IntegerField(default=0)

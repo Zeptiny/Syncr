@@ -1,10 +1,13 @@
 from huey import crontab
 from huey.contrib.djhuey import periodic_task
 import requests
+from django.utils import timezone
+from django.contrib.auth.models import User
+from django.db.models import Sum
 
 from cron_validator import CronValidator
-from datetime import datetime
-from .models import Job, Schedule
+from datetime import datetime, timedelta
+from .models import Job, Schedule, DailyStatistics
 from .utils import createJobHandler
 
 @periodic_task(crontab(minute='*/1'))
@@ -51,3 +54,38 @@ def check_tasks_for_failure():
             job.error = status.json().get("error") + "\nOur system was unable to query the job and was promptly finished"
             job.save()
             print(f"Job {job.rcloneId} failed")
+            
+            
+# Collect user usage
+# we are starting 5 minutes after midnight to ensure that the task won't try to get data from the wrong day (Yesterday yesterday)
+# We check endTime to ensure that we won't get jobs that arent finished but started the day before checking (They would need to run for more than 24 hours)
+@periodic_task(crontab(hour=0, minute=5))
+def collect_daily_statistics():
+    yesterday = timezone.now().date() - timedelta(days=1)
+    users = User.objects.all()
+
+    for user in users:
+        jobs_yesterday = Job.objects.filter(user=user, endTime__date=yesterday, finished=True)
+        
+        bandwidth = jobs_yesterday.aggregate(
+            bytes=Sum('bytes'),
+            serverSideCopyBytes=Sum('serverSideCopyBytes'),
+            serverSideMoveBytes=Sum('serverSideMoveBytes')
+        )
+        
+        bytes = bandwidth['bytes'] or 0
+        serverSideCopyBytes = bandwidth['serverSideCopyBytes'] or 0
+        serverSideMoveBytes = bandwidth['serverSideMoveBytes'] or 0
+        
+        jobs_run = jobs_yesterday.count()
+        errored_jobs = jobs_yesterday.filter(success=False).count()
+
+        DailyStatistics.objects.create(
+            user=user,
+            date=yesterday,
+            bytes=bytes,
+            serverSideCopyBytes = serverSideCopyBytes,
+            serverSideMoveBytes = serverSideMoveBytes,
+            jobs_run=jobs_run,
+            errored_jobs=errored_jobs
+        )
