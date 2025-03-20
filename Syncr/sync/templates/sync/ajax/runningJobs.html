@@ -14,6 +14,9 @@
                     Type
                 </th>
                 <th scope="col" class="px-6 py-3">
+                    Calee
+                </th>
+                <th scope="col" class="px-6 py-3">
                     Source
                 </th>
                 <th scope="col" class="px-6 py-3">
@@ -44,6 +47,13 @@
                 </th>
                 <td class="px-6 py-4">
                     {{job.type}}
+                </td>
+                <td class="px-6 py-4">
+                    {% if job.schedule %}
+                        {{job.schedule.name}}
+                    {% else %}
+                        Manual
+                    {% endif %}
                 </td>
                 <td class="px-6 py-4">
                     {{job.srcFs.type}}:{{job.srcFs.name}}
