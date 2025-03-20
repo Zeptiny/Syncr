@@ -121,7 +121,7 @@ class detailView(View):
         context = {
             'job': job
         }
-        return render(request, 'sync/detail.html', context)
+        return render(request, 'sync/jobDetail.html', context)
     
 # Schedules
 class scheduleView(View):
