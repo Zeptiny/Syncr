@@ -1,0 +1,37 @@
+<div>
+    <div>
+        <canvas id="myChart"></canvas>
+    </div>
+    <script>
+        const chart1 = document.getElementById('myChart');
+
+        new Chart(chart1, {
+          type: 'bar',
+          data: {
+            labels: [
+            {% for day in days %}
+            '{{day}}'
+            {% if not forloop.last %},{% endif %}
+            {% endfor %}
+            ],
+            datasets: [{
+              label: '# of Votes',
+              data: [
+              {% for bytes in bandwidth %}
+              '{{bytes}}'
+              {% if not forloop.last %},{% endif %}
+              {% endfor %}
+              ],
+              borderWidth: 1
+            }]
+          },
+          options: {
+            scales: {
+              y: {
+                beginAtZero: true
+              }
+            }
+          }
+        });
+    </script>
+</div>

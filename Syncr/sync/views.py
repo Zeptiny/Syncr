@@ -29,6 +29,30 @@ class ajaxIndexStatsView(View):
             'totalBandwidth': models.Job.objects.filter(user=request.user, startTime__gte=(timezone.now() - timedelta(days=30))).aggregate(totalBandwidth=Sum('bytes'))['totalBandwidth'] or 0
         }
         return render(request, 'sync/ajax/indexStats.html', context)
+    
+class ajaxIndexStatsChartsView(View):
+    def get(self, request):
+        # Get the last 7 days
+        days = []
+        for i in range(7):
+            day = timezone.now() - timedelta(days=i)
+            days.append(day.strftime("%Y-%m-%d"))
+        
+        # Get the total bandwidth transferred per day
+        bandwidth = []
+        for day in days:
+            bytes = models.DailyStatistics.objects.filter(user=request.user, date=day).aggregate(bytes=Sum('bytes'))['bytes'] or 0
+            bandwidth.append(bytes)
+        
+        
+        print(days)
+        print(bandwidth)
+        context = {
+            'days': days,
+            'bandwidth': bandwidth
+        }
+        
+        return render(request, 'sync/ajax/indexStatsCharts.html', context)
 
 # Remotes
 

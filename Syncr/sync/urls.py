@@ -6,6 +6,7 @@ app_name = "sync"
 urlpatterns = [
     path('', views.IndexView.as_view(), name='index'),
     path('ajax/indexStats', views.ajaxIndexStatsView.as_view(), name='indexStats'),
+    path('ajax/indexStatsCharts', views.ajaxIndexStatsChartsView.as_view(), name='indexStatsCharts'),
     
     # Jobs
     path('job/run/', views.createJobView.as_view(), name='runJob'),
