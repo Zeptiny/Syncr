@@ -32,25 +32,36 @@ class ajaxIndexStatsView(View):
     
 class ajaxIndexStatsChartsView(View):
     def get(self, request):
-        # Get the last 7 days
-        days = []
-        for i in range(7):
-            day = timezone.now() - timedelta(days=i)
-            days.append(day.strftime("%Y-%m-%d"))
+        days = [timezone.now().date() - timedelta(days=7-i) for i in range(7)]
         
-        # Get the total bandwidth transferred per day
-        bandwidth = []
-        for day in days:
-            bytes = models.DailyStatistics.objects.filter(user=request.user, date=day).aggregate(bytes=Sum('bytes'))['bytes'] or 0
-            bandwidth.append(bytes)
+        stats = models.DailyStatistics.objects.filter(user=request.user, date__in=days)
         
+        stats_by_date = {stat.date: stat for stat in stats}
         
-        print(days)
-        print(bandwidth)
+        # Initialize the context dictionary
         context = {
-            'days': days,
-            'bandwidth': bandwidth
+            'days': [day.strftime("%m-%d") for day in days],
+            'bytes': [],
+            'serverSideCopyBytes': [],
+            'serverSideMoveBytes': [],
+            'jobsRun': [],
+            'jobsErrored': []
         }
+        
+        # Prepare the data for the chart
+        for day in days:
+            if day in stats_by_date:
+                context['bytes'].append((stats_by_date[day].bytes)/1000000000)
+                context['serverSideCopyBytes'].append((stats_by_date[day].serverSideCopyBytes)/1000000000)
+                context['serverSideMoveBytes'].append((stats_by_date[day].serverSideMoveBytes)/1000000000)
+                context['jobsRun'].append(stats_by_date[day].jobs_run)
+                context['jobsErrored'].append(stats_by_date[day].errored_jobs)
+            else:
+                context['bytes'].append(0)
+                context['serverSideCopyBytes'].append(0)
+                context['serverSideMoveBytes'].append(0)
+                context['jobsRun'].append(0)
+                context['jobsErrored'].append(0)
         
         return render(request, 'sync/ajax/indexStatsCharts.html', context)
 
