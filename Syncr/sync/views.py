@@ -152,9 +152,10 @@ class createJobView(View):
 
 class detailView(View):
     def get(self, request, jobId):
-        job = models.Job.objects.get(pk=jobId)
+        isFinished = models.Job.objects.get(pk=jobId).finished
         context = {
-            'job': job
+            'jobId': jobId,
+            'isFinished': isFinished
         }
         return render(request, 'sync/jobDetail.html', context)
     
@@ -204,35 +205,11 @@ class ajaxScheduleListView(View):
 # We are not using utils.queryJob as we want the transferring and checking
 class ajaxJobQuery(View):
     def get(self, request, jobId):
-        
-        # If the job is finished, reload the user page to query from the database
         job = models.Job.objects.get(pk=jobId)
-        if job.finished:
-            return redirect('sync:detail', jobId=jobId)
-        
-        # If the job is not finished, query the job directly from rclone
-        # We do not query from the database to transfer the load to the rclone server
-        else:
-            rcloneJobId = job.rcloneId
-            
-            status = requests.post("http://127.0.0.1:5572/job/status", json={
-                "jobid": rcloneJobId
-            })
-            status.raise_for_status()
-            stats = requests.post("http://127.0.0.1:5572/core/stats", json={
-                "group": "job/" + str(rcloneJobId)
-            })
-            stats.raise_for_status()
-            
-            query = {
-                **status.json(),
-                **stats.json()
-            }
-            
-            context = {
-                'query': query
-            }
-            return render(request, 'sync/ajax/jobQuery.html', context)
+        context = {
+            'job': job
+        }
+        return render(request, 'sync/ajax/jobQuery.html', context)
 
         
 class ajaxRunningJobs(View):

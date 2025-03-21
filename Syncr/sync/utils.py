@@ -126,6 +126,7 @@ def autoQueryRunningJob(jobObject) -> None:
             setattr(jobObject, key, value)
         jobObject.save()
         
+        print(combinedQuery)
         # If the job is finished, break the loop
         if combinedQuery.get("finished"):
             print(f"Job {jobObject.rcloneId} finished")
