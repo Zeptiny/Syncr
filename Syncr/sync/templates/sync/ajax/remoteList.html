@@ -12,7 +12,10 @@
                     Type
                 </th>
                 <th scope="col" class="px-6 py-3">
-                    Edit/Delete
+                    Edit
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Delete
                 </th>
             </tr>
         </thead>
@@ -26,7 +29,13 @@
                     {{remote.type}}
                 </td>
                 <td class="px-6 py-4">
-                    TO-DO
+                    <a href="{% url 'sync:editRemote' remote.id %}">Edit</a>
+                </td>
+                <td class="px-6 py-4">
+                    <form action="{% url 'sync:deleteRemote' remote.id %}" method="POST">
+                        {% csrf_token %}
+                        <button class="hover:cursor-pointer">Delete</button>
+                    </form>
                 </td>
             </tr>
             {% endfor %}

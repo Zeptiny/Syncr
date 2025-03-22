@@ -81,6 +81,11 @@ These scripts are before the content, in the head, but are placed here for conve
             });
             configField.value = JSON.stringify(configData);
         }
+
+        // Trigger the updateConfigField function if a type is already selected
+        if (remoteTypeField.value) {
+            updateConfigField(remoteTypeField.value);
+        }
     });
 </script>
 {% endblock scripts_head %}

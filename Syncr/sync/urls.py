@@ -30,7 +30,9 @@ urlpatterns = [
     
     # Remotes
     path('remote/', views.remoteView.as_view(), name='remote'),
-    path('remote/create/', views.createRemoteView.as_view(), name='createRemote'),
+    path('remote/new/', views.createRemoteView.as_view(), name='createRemote'),
+    path('remote/edit/<int:remoteId>', views.createRemoteView.as_view(), name='editRemote'),
+    path('remote/delete/<int:remoteId>', views.deleteRemoteView.as_view(), name='deleteRemote'),
     
     
     path('ajax/remote/list/', views.ajaxRemoteList.as_view(), name='remoteList'),
