@@ -86,10 +86,12 @@ class jobRunStatistics(models.Model):
     job = models.ForeignKey(Job, on_delete=models.CASCADE)
     dateTime = models.DateTimeField(default=timezone.now)
     
-    speed = models.IntegerField() # Rclone speed
-    speedServerSideCopy = models.IntegerField() # Gathered from ServerSideCopyBytes from last stats subtracting the now ServerSideCopyBytes dividing by the stat update rate in seconds
-    speedServerSideMove = models.IntegerField() # Gathered from ServerSideMoveBytes from last stats subtracting the now ServerSideMoveBytes dividing by the stat update rate in seconds
+    speed = models.IntegerField(default=0) # Rclone speed
+    speedServerSideCopy = models.IntegerField(default=0) # Gathered from ServerSideCopyBytes from last stats subtracting the now ServerSideCopyBytes dividing by the stat update rate in seconds
+    speedServerSideMove = models.IntegerField(default=0) # Gathered from ServerSideMoveBytes from last stats subtracting the now ServerSideMoveBytes dividing by the stat update rate in seconds
     
     transferSpeed = models.FloatField() # Gathered from Transfers from last stats subtracting the now Transfers dividing by the stat update rate in seconds
-    transferSpeedServerSideCopy = models.FloatField()
-    transferSpeedServerSideMove = models.FloatField() 
+    transferSpeedServerSideCopy = models.FloatField(default=0)
+    transferSpeedServerSideMove = models.FloatField(default=0) 
+    
+    checks = models.FloatField(default=0)

@@ -87,6 +87,9 @@
         }
     });
 
+
+
+    
     var transfersChart = new Chart(transfersChartElement, {
         type: 'line',
         data: {
@@ -121,6 +124,16 @@
                 data: [
                     {% for transfer in transferSpeedServerSideMove %}
                     {{ transfer }}
+                    {% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                ],
+                borderWidth: 1
+            },
+            {
+                label: 'Checks',
+                data: [
+                    {% for check in checks %}
+                    {{ check }}
                     {% if not forloop.last %},{% endif %}
                     {% endfor %}
                 ],

@@ -219,7 +219,9 @@ class ajaxJobQueryCharts(View):
             
             'transferSpeed': [stat.transferSpeed for stat in stats],
             'transferSpeedServerSideCopy': [stat.transferSpeedServerSideCopy for stat in stats],
-            'transferSpeedServerSideMove': [stat.transferSpeedServerSideMove for stat in stats]
+            'transferSpeedServerSideMove': [stat.transferSpeedServerSideMove for stat in stats],
+            
+            'checks': [stat.checks for stat in stats]
         }
         
         return render(request, 'sync/ajax/jobQueryCharts.html', context)

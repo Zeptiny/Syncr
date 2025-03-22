@@ -162,7 +162,7 @@ def autoQueryRunningJobStats(jobObject) -> None:
     # We need those variables to calculate the speed
     # We don't store it in the model as it's irrelevant
     # (<CurrentTransfers> - <LastTransfers>) / 15
-    lastTransfers = lastTransfersSSCopy = lastTransfersSSMove = 0
+    lastTransfers = lastTransfersSSCopy = lastTransfersSSMove = lastChecks = 0
     while(True):
         startTime = timezone.now()
         
@@ -186,12 +186,15 @@ def autoQueryRunningJobStats(jobObject) -> None:
             transferSpeed = (combinedQuery.get('transfers') - lastTransfers) / 15,
             transferSpeedServerSideCopy = ((combinedQuery.get('serverSideCopies') - lastTransfersSSCopy) / 15),
             transferSpeedServerSideMove = ((combinedQuery.get('serverSideMoves') - lastTransfersSSMove) / 15),
+            
+            checks = ((combinedQuery.get('checks') - lastChecks) / 15),
         )
         
         # Update the lastTransfers
         lastTransfers = combinedQuery.get('transfers')
         lastTransfersSSCopy = combinedQuery.get('serverSideCopies')
         lastTransfersSSMove = combinedQuery.get('serverSideMoves')
+        lastChecks = combinedQuery.get('checks')
         
         endTime = timezone.now()
         
