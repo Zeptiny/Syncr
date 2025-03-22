@@ -1,7 +1,11 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block content %}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" integrity="sha512-ZwR1/gSZM3ai6vCdI+LVF1zSq/5HznD3ZSTk7kajkaj4D292NLuduDCO1c/NT8Id+jE58KYLKT7hXnbtryGmMg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+<script src="{% static 'js/chartjs-plugin-zoom.js' %}"></script>
+
 
 <div hx-get="{% url 'sync:indexStats' %}" hx-trigger="every 5s, load"></div>
 <div hx-get="{% url 'sync:indexStatsCharts' %}" hx-trigger="load"></div>
