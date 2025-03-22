@@ -81,7 +81,7 @@ class createRemoteView(View):
             else: # If it doesn't exist
                 return redirect('sync:createRemote') # Redirect to without an ID
         else:
-            form = forms.remoteCreateForm(request=request)
+            form = forms.remoteCreateForm()
         
         context = {
             'form': form,
@@ -91,17 +91,17 @@ class createRemoteView(View):
         return render(request, 'sync/remoteCreate.html', context)
     
     def post(self, request, remoteId=None):
-        if remoteId: # If there is a schedule id
+        if remoteId: # If there is a remote id
             if models.Remote.objects.filter(pk=remoteId).exists(): # If an object with that ID exists
                 remote = models.Remote.objects.get(pk=remoteId)
                 if remote.user != request.user: # Redirect to the normal creation if the user is not the owner
                     return redirect('sync:createRemote')
 
-                form = forms.remoteCreateForm(request.POST, instance=remote, request=request)            
+                form = forms.remoteCreateForm(request.POST, instance=remote)            
             else: # If it doesn't exist
                 return redirect('sync:createRemote') # Redirect to without an ID
         else:
-            form = forms.remoteCreateForm(request.POST, request=request)
+            form = forms.remoteCreateForm(request.POST)
         
         if form.is_valid():
             remote = form.save(commit=False)
@@ -251,7 +251,7 @@ class createScheduleView(View):
         
         return render(request, 'sync/scheduleCreate.html', context)
     
-    def post(self, request, scheduleId):
+    def post(self, request, scheduleId=None):
         if scheduleId: # If there is a schedule id
             if models.Schedule.objects.filter(pk=scheduleId).exists(): # If an object with that ID exists
                 schedule = models.Schedule.objects.get(pk=scheduleId)
