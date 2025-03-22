@@ -12,3 +12,5 @@ admin.site.register(models.Remote)
 admin.site.register(models.Schedule)
 
 admin.site.register(models.DailyStatistics)
+
+admin.site.register(models.jobRunStatistics)

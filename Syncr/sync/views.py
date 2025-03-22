@@ -159,6 +159,40 @@ class detailView(View):
         }
         return render(request, 'sync/jobDetail.html', context)
     
+# We are not using utils.queryJob as we want the transferring and checking
+class ajaxJobQuery(View):
+    def get(self, request, jobId):
+        job = models.Job.objects.get(pk=jobId)
+        context = {
+            'job': job
+        }
+        return render(request, 'sync/ajax/jobQuery.html', context)
+    
+class ajaxJobQueryCharts(View):
+    def get(self, request, jobId):
+        job = models.Job.objects.get(id=jobId)
+        
+        # Fetch all the statistics for the job
+        # We ignore the first one as it will be all fucking zeros
+        stats = models.jobRunStatistics.objects.filter(job=job).order_by('dateTime')[1:]
+        
+        relativeTimes = [(stat.dateTime - job.startTime).total_seconds() for stat in stats]  # Convert to minutes
+
+        # Prepare the data for the chart
+        context = {
+            'times': relativeTimes,
+            
+            'bytes': [stat.speed / 1_000_000 for stat in stats],  # Convert bytes to megabytes
+            'serverSideCopyBytes': [stat.speedServerSideCopy / 1_000_000 for stat in stats],  # Convert bytes to megabytes
+            'serverSideMoveBytes': [stat.speedServerSideMove / 1_000_000 for stat in stats],  # Convert bytes to megabytes
+            
+            'transferSpeed': [stat.transferSpeed for stat in stats],
+            'transferSpeedServerSideCopy': [stat.transferSpeedServerSideCopy for stat in stats],
+            'transferSpeedServerSideMove': [stat.transferSpeedServerSideMove for stat in stats]
+        }
+        
+        return render(request, 'sync/ajax/jobQueryCharts.html', context)
+    
 # Schedules
 class scheduleView(View):
     def get(self, request):
@@ -200,16 +234,6 @@ class ajaxScheduleListView(View):
         return render(request, 'sync/ajax/scheduleList.html', context)
 
 # Ajax Views Below
-
-
-# We are not using utils.queryJob as we want the transferring and checking
-class ajaxJobQuery(View):
-    def get(self, request, jobId):
-        job = models.Job.objects.get(pk=jobId)
-        context = {
-            'job': job
-        }
-        return render(request, 'sync/ajax/jobQuery.html', context)
 
         
 class ajaxRunningJobs(View):

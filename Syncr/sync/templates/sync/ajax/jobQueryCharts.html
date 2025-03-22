@@ -1,0 +1,152 @@
+{% load custom_filters %}
+{% comment %} Scripts below {% endcomment %}
+<script>
+    var bytesChart = new Chart(bytesChartElement, {
+        type: 'line',
+        data: {
+            labels: [
+            {% for time in times %}
+            '{{ time|floatformat:0 }}'
+            {% if not forloop.last %},{% endif %}
+            {% endfor %}
+            ],
+            datasets: [{
+                label: 'Bandwidth',
+                data: [
+                    {% for byte in bytes %}
+                    {{ byte }}
+                    {% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                ],
+                borderWidth: 1
+            },
+            {
+                label: 'Server Side Copy',
+                data: [
+                    {% for byte in serverSideCopyBytes %}
+                    {{ byte }}
+                    {% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                ],
+                borderWidth: 1
+            },
+            {
+                label: 'Server Side Move',
+                data: [
+                    {% for byte in serverSideMoveBytes %}
+                    {{ byte }}
+                    {% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                ],
+                borderWidth: 1
+            }]
+        },
+        options: {
+            scales: {
+                y: {
+                    stacked: true,
+                    ticks: {
+                        color: 'rgba(255, 255, 255, 1)', // Change y-axis text color
+                        callback: function(value) {
+                            return value + ' MB/s';
+                        }
+                    }
+                },
+                x: {
+                    ticks: {
+                        color: 'rgba(255, 255, 255, 1)', // Change x-axis text color
+                        callback: function(value, index, ticks) {
+                            return this.getLabelForValue(value) + 's';
+                        }
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    labels: {
+                        color: 'rgba(255, 255, 255, 1)' // Change legend text color
+                    }
+                }
+            },
+            animation: {
+                duration: 0
+            }
+        }
+    });
+
+    var transfersChart = new Chart(transfersChartElement, {
+        type: 'line',
+        data: {
+            labels: [
+            {% for time in times %}
+            '{{ time|floatformat:0 }}'
+            {% if not forloop.last %},{% endif %}
+            {% endfor %}
+            ],
+            datasets: [{
+                label: 'Transfers',
+                data: [
+                    {% for transfer in transferSpeed %}
+                    {{ transfer }}
+                    {% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                ],
+                borderWidth: 1
+            },
+            {
+                label: 'Server Side Copies',
+                data: [
+                    {% for transfer in transferSpeedServerSideCopy %}
+                    {{ transfer }}
+                    {% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                ],
+                borderWidth: 1
+            },
+            {
+                label: 'Server Side Moves',
+                data: [
+                    {% for transfer in transferSpeedServerSideMove %}
+                    {{ transfer }}
+                    {% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                ],
+                borderWidth: 1
+            }]
+        },
+        options: {
+            scales: {
+                y: {
+                    stacked: true,
+                    ticks: {
+                        color: 'rgba(255, 255, 255, 1)', // Change y-axis text color
+                        callback: function(value) {
+                            return value + ' /s';
+                        }
+                    }
+                },
+                x: {
+                    ticks: {
+                        color: 'rgba(255, 255, 255, 1)', // Change x-axis text color
+                        callback: function(value, index, ticks) {
+                            return this.getLabelForValue(value) + 's';
+                        }
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    labels: {
+                        color: 'rgba(255, 255, 255, 1)' // Change legend text color
+                    }
+                }
+            },
+            animation: {
+                duration: 0
+            }
+        }
+    });
+
+    bytesChart.update('none');
+    transfersChart.update('none');
+</script>

@@ -15,6 +15,8 @@ urlpatterns = [
     path('ajax/runningjobs', views.ajaxRunningJobs.as_view(), name='runningJobs'),
     path('ajax/finishedjobs', views.ajaxFinishedJobs.as_view(), name='finishedJobs'),
     path('ajax/jobquery/<int:jobId>', views.ajaxJobQuery.as_view(), name='jobQuery'),
+    path('ajax/jobquerycharts/<int:jobId>', views.ajaxJobQueryCharts.as_view(), name='jobQueryCharts'),
+    
     
     
     # Schedule

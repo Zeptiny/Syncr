@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.utils import timezone
 
 from .settings import TASK_TYPES, REMOTE_TYPES
 
@@ -77,3 +78,18 @@ class DailyStatistics(models.Model):
     serverSideMoveBytes = models.BigIntegerField(default=0)
     jobs_run = models.IntegerField(default=0)
     errored_jobs = models.IntegerField(default=0)
+
+
+# Statistics gathered while the job is running
+# There will be multiple (A lot) per job, one every 15 seconds
+class jobRunStatistics(models.Model):
+    job = models.ForeignKey(Job, on_delete=models.CASCADE)
+    dateTime = models.DateTimeField(default=timezone.now)
+    
+    speed = models.IntegerField() # Rclone speed
+    speedServerSideCopy = models.IntegerField() # Gathered from ServerSideCopyBytes from last stats subtracting the now ServerSideCopyBytes dividing by the stat update rate in seconds
+    speedServerSideMove = models.IntegerField() # Gathered from ServerSideMoveBytes from last stats subtracting the now ServerSideMoveBytes dividing by the stat update rate in seconds
+    
+    transferSpeed = models.FloatField() # Gathered from Transfers from last stats subtracting the now Transfers dividing by the stat update rate in seconds
+    transferSpeedServerSideCopy = models.FloatField()
+    transferSpeedServerSideMove = models.FloatField() 

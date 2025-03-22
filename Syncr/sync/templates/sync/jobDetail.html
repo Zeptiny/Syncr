@@ -2,14 +2,62 @@
 {% load custom_filters %}
 
 {% block content %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" integrity="sha512-ZwR1/gSZM3ai6vCdI+LVF1zSq/5HznD3ZSTk7kajkaj4D292NLuduDCO1c/NT8Id+jE58KYLKT7hXnbtryGmMg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
 <div class="my-4">
     <a href="{% url 'sync:index' %}" class="p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">Back to Home</a>
 </div>
 
 {% if isFinished %}
-<div hx-get="{% url 'sync:jobQuery' jobId %}" hx-trigger="load"></div>
+<div id="jobQuery" hx-get="{% url 'sync:jobQuery' jobId %}" hx-trigger="load"></div>
 {% else %}
-<div hx-get="{% url 'sync:jobQuery' jobId %}" hx-trigger="every 5s, load"></div>
+<div id="jobQuery" hx-get="{% url 'sync:jobQuery' jobId %}" hx-trigger="every 5s, load"></div>
 {% endif %}
+
+<div class="grid grid-cols-1 md:grid-cols-2 mb-4 gap-x-4 gap-y-4">
+    <figure class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700">
+        <blockquote class="w-full mb-2 text-gray-500 dark:text-gray-400">
+            <canvas id="bytesChart"></canvas>
+        </blockquote>   
+    </figure>
+    <figure class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700">
+        <blockquote class="w-full mb-2 text-gray-500 dark:text-gray-400">
+            <canvas id="transfersChart"></canvas>
+        </blockquote>  
+    </figure>
+</div>
+
+<script>
+    var bytesChartElement = document.getElementById('bytesChart');
+    var transfersChartElement = document.getElementById('transfersChart');
+    var bytesChart, transfersChart;
+
+    document.addEventListener('htmx:beforeSwap', function(event) {
+        if (event.target.id === 'jobQueryChartsJS') {
+            if (bytesChart) {
+                bytesChart.destroy();
+                bytesChart = null;
+            }
+            if (transfersChart) {
+                transfersChart.destroy();
+                transfersChart = null;
+            }
+        }
+    });
+
+    document.addEventListener('htmx:afterSwap', function(event) {
+        if (event.target.id === 'jobQueryChartsJS') {
+            bytesChartElement = document.getElementById('bytesChart');
+            transfersChartElement = document.getElementById('transfersChart');
+        }
+    });
+</script>
+
+{% if isFinished %}
+<div id="jobQueryChartsJS" hx-get="{% url 'sync:jobQueryCharts' jobId %}" hx-trigger="load"></div>
+{% else %}
+<div id="jobQueryChartsJS" hx-get="{% url 'sync:jobQueryCharts' jobId %}" hx-trigger="every 15s, load"></div>
+{% endif %}
+
+<div id="jobQueryChartsJS"></div>
 {% endblock content %}

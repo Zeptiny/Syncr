@@ -1,3 +1,4 @@
+from django.utils import timezone
 import json
 import subprocess
 from time import sleep
@@ -20,8 +21,9 @@ def createJobHandler(type: str, srcFs, dstFs, user, **kwargs) -> None:
     job.raise_for_status()
     jobId = job.json().get("jobid")
     combinedQuery = queryJob(jobId)
+    
     # It only works if the keys are the same in the queries and the model
-    jobObject = models.Job(
+    jobObject = models.Job.objects.create(
         user=user,
         schedule=kwargs.get("schedule"),
         type=type,
@@ -29,10 +31,22 @@ def createJobHandler(type: str, srcFs, dstFs, user, **kwargs) -> None:
         dstFs=dstFs,
         **combinedQuery
     )
-    jobObject.save()
+    
+    # Crate the first statistic model, as we need one "base"
+    # we havent even started the query, so its safe to assume all 0 (I think)
+    models.jobRunStatistics.objects.create(
+        job = jobObject,
+        speed = 0,
+        speedServerSideCopy = 0,
+        speedServerSideMove = 0,
+        transferSpeed = 0,
+        transferSpeedServerSideCopy = 0,
+        transferSpeedServerSideMove = 0
+    )
     
     # Start the auto query thread
     threading.Thread(target=autoQueryRunningJob, args=(jobObject,)).start()
+    threading.Thread(target=autoQueryRunningJobStats, args=(jobObject,)).start()
     
 
 # Remote formating functions
@@ -117,6 +131,8 @@ def queryJob(jobId: int) -> dict:
 
 def autoQueryRunningJob(jobObject) -> None:
     while(True):
+        startTime = timezone.now()
+        
         combinedQuery = queryJob(jobObject.rcloneId)
         # print(combinedQuery)
         
@@ -132,5 +148,55 @@ def autoQueryRunningJob(jobObject) -> None:
             print(f"Job {jobObject.rcloneId} finished")
             break
         
-        print(f"Updated job {jobObject.rcloneId}")
-        sleep(1) # Only check every second
+        endTime = timezone.now()
+        
+        sleepTime = 1 - (endTime - startTime).total_seconds()
+        print(f"Sleeptime: {sleepTime} : {jobObject.rcloneId} : Model")
+        if sleepTime > 0:
+            sleep(sleepTime)
+        else:
+            print(f"Job {jobObject.rcloneId} took too long to update, skipping sleep")
+
+def autoQueryRunningJobStats(jobObject) -> None:
+    # We need those variables to calculate the speed
+    # We don't store it in the model as it's irrelevant
+    # (<CurrentTransfers> - <LastTransfers>) / 15
+    lastTransfers = lastTransfersSSCopy = lastTransfersSSMove = 0
+    while(True):
+        startTime = timezone.now()
+        
+        combinedQuery = queryJob(jobObject.rcloneId)
+        
+        # If the job is finished, break the loop
+        if combinedQuery.get("finished"):
+            print(f"Job {jobObject.rcloneId} finished")
+            break
+        
+        # We shall only update if the job isn't finished to not fuck up any data
+        # Yes, it means we can lose up to 15 seconds of the last data
+        lastStatsRun = models.jobRunStatistics.objects.filter(job=jobObject).latest('dateTime')
+        models.jobRunStatistics.objects.create(
+            job=jobObject,
+            
+            speed = combinedQuery.get('speed'),
+            speedServerSideCopy = ((combinedQuery.get('serverSideCopyBytes') - lastStatsRun.speedServerSideCopy) / 15),
+            speedServerSideMove = ((combinedQuery.get('serverSideMoveBytes') - lastStatsRun.speedServerSideMove) / 15),
+            
+            transferSpeed = (combinedQuery.get('transfers') - lastTransfers) / 15,
+            transferSpeedServerSideCopy = ((combinedQuery.get('serverSideCopies') - lastTransfersSSCopy) / 15),
+            transferSpeedServerSideMove = ((combinedQuery.get('serverSideMoves') - lastTransfersSSMove) / 15),
+        )
+        
+        # Update the lastTransfers
+        lastTransfers = combinedQuery.get('transfers')
+        lastTransfersSSCopy = combinedQuery.get('serverSideCopies')
+        lastTransfersSSMove = combinedQuery.get('serverSideMoves')
+        
+        endTime = timezone.now()
+        
+        sleepTime = 15 - (endTime - startTime).total_seconds()
+        print(f"Sleeptime: {sleepTime} : {jobObject.rcloneId} : Stats")
+        if sleepTime > 0:
+            sleep(sleepTime)
+        else:
+            print(f"Job {jobObject.rcloneId} took too long to update, skipping sleep")
