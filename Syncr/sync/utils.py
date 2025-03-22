@@ -76,11 +76,13 @@ def createOnTheFlyRemote(remote) -> str:
             f":{remote.type}," +
             ",".join(f"{key}=\"{value}\"" for key, value in remote.config.items()
                      if key != "pass") + 
-            f",pass={obscure(remote.config['pass'])}" +
+            f",pass=\"{obscure(remote.config['pass'])}\"" +
             ":"
         )
         
-    # print(f"REMOTE TYPE: {remote.type}")
+    else:
+        raise ValueError(f"Unsupported remote type: {remote.type}")
+        
     print(formattedRemote)
     
     return formattedRemote
@@ -142,7 +144,6 @@ def autoQueryRunningJob(jobObject) -> None:
             setattr(jobObject, key, value)
         jobObject.save()
         
-        print(combinedQuery)
         # If the job is finished, break the loop
         if combinedQuery.get("finished"):
             print(f"Job {jobObject.rcloneId} finished")
