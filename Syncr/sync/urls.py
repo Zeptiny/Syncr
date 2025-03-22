@@ -21,7 +21,9 @@ urlpatterns = [
     
     # Schedule
     path('schedule/', views.scheduleView.as_view(), name='schedule'),
-    path('schedule/create/', views.createScheduleView.as_view(), name='createSchedule'),
+    path('schedule/new/', views.createScheduleView.as_view(), name='createSchedule'),
+    path('schedule/edit/<int:scheduleId>/', views.createScheduleView.as_view(), name='editSchedule'),
+    path('schedule/delete/<int:scheduleId>/', views.deleteScheduleView.as_view(), name='deleteSchedule'),
     
     path('ajax/schedulelist', views.ajaxScheduleListView.as_view(), name='scheduleList'),
     

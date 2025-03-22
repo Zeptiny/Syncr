@@ -1,7 +1,7 @@
 import random
 from django.http import HttpResponse
 from time import sleep
-from django.shortcuts import render, redirect
+from django.shortcuts import get_object_or_404, render, redirect
 from django.views import View
 from django.db.models import Sum
 from django.utils import timezone
@@ -199,16 +199,39 @@ class scheduleView(View):
         return render(request, 'sync/schedule.html')
 
 class createScheduleView(View):
-    def get(self, request):
-        form = forms.scheduleCreateForm(request=request)
+    def get(self, request, scheduleId=None):
+        
+        if scheduleId: # If there is a schedule id
+            if models.Schedule.objects.filter(pk=scheduleId).exists(): # If an object with that ID exists
+                schedule = models.Schedule.objects.get(pk=scheduleId)
+                
+                if schedule.user != request.user: # Redirect to the normal creation if the user is not the owner
+                    return redirect('sync:createSchedule')
+                
+                form = forms.scheduleCreateForm(instance=schedule, request=request)
+            else: # If it doesn't exist
+                return redirect('sync:createSchedule') # Redirect to without an ID
+        else:
+            form = forms.scheduleCreateForm(request=request)
         
         context = {
             'form': form
         }
         
         return render(request, 'sync/scheduleCreate.html', context)
-    def post(self, request):
-        form = forms.scheduleCreateForm(request.POST, request=request)
+    
+    def post(self, request, scheduleId):
+        if scheduleId: # If there is a schedule id
+            if models.Schedule.objects.filter(pk=scheduleId).exists(): # If an object with that ID exists
+                schedule = models.Schedule.objects.get(pk=scheduleId)
+                if schedule.user != request.user: # Redirect to the normal creation if the user is not the owner
+                    return redirect('sync:createSchedule')
+
+                form = forms.scheduleCreateForm(request.POST, instance=schedule, request=request)            
+            else: # If it doesn't exist
+                return redirect('sync:createSchedule') # Redirect to without an ID
+        else:
+            form = forms.scheduleCreateForm(request.POST, request=request)
         
         if form.is_valid():
             schedule = form.save(commit=False)
@@ -223,7 +246,17 @@ class createScheduleView(View):
                 'form': form
             }
             return render(request, 'sync/scheduleCreate.html', context)
+
+class deleteScheduleView(View):
+    def post(self, request, scheduleId):
+        schedule = get_object_or_404(models.Schedule, pk=scheduleId)
         
+        if schedule.user == request.user:
+            schedule.delete()
+        
+        return redirect('sync:schedule')
+    
+      
 class ajaxScheduleListView(View):
     def get(self, request):
         schedules = models.Schedule.objects.filter(user=request.user)

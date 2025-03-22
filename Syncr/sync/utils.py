@@ -81,7 +81,7 @@ def createOnTheFlyRemote(remote) -> str:
         )
         
     # print(f"REMOTE TYPE: {remote.type}")
-    # print(formattedRemote)
+    print(formattedRemote)
     
     return formattedRemote
 
