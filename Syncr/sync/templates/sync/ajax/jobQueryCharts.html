@@ -168,10 +168,14 @@
                 }
             },
             animation: {
-                duration: 0
+                duration: 0 // Disable the initial loading animation (As it gets really bad after multiple updates)
             }
         }
     });
+    
+    // Enable animation for subsequent updates
+    bytesChart.options.animation.duration = 1000;
+    transfersChart.options.animation.duration = 1000;
 
     bytesChart.update('none');
     transfersChart.update('none');
