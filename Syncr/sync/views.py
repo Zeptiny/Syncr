@@ -309,7 +309,7 @@ class ajaxRunningJobs(View):
             'runningJobs': runningJobs
         }
         
-        return render(request, 'sync/ajax/runningJobs.html', context)
+        return render(request, 'sync/ajax/indexJobRunning.html', context)
 
 class ajaxFinishedJobs(View):
     def get(self, request):
@@ -318,4 +318,4 @@ class ajaxFinishedJobs(View):
             'finishedJobs': finishedJobs
         }
         
-        return render(request, 'sync/ajax/finishedJobs.html', context)
+        return render(request, 'sync/ajax/indexJobFinished.html', context)

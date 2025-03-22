@@ -35,6 +35,9 @@
                     Speed
                 </th>
                 <th scope="col" class="px-6 py-3">
+                    Start Time
+                </th>
+                <th scope="col" class="px-6 py-3">
                     GB/Total GB
                 </th>
             </tr>
@@ -72,6 +75,9 @@
                 </td>
                 <td class="px-6 py-4">
                     {{job.speed|divide:1000000|floatformat:2}} MB/s
+                </td>
+                <td class="px-6 py-4">
+                    {{job.startTime|date:"d-m-Y H:i"}}
                 </td>
                 <td class="px-6 py-4">
                     {{ job.bytes|divide:1000000000|floatformat:2 }} / {{ job.totalBytes|divide:1000000000|floatformat:2 }} GB
