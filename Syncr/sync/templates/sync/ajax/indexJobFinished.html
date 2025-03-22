@@ -1,4 +1,5 @@
 {% load custom_filters %}
+{% load static %}
 
 {% if finishedJobs.count < 1 %}
 <p>No jobs finished</p>
@@ -44,7 +45,10 @@
         </thead>
         <tbody>
             {% for job in finishedJobs %}
-            <tr onclick="window.location='{% url 'sync:detail' job.id %}'" class="hover:cursor-pointer bg-white border-b hover:dark:bg-gray-700 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 border-gray-200">
+            <tr onclick="window.location='{% url 'sync:detail' job.id %}'" class="hover:cursor-pointer bg-white border-b hover:dark:bg-gray-700 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 border-gray-200
+            {% if not job.success %}
+             bg-red-100 dark:bg-red-950/50 dark:hover:bg-red-950/33!
+            {% endif %}">
                 <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white">
                     {{job.id}}
                 </th>
@@ -81,9 +85,13 @@
                 </td>
                 <td class="px-6 py-4">
                     {% if job.success %}
-                    <p class="text-green-200">Yup</p>
+                    <svg data-slot="icon" aria-hidden="true" fill="currentColor" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" class="max-w-6 max-h-6 fill-green-200">
+                        <path clip-rule="evenodd" d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z" fill-rule="evenodd"></path>
+                    </svg>
                     {% else %}
-                    <p class="text-red-200">Oh no</p>
+                    <svg data-slot="icon" aria-hidden="true" fill="currentColor" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" class="max-w-6 max-h-6 fill-red-200">
+                        <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z"></path>
+                    </svg>
                     {% endif %}
                 </td>
             </tr>
