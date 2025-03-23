@@ -1,43 +1,51 @@
 {% load custom_filters %}
 
 <div class="grid grid-cols-2 md:grid-cols-4 mb-4 gap-x-4 gap-y-4">
-    <figure class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
-        <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
-            <p class="my-2">Running Jobs</p>
-            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{runningJobs}}</h3>
-        </blockquote>   
-    </figure>
-    <figure class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
-        <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
-            <p class="my-2">Scheduled Jobs</p>
-            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{scheduledJobs}}</h3>
-        </blockquote>  
-    </figure>
-    <figure class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
-        <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
-            <p class="my-2">Errored Jobs</p>
-            <h3 class="text-lg font-semibold 
-            {% if erroredJobs > 0 %} text-red-200 {% else %} text-gray-900 dark:text-white {% endif %}"> 
-                {{erroredJobs}}
-            </h3>
-            <p class="my-2 flex items-center text-sm">
-                <svg class="me-1.5 h-4 w-4 text-gray-500 dark:text-gray-400" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24">
-                    <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 11h2v5m-2 0h4m-2.592-8.5h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                </svg>
-                Last 30 days
-            </p>
-        </blockquote>   
-    </figure>
-    <figure class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
-        <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
-            <p class="my-2">Total Bandwidth</p>
-            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{totalBandwidth|divide:1000000000|floatformat:2}}GB</h3>
-            <p class="my-2 flex items-center text-sm">
-                <svg class="me-1.5 h-4 w-4 text-gray-500 dark:text-gray-400" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24">
-                    <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 11h2v5m-2 0h4m-2.592-8.5h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                </svg>
-                Last 30 days
-            </p>
-        </blockquote>   
-    </figure>
+    <a href="#runningJobsList" class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:dark:bg-gray-700 hover:bg-gray-300">
+        <figure>
+            <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+                <p class="my-2">Running Jobs</p>
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{runningJobs}}</h3>
+            </blockquote>   
+        </figure>
+    </a>
+    <a href="{% url 'sync:schedule' %}" class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:dark:bg-gray-700 hover:bg-gray-300">
+        <figure>
+            <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+                <p class="my-2">Scheduled Jobs</p>
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{scheduledJobs}}</h3>
+            </blockquote>  
+        </figure>
+    </a>
+    <a href="{% url 'sync:jobList' %}?status=failed&last_x_days=30" class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:dark:bg-gray-700 hover:bg-gray-300">
+        <figure>
+            <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+                <p class="my-2">Errored Jobs</p>
+                <h3 class="text-lg font-semibold 
+                {% if erroredJobs > 0 %} text-red-200 {% else %} text-gray-900 dark:text-white {% endif %}"> 
+                    {{erroredJobs}}
+                </h3>
+                <p class="my-2 flex items-center text-sm">
+                    <svg class="me-1.5 h-4 w-4 text-gray-500 dark:text-gray-400" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24">
+                        <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 11h2v5m-2 0h4m-2.592-8.5h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                    </svg>
+                    Last 30 days
+                </p>
+            </blockquote>   
+        </figure>
+    </a>
+    <a href="{% url 'sync:jobList' %}?order_by=bytes&last_x_days=30" class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:dark:bg-gray-700 hover:bg-gray-300">
+        <figure>
+            <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+                <p class="my-2">Total Bandwidth</p>
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{totalBandwidth|divide:1000000000|floatformat:2}}GB</h3>
+                <p class="my-2 flex items-center text-sm">
+                    <svg class="me-1.5 h-4 w-4 text-gray-500 dark:text-gray-400" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24">
+                        <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 11h2v5m-2 0h4m-2.592-8.5h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                    </svg>
+                    Last 30 days
+                </p>
+            </blockquote>   
+        </figure>
+    </a>
 </div>
