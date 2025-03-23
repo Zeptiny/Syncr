@@ -32,7 +32,7 @@
             </div>
         </div>
 
-        <button class="self-end bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg block p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white hover:cursor-pointer hover:dark:bg-gray-800">Search</button>
+        <button class="self-end bg-gray-50 border border-gray-300 text-gray-900 text-sm block p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white hover:cursor-pointer hover:dark:bg-gray-800">Search</button>
     </div>
 </form>
 
@@ -147,7 +147,7 @@
         <ul class="inline-flex -space-x-px rtl:space-x-reverse text-sm h-8">
             {% if jobs.has_previous %}
                 <li>
-                    <a href="?page={{jobs.previous_page_number}}&{{query_string}}" class="flex items-center justify-center px-3 h-8 ms-0 leading-tight text-gray-500 bg-white border border-gray-300 rounded-s-lg hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">Previous</a>
+                    <a href="?page={{jobs.previous_page_number}}&{{query_string}}" class="flex items-center justify-center px-3 h-8 ms-0 leading-tight text-gray-500 bg-white border border-gray-300 hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">Previous</a>
                 </li>
                 {% if jobs.number > 2 %}
                     <li>
@@ -175,7 +175,7 @@
                     </li>
                 {% endif %}
                 <li>
-                    <a href="?page={{jobs.next_page_number}}&{{query_string}}" class="flex items-center justify-center px-3 h-8 leading-tight text-gray-500 bg-white border border-gray-300 rounded-e-lg hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">Next</a>
+                    <a href="?page={{jobs.next_page_number}}&{{query_string}}" class="flex items-center justify-center px-3 h-8 leading-tight text-gray-500 bg-white border border-gray-300 hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">Next</a>
                 </li>
             {% endif %}
         </ul>
