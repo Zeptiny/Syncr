@@ -28,7 +28,7 @@ class Schedule(models.Model):
     srcFs = models.ForeignKey(Remote, on_delete=models.CASCADE, null=True, related_name='schedule_srcfFs')
     dstFs = models.ForeignKey(Remote, on_delete=models.CASCADE, null=True, related_name='schedule_dstfFs')
     
-    server = models.ForeignKey(Server, on_delete=models.SET_NULL, null=True) # The server where the jobs on this schedule should execute
+    server = models.ForeignKey(Server, on_delete=models.SET_NULL, null=True, related_name="schedules") # The server where the jobs on this schedule should execute
     
 class Job(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -39,7 +39,7 @@ class Job(models.Model):
     srcFs = models.ForeignKey(Remote, on_delete=models.CASCADE, null=True, related_name='job_srcFs')
     dstFs = models.ForeignKey(Remote, on_delete=models.CASCADE, null=True, related_name='job_dstFs') # There are jobs that may not require a destination (Eg. delete)
     
-    server = models.ForeignKey(Server, on_delete=models.SET_NULL, null=True) # The server on where the job run
+    server = models.ForeignKey(Server, on_delete=models.SET_NULL, null=True, related_name="jobs") # The server on where the job run
 
     # Status dependent
     # Gathered via rclone rc job/status jobid=<id> --rc-addr=

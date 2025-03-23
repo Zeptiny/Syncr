@@ -2,10 +2,150 @@
 {% load custom_filters %}
 
 {% block content %}
-{{server.host}}:{{server.port}}
-{{server.network_speed|divide:1000000000|floatformat:0}} GB/s
-{{server.version}}
-{{server.continent}}
-{{server.country}}
-{{server.provider}}
+<div class="grid grid-cols-1 md:grid-cols-3 mb-4 gap-x-4 gap-y-4">
+    <figure class="col-span-3 flex flex-col p-2 bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
+        <blockquote class="mb-2 text-gray-500 dark:text-gray-400">
+            <div class="grid grid-cols-3 text-center">
+                <div>
+                    <p class="mt-2">Host</p>
+
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+                        {{server.host}}:{{server.port}}
+                    </h3>
+                </div>
+
+                <div class="text-center">
+                    <p class="mt-2">Provider</p>
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+                        {{server.provider}}
+                    </h3>
+                </div>
+
+                <div>
+                    <p class="mt-2">Status</p>
+                    <h3 class="text-lg font-semibold items-center text-gray-900 dark:text-white flex justify-center">
+                        {% if server.online %}
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="fill-green-200">
+                            <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/>
+                        </svg>
+                        {% else %}
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="fill-red-200">
+                            <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="m12 13-1-1 2-2-3-3 2-2"/>
+                        </svg>
+                        {% endif %}                    
+                    </h3>
+                </div>
+            </div>
+        </blockquote>   
+    </figure>
+
+    <figure class="flex flex-col items-top p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
+        <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+            <p class="my-2">Capacity</p>
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{server.network_speed|divide:1000000000|floatformat:0}} GB/s
+            </h3>
+        </blockquote>   
+    </figure>
+    <figure class="flex flex-col items-top p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
+        <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+            <p class="my-2">Location</p>
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Country: {{server.country}}</h3>
+        </blockquote>   
+    </figure>
+    <figure class="flex flex-col items-top p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
+        <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+            <p class="my-2">Rclone</p>
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Version: {{server.version}}</h3>
+        </blockquote>   
+    </figure>
+</div>
+
+<div id="runningJobsList" class="flex justify-between items-center mt-2 dark:bg-gray-700 px-2">
+    <div>
+        <h1 class="text-2xl font-bold dark:text-gray-200 mt-2">
+            Jobs running in this server
+        </h1>
+    </div>
+</div>
+<table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+    <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+        <tr>
+            <th scope="col" class="px-6 py-3">
+                ID
+            </th>
+            <th scope="col" class="px-6 py-3">
+                Elapsed Time
+            </th>
+            <th scope="col" class="px-6 py-3">
+                ETA
+            </th>
+            <th scope="col" class="px-6 py-3">
+                Speed
+            </th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for job in server.jobs.all %}
+        <tr onclick="window.location='{% url 'sync:detail' job.id %}'" class="hover:cursor-pointer bg-white border-b hover:dark:bg-gray-700 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 border-gray-200
+        {% if not server.online %}
+         bg-red-100 dark:bg-red-950/50 dark:hover:bg-red-950/33!
+        {% endif %}">
+            <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white">
+                {{job.id}}
+            </th>
+            <td class="px-6 py-4">
+                {{job.elapsedTime}}
+            </td>
+            <td class="px-6 py-4">
+                {{job.eta}}
+            </td>
+            <td class="px-6 py-4">
+                {{job.speed|divide:1000000|floatformat:2}} MB/s
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div id="runningJobsList" class="flex justify-between items-center mt-2 dark:bg-gray-700 px-2">
+    <div>
+        <h1 class="text-2xl font-bold dark:text-gray-200 mt-2">
+            Schedules in this server
+        </h1>
+    </div>
+</div>
+<table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+    <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+        <tr>
+            <th scope="col" class="px-6 py-3">
+                User
+            </th>
+            <th scope="col" class="px-6 py-3">
+                Cron
+            </th>
+            <th scope="col" class="px-6 py-3">
+                Type
+            </th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for schedule in server.schedules.all %}
+        <tr onclick="window.location=''" class="hover:cursor-pointer bg-white border-b hover:dark:bg-gray-700 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 border-gray-200
+        {% if not server.online %}
+         bg-red-100 dark:bg-red-950/50 dark:hover:bg-red-950/33!
+        {% endif %}">
+            <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white">
+                {{schedule.user.username}}
+            </th>
+            <td class="px-6 py-4">
+                {{schedule.cron}}
+            </td>
+            <td class="px-6 py-4">
+                {{schedule.type}}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
 {% endblock content %}
