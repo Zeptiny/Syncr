@@ -169,9 +169,10 @@ class createJobView(View):
             type = form.cleaned_data['type']
             srcFs = form.cleaned_data['srcFs']
             dstFs = form.cleaned_data['dstFs']
+            server = form.cleaned_data['server']
             
             # Create the job
-            utils.createJobHandler(type, srcFs, dstFs, request.user)
+            utils.createJobHandler(type, srcFs, dstFs, server, request.user)
             
             return redirect('sync:index')
         

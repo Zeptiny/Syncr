@@ -26,5 +26,9 @@ class Server(models.Model):
         ("OC", "Oceania"),
         ("SA", "South America"),
     ], max_length=2, default="NA")
-    country = models.CharField(max_length=255, default="") 
+    country = models.CharField(max_length=255, default="")
+    
+    
+    def __str__(self):
+        return f"{self.host}:{self.port}" 
     

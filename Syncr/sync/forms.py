@@ -1,6 +1,8 @@
 from django import forms
 from . import models
 
+from servers.models import Server
+
 from .settings import TASK_TYPES
 
 class remoteCreateForm(forms.ModelForm):
@@ -27,6 +29,12 @@ class jobCreateForm(forms.Form):
         widget=forms.Select(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
         )
 
+    server = forms.ModelChoiceField(
+        queryset=Server.objects.all(),
+        widget=forms.Select(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
+        required=True,
+    )
+
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop('request')
         super(jobCreateForm, self).__init__(*args, **kwargs)
@@ -44,13 +52,14 @@ class jobCreateForm(forms.Form):
 class scheduleCreateForm(forms.ModelForm):
     class Meta:
         model = models.Schedule
-        fields = ['name', 'type', 'cron', 'srcFs', 'dstFs']
+        fields = ['name', 'type', 'cron', 'srcFs', 'dstFs', 'server']
         labels = {
             'name': 'Schedule Name',
             'type': 'Schedule Type',
             'cron': 'Cron Frequency',
             'srcFs': 'Source Remote',
-            'dstFs': 'Destination Remote'
+            'dstFs': 'Destination Remote',
+            'server': 'Server to run the jobs'
         }
         
         
@@ -59,6 +68,11 @@ class scheduleCreateForm(forms.ModelForm):
             'name': forms.TextInput(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
             'type': forms.Select(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
         }
+        
+        server = forms.ModelChoiceField(
+            queryset=Server.objects.all(),
+            required=True,
+        )
 
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop('request')
@@ -70,6 +84,11 @@ class scheduleCreateForm(forms.ModelForm):
         )
         self.fields['dstFs'] = forms.ModelChoiceField(
             queryset=models.Remote.objects.filter(user=self.request.user),
+            widget=forms.Select(attrs={'class': 'fbg-gray-50 border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+        )
+        
+        self.fields['server'] = forms.ModelChoiceField(
+            queryset=Server.objects.filter(online=True),
             widget=forms.Select(attrs={'class': 'fbg-gray-50 border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
         )
         

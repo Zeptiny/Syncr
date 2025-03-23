@@ -7,12 +7,12 @@ import requests
 import threading
 
 # Job creation functions
-def createJobHandler(type: str, srcFs, dstFs, user, **kwargs) -> None:
+def createJobHandler(type: str, srcFs, dstFs, server, user, **kwargs) -> None:
     # Start the job
     if type == "sync/copy":
-        job = requests.post("http://127.0.0.1:5572/sync/copy", json={
-            "srcFs": createOnTheFlyRemote(remote=srcFs),
-            "dstFs": createOnTheFlyRemote(remote=dstFs),
+        job = requests.post(f"http://{server.host}:{server.port}/sync/copy", json={
+            "srcFs": createOnTheFlyRemote(remote=srcFs, server=server),
+            "dstFs": createOnTheFlyRemote(remote=dstFs, server=server),
             "_async": "true"
         })
     else:
@@ -20,7 +20,7 @@ def createJobHandler(type: str, srcFs, dstFs, user, **kwargs) -> None:
     
     job.raise_for_status()
     jobId = job.json().get("jobid")
-    combinedQuery = queryJob(jobId)
+    combinedQuery = queryJob(jobId, server)
     
     # It only works if the keys are the same in the queries and the model
     jobObject = models.Job.objects.create(
@@ -29,6 +29,7 @@ def createJobHandler(type: str, srcFs, dstFs, user, **kwargs) -> None:
         type=type,
         srcFs=srcFs,
         dstFs=dstFs,
+        server=server,
         **combinedQuery
     )
     
@@ -50,7 +51,7 @@ def createJobHandler(type: str, srcFs, dstFs, user, **kwargs) -> None:
     
 
 # Remote formating functions
-def createOnTheFlyRemote(remote) -> str:
+def createOnTheFlyRemote(remote, server) -> str:
     # Each config type has it own format
     # Is it efficient? Hell no, but it works
     if remote.type == "s3":
@@ -76,7 +77,7 @@ def createOnTheFlyRemote(remote) -> str:
             f":{remote.type}," +
             ",".join(f"{key}=\"{value}\"" for key, value in remote.config.items()
                      if key != "pass") + 
-            f",pass=\"{obscure(remote.config['pass'])}\"" +
+            f",pass=\"{obscure(remote.config['pass'], server)}\"" +
             ":"
         )
         
@@ -87,8 +88,8 @@ def createOnTheFlyRemote(remote) -> str:
     
     return formattedRemote
 
-def obscure(plainPass):
-    password = requests.post("http://127.0.0.1:5572/core/obscure", json={
+def obscure(plainPass, server):
+    password = requests.post(f"http://{server.host}:{server.port}/core/obscure", json={
         "clear": plainPass
     })
     password.raise_for_status()
@@ -98,8 +99,8 @@ def obscure(plainPass):
 
 
 # Job query functions
-def queryJobStats(jobId: int) -> dict:
-    stats = requests.post("http://127.0.0.1:5572/core/stats", json={
+def queryJobStats(jobId: int, server) -> dict:
+    stats = requests.post(f"http://{server.host}:{server.port}/core/stats", json={
         "group": "job/" + str(jobId)
     })
     stats.raise_for_status()
@@ -111,8 +112,8 @@ def queryJobStats(jobId: int) -> dict:
     
     return stats
 
-def queryJobStatus(jobId: int) -> dict:
-    status = requests.post("http://127.0.0.1:5572/job/status", json={
+def queryJobStatus(jobId: int, server) -> dict:
+    status = requests.post(f"http://{server.host}:{server.port}/job/status", json={
         "jobid": jobId
     })
     status.raise_for_status()
@@ -123,9 +124,9 @@ def queryJobStatus(jobId: int) -> dict:
     
     return status
 
-def queryJob(jobId: int) -> dict:
-    statusQuery = queryJobStatus(jobId)
-    statsQuery = queryJobStats(jobId)
+def queryJob(jobId: int, server) -> dict:
+    statusQuery = queryJobStatus(jobId, server)
+    statsQuery = queryJobStats(jobId, server)
     
     combinedQuery = {**statusQuery, **statsQuery}
     
@@ -135,7 +136,7 @@ def autoQueryRunningJob(jobObject) -> None:
     while(True):
         startTime = timezone.now()
         
-        combinedQuery = queryJob(jobObject.rcloneId)
+        combinedQuery = queryJob(jobObject.rcloneId, jobObject.server)
         # print(combinedQuery)
         
         # Update the model with the new information
@@ -166,7 +167,7 @@ def autoQueryRunningJobStats(jobObject) -> None:
     while(True):
         startTime = timezone.now()
         
-        combinedQuery = queryJob(jobObject.rcloneId)
+        combinedQuery = queryJob(jobObject.rcloneId, jobObject.server)
         
         # If the job is finished, break the loop
         if combinedQuery.get("finished"):
