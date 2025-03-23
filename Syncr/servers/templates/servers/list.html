@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% load custom_filters %}
+
+{% block content %}
+<table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+    <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+        <tr>
+            <th scope="col" class="px-6 py-3">
+                Host
+            </th>
+            <th scope="col" class="px-6 py-3">
+                Speed
+            </th>
+            <th scope="col" class="px-6 py-3">
+                version
+            </th>
+            <th scope="col" class="px-6 py-3">
+                Continent
+            </th>
+            <th scope="col" class="px-6 py-3">
+                Country
+            </th>
+            <th scope="col" class="px-6 py-3">
+                Provider
+            </th>
+            <th scope="col" class="px-6 py-3">
+                Online
+            </th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for server in servers %}
+        <tr onclick="window.location='{% url 'servers:detail' server.id %}'" class="hover:cursor-pointer bg-white border-b hover:dark:bg-gray-700 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 border-gray-200
+        {% if not server.online %}
+         bg-red-100 dark:bg-red-950/50 dark:hover:bg-red-950/33!
+        {% endif %}">
+            <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white">
+                {{server.host}}:{{server.port}}
+            </th>
+            <td class="px-6 py-4">
+                {{server.network_speed|divide:1000000000|floatformat:0}} GB/s
+            </td>
+            <td class="px-6 py-4">
+                {{server.version}}
+            </td>
+            <td class="px-6 py-4">
+                {{server.continent}}
+            </td>
+            <td class="px-6 py-4">
+                {{server.country}}
+            </td>
+            <td class="px-6 py-4">
+                {{server.provider}}
+            </td>
+            <td class="px-6 py-4">
+                {% if server.online %}
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="fill-green-200">
+                    <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/>
+                </svg>
+                {% else %}
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="fill-red-200">
+                    <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="m12 13-1-1 2-2-3-3 2-2"/>
+                </svg>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+
+{% if servers.paginator.count < 1%}
+<p class="text-gray-700 bg-gray-50 dark:bg-gray-800 dark:text-gray-400 p-2 max-w-full">No servers satisfy your search</p>
+{% endif %}
+{% endblock content %}

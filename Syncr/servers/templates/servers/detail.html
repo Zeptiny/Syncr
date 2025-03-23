@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% load custom_filters %}
+
+{% block content %}
+{{server.host}}:{{server.port}}
+{{server.network_speed|divide:1000000000|floatformat:0}} GB/s
+{{server.version}}
+{{server.continent}}
+{{server.country}}
+{{server.provider}}
+{% endblock content %}

@@ -33,6 +33,7 @@ ALLOWED_HOSTS = []
 
 INSTALLED_APPS = [
     'sync',
+    'servers',
     
     # 3 party apps
     'huey.contrib.djhuey',
