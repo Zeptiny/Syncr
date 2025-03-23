@@ -26,6 +26,10 @@
                 <label for="{{ searchForm.last_x_days.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ searchForm.last_x_days.label }}</label>
                 {{searchForm.last_x_days}}
             </div>
+            <div>
+                <label for="{{ searchForm.order_by.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ searchForm.order_by.label }}</label>
+                {{searchForm.order_by}}
+            </div>
         </div>
 
         <button class="self-end bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg block p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white hover:cursor-pointer hover:dark:bg-gray-800">Search</button>

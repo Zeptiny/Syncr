@@ -202,6 +202,11 @@ class jobListView(View):
             callee = searchForm.cleaned_data.get('callee')
             status = searchForm.cleaned_data.get('status')
             last_x_days = searchForm.cleaned_data.get('last_x_days')
+            
+            order_by = searchForm.cleaned_data.get('order_by', 'startTime')
+            if not order_by: # For some reason, default is not applying correctly
+                order_by = 'startTime'
+
 
             if search:
                 filters &= (
@@ -225,7 +230,7 @@ class jobListView(View):
                 days_ago = timezone.now() - timedelta(days=int(last_x_days))
                 filters &= Q(startTime__gte=days_ago)
 
-        jobs = models.Job.objects.filter(filters).order_by('-startTime')
+        jobs = models.Job.objects.filter(filters).order_by(f'-{order_by}')
 
         paginator = Paginator(jobs, 10)
         page_number = request.GET.get('page')
