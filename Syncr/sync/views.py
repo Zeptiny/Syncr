@@ -7,9 +7,9 @@ from django.db.models import Sum
 from django.utils import timezone
 from datetime import timedelta
 
-import subprocess
-import threading
-import requests
+from django.core.paginator import Paginator
+from django.db.models import Q
+from urllib.parse import urlencode
 
 from . import utils
 from . import models
@@ -189,7 +189,61 @@ class detailView(View):
             'isFinished': isFinished
         }
         return render(request, 'sync/jobDetail.html', context)
-    
+
+class jobListView(View):
+    def get(self, request):
+        searchForm = forms.jobsSearchForm(request.GET, request=request)
+
+        filters = Q(user=request.user)
+
+        if searchForm.is_valid():
+            search = searchForm.cleaned_data.get('search')
+            job_type = searchForm.cleaned_data.get('type')
+            callee = searchForm.cleaned_data.get('callee')
+            status = searchForm.cleaned_data.get('status')
+            last_x_days = searchForm.cleaned_data.get('last_x_days')
+
+            if search:
+                filters &= (
+                    Q(id__icontains=search) | 
+                    Q(srcFs__name__icontains=search) | 
+                    Q(dstFs__name__icontains=search)
+                )
+                            
+            if job_type:
+                filters &= Q(type=job_type)
+            if callee:
+                filters &= Q(schedule__isnull=True) if callee == 'manual' else Q(schedule__name=callee)
+            if status:
+                status_filters = {
+                    'success': Q(success=True, finished=True),
+                    'failed': Q(success=False, finished=True),
+                    'running': Q(finished=False),
+                }
+                filters &= status_filters.get(status, Q())  
+            if last_x_days:
+                days_ago = timezone.now() - timedelta(days=int(last_x_days))
+                filters &= Q(startTime__gte=days_ago)
+
+        jobs = models.Job.objects.filter(filters).order_by('-startTime')
+
+        paginator = Paginator(jobs, 10)
+        page_number = request.GET.get('page')
+        jobs = paginator.get_page(page_number)
+        
+        # Build query string without 'page'
+        query_params = request.GET.copy()
+        query_params.pop('page', None)  # Remove existing page parameter
+        query_string = urlencode(query_params)  # Encode remaining parameters
+        
+        context = {
+            'jobs': jobs,
+            'searchForm': searchForm,
+            'query_string': query_string
+        }
+
+        return render(request, 'sync/jobList.html', context)
+
 # We are not using utils.queryJob as we want the transferring and checking
 class ajaxJobQuery(View):
     def get(self, request, jobId):

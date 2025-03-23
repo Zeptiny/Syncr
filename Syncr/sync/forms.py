@@ -75,3 +75,40 @@ class scheduleCreateForm(forms.ModelForm):
         
     # TO-DO
     # ENSURE THE CRON IS CORRECTLY FORMATTED
+    
+
+
+class jobsSearchForm(forms.Form):
+    search = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={'placeholder': 'Search for ID, srcFs and dstFs', 'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+    )
+    
+    type = forms.ChoiceField(
+        choices=[('', 'All')] + list(TASK_TYPES.items()),
+        required=False,
+        widget=forms.Select(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+    )
+    
+    callee = forms.ChoiceField(
+        required=False,
+        widget=forms.Select(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+    )
+    
+    last_x_days = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All'), ('1', '1'), ('7', '7'), ('30', '30'), ('365', '365')],
+        widget=forms.Select(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+    )
+    
+    status = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All'), ('success', 'Success'), ('failed', 'Failed'), ('running', 'Running')],
+        widget=forms.Select(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+    )
+    
+    def __init__(self, *args, **kwargs):
+        self.request = kwargs.pop('request')
+        super(jobsSearchForm, self).__init__(*args, **kwargs)
+        
+        self.fields['callee'].choices = [('', 'All')] + [('manual', 'Manual')] + list(self.request.user.schedule_set.all().values_list('name', 'name'))

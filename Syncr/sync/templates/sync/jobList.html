@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% load static %}
+{% load custom_filters %}
+
+{% block content %}
+<form action="" class="my-2">
+    <div class="flex gap-4 items-center">
+        <div class="flex-grow">
+            <label for="{{ searchForm.search.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ searchForm.search.label }}</label>
+            {{searchForm.search}}
+        </div>
+        <div class="flex gap-4">
+            <div>
+                <label for="{{ searchForm.type.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ searchForm.type.label }}</label>
+                {{searchForm.type}}
+            </div>
+            <div>
+                <label for="{{ searchForm.callee.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ searchForm.callee.label }}</label>
+                {{searchForm.callee}}
+            </div>
+            <div>
+                <label for="{{ searchForm.status.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ searchForm.status.label }}</label>
+                {{searchForm.status}}
+            </div>
+            <div>
+                <label for="{{ searchForm.last_x_days.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ searchForm.last_x_days.label }}</label>
+                {{searchForm.last_x_days}}
+            </div>
+        </div>
+
+        <button class="self-end bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg block p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white hover:cursor-pointer hover:dark:bg-gray-800">Search</button>
+    </div>
+</form>
+
+<div class="relative overflow-x-auto">
+    <table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+            <tr>
+                <th scope="col" class="px-6 py-3">
+                    ID
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Type
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Calee
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Source
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Destination
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Duration
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Checks
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Transfers
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Size
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    End Time
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Success
+                </th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for job in jobs %}
+            <tr onclick="window.location='{% url 'sync:detail' job.id %}'" class="hover:cursor-pointer bg-white border-b hover:dark:bg-gray-700 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 border-gray-200
+            {% if not job.success and job.finished %}
+             bg-red-100 dark:bg-red-950/50 dark:hover:bg-red-950/33!
+            {% endif %}">
+                <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white">
+                    {{job.id}}
+                </th>
+                <td class="px-6 py-4">
+                    {{job.type}}
+                </td>
+                <td class="px-6 py-4">
+                    {% if job.schedule %}
+                        {{job.schedule.name}}
+                    {% else %}
+                        Manual
+                    {% endif %}
+                </td>
+                <td class="px-6 py-4">
+                    {{job.srcFs.type}}:{{job.srcFs.name}}
+                </td>
+                <td class="px-6 py-4">
+                    {{job.dstFs.type}}:{{job.dstFs.name}}
+                </td>
+                <td class="px-6 py-4">
+                    {{job.elapsedTime}}s
+                </td>
+                <td class="px-6 py-4">
+                    {{job.totalChecks}}
+                </td>
+                <td class="px-6 py-4">
+                    {{job.totalTransfers}}
+                </td>
+                <td class="px-6 py-4">
+                    {{ job.bytes|divide:1000000000|floatformat:2 }} GB
+                </td>
+                <td class="px-6 py-4">
+                    {{job.endTime|date:"d-m-Y H:i"}}
+                </td>
+                <td class="px-6 py-4">
+                    {% if job.success %}
+                    <svg data-slot="icon" aria-hidden="true" fill="currentColor" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" class="max-w-6 max-h-6 fill-green-200">
+                        <path clip-rule="evenodd" d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z" fill-rule="evenodd"></path>
+                    </svg>
+                    {% else %}
+                    <svg data-slot="icon" aria-hidden="true" fill="currentColor" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" class="max-w-6 max-h-6 fill-red-200">
+                        <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z"></path>
+                    </svg>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if jobs.paginator.count < 1%}
+    <p class="text-gray-700 bg-gray-50 dark:bg-gray-800 dark:text-gray-400 p-2 max-w-full">No jobs satisfy your search</p>
+    {% endif %}
+
+
+
+    <nav class="flex items-center flex-column flex-wrap md:flex-row justify-between pt-4" aria-label="Table navigation">
+        <span class="text-sm font-normal text-gray-500 dark:text-gray-400 mb-4 md:mb-0 block w-full md:inline md:w-auto">Showing <span class="font-semibold text-gray-900 dark:text-white">{%widthratio jobs.number 1 jobs.paginator.per_page as current_page_max %} {{current_page_max|add:"-10"}} - {{current_page_max}}</span> of <span class="font-semibold text-gray-900 dark:text-white">{{ jobs.paginator.count }}</span></span>
+        <ul class="inline-flex -space-x-px rtl:space-x-reverse text-sm h-8">
+            {% if jobs.has_previous %}
+                <li>
+                    <a href="?page={{jobs.previous_page_number}}&{{query_string}}" class="flex items-center justify-center px-3 h-8 ms-0 leading-tight text-gray-500 bg-white border border-gray-300 rounded-s-lg hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">Previous</a>
+                </li>
+                {% if jobs.number > 2 %}
+                    <li>
+                        <a href="?page={{jobs.number|add:"-2"}}&{{query_string}}" class="flex items-center justify-center px-3 h-8 leading-tight text-gray-500 bg-white border border-gray-300 hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">{{jobs.number|add:"-2"}}</a>
+                    </li>
+                {% endif %}
+                {% if jobs.number > 1 %}
+                    <li>
+                        <a href="?page={{jobs.number|add:"-1"}}&{{query_string}}" class="flex items-center justify-center px-3 h-8 leading-tight text-gray-500 bg-white border border-gray-300 hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">{{jobs.number|add:"-1"}}</a>
+                    </li>
+                {% endif %}
+            {% endif %}
+            <li>
+                <a aria-current="page" class="flex items-center justify-center px-3 h-8 text-blue-600 border border-gray-300 bg-blue-50 hover:bg-blue-100 hover:text-blue-700 dark:border-gray-700 dark:bg-gray-700 dark:text-white">{{jobs.number}}</a>
+            </li>
+            {% if jobs.has_next %}
+                {% if jobs.number|add:"1" <= jobs.paginator.num_pages %}
+                    <li>
+                        <a href="?page={{jobs.number|add:"1"}}&{{query_string}}" class="flex items-center justify-center px-3 h-8 leading-tight text-gray-500 bg-white border border-gray-300 hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">{{jobs.number|add:"1"}}</a>
+                    </li>
+                {% endif %}
+                {% if jobs.number|add:"2" <= jobs.paginator.num_pages %}
+                    <li>
+                        <a href="?page={{jobs.number|add:"2"}}&{{query_string}}" class="flex items-center justify-center px-3 h-8 leading-tight text-gray-500 bg-white border border-gray-300 hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">{{jobs.number|add:"2"}}</a>
+                    </li>
+                {% endif %}
+                <li>
+                    <a href="?page={{jobs.next_page_number}}&{{query_string}}" class="flex items-center justify-center px-3 h-8 leading-tight text-gray-500 bg-white border border-gray-300 rounded-e-lg hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">Next</a>
+                </li>
+            {% endif %}
+        </ul>
+    </nav>
+</div>
+{% endblock content %}

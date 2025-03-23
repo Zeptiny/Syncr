@@ -10,7 +10,8 @@ urlpatterns = [
     
     # Jobs
     path('job/run/', views.createJobView.as_view(), name='runJob'),
-    path('detail/<int:jobId>', views.detailView.as_view(), name='detail'),
+    path('job/<int:jobId>', views.detailView.as_view(), name='detail'),
+    path('job/list/', views.jobListView.as_view(), name='jobList'),
     
     path('ajax/runningjobs', views.ajaxRunningJobs.as_view(), name='runningJobs'),
     path('ajax/finishedjobs', views.ajaxFinishedJobs.as_view(), name='finishedJobs'),
