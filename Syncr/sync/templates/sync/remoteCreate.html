@@ -1,39 +1,59 @@
 {% extends "base.html" %}
 
 {% block content %}
-<form action="" method="POST" class="max-w-sm mx-auto">
+<form action="" method="POST" class="max-w-lg mx-auto">
     {% csrf_token %}
-    <div>
-        <label for="{{ form.type.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ form.type.label }}</label>
-        {{ form.type }}
+    <h1 class="block mt-2 text-xl text-gray-900 dark:text-white">Schedule Type</h1>
+    <p class="block mb-2 text-gray-900 dark:text-gray-300">Choose the type of your remote</p>
+    <div class="grid grid-cols-3 gap-2">
+        {% for choice in form.type %}
+        <label class="bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 hover:cursor-pointer dark:hover:bg-gray-800 dark:has-checked:bg-blue-500">
+                <input 
+                    type="radio" 
+                    class="hidden" 
+                    name="{{ form.type.name }}" 
+                    value="{{ choice.data.value }}"
+                >
+                <div class="flex flex-col">
+                    <span class="font-medium">{{ choice.data.label }}</span>
+                </div>
+            </label>
+        {% endfor %}
     </div>
-    <div>
-        <label for="{{ form.name.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ form.name.label }}</label>
+
+    <div class="mt-8">
+        <h1 class="block mt-2 text-xl text-gray-900 dark:text-white">Remote configuration</h1>
+        <p class="block mb-2 text-gray-900 dark:text-gray-300">Fill the information needed to create your remote.</p>
+        <div id="dynamic-fields-container">
+        </div>
+    </div>
+
+    <div class="mt-8">
+        <label for="{{ form.name.id_for_label }}" class="block text-gray-900 dark:text-white">{{ form.name.label }}</label>
+        <p class="block mb-2 text-gray-900 dark:text-gray-300">Give your remote a human redable name!</p>
         {{ form.name }}
     </div>
 
-    {{form.config}}
-    <div id="dynamic-fields-container"></div>
+    {{ form.config }}
     <button type="submit" class="mt-2 hover:cursor-pointer text-white bg-gray-800 hover:bg-gray-900 focus:outline-none focus:ring-4 focus:ring-gray-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-gray-800 dark:hover:bg-gray-700 dark:focus:ring-gray-700 dark:border-gray-700">Submit</button>
 </form>
 {% endblock content %}
 
-
-{% comment %} 
-These scripts are before the content, in the head, but are placed here for convenience. 
-{% endcomment %}
 {% block scripts_head %}
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        const remoteTypeField = document.querySelector('select[name="type"]');
+        const radioButtons = document.querySelectorAll('input[name="{{ form.type.name }}"]');
         const configField = document.querySelector('input[name="config"]');
         const form = document.querySelector('form');
         const dynamicFieldsContainer = document.querySelector('#dynamic-fields-container');
-        const remoteFields = {{ remote_fields|safe }};
+        const remoteFields = {{ remote_fields|safe }};  // Assuming remote_fields is a dictionary in context
 
-        remoteTypeField.addEventListener('change', function() {
-            const selectedType = remoteTypeField.value;
-            updateConfigField(selectedType);
+        // Add event listener to radio buttons
+        radioButtons.forEach(radio => {
+            radio.addEventListener('change', function() {
+                const selectedType = this.value;  // Get the selected type
+                updateConfigField(selectedType);
+            });
         });
 
         form.addEventListener('submit', function(event) {
@@ -60,7 +80,7 @@ These scripts are before the content, in the head, but are placed here for conve
 
             const label = document.createElement('label');
             label.textContent = labelText;
-            label.classList.add('dynamic-field', 'block', 'mb-2', 'text-gray-900', 'dark:text-white');
+            label.classList.add('dynamic-field', 'block', 'mt-2', 'text-gray-900', 'dark:text-white');
 
             const input = document.createElement('input');
             input.type = 'text';
@@ -83,8 +103,9 @@ These scripts are before the content, in the head, but are placed here for conve
         }
 
         // Trigger the updateConfigField function if a type is already selected
-        if (remoteTypeField.value) {
-            updateConfigField(remoteTypeField.value);
+        const selectedType = document.querySelector('input[name="{{ form.type.name }}"]:checked');
+        if (selectedType) {
+            updateConfigField(selectedType.value);
         }
     });
 </script>
