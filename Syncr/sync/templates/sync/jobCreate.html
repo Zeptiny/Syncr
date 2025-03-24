@@ -65,10 +65,13 @@
     </div>
 
 
-    <div>
-        <label for="{{ form.server.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ form.server.label }}</label>
+    <div class="mt-8">
+        <label for="{{ form.server.id_for_label }}" class="block text-xl text-gray-900 dark:text-white">{{ form.server.label }}</label>
+        <p class="block mb-2 text-gray-900 dark:text-gray-300">The server that will trigger the schedule, the closer from the remotes, the better the expected performance</p>
         {{ form.server }}
     </div>
+
+    
     <button name="submit" class="mt-2 rounded-lg hover:cursor-pointer text-white bg-gray-800 hover:bg-gray-900 focus:outline-none focus:ring-4 focus:ring-gray-300 font-medium text-sm px-5 py-2.5 me-2 mb-2 dark:bg-gray-800 dark:hover:bg-gray-700 dark:focus:ring-gray-700 dark:border-gray-700">Run Job</button>
 </form>
 
