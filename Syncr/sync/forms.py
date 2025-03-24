@@ -23,6 +23,18 @@ class remoteCreateForm(forms.ModelForm):
         super(remoteCreateForm, self).__init__(*args, **kwargs)
         self.fields['config'].widget = forms.HiddenInput()
 
+class remoteWidget(forms.Select):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.remote = models.Remote.objects.all()
+        
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        remote = next((s for s in self.remote if s.id == value), None)
+        if remote:
+            option['attrs']['remote'] = remote
+        return option
+
 class jobCreateForm(forms.Form):
     type = forms.ChoiceField(
         choices=list(TASK_TYPES.items()),
@@ -41,11 +53,15 @@ class jobCreateForm(forms.Form):
         
         self.fields['srcFs'] = forms.ModelChoiceField(
             queryset=models.Remote.objects.filter(user=self.request.user),
-            widget=forms.Select(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+            required=True,
+            widget=remoteWidget,
+            empty_label=None  # Remove the default "None" choice
         )
         self.fields['dstFs'] = forms.ModelChoiceField(
             queryset=models.Remote.objects.filter(user=self.request.user),
-            widget=forms.Select(attrs={'class': 'fbg-gray-50 border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+            required=True,
+            widget=remoteWidget,
+            empty_label=None  # Remove the default "None" choice
         )
         
 
@@ -80,11 +96,15 @@ class scheduleCreateForm(forms.ModelForm):
         
         self.fields['srcFs'] = forms.ModelChoiceField(
             queryset=models.Remote.objects.filter(user=self.request.user),
-            widget=forms.Select(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+            required=True,
+            widget=remoteWidget,
+            empty_label=None  # Remove the default "None" choice
         )
         self.fields['dstFs'] = forms.ModelChoiceField(
             queryset=models.Remote.objects.filter(user=self.request.user),
-            widget=forms.Select(attrs={'class': 'fbg-gray-50 border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+            required=True,
+            widget=remoteWidget,
+            empty_label=None  # Remove the default "None" choice
         )
         
         self.fields['server'] = forms.ModelChoiceField(

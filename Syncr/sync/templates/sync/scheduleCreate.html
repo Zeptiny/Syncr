@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
-<form action="" method="POST" class="max-w-sm mx-auto">
+<form action="" method="POST" class="max-w-xl mx-auto">
     {% csrf_token %}
     <div>
         <label for="{{ form.name.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ form.name.label }}</label>
@@ -15,13 +15,44 @@
         <label for="{{ form.cron.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ form.cron.label }}</label>
         {{ form.cron }}
     </div>
-    <div>
-        <label for="{{ form.srcFs.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ form.srcFs.label }}</label>
-        {{ form.srcFs }}
+    <h1 class="block mt-2 text-gray-900 dark:text-white">Source filesystem</h1>
+    <div class="grid grid-cols-3 gap-2">
+        {% for choice in form.srcFs %}
+            {% with srcFs=choice.data.attrs.remote %}
+            <label class="bg-gray-50 border border-gray-300 text-gray-900 text-sm block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500
+            hover:cursor-pointer dark:hover:bg-gray-800 dark:has-checked:bg-blue-500">
+                    <input 
+                        type="radio" 
+                        class="hidden" 
+                        name="{{ form.srcFs.name }}" 
+                        value="{{ choice.data.value }}"
+                    >
+                    <div class="flex flex-col">
+                        <span class="font-medium">{{ srcFs.type }} - {{ srcFs.name }}</span>
+                    </div>
+                </label>
+            {% endwith %}
+        {% endfor %}
     </div>
-    <div>
-        <label for="{{ form.dstFs.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ form.dstFs.label }}</label>
-        {{ form.dstFs }}
+    
+    <h1 class="block mt-2 text-gray-900 dark:text-white">Destination Filesystem</h1>
+    <div class="grid grid-cols-3 gap-2">
+        {% for choice in form.dstFs %}
+            {% with dstFs=choice.data.attrs.remote %}
+                <label class="bg-gray-50 border border-gray-300 text-gray-900 text-sm block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500
+                    hover:cursor-pointer dark:hover:bg-gray-800 dark:has-checked:bg-blue-500">
+                    <input 
+                        type="radio" 
+                        class="hidden" 
+                        name="{{ form.dstFs.name }}" 
+                        value="{{ choice.data.value }}"
+                    >
+                    <div class="flex flex-col">
+                        <span class="font-medium">{{ dstFs.type }} - {{ dstFs.name }}</span>
+                    </div>
+                </label>
+            {% endwith %}
+        {% endfor %}
     </div>
     <div>
         <label for="{{ form.server.id_for_label }}" class="block mb-2 text-gray-900 dark:text-white">{{ form.server.label }}</label>
