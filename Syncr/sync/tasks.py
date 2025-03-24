@@ -39,7 +39,7 @@ def check_tasks_for_failure():
     running_jobs = Job.objects.filter(finished=False)
     for job in running_jobs:
         try:
-            status = requests.post("http://127.0.0.1:5572/job/status", json={
+            status = requests.post(f"http://{job.server.host}:{job.server.port}/job/status", json={
                 "jobid": job.rcloneId
             })
             status.raise_for_status()
