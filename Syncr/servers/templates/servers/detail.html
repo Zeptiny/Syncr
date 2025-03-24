@@ -86,7 +86,7 @@
         </tr>
     </thead>
     <tbody>
-        {% for job in server.jobs.all %}
+        {% for job in jobs %}
         <tr onclick="window.location='{% url 'sync:detail' job.id %}'" class="hover:cursor-pointer bg-white border-b hover:dark:bg-gray-700 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 border-gray-200
         {% if not server.online %}
          bg-red-100 dark:bg-red-950/50 dark:hover:bg-red-950/33!
