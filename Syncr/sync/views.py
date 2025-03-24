@@ -168,11 +168,27 @@ class createJobView(View):
             # Get the form data
             type = form.cleaned_data['type']
             srcFs = form.cleaned_data['srcFs']
+            srcFsPath = form.cleaned_data['srcFsPath']
             dstFs = form.cleaned_data['dstFs']
+            dstFsPath = form.cleaned_data['dstFsPath']
             server = form.cleaned_data['server']
             
+            # Correctly formatting the path:
+            srcFsPath = srcFsPath.replace(" ", "")
+            dstFsPath = dstFsPath.replace(" ", "")
+            
+            if srcFsPath[-1] != "/":
+                srcFsPath += "/"
+            if srcFsPath[0] != "/":
+                srcFsPath = "/" + srcFsPath
+                
+            if dstFsPath[-1] != "/":
+                dstFsPath += "/"
+            if dstFsPath[0] != "/":
+                dstFsPath = "/" + dstFsPath
+            
             # Create the job
-            utils.createJobHandler(type, srcFs, dstFs, server, request.user)
+            utils.createJobHandler(type, srcFs, srcFsPath, dstFs, dstFsPath, server, request.user)
             
             return redirect('sync:index')
         
@@ -329,6 +345,20 @@ class createScheduleView(View):
         if form.is_valid():
             schedule = form.save(commit=False)
             schedule.user = request.user
+            
+            # Correctly formatting the path:
+            schedule.srcFsPath = schedule.srcFsPath.replace(" ", "")
+            schedule.dstFsPath = schedule.dstFsPath.replace(" ", "")
+            
+            if schedule.srcFsPath[-1] != "/":
+                schedule.srcFsPath += "/"
+            if schedule.srcFsPath[0] != "/":
+                schedule.srcFsPath = "/" + schedule.srcFsPath
+                
+            if schedule.dstFsPath[-1] != "/":
+                schedule.dstFsPath += "/"
+            if schedule.dstFsPath[0] != "/":
+                schedule.dstFsPath = "/" + schedule.dstFsPath
             
             schedule.save()
             

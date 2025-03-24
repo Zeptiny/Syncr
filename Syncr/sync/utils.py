@@ -7,12 +7,12 @@ import requests
 import threading
 
 # Job creation functions
-def createJobHandler(type: str, srcFs, dstFs, server, user, **kwargs) -> None:
+def createJobHandler(type: str, srcFs, srcFsPath, dstFs, dstFsPath, server, user, **kwargs) -> None:
     # Start the job
     if type == "sync/copy":
         job = requests.post(f"http://{server.host}:{server.port}/sync/copy", json={
-            "srcFs": createOnTheFlyRemote(remote=srcFs, server=server),
-            "dstFs": createOnTheFlyRemote(remote=dstFs, server=server),
+            "srcFs": createOnTheFlyRemote(remote=srcFs, server=server, path=srcFsPath),
+            "dstFs": createOnTheFlyRemote(remote=dstFs, server=server, path=dstFsPath),
             "_async": "true"
         })
     else:
@@ -28,7 +28,9 @@ def createJobHandler(type: str, srcFs, dstFs, server, user, **kwargs) -> None:
         schedule=kwargs.get("schedule"),
         type=type,
         srcFs=srcFs,
+        srcFsPath=srcFsPath,
         dstFs=dstFs,
+        dstFsPath=dstFsPath,
         server=server,
         **combinedQuery
     )
@@ -51,7 +53,8 @@ def createJobHandler(type: str, srcFs, dstFs, server, user, **kwargs) -> None:
     
 
 # Remote formating functions
-def createOnTheFlyRemote(remote, server) -> str:
+def createOnTheFlyRemote(remote, server, path) -> str:
+    
     # Each config type has it own format
     # Is it efficient? Hell no, but it works
     if remote.type == "s3":
@@ -69,7 +72,7 @@ def createOnTheFlyRemote(remote, server) -> str:
             f":{remote.type}," +
             ",".join(f"{key}=\"{value}\"" for key, value in remote.config.items()
                      if key != "bucket") +
-            f":{remote.config['bucket']}"
+            f":{remote.config['bucket']}{path}"
         )
         
     elif remote.type == "sftp":
@@ -78,7 +81,7 @@ def createOnTheFlyRemote(remote, server) -> str:
             ",".join(f"{key}=\"{value}\"" for key, value in remote.config.items()
                      if key != "pass") + 
             f",pass=\"{obscure(remote.config['pass'], server)}\"" +
-            ":"
+            f":{path}"
         )
         
     else:

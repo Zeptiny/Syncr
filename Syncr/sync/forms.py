@@ -45,12 +45,21 @@ class jobCreateForm(forms.Form):
     type = forms.ChoiceField(
         choices=list(TASK_TYPES.items()),
         widget=forms.Select(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
-        )
+    )
 
     server = forms.ModelChoiceField(
         queryset=Server.objects.all(),
         widget=forms.Select(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
         required=True,
+    )
+    
+    dstFsPath = forms.CharField(
+        initial="/",
+        widget=forms.TextInput(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+    )
+    srcFsPath = forms.CharField(
+        initial="/",
+        widget=forms.TextInput(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
     )
 
     def __init__(self, *args, **kwargs):
@@ -74,13 +83,15 @@ class jobCreateForm(forms.Form):
 class scheduleCreateForm(forms.ModelForm):
     class Meta:
         model = models.Schedule
-        fields = ['name', 'type', 'cron', 'srcFs', 'dstFs', 'server']
+        fields = ['name', 'type', 'cron', 'srcFs', 'srcFsPath', 'dstFs', 'dstFsPath', 'server']
         labels = {
             'name': 'Schedule Name',
             'type': 'Schedule Type',
             'cron': 'Cron Frequency',
             'srcFs': 'Source Remote',
+            'srcFsPath': 'Source Remote Path',
             'dstFs': 'Destination Remote',
+            'dstFsPath': 'Destionation Remote Path',
             'server': 'Server to run the jobs'
         }
         
@@ -95,6 +106,8 @@ class scheduleCreateForm(forms.ModelForm):
                 }),
             'name': forms.TextInput(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
             'type': forms.Select(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
+            'dstFsPath': forms.TextInput(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
+            'srcFsPath': forms.TextInput(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
         }
         
         server = forms.ModelChoiceField(

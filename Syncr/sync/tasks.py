@@ -21,7 +21,10 @@ def check_schedules_cron():
             # Run the task
             createJobHandler(type=schedule.type, 
                              srcFs=schedule.srcFs, 
+                             srcFsPath=schedule.srcFsPath,
                              dstFs=schedule.dstFs, 
+                             dstFsPath=schedule.dstFsPath,
+                             server=schedule.server,
                              user=schedule.user,
                              # Kwargs below
                              schedule=schedule)

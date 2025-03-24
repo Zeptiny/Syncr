@@ -154,6 +154,10 @@
             {% endwith %}
         {% endfor %}
     </div>
+    <div class="flex items-center gap-2 mt-2">
+        <p class="block mb-2 text-gray-900 dark:text-white">Path: </p>
+        {{form.srcFsPath}}
+    </div>
     
     <h1 class="block mt-2 text-xl text-gray-900 dark:text-white mt-8">Destination Filesystem</h1>
     <p class="block mb-2 text-gray-900 dark:text-gray-300">The destination remote from where the files will be pushed</p>
@@ -174,6 +178,10 @@
                 </label>
             {% endwith %}
         {% endfor %}
+    </div>
+    <div class="flex items-center gap-2 mt-2">
+        <p class="block mb-2 text-gray-900 dark:text-white">Path: </p>
+        {{form.dstFsPath}}
     </div>
 
     <div class="mt-8">

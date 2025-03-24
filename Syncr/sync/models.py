@@ -26,7 +26,9 @@ class Schedule(models.Model):
     type = models.CharField(choices=TASK_TYPES.items(), max_length=127, default="sync/copy")
     
     srcFs = models.ForeignKey(Remote, on_delete=models.CASCADE, null=True, related_name='schedule_srcfFs')
+    srcFsPath = models.CharField(max_length=127, default="/")
     dstFs = models.ForeignKey(Remote, on_delete=models.CASCADE, null=True, related_name='schedule_dstfFs')
+    dstFsPath = models.CharField(max_length=127, default="/")
     
     server = models.ForeignKey(Server, on_delete=models.SET_NULL, null=True, related_name="schedules") # The server where the jobs on this schedule should execute
     
@@ -37,7 +39,9 @@ class Job(models.Model):
     type = models.CharField(choices=TASK_TYPES.items(), max_length=127, default="sync/copy")
     
     srcFs = models.ForeignKey(Remote, on_delete=models.CASCADE, null=True, related_name='job_srcFs')
+    srcFsPath = models.CharField(max_length=127, default="/")
     dstFs = models.ForeignKey(Remote, on_delete=models.CASCADE, null=True, related_name='job_dstFs') # There are jobs that may not require a destination (Eg. delete)
+    dstFsPath = models.CharField(max_length=127, default="/")
     
     server = models.ForeignKey(Server, on_delete=models.SET_NULL, null=True, related_name="jobs") # The server on where the job run
 
