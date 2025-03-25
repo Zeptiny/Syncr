@@ -1,5 +1,6 @@
 TASK_TYPES = {
     "sync/copy": "copy",
+    "sync/sync": "sync",
 }
 
 # SFTP is hanging up, no error, just freeze
