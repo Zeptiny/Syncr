@@ -22,6 +22,13 @@ def createJobHandler(type: str, srcFs, srcFsPath, dstFs, dstFsPath, server, user
             "dstFs": createOnTheFlyRemote(remote=dstFs, server=server, path=dstFsPath),
             "_async": "true"
         })
+        
+    if type == "sync/move":
+        job = requests.post(f"http://{server.host}:{server.port}/sync/move", json={
+            "srcFs": createOnTheFlyRemote(remote=srcFs, server=server, path=srcFsPath),
+            "dstFs": createOnTheFlyRemote(remote=dstFs, server=server, path=dstFsPath),
+            "_async": "true"
+        })
     
     else:
         raise ValueError("Invalid job type")    
