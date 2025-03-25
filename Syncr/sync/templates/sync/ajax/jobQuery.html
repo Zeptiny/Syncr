@@ -53,6 +53,11 @@
                     <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
                         {{ job.startTime|date:"d/m H:i" }} → {{ job.endTime|date:"H:i" }} ({{ job.duration|floatformat:1 }}s)
                     </h3>
+                    {% if not job.finished %}
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+                        ETA: {{job.eta}}
+                    </h3>
+                    {% endif %}
                 </div>
             </div>
         </blockquote>   
