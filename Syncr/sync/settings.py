@@ -1,11 +1,11 @@
 TASK_TYPES = {
     "sync/copy": {
         'display': "Copy",
-        'description': "Copy files from source to destination",
+        'description': "Copy files from source to destination, skipping identical files",
     },
     "sync/sync": {
         'display': "Sync",
-        'description': "Sync files from source to destination",
+        'description': "Make source and dest identical, modifying destination only",
     },
     "sync/move": {
         'display': "Move",
