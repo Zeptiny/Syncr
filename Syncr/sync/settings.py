@@ -1,7 +1,16 @@
 TASK_TYPES = {
-    "sync/copy": "copy",
-    "sync/sync": "sync",
-    "sync/move": "move",
+    "sync/copy": {
+        'display': "Copy",
+        'description': "Copy files from source to destination",
+    },
+    "sync/sync": {
+        'display': "Sync",
+        'description': "Sync files from source to destination",
+    },
+    "sync/move": {
+        'display': "Move",
+        'description': "Move files from source to destination",
+    },
 }
 
 # SFTP is hanging up, no error, just freeze

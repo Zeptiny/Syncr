@@ -12,15 +12,16 @@
         <label class="bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500
         hover:cursor-pointer dark:hover:bg-gray-800 dark:has-checked:bg-blue-500">
                 <input 
-                    type="radio" 
-                    class="hidden" 
-                    name="{{ form.type.name }}" 
-                    value="{{ choice.data.value }}"
-                >
-                <div class="flex flex-col">
-                    <span class="font-medium">{{choice.data.label}}</span>
-                </div>
-            </label>
+                type="radio" 
+                class="hidden" 
+                name="{{ form.type.name }}" 
+                value="{{ choice.data.value }}"
+            >
+            <div class="flex flex-col">
+                <span class="font-bold">{{choice.data.label}}</span>
+                <span class="dark:text-gray-300">{{choice.data.attrs.description}}</span>
+            </div>
+        </label>
         {% endfor %}
     </div>
 

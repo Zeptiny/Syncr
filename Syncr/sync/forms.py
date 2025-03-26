@@ -53,10 +53,18 @@ class serverWidget(forms.Select):
             option['attrs']['server'] = server
         return option
 
+class TaskTypeWidget(forms.Select):
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        # Append the description from TASK_TYPES to the option's attributes
+        if value in TASK_TYPES:
+            option['attrs']['description'] = TASK_TYPES[value]['description']
+        return option
+    
 class jobCreateForm(forms.Form):
     type = forms.ChoiceField(
-        choices=list(TASK_TYPES.items()),
-        widget=forms.Select(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+        choices=[(key, value['display']) for key, value in TASK_TYPES.items()],
+        widget=TaskTypeWidget()
     )
 
     server = forms.ModelChoiceField(
@@ -118,7 +126,6 @@ class scheduleCreateForm(forms.ModelForm):
                 'aria-autocomplete': 'none',
                 }),
             'name': forms.TextInput(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
-            'type': forms.Select(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
             'dstFsPath': forms.TextInput(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
             'srcFsPath': forms.TextInput(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
         }
@@ -145,6 +152,11 @@ class scheduleCreateForm(forms.ModelForm):
             required=True,
             widget=serverWidget,
             empty_label=None  # Remove the default "None" choice
+        )
+        
+        self.fields['type'] = forms.ChoiceField(
+            choices=[(key, value['display']) for key, value in TASK_TYPES.items()],
+            widget=TaskTypeWidget()
         )
         
     # TO-DO
