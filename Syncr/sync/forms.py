@@ -40,6 +40,18 @@ class remoteWidget(forms.Select):
         if remote:
             option['attrs']['remote'] = remote
         return option
+    
+class serverWidget(forms.Select):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.servers = Server.objects.all()
+        
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        server = next((s for s in self.servers if s.id == value), None)
+        if server:
+            option['attrs']['server'] = server
+        return option
 
 class jobCreateForm(forms.Form):
     type = forms.ChoiceField(
@@ -49,8 +61,9 @@ class jobCreateForm(forms.Form):
 
     server = forms.ModelChoiceField(
         queryset=Server.objects.all(),
-        widget=forms.Select(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
+        widget=serverWidget,
         required=True,
+        empty_label=None  # Remove the default "None" choice
     )
     
     dstFsPath = forms.CharField(
@@ -91,7 +104,7 @@ class scheduleCreateForm(forms.ModelForm):
             'srcFs': 'Source Remote',
             'srcFsPath': 'Source Remote Path',
             'dstFs': 'Destination Remote',
-            'dstFsPath': 'Destionation Remote Path',
+            'dstFsPath': 'Destination Remote Path',
             'server': 'Server to run the jobs'
         }
         
@@ -109,11 +122,6 @@ class scheduleCreateForm(forms.ModelForm):
             'dstFsPath': forms.TextInput(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
             'srcFsPath': forms.TextInput(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
         }
-        
-        server = forms.ModelChoiceField(
-            queryset=Server.objects.all(),
-            required=True,
-        )
 
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop('request')
@@ -133,8 +141,10 @@ class scheduleCreateForm(forms.ModelForm):
         )
         
         self.fields['server'] = forms.ModelChoiceField(
-            queryset=Server.objects.filter(online=True),
-            widget=forms.Select(attrs={'class': 'fbg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
+            queryset=Server.objects.all(),
+            required=True,
+            widget=serverWidget,
+            empty_label=None  # Remove the default "None" choice
         )
         
     # TO-DO

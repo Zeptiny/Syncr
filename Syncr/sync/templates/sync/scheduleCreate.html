@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load custom_filters %}
 
 {% block content %}
 <form action="" method="POST" class="max-w-xl mx-auto">
@@ -187,7 +188,26 @@
     <div class="mt-8">
         <label for="{{ form.server.id_for_label }}" class="block text-xl text-gray-900 dark:text-white">{{ form.server.label }}</label>
         <p class="block mb-2 text-gray-900 dark:text-gray-300">The server that will trigger the schedule, the closer from the remotes, the better the expected performance</p>
-        {{ form.server }}
+        <div class="grid grid-cols-3 gap-2">
+            {% for choice in form.server %}
+                {% with server=choice.data.attrs.server %}
+                <label class="bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500
+                hover:cursor-pointer dark:hover:bg-gray-800 dark:has-checked:bg-blue-500">
+                        <input 
+                            type="radio" 
+                            class="hidden" 
+                            name="{{ form.server.name }}" 
+                            value="{{ choice.data.value }}"
+                        >
+                        <div class="flex flex-col">
+                            <span class="font-medium">{{server.get_continent_display}}</span>
+                            <span class="font-medium">{{server.country}}</span>
+                            <span class="font-medium">Network: {{server.network_speed|divide:1000000000|floatformat:0}} Gb/s</span>
+                        </div>
+                    </label>
+                {% endwith %}
+            {% endfor %}
+        </div>
     </div>
 
     <div class="mt-8">
