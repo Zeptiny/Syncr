@@ -1,0 +1,14 @@
+{% for field in form %}
+    <div class="mt-2">
+        <div class="flex gap-1 items-center dark:text-white">
+            {{ field.label_tag }}
+            {{ field }}
+        </div>
+        {% if field.help_text %}
+            <p class="text-gray-600 text-sm dark:text-gray-300">{{ field.help_text }}</p>
+        {% endif %}
+        {% for error in field.errors %}
+            <p class="text-red-500 dark:text-red-400">{{ error }}</p>
+        {% endfor %}
+    </div>
+{% endfor %}

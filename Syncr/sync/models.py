@@ -32,6 +32,8 @@ class Schedule(models.Model):
     
     server = models.ForeignKey(Server, on_delete=models.SET_NULL, null=True, related_name="schedules") # The server where the jobs on this schedule should execute
     
+    options = models.JSONField(default=dict) # The options that should be passed to the job
+    
 class Job(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     schedule = models.ForeignKey(Schedule, on_delete=models.CASCADE, null=True, related_name="jobs")# The schedule that called the job, if it's null, it was created manually/forced
@@ -44,6 +46,8 @@ class Job(models.Model):
     dstFsPath = models.CharField(max_length=127, default="/")
     
     server = models.ForeignKey(Server, on_delete=models.SET_NULL, null=True, related_name="jobs") # The server on where the job run
+    
+    options = models.JSONField(default=dict) # The options that should be passed to the job
 
     # Status dependent
     # Gathered via rclone rc job/status jobid=<id> --rc-addr=

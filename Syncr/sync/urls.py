@@ -29,6 +29,10 @@ urlpatterns = [
     path('ajax/schedulelist', views.ajaxScheduleListView.as_view(), name='scheduleList'),
     
     
+    # Forms
+    path('ajax/genericCopyOptionsForm/', views.ajaxGenericCopyOptionsForm.as_view(), name='genericCopyOptionsForm'),
+    
+    
     # Remotes
     path('remote/', views.remoteView.as_view(), name='remote'),
     path('remote/new/', views.createRemoteView.as_view(), name='createRemote'),

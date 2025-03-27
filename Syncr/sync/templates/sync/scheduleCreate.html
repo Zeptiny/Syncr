@@ -13,7 +13,7 @@
         hover:cursor-pointer dark:hover:bg-gray-800 dark:has-checked:bg-blue-500">
                 <input 
                 type="radio" 
-                class="hidden" 
+                class="hidden job-type-radio" 
                 name="{{ form.type.name }}" 
                 value="{{ choice.data.value }}"
             >
@@ -185,6 +185,45 @@
         <p class="block mb-2 text-gray-900 dark:text-white">Path: </p>
         {{form.dstFsPath}}
     </div>
+
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const jobTypeRadios = document.querySelectorAll('.job-type-radio');
+            const advancedOptionsDiv = document.getElementById('advanced-options');
+        
+            jobTypeRadios.forEach(radio => {
+                radio.addEventListener('change', function () {
+                    if (this.checked) {
+                        const selectedJobType = this.value;
+    
+                        // Debugging: Log the selected job type
+                        console.log('Selected Job Type:', selectedJobType);
+    
+                        // Check if the selected job type matches the allowed values
+                        if (["sync/copy", "sync/sync", "sync/move"].includes(selectedJobType)) {
+                            // Set the hx-get attribute
+                            advancedOptionsDiv.setAttribute('hx-get', '{% url "sync:genericCopyOptionsForm" %}');
+    
+                            // Reprocess the element to make HTMX aware of the change
+                            htmx.process(advancedOptionsDiv);
+    
+                            // Manually trigger the HTMX 'changed' event
+                            htmx.trigger(advancedOptionsDiv, "changed");
+                        }
+                    }
+                });
+            });
+        });
+    </script>
+    
+
+    <h1 class="block mt-2 text-xl text-gray-900 dark:text-white mt-8">Advanced Options</h1>
+    <p class="block mb-2 text-gray-900 dark:text-gray-300">Flags that can be changed to alter how the job is performed</p>
+    <div id="advanced-options" hx-trigger="changed">
+        <h1 class="block mt-2 text-gray-900 dark:text-white">Please select a job type above</h1>
+    </div> {% comment %} HX field to advanced options {% endcomment %}
+
 
     <div class="mt-8">
         <label for="{{ form.server.id_for_label }}" class="block text-xl text-gray-900 dark:text-white">{{ form.server.label }}</label>

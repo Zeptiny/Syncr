@@ -105,4 +105,15 @@
             <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{job.error}}</h3>
         </blockquote>   
     </figure>
+
+    <figure class="col-span-3 flex flex-col items-top p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
+        <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+            <p class="my-2">Options</p>
+            <div class="grid grid-cols-6">
+                {% for key, value in job.options.items %}
+                    <h3>{{ key }}: {{ value }}</h3>
+                {% endfor %}
+            </div>
+        </blockquote>   
+    </figure>
 </div>

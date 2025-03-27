@@ -161,8 +161,67 @@ class scheduleCreateForm(forms.ModelForm):
         
     # TO-DO
     # ENSURE THE CRON IS CORRECTLY FORMATTED
-    
 
+# This form has all the generic copy options that can be used in the copy/sync/move tasks
+# https://rclone.org/commands/rclone_move/
+# https://rclone.org/commands/rclone_sync/
+# https://rclone.org/commands/rclone_copy/
+class genericCopyOptionsForm(forms.Form):
+    CheckFirst = forms.BooleanField(
+        required=False,
+        initial=False,
+        help_text="Do all the checks before starting the transfer",
+        widget=forms.CheckboxInput(attrs={
+            'class': 'w-6 h-6 text-blue-600 bg-gray-100 border-gray-300 rounded-sm focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-500'
+        })
+    )
+    
+    CheckSum = forms.BooleanField(
+        required=False,
+        initial=False,
+        help_text="Check for changes with size & checksum (if available, or fallback to size only)",
+        widget=forms.CheckboxInput(attrs={
+            'class': 'w-6 h-6 text-blue-600 bg-gray-100 border-gray-300 rounded-sm focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-500'
+        })
+    )
+    
+    Immutable = forms.BooleanField(
+        required=False,
+        initial=False,
+        help_text="Do not modify files, fail if existing files have been modified",
+        widget=forms.CheckboxInput(attrs={
+            'class': 'w-6 h-6 text-blue-600 bg-gray-100 border-gray-300 rounded-sm focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-500'
+        })
+    )
+    
+    Inplace = forms.BooleanField(
+        required=False,
+        initial=False,
+        help_text="Download directly to destination file instead of atomic download to temp/rename",
+        widget=forms.CheckboxInput(attrs={
+            'class': 'w-6 h-6 text-blue-600 bg-gray-100 border-gray-300 rounded-sm focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-500'
+        })
+    )
+    
+    PartialSuffix = forms.CharField(
+        required=False,
+        initial=".partial",
+        help_text="Add partial-suffix to temporary file name when inplace is not used",
+        widget=forms.TextInput(attrs={
+            'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'
+        })
+    )
+    
+    DryRun = forms.BooleanField(
+        required=False,
+        initial=False,
+        help_text="Do a trial run with no permanent changes",
+        widget=forms.CheckboxInput(attrs={
+            'class': 'w-6 h-6 text-blue-600 bg-gray-100 border-gray-300 rounded-sm focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-500'
+        })
+    )
+    
+    
 
 class jobsSearchForm(forms.Form):
     search = forms.CharField(

@@ -7,32 +7,23 @@ import requests
 import threading
 
 # Job creation functions
-def createJobHandler(type: str, srcFs, srcFsPath, dstFs, dstFsPath, server, user, **kwargs) -> None:
+def createJobHandler(type: str, srcFs, srcFsPath, dstFs, dstFsPath, options, server, user, **kwargs) -> None:
     # Start the job
-    if type == "sync/copy":
-        job = requests.post(f"http://{server.host}:{server.port}/sync/copy", json={
+    if type == "sync/copy" or type == "sync/sync" or type == "sync/move":
+        payload = {
             "srcFs": createOnTheFlyRemote(remote=srcFs, server=server, path=srcFsPath),
             "dstFs": createOnTheFlyRemote(remote=dstFs, server=server, path=dstFsPath),
-            "_async": "true"
-        })
-        
-    elif type == "sync/sync":
-        job = requests.post(f"http://{server.host}:{server.port}/sync/sync", json={
-            "srcFs": createOnTheFlyRemote(remote=srcFs, server=server, path=srcFsPath),
-            "dstFs": createOnTheFlyRemote(remote=dstFs, server=server, path=dstFsPath),
-            "_async": "true"
-        })
-        
-    elif type == "sync/move":
-        job = requests.post(f"http://{server.host}:{server.port}/sync/move", json={
-            "srcFs": createOnTheFlyRemote(remote=srcFs, server=server, path=srcFsPath),
-            "dstFs": createOnTheFlyRemote(remote=dstFs, server=server, path=dstFsPath),
-            "_async": "true"
-        })
+            "_async": "true",
+            "_config": {
+                "dryrun": True,
+            }
+        }
     
     else:
         print(f"Received job type: '{type}' (repr: {repr(type)})")
         raise ValueError("Invalid job type")    
+    
+    job = requests.post(f"http://{server.host}:{server.port}/{type}", json=payload)
     
     job.raise_for_status()
     jobId = job.json().get("jobid")
@@ -48,6 +39,7 @@ def createJobHandler(type: str, srcFs, srcFsPath, dstFs, dstFsPath, server, user
         dstFs=dstFs,
         dstFsPath=dstFsPath,
         server=server,
+        options=options,
         **combinedQuery
     )
     

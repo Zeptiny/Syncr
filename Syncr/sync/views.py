@@ -164,39 +164,65 @@ class createJobView(View):
     def post(self, request):
         form = forms.jobCreateForm(request.POST, request=request)
         
-        if form.is_valid():
-            # Get the form data
-            type = form.cleaned_data['type']
-            srcFs = form.cleaned_data['srcFs']
-            srcFsPath = form.cleaned_data['srcFsPath']
-            dstFs = form.cleaned_data['dstFs']
-            dstFsPath = form.cleaned_data['dstFsPath']
-            server = form.cleaned_data['server']
-            
-            # Correctly formatting the path:
-            srcFsPath = srcFsPath.replace(" ", "")
-            dstFsPath = dstFsPath.replace(" ", "")
-            
-            if srcFsPath[-1] != "/":
-                srcFsPath += "/"
-            if srcFsPath[0] != "/":
-                srcFsPath = "/" + srcFsPath
-                
-            if dstFsPath[-1] != "/":
-                dstFsPath += "/"
-            if dstFsPath[0] != "/":
-                dstFsPath = "/" + dstFsPath
-            
-            # Create the job
-            utils.createJobHandler(type, srcFs, srcFsPath, dstFs, dstFsPath, server, request.user)
-            
-            return redirect('sync:index')
-        
-        else:
+        # Check if things are not fucked
+        if not form.is_valid():
             context = {
                 'form': form
             }
             return render(request, 'sync/jobCreate.html', context)
+        
+        
+        if form.cleaned_data['type'] == "sync/copy" or "sync/sync" or "sync/move":
+            optionsForm = forms.genericCopyOptionsForm(request.POST)
+            
+            if not optionsForm.is_valid():
+                context = {
+                    'form': form,
+                }
+                return render(request, 'sync/jobCreate.html', context)
+
+        #
+        # If everything is valid and gud:
+        #
+        
+        
+        # Get the form data
+        type = form.cleaned_data['type']
+        srcFs = form.cleaned_data['srcFs']
+        srcFsPath = form.cleaned_data['srcFsPath']
+        dstFs = form.cleaned_data['dstFs']
+        dstFsPath = form.cleaned_data['dstFsPath']
+        server = form.cleaned_data['server']
+        
+        # Correctly formatting the path:
+        srcFsPath = srcFsPath.replace(" ", "")
+        dstFsPath = dstFsPath.replace(" ", "")
+        
+        if srcFsPath[-1] != "/":
+            srcFsPath += "/"
+        if srcFsPath[0] != "/":
+            srcFsPath = "/" + srcFsPath
+            
+        if dstFsPath[-1] != "/":
+            dstFsPath += "/"
+        if dstFsPath[0] != "/":
+            dstFsPath = "/" + dstFsPath
+            
+        # Get the options
+        options = optionsForm.cleaned_data
+        options = {key.replace("_", "-"): value for key, value in options.items()} # Replace _ from options to -
+        
+        # Create the job
+        utils.createJobHandler(type=type, 
+                               srcFs=srcFs, 
+                               srcFsPath=srcFsPath, 
+                               dstFs=dstFs, 
+                               dstFsPath=dstFsPath, 
+                               options=options,
+                               server=server, 
+                               user=request.user)
+        
+        return redirect('sync:index')
 
 class detailView(View):
     def get(self, request, jobId):
@@ -342,33 +368,48 @@ class createScheduleView(View):
         else:
             form = forms.scheduleCreateForm(request.POST, request=request)
         
-        if form.is_valid():
-            schedule = form.save(commit=False)
-            schedule.user = request.user
-            
-            # Correctly formatting the path:
-            schedule.srcFsPath = schedule.srcFsPath.replace(" ", "")
-            schedule.dstFsPath = schedule.dstFsPath.replace(" ", "")
-            
-            if schedule.srcFsPath[-1] != "/":
-                schedule.srcFsPath += "/"
-            if schedule.srcFsPath[0] != "/":
-                schedule.srcFsPath = "/" + schedule.srcFsPath
-                
-            if schedule.dstFsPath[-1] != "/":
-                schedule.dstFsPath += "/"
-            if schedule.dstFsPath[0] != "/":
-                schedule.dstFsPath = "/" + schedule.dstFsPath
-            
-            schedule.save()
-            
-            return redirect('sync:schedule')
-        
-        else:
+        if not form.is_valid():
             context = {
                 'form': form
             }
             return render(request, 'sync/scheduleCreate.html', context)
+        
+        if form.cleaned_data['type'] == "sync/copy" or "sync/sync" or "sync/move":
+            optionsForm = forms.genericCopyOptionsForm(request.POST)
+            
+            if not optionsForm.is_valid():
+                context = {
+                    'form': form,
+                }
+                return render(request, 'sync/jobCreate.html', context)
+        
+        #
+        # If everything is valid and gud:
+        #
+        
+        
+        schedule = form.save(commit=False)
+        schedule.user = request.user
+        schedule.options = optionsForm.cleaned_data
+        
+        # Correctly formatting the path:
+        schedule.srcFsPath = schedule.srcFsPath.replace(" ", "")
+        schedule.dstFsPath = schedule.dstFsPath.replace(" ", "")
+        
+        if schedule.srcFsPath[-1] != "/":
+            schedule.srcFsPath += "/"
+        if schedule.srcFsPath[0] != "/":
+            schedule.srcFsPath = "/" + schedule.srcFsPath
+            
+        if schedule.dstFsPath[-1] != "/":
+            schedule.dstFsPath += "/"
+        if schedule.dstFsPath[0] != "/":
+            schedule.dstFsPath = "/" + schedule.dstFsPath
+        
+        schedule.save()
+        
+        return redirect('sync:schedule')
+        
 
 class deleteScheduleView(View):
     def post(self, request, scheduleId):
@@ -409,3 +450,12 @@ class ajaxFinishedJobs(View):
         }
         
         return render(request, 'sync/ajax/indexJobFinished.html', context)
+    
+    
+class ajaxGenericCopyOptionsForm(View):
+    def get(self, request):
+        form = forms.genericCopyOptionsForm()
+        context = {
+            'form': form
+        }
+        return render(request, 'sync/ajax/genericCopyOptionsForm.html', context)

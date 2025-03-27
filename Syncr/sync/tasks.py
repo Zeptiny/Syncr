@@ -24,6 +24,7 @@ def check_schedules_cron():
                              srcFsPath=schedule.srcFsPath,
                              dstFs=schedule.dstFs, 
                              dstFsPath=schedule.dstFsPath,
+                             options=schedule.options,
                              server=schedule.server,
                              user=schedule.user,
                              # Kwargs below
