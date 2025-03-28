@@ -307,7 +307,7 @@ class jobsSearchForm(forms.Form):
     )
     
     type = forms.ChoiceField(
-        choices=[('', 'All')] + list(TASK_TYPES.items()),
+        choices=[(key, value['display']) for key, value in TASK_TYPES.items()],
         required=False,
         widget=forms.Select(attrs={'class': 'bg-gray-50 border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
     )
