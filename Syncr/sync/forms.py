@@ -339,4 +339,4 @@ class jobsSearchForm(forms.Form):
         self.request = kwargs.pop('request')
         super(jobsSearchForm, self).__init__(*args, **kwargs)
         
-        self.fields['callee'].choices = [('', 'All')] + [('manual', 'Manual')] + list(self.request.user.schedule_set.all().values_list('name', 'name'))
+        self.fields['callee'].choices = [('', 'All')] + [('manual', 'Manual')] + list(self.request.user.schedules.values_list('name', 'name'))
