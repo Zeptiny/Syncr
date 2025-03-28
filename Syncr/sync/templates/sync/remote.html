@@ -6,6 +6,7 @@
         <h1 class="text-2xl font-bold dark:text-gray-200 mt-2">
             Remotes
         </h1>
+        <p class="block mb-2 text-gray-900 dark:text-gray-300">Filesystems from a different number of providers and protocols</p>
         {% comment %} <p class="mt-1 text-sm font-normal text-gray-500 dark:text-gray-400">Only the last 20 entries are shown here</p> {% endcomment %}
     </div>
     <div>
@@ -20,13 +21,60 @@
         <h1 class="text-2xl font-bold dark:text-gray-200 mt-2">
             Unions
         </h1>
+        <p class="block mb-2 text-gray-900 dark:text-gray-300">Collection of remotes and can act as one singular filesystem</p>
         {% comment %} <p class="mt-1 text-sm font-normal text-gray-500 dark:text-gray-400">Only the last 20 entries are shown here</p> {% endcomment %}
     </div>
     <div>
-        <a href="{% url 'sync:createRemote' %}" class="p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">Create New Union</a>
+        <a href="{% url 'sync:createUnion' %}" class="p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">Create New Union</a>
     </div>
 </div>
 <div>
-    <h1>I still need to implement this :(</h1>
+    {% if user.unions.count < 1 %}
+    <p class="text-gray-700 bg-gray-50 dark:bg-gray-800 dark:text-gray-400 p-2 max-w-full">No Unions configured</p>
+    {% else %}
+    <div class="relative overflow-x-auto">
+        <table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+            <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+                <tr>
+                    <th scope="col" class="px-6 py-3">
+                        Name
+                    </th>
+                    <th scope="col" class="px-6 py-3">
+                        Remotes
+                    </th>
+                    <th scope="col" class="px-6 py-3">
+                        Edit
+                    </th>
+                    <th scope="col" class="px-6 py-3">
+                        Delete
+                    </th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for union in user.unions.all %}
+                <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700 border-gray-200">
+                    <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white">
+                        {{union.name}}
+                    </th>
+                    <td class="px-6 py-4">
+                        {% for remote in union.remotes.all %}
+                            {{remote}}
+                        {% endfor %}
+                    </td>
+                    <td class="px-6 py-4">
+                        <a href="{% url 'sync:editUnion' union.id %}">Edit</a>
+                    </td>
+                    <td class="px-6 py-4">
+                        <form action="{% url 'sync:deleteUnion' union.id %}" method="POST">
+                            {% csrf_token %}
+                            <button class="hover:cursor-pointer">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </div>
+{% endif %}
 {% endblock content %}

@@ -39,6 +39,9 @@ urlpatterns = [
     path('remote/edit/<int:remoteId>', views.createRemoteView.as_view(), name='editRemote'),
     path('remote/delete/<int:remoteId>', views.deleteRemoteView.as_view(), name='deleteRemote'),
     
+    path('union/new/', views.createUnionView.as_view(), name='createUnion'),
+    path('union/edit/<int:unionId>', views.createUnionView.as_view(), name='editUnion'),
+    path('union/delete/<int:unionId>', views.deleteUnionView.as_view(), name='deleteUnion'),
     
     path('ajax/remote/list/', views.ajaxRemoteList.as_view(), name='remoteList'),
 ]

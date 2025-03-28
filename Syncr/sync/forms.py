@@ -31,14 +31,34 @@ class remoteCreateForm(forms.ModelForm):
 
 class remoteWidget(forms.Select):
     def __init__(self, *args, **kwargs):
+        self.request = kwargs.pop('request', None)  # Accept the request object
         super().__init__(*args, **kwargs)
-        self.remote = models.Remote.objects.all()
         
+        # Fetch only the Remote and Union objects owned by the current user
+        if self.request:
+            self.remotes = models.Remote.objects.filter(user=self.request.user)
+            self.unions = models.Union.objects.filter(user=self.request.user)
+        else:
+            self.remotes = models.Remote.objects.none()
+            self.unions = models.Union.objects.none()
+
     def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
         option = super().create_option(name, value, label, selected, index, subindex, attrs)
-        remote = next((s for s in self.remote if s.id == value), None)
-        if remote:
-            option['attrs']['remote'] = remote
+
+        # Parse the value to determine if it's a Remote or Union
+        if value:
+            value_type, value_id = value.split(':')
+            if value_type == 'remote':
+                remote = next((r for r in self.remotes if str(r.id) == value_id), None)
+                if remote:
+                    option['attrs']['type'] = remote.type
+                    option['attrs']['name'] = remote.name
+            elif value_type == 'union':
+                union = next((u for u in self.unions if str(u.id) == value_id), None)
+                if union:
+                    option['attrs']['type'] = 'union'
+                    option['attrs']['name'] = union.name
+
         return option
     
 class serverWidget(forms.Select):
@@ -62,6 +82,15 @@ class TaskTypeWidget(forms.Select):
         return option
     
 class jobCreateForm(forms.Form):
+    srcFs = forms.ChoiceField(
+        required=True,
+        widget=remoteWidget,
+    )
+    dstFs = forms.ChoiceField(
+        required=True,
+        widget=remoteWidget,
+    )
+    
     type = forms.ChoiceField(
         choices=[(key, value['display']) for key, value in TASK_TYPES.items()],
         widget=TaskTypeWidget()
@@ -87,31 +116,49 @@ class jobCreateForm(forms.Form):
         self.request = kwargs.pop('request')
         super(jobCreateForm, self).__init__(*args, **kwargs)
         
-        self.fields['srcFs'] = forms.ModelChoiceField(
-            queryset=models.Remote.objects.filter(user=self.request.user),
+        # Combine Remote and Union objects into choices
+        remotes = models.Remote.objects.filter(user=self.request.user)
+        unions = models.Union.objects.filter(user=self.request.user)
+        
+        self.fields['srcFs'] = forms.ChoiceField(
+            choices=[
+                (f"remote:{remote.id}", f"Remote: {remote.name}") for remote in remotes
+            ] + [
+                (f"union:{union.id}", f"Union: {union.name}") for union in unions
+            ],
             required=True,
-            widget=remoteWidget,
-            empty_label=None  # Remove the default "None" choice
+            widget=remoteWidget(request=self.request)  # Pass the request object
         )
-        self.fields['dstFs'] = forms.ModelChoiceField(
-            queryset=models.Remote.objects.filter(user=self.request.user),
+
+        self.fields['dstFs'] = forms.ChoiceField(
+            choices=[
+                (f"remote:{remote.id}", f"Remote: {remote.name}") for remote in remotes
+            ] + [
+                (f"union:{union.id}", f"Union: {union.name}") for union in unions
+            ],
             required=True,
-            widget=remoteWidget,
-            empty_label=None  # Remove the default "None" choice
+            widget=remoteWidget(request=self.request)  # Pass the request object
         )
         
 
 class scheduleCreateForm(forms.ModelForm):
+    srcFs = forms.ChoiceField(
+        required=True,
+        widget=remoteWidget,
+    )
+    dstFs = forms.ChoiceField(
+        required=True,
+        widget=remoteWidget,
+    )
+    
     class Meta:
         model = models.Schedule
-        fields = ['name', 'type', 'cron', 'srcFs', 'srcFsPath', 'dstFs', 'dstFsPath', 'server']
+        fields = ['name', 'type', 'cron', 'srcFsPath', 'dstFsPath', 'server']
         labels = {
             'name': 'Schedule Name',
             'type': 'Schedule Type',
             'cron': 'Cron Frequency',
-            'srcFs': 'Source Remote',
             'srcFsPath': 'Source Remote Path',
-            'dstFs': 'Destination Remote',
             'dstFsPath': 'Destination Remote Path',
             'server': 'Server to run the jobs'
         }
@@ -134,17 +181,28 @@ class scheduleCreateForm(forms.ModelForm):
         self.request = kwargs.pop('request')
         super(scheduleCreateForm, self).__init__(*args, **kwargs)
         
-        self.fields['srcFs'] = forms.ModelChoiceField(
-            queryset=models.Remote.objects.filter(user=self.request.user),
+        # Combine Remote and Union objects into choices
+        remotes = models.Remote.objects.filter(user=self.request.user)
+        unions = models.Union.objects.filter(user=self.request.user)
+        
+        self.fields['srcFs'] = forms.ChoiceField(
+            choices=[
+                (f"remote:{remote.id}", f"Remote: {remote.name}") for remote in remotes
+            ] + [
+                (f"union:{union.id}", f"Union: {union.name}") for union in unions
+            ],
             required=True,
-            widget=remoteWidget,
-            empty_label=None  # Remove the default "None" choice
+            widget=remoteWidget(request=self.request)  # Pass the request object
         )
-        self.fields['dstFs'] = forms.ModelChoiceField(
-            queryset=models.Remote.objects.filter(user=self.request.user),
+
+        self.fields['dstFs'] = forms.ChoiceField(
+            choices=[
+                (f"remote:{remote.id}", f"Remote: {remote.name}") for remote in remotes
+            ] + [
+                (f"union:{union.id}", f"Union: {union.name}") for union in unions
+            ],
             required=True,
-            widget=remoteWidget,
-            empty_label=None  # Remove the default "None" choice
+            widget=remoteWidget(request=self.request)  # Pass the request object
         )
         
         self.fields['server'] = forms.ModelChoiceField(
@@ -161,6 +219,25 @@ class scheduleCreateForm(forms.ModelForm):
         
     # TO-DO
     # ENSURE THE CRON IS CORRECTLY FORMATTED
+
+class unionCreateForm(forms.ModelForm):
+    class Meta:
+        model = models.Union
+        fields = ['name', 'remotes']
+        labels = {
+            'name': 'Union Name',
+            'remotes': 'Union Remotes'
+        }
+        
+        widgets = {
+            'name': forms.TextInput(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'}),
+        }
+        
+    def __init__ (self, *args, **kwargs):
+        self.request = kwargs.pop('request')
+        super(unionCreateForm, self).__init__(*args, **kwargs)
+        
+        self.fields['remotes'].queryset = models.Remote.objects.filter(user=self.request.user)
 
 # This form has all the generic copy options that can be used in the copy/sync/move tasks
 # https://rclone.org/commands/rclone_move/

@@ -140,7 +140,7 @@
     <p class="block mb-2 text-gray-900 dark:text-gray-300">The source remote from where the files will be pulled</p>
     <div class="grid grid-cols-3 gap-2">
         {% for choice in form.srcFs %}
-            {% with srcFs=choice.data.attrs.remote %}
+            {% with srcFs=choice.data.attrs %}
             <label class="bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500
             hover:cursor-pointer dark:hover:bg-gray-800 dark:has-checked:bg-blue-500">
                     <input 
@@ -165,7 +165,7 @@
     <p class="block mb-2 text-gray-900 dark:text-gray-300">The destination remote from where the files will be pushed</p>
     <div class="grid grid-cols-3 gap-2">
         {% for choice in form.dstFs %}
-            {% with dstFs=choice.data.attrs.remote %}
+            {% with dstFs=choice.data.attrs %}
                 <label class="bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500
                     hover:cursor-pointer dark:hover:bg-gray-800 dark:has-checked:bg-blue-500">
                     <input 

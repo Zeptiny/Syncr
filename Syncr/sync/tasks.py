@@ -20,10 +20,15 @@ def check_schedules_cron():
         if CronValidator.match_datetime(schedule.cron, dt):
             # Run the task
             createJobHandler(type=schedule.type, 
-                             srcFs=schedule.srcFs, 
+                             
+                             srcFs_content_type=schedule.srcFs_content_type, 
+                             srcFs_object_id=schedule.srcFs_object_id,
                              srcFsPath=schedule.srcFsPath,
-                             dstFs=schedule.dstFs, 
+                             
+                             dstFs_content_type=schedule.dstFs_content_type, 
                              dstFsPath=schedule.dstFsPath,
+                             dstFs_object_id=schedule.dstFs_object_id,
+                             
                              options=schedule.options,
                              server=schedule.server,
                              user=schedule.user,

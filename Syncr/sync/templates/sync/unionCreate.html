@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block content %}
+<form action="" method="POST" class="max-w-lg mx-auto">
+    {% csrf_token %}
+    <h1 class="block mt-2 text-xl text-gray-900 dark:text-white">Remotes</h1>
+    <p class="block mb-2 text-gray-900 dark:text-gray-300">The remotes that make part of this union</p>
+    <div class="grid grid-cols-3 gap-2">
+        {% for remote in form.remotes.field.queryset %}
+            <label class="bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500
+            hover:cursor-pointer dark:hover:bg-gray-800 dark:has-checked:bg-blue-500">
+                <input 
+                    type="checkbox" 
+                    class="hidden" 
+                    name="{{ form.remotes.name }}" 
+                    value="{{ remote.id }}" 
+                    {% if remote in form.instance.remotes.all %}checked{% endif %}
+                >
+                <div class="flex flex-col">
+                    <span class="font-medium">{{ remote.name }}</span>
+                </div>
+            </label>
+        {% endfor %}
+    </div>
+
+    <div class="mt-8">
+        <label for="{{ form.name.id_for_label }}" class="block text-gray-900 dark:text-white">{{ form.name.label }}</label>
+        <p class="block mb-2 text-gray-900 dark:text-gray-300">Give your union a human redable name!</p>
+        {{ form.name }}
+    </div>
+
+    {{ form.config }}
+    <button type="submit" class="mt-2 hover:cursor-pointer text-white bg-gray-800 hover:bg-gray-900 focus:outline-none focus:ring-4 focus:ring-gray-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-gray-800 dark:hover:bg-gray-700 dark:focus:ring-gray-700 dark:border-gray-700">Submit</button>
+</form>
+{% endblock content %}

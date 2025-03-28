@@ -6,6 +6,7 @@ from django.views import View
 from django.db.models import Sum
 from django.utils import timezone
 from datetime import timedelta
+from django.contrib.contenttypes.models import ContentType
 
 from django.core.paginator import Paginator
 from django.db.models import Q
@@ -140,6 +141,66 @@ class deleteRemoteView(View):
 class remoteView(View):
     def get(self, request):
         return render(request, 'sync/remote.html')
+    
+    
+class createUnionView(View):
+    def get(self, request, unionId=None):
+        if unionId: # If there is a remote id
+            if models.Union.objects.filter(pk=unionId).exists(): # If an object with that ID exists
+                remote = models.Union.objects.get(pk=unionId)
+                
+                if remote.user != request.user: # Redirect to the normal creation if the user is not the owner
+                    return redirect('sync:createUnion')
+                
+                form = forms.unionCreateForm(instance=remote, request=request)
+            else: # If it doesn't exist
+                return redirect('sync:createUnion') # Redirect to without an ID
+        else:
+            form = forms.unionCreateForm(request=request)
+        
+        context = {
+            'form': form
+        }
+        
+        return render(request, 'sync/unionCreate.html', context)
+    
+    def post(self, request, unionId=None):
+        if unionId: # If there is a remote id
+            if models.Union.objects.filter(pk=unionId).exists(): # If an object with that ID exists
+                union = models.Union.objects.get(pk=unionId)
+                
+                if union.user != request.user: # Redirect to the normal creation if the user is not the owner
+                    return redirect('sync:createUnion')
+                
+                form = forms.unionCreateForm(request.POST, instance=union, request=request)
+            else: # If it doesn't exist
+                return redirect('sync:createUnion') # Redirect to without an ID
+        else:
+            form = forms.unionCreateForm(request.POST, request=request)
+        
+        if form.is_valid():
+            union = form.save(commit=False)
+            union.user = request.user
+            union.save()
+            union.remotes.clear()  # Clear all existing remotes
+            form.save_m2m()
+            
+            return redirect('sync:remote')
+        
+        else:
+            context = {
+                'form': form
+            }
+            return render(request, 'sync/unionCreate.html', context)
+
+class deleteUnionView(View):
+    def post(self, request, unionId):
+        union = get_object_or_404(models.Union, pk=unionId)
+        
+        if union.user == request.user:
+            union.delete()
+        
+        return redirect('sync:remote')
 
 class ajaxRemoteList(View):
     def get(self, request):
@@ -186,11 +247,13 @@ class createJobView(View):
         #
         
         
+        # Process the srcFs and dstFs fields
+        srcFs_content_type, srcFs_object_id = form.cleaned_data['srcFs'].split(':')
+        dstFs_content_type, dstFs_object_id = form.cleaned_data['dstFs'].split(':')
+        
         # Get the form data
         type = form.cleaned_data['type']
-        srcFs = form.cleaned_data['srcFs']
         srcFsPath = form.cleaned_data['srcFsPath']
-        dstFs = form.cleaned_data['dstFs']
         dstFsPath = form.cleaned_data['dstFsPath']
         server = form.cleaned_data['server']
         
@@ -212,11 +275,17 @@ class createJobView(View):
         options = optionsForm.cleaned_data
         options = {key.replace("_", "-"): value for key, value in options.items()} # Replace _ from options to -
         
+        # This shit return <app_label> | <model>
+        # ContentType.objects.get(model=srcFs_content_type)
+        
+        
         # Create the job
         utils.createJobHandler(type=type, 
-                               srcFs=srcFs, 
+                               srcFs_content_type=ContentType.objects.get(model=srcFs_content_type), 
+                               srcFs_object_id=srcFs_object_id,
                                srcFsPath=srcFsPath, 
-                               dstFs=dstFs, 
+                               dstFs_content_type=ContentType.objects.get(model=dstFs_content_type), 
+                               dstFs_object_id=dstFs_object_id,
                                dstFsPath=dstFsPath, 
                                options=options,
                                server=server, 
@@ -388,9 +457,19 @@ class createScheduleView(View):
         #
         
         
+        # Process the srcFs and dstFs fields
+        srcFs_content_type, srcFs_object_id = form.cleaned_data['srcFs']
+        dstFs_content_type, dstFs_object_id = form.cleaned_data['dstFs']
+        
+        # Save the schedule
         schedule = form.save(commit=False)
         schedule.user = request.user
         schedule.options = optionsForm.cleaned_data
+        
+        schedule.srcFs_content_type = srcFs_content_type
+        schedule.srcFs_object_id = srcFs_object_id
+        schedule.dstFs_content_type = dstFs_content_type
+        schedule.dstFs_object_id = dstFs_object_id
         
         # Correctly formatting the path:
         schedule.srcFsPath = schedule.srcFsPath.replace(" ", "")

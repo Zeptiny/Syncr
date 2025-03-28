@@ -7,15 +7,24 @@ import requests
 import threading
 
 # Job creation functions
-def createJobHandler(type: str, srcFs, srcFsPath, dstFs, dstFsPath, options, server, user, **kwargs) -> None:
+def createJobHandler(type: str, 
+                     srcFs_content_type, srcFs_object_id, srcFsPath, 
+                     dstFs_content_type, dstFs_object_id, dstFsPath, 
+                     options, server, user, **kwargs) -> None:
     # Start the job
     if type == "sync/copy" or type == "sync/sync" or type == "sync/move":
         payload = {
-            "srcFs": createOnTheFlyRemote(remote=srcFs, server=server, path=srcFsPath),
-            "dstFs": createOnTheFlyRemote(remote=dstFs, server=server, path=dstFsPath),
+            "srcFs": createOnTheFlyFsHandler(fs_type=srcFs_content_type.model, 
+                                          fs_object_id=srcFs_object_id,
+                                          server=server, 
+                                          path=srcFsPath),
+            "dstFs": createOnTheFlyFsHandler(fs_type=dstFs_content_type.model,
+                                          fs_object_id=dstFs_object_id,
+                                          server=server, 
+                                          path=dstFsPath),
             "_async": "true",
             "_config": {
-                "dryrun": True,
+                **options
             }
         }
     
@@ -34,9 +43,11 @@ def createJobHandler(type: str, srcFs, srcFsPath, dstFs, dstFsPath, options, ser
         user=user,
         schedule=kwargs.get("schedule"),
         type=type,
-        srcFs=srcFs,
+        srcFs_content_type=srcFs_content_type,
+        srcFs_object_id=srcFs_object_id,
         srcFsPath=srcFsPath,
-        dstFs=dstFs,
+        dstFs_content_type=dstFs_content_type,
+        dstFs_object_id=dstFs_object_id,
         dstFsPath=dstFsPath,
         server=server,
         options=options,
@@ -61,6 +72,33 @@ def createJobHandler(type: str, srcFs, srcFsPath, dstFs, dstFsPath, options, ser
     
 
 # Remote formating functions
+def createOnTheFlyFsHandler(fs_type, fs_object_id, server, path) -> str:
+    if fs_type == "remote":
+        remote = models.Remote.objects.get(id=fs_object_id)
+        formattedFs = createOnTheFlyRemote(remote, server, path)
+        
+    elif fs_type == "union":
+        union = models.Union.objects.get(id=fs_object_id)
+        
+        # Properly format the union remote with quoted upstreams
+        upstreams = [
+            createOnTheFlyRemote(remote, server, path) for remote in union.remotes.all()
+        ]
+        
+        # Ensure there are no empty upstreams
+        if not upstreams:
+            raise ValueError("Union remote cannot have empty upstreams.")
+        
+        # Join upstreams with commas and construct the union remote
+        formattedFs = f':union,upstreams="{" ".join(upstreams)}":{path}'
+        
+    else: 
+        raise ValueError(f"Unsupported fs type: {fs_type}")
+    
+    print(formattedFs)
+    return formattedFs
+    
+
 def createOnTheFlyRemote(remote, server, path) -> str:
     
     # Each config type has it own format
@@ -78,7 +116,7 @@ def createOnTheFlyRemote(remote, server, path) -> str:
         
         formattedRemote = (
             f":{remote.type}," +
-            ",".join(f"{key}=\"{value}\"" for key, value in remote.config.items()
+            ",".join(f"{key}=\'{value}\'" for key, value in remote.config.items()
                      if key != "bucket") +
             f":{remote.config['bucket']}{path}"
         )
@@ -94,8 +132,6 @@ def createOnTheFlyRemote(remote, server, path) -> str:
         
     else:
         raise ValueError(f"Unsupported remote type: {remote.type}")
-        
-    print(formattedRemote)
     
     return formattedRemote
 
