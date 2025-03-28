@@ -89,7 +89,7 @@ class createRemoteView(View):
             'remote_fields': REMOTE_FIELDS
         }
         
-        return render(request, 'sync/remoteCreate.html', context)
+        return render(request, 'sync/remote/create.html', context)
     
     def post(self, request, remoteId=None):
         if remoteId: # If there is a remote id
@@ -140,7 +140,7 @@ class deleteRemoteView(View):
 
 class remoteView(View):
     def get(self, request):
-        return render(request, 'sync/remote.html')
+        return render(request, 'sync/remote/list.html')
     
     
 class createUnionView(View):
@@ -162,7 +162,7 @@ class createUnionView(View):
             'form': form
         }
         
-        return render(request, 'sync/unionCreate.html', context)
+        return render(request, 'sync/remote/unionCreate.html', context)
     
     def post(self, request, unionId=None):
         if unionId: # If there is a remote id
@@ -211,7 +211,7 @@ class createJobView(View):
             'form': form
         }
         
-        return render(request, 'sync/jobCreate.html', context)
+        return render(request, 'sync/job/create.html', context)
     
     def post(self, request):
         form = forms.jobCreateForm(request.POST, request=request)
@@ -221,7 +221,7 @@ class createJobView(View):
             context = {
                 'form': form
             }
-            return render(request, 'sync/jobCreate.html', context)
+            return render(request, 'sync/job/create.html', context)
         
         
         if form.cleaned_data['type'] == "sync/copy" or "sync/sync" or "sync/move":
@@ -231,7 +231,7 @@ class createJobView(View):
                 context = {
                     'form': form,
                 }
-                return render(request, 'sync/jobCreate.html', context)
+                return render(request, 'sync/job/create.html', context)
 
         #
         # If everything is valid and gud:
@@ -291,7 +291,7 @@ class detailView(View):
             'jobId': jobId,
             'isFinished': isFinished
         }
-        return render(request, 'sync/jobDetail.html', context)
+        return render(request, 'sync/job/detail.html', context)
 
 class jobListView(View):
     def get(self, request):
@@ -350,7 +350,7 @@ class jobListView(View):
             'query_string': query_string
         }
 
-        return render(request, 'sync/jobList.html', context)
+        return render(request, 'sync/job/list.html', context)
 
 # We are not using utils.queryJob as we want the transferring and checking
 class ajaxJobQuery(View):
@@ -359,7 +359,7 @@ class ajaxJobQuery(View):
         context = {
             'job': job
         }
-        return render(request, 'sync/ajax/jobQuery.html', context)
+        return render(request, 'sync/job/ajax/query.html', context)
     
 class ajaxJobQueryCharts(View):
     def get(self, request, jobId):
@@ -386,12 +386,12 @@ class ajaxJobQueryCharts(View):
             'checks': [stat.checks for stat in stats]
         }
         
-        return render(request, 'sync/ajax/jobQueryCharts.html', context)
+        return render(request, 'sync/job/ajax/QueryCharts.html', context)
     
 # Schedules
 class scheduleView(View):
     def get(self, request):
-        return render(request, 'sync/schedule.html')
+        return render(request, 'sync/schedule/schedules.html')
 
 class createScheduleView(View):
     def get(self, request, scheduleId=None):
@@ -413,7 +413,7 @@ class createScheduleView(View):
             'form': form
         }
         
-        return render(request, 'sync/scheduleCreate.html', context)
+        return render(request, 'sync/schedule/create.html', context)
     
     def post(self, request, scheduleId=None):
         if scheduleId: # If there is a schedule id
@@ -432,7 +432,7 @@ class createScheduleView(View):
             context = {
                 'form': form
             }
-            return render(request, 'sync/scheduleCreate.html', context)
+            return render(request, 'sync/schedule/create.html', context)
         
         if form.cleaned_data['type'] == "sync/copy" or "sync/sync" or "sync/move":
             optionsForm = forms.genericCopyOptionsForm(request.POST)
@@ -441,7 +441,7 @@ class createScheduleView(View):
                 context = {
                     'form': form,
                 }
-                return render(request, 'sync/jobCreate.html', context)
+                return render(request, 'sync/job/create.html', context)
         
         #
         # If everything is valid and gud:
