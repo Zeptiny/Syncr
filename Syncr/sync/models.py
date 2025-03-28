@@ -27,12 +27,12 @@ class Union(models.Model):
     remotes = models.ManyToManyField(Remote)
 
 class Schedule(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="schedules")
     name = models.CharField(max_length=127)
     
     cron = models.CharField(max_length=127) # A string that represents the cron frequency
     
-    type = models.CharField(choices=TASK_TYPES.items(), max_length=127, default="sync/copy")
+    type = models.CharField(choices=[(key, value['display']) for key, value in TASK_TYPES.items()], max_length=127, default="sync/copy")
     
     srcFs_content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name='schdule_srcFs_content_type', null=True)
     srcFs_object_id = models.PositiveIntegerField(null=True)

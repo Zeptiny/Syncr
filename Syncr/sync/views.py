@@ -449,17 +449,17 @@ class createScheduleView(View):
         
         
         # Process the srcFs and dstFs fields
-        srcFs_content_type, srcFs_object_id = form.cleaned_data['srcFs']
-        dstFs_content_type, dstFs_object_id = form.cleaned_data['dstFs']
+        srcFs_content_type, srcFs_object_id = form.cleaned_data['srcFs'].split(':')
+        dstFs_content_type, dstFs_object_id = form.cleaned_data['dstFs'].split(':')
         
         # Save the schedule
         schedule = form.save(commit=False)
         schedule.user = request.user
         schedule.options = optionsForm.cleaned_data
-        
-        schedule.srcFs_content_type = srcFs_content_type
+
+        schedule.srcFs_content_type = ContentType.objects.get(model=srcFs_content_type)
         schedule.srcFs_object_id = srcFs_object_id
-        schedule.dstFs_content_type = dstFs_content_type
+        schedule.dstFs_content_type = ContentType.objects.get(model=dstFs_content_type)
         schedule.dstFs_object_id = dstFs_object_id
         
         # Correctly formatting the path:
