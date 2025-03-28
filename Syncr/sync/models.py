@@ -10,7 +10,7 @@ from .settings import TASK_TYPES, REMOTE_TYPES
 from servers.models import Server
 
 class Remote(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="remotes")
     
     name = models.CharField(max_length=127)
     type = models.CharField(choices=REMOTE_TYPES.items(), max_length=127) # There is a list of allowed remotes

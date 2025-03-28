@@ -201,15 +201,6 @@ class deleteUnionView(View):
             union.delete()
         
         return redirect('sync:remote')
-
-class ajaxRemoteList(View):
-    def get(self, request):
-        remotes = models.Remote.objects.filter(user=request.user)
-        context = {
-            'remotes': remotes
-        }
-        
-        return render(request, 'sync/ajax/remoteList.html', context)
 # Jobs
 
 class createJobView(View):

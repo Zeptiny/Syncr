@@ -13,7 +13,51 @@
         <a href="{% url 'sync:createRemote' %}" class="p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">Create New Remote</a>
     </div>
 </div>
-<div hx-get="{% url 'sync:remoteList' %}" hx-trigger="load"></div>
+{% if user.remotes.count < 1 %}
+<p class="text-gray-700 bg-gray-50 dark:bg-gray-800 dark:text-gray-400 p-2 max-w-full">No remotes configured</p>
+{% else %}
+<div class="relative overflow-x-auto">
+    <table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+            <tr>
+                <th scope="col" class="px-6 py-3">
+                    Name
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Type
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Edit
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Delete
+                </th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for remote in user.remotes.all %}
+            <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700 border-gray-200">
+                <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white">
+                    {{remote.name}}
+                </th>
+                <td class="px-6 py-4">
+                    {{remote.type}}
+                </td>
+                <td class="px-6 py-4">
+                    <a href="{% url 'sync:editRemote' remote.id %}">Edit</a>
+                </td>
+                <td class="px-6 py-4">
+                    <form action="{% url 'sync:deleteRemote' remote.id %}" method="POST">
+                        {% csrf_token %}
+                        <button class="hover:cursor-pointer">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
 
 
 <div class="flex justify-between items-center mt-2 dark:bg-gray-700 p-2">
