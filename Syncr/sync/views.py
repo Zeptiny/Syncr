@@ -489,16 +489,6 @@ class deleteScheduleView(View):
             schedule.delete()
         
         return redirect('sync:schedule')
-    
-      
-class ajaxScheduleListView(View):
-    def get(self, request):
-        schedules = models.Schedule.objects.filter(user=request.user)
-        context = {
-            'schedules': schedules
-        }
-        
-        return render(request, 'sync/ajax/scheduleList.html', context)
 
 # Ajax Views Below
 

@@ -26,8 +26,6 @@ urlpatterns = [
     path('schedule/edit/<int:scheduleId>/', views.createScheduleView.as_view(), name='editSchedule'),
     path('schedule/delete/<int:scheduleId>/', views.deleteScheduleView.as_view(), name='deleteSchedule'),
     
-    path('ajax/schedulelist', views.ajaxScheduleListView.as_view(), name='scheduleList'),
-    
     
     # Forms
     path('ajax/genericCopyOptionsForm/', views.ajaxGenericCopyOptionsForm.as_view(), name='genericCopyOptionsForm'),
