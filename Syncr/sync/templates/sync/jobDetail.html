@@ -8,7 +8,7 @@
 <script src="{% static 'js/chartjs-plugin-zoom.js' %}"></script>
 
 <div class="my-4">
-    <a href="{% url 'sync:index' %}" class="p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">Back to Home</a>
+    <a href="{% url 'sync:index' %}" class="rounded-lg p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">Back to Home</a>
 </div>
 
 {% if isFinished %}
@@ -18,13 +18,13 @@
 {% endif %}
 
 <div class="grid grid-cols-1 md:grid-cols-2 mb-4 gap-x-4 gap-y-4">
-    <figure class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700">
+    <figure class="rounded-lg flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700">
         <blockquote class="w-full mb-2 text-gray-500 dark:text-gray-400">
             <canvas id="bytesChart"></canvas>
         </blockquote>  
         <button id="resetBytesZoom" class="mt-2 text-white bg-gray-800 hover:bg-gray-900 focus:outline-none focus:ring-4 focus:ring-gray-300 font-medium rounded-lg text-sm px-5 py-2.5 mb-2 dark:bg-gray-800 dark:hover:bg-gray-700 dark:focus:ring-gray-700 dark:border-gray-700">Reset Zoom</button> 
     </figure>
-    <figure class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700">
+    <figure class="rounded-lg flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700">
         <blockquote class="w-full mb-2 text-gray-500 dark:text-gray-400">
             <canvas id="transfersChart"></canvas>
         </blockquote>  

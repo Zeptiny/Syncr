@@ -1,7 +1,7 @@
 {% load custom_filters %}
 
 <div class="grid grid-cols-2 md:grid-cols-4 mb-4 gap-x-4 gap-y-4">
-    <a href="#runningJobsList" class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:dark:bg-gray-700 hover:bg-gray-300">
+    <a href="#runningJobsList" class="rounded-lg flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:dark:bg-gray-700 hover:bg-gray-300">
         <figure>
             <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
                 <p class="my-2">Running Jobs</p>
@@ -9,7 +9,7 @@
             </blockquote>   
         </figure>
     </a>
-    <a href="{% url 'sync:schedule' %}" class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:dark:bg-gray-700 hover:bg-gray-300">
+    <a href="{% url 'sync:schedule' %}" class="rounded-lg flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:dark:bg-gray-700 hover:bg-gray-300">
         <figure>
             <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
                 <p class="my-2">Scheduled Jobs</p>
@@ -17,7 +17,7 @@
             </blockquote>  
         </figure>
     </a>
-    <a href="{% url 'sync:jobList' %}?status=failed&last_x_days=30" class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:dark:bg-gray-700 hover:bg-gray-300">
+    <a href="{% url 'sync:jobList' %}?status=failed&last_x_days=30" class="rounded-lg flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:dark:bg-gray-700 hover:bg-gray-300">
         <figure>
             <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
                 <p class="my-2">Errored Jobs</p>
@@ -34,7 +34,7 @@
             </blockquote>   
         </figure>
     </a>
-    <a href="{% url 'sync:jobList' %}?order_by=bytes&last_x_days=30" class="flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:dark:bg-gray-700 hover:bg-gray-300">
+    <a href="{% url 'sync:jobList' %}?order_by=bytes&last_x_days=30" class="rounded-lg flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:dark:bg-gray-700 hover:bg-gray-300">
         <figure>
             <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
                 <p class="my-2">Total Bandwidth</p>

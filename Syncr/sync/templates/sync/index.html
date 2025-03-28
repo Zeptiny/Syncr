@@ -10,7 +10,7 @@
 <div hx-get="{% url 'sync:indexStats' %}" hx-trigger="every 5s, load"></div>
 <div hx-get="{% url 'sync:indexStatsCharts' %}" hx-trigger="load"></div>
 
-<div id="runningJobsList" class="flex justify-between items-center mt-2 dark:bg-gray-700 px-2">
+<div id="runningJobsList" class="rounded-t-lg flex justify-between items-center mt-2 dark:bg-gray-700 px-2">
     <div>
         <h1 class="text-2xl font-bold dark:text-gray-200 mt-2">
             Running Jobs
@@ -24,7 +24,7 @@
 <div hx-get="{% url 'sync:runningJobs' %}" hx-trigger="every 5s, load"></div>
 
 
-<div class="flex justify-between items-center mt-2 dark:bg-gray-700 px-2">
+<div class="rounded-t-lg flex justify-between items-center mt-2 dark:bg-gray-700 px-2">
     <div>
         <h1 class="text-2xl font-bold dark:text-gray-200 mt-2">
             Finished Jobs
