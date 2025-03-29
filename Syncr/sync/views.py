@@ -3,7 +3,8 @@ from django.http import HttpResponse
 from time import sleep
 from django.shortcuts import get_object_or_404, render, redirect
 from django.views import View
-from django.db.models import Sum
+from django.db.models import Sum, Count, Q
+from django.db.models.functions import TruncDate
 from django.utils import timezone
 from datetime import timedelta
 from django.contrib.contenttypes.models import ContentType
@@ -31,39 +32,92 @@ class ajaxIndexStatsView(View):
         }
         return render(request, 'sync/ajax/indexStats.html', context)
     
+# class ajaxIndexStatsChartsView(View):
+#     def get(self, request):
+#         days = [timezone.now().date() - timedelta(days=7-i) for i in range(7)]
+        
+#         stats = models.DailyStatistics.objects.filter(user=request.user, date__in=days)
+        
+#         stats_by_date = {stat.date: stat for stat in stats}
+        
+#         # Initialize the context dictionary
+#         context = {
+#             'days': [day.strftime("%m-%d") for day in days],
+#             'bytes': [],
+#             'serverSideCopyBytes': [],
+#             'serverSideMoveBytes': [],
+#             'jobsRun': [],
+#             'jobsErrored': []
+#         }
+        
+#         # Prepare the data for the chart
+#         for day in days:
+#             if day in stats_by_date:
+#                 context['bytes'].append((stats_by_date[day].bytes)/1000000000)
+#                 context['serverSideCopyBytes'].append((stats_by_date[day].serverSideCopyBytes)/1000000000)
+#                 context['serverSideMoveBytes'].append((stats_by_date[day].serverSideMoveBytes)/1000000000)
+#                 context['jobsRun'].append(stats_by_date[day].jobs_run)
+#                 context['jobsErrored'].append(stats_by_date[day].errored_jobs)
+#             else:
+#                 context['bytes'].append(0)
+#                 context['serverSideCopyBytes'].append(0)
+#                 context['serverSideMoveBytes'].append(0)
+#                 context['jobsRun'].append(0)
+#                 context['jobsErrored'].append(0)
+        
+#         return render(request, 'sync/ajax/indexStatsCharts.html', context)
 class ajaxIndexStatsChartsView(View):
     def get(self, request):
-        days = [timezone.now().date() - timedelta(days=7-i) for i in range(7)]
-        
-        stats = models.DailyStatistics.objects.filter(user=request.user, date__in=days)
-        
-        stats_by_date = {stat.date: stat for stat in stats}
-        
-        # Initialize the context dictionary
+        # Define the date range (last 14 days)
+        start_date = timezone.now().date() - timedelta(days=13)
+        end_date = timezone.now().date()
+
+        # Query the Job model and group by date
+        jobs = (
+            models.Job.objects.filter(
+                user=request.user,
+                startTime__date__range=(start_date, end_date)
+            )
+            .annotate(date=TruncDate('startTime'))
+            .values('date')
+            .annotate(
+                total_bytes=Sum('bytes', default=0),
+                total_server_side_copy_bytes=Sum('serverSideCopyBytes', default=0),
+                total_server_side_move_bytes=Sum('serverSideMoveBytes', default=0),
+                jobs_run=Count('id'),
+                jobs_errored=Count('id', filter=Q(success=False)),
+            )
+        )
+
+        # Create a dictionary to map dates to stats
+        stats_by_date = {job['date']: job for job in jobs}
+
+        # Prepare the context for the chart
+        days = [start_date + timedelta(days=i) for i in range(14)]
         context = {
             'days': [day.strftime("%m-%d") for day in days],
             'bytes': [],
             'serverSideCopyBytes': [],
             'serverSideMoveBytes': [],
             'jobsRun': [],
-            'jobsErrored': []
+            'jobsErrored': [],
         }
-        
-        # Prepare the data for the chart
+
+        # Populate the context with data or defaults
         for day in days:
             if day in stats_by_date:
-                context['bytes'].append((stats_by_date[day].bytes)/1000000000)
-                context['serverSideCopyBytes'].append((stats_by_date[day].serverSideCopyBytes)/1000000000)
-                context['serverSideMoveBytes'].append((stats_by_date[day].serverSideMoveBytes)/1000000000)
-                context['jobsRun'].append(stats_by_date[day].jobs_run)
-                context['jobsErrored'].append(stats_by_date[day].errored_jobs)
+                context['bytes'].append(stats_by_date[day]['total_bytes'] / 1_000_000_000)  # Convert to GB
+                context['serverSideCopyBytes'].append(stats_by_date[day]['total_server_side_copy_bytes'] / 1_000_000_000)  # Convert to GB
+                context['serverSideMoveBytes'].append(stats_by_date[day]['total_server_side_move_bytes'] / 1_000_000_000)  # Convert to GB
+                context['jobsRun'].append(stats_by_date[day]['jobs_run'])
+                context['jobsErrored'].append(stats_by_date[day]['jobs_errored'])
             else:
                 context['bytes'].append(0)
                 context['serverSideCopyBytes'].append(0)
                 context['serverSideMoveBytes'].append(0)
                 context['jobsRun'].append(0)
                 context['jobsErrored'].append(0)
-        
+        print(context)
         return render(request, 'sync/ajax/indexStatsCharts.html', context)
 
 # Remotes
