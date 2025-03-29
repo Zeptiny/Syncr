@@ -1,195 +1,334 @@
 {% load custom_filters %}
-{% comment %} Scripts below {% endcomment %}
+<div class="grid grid-cols-2 gap-4">
+    <div class="w-full bg-white rounded-lg shadow-sm dark:bg-gray-800 p-2 md:p-4">
+        <div class="flex justify-between mb-4">
+            <h5 class="inline-flex items-center text-gray-500 dark:text-gray-400 leading-none font-normal mb-2">Bandwidth
+              <svg data-popover-target="bytes-info" data-popover-placement="bottom" class="w-3 h-3 text-gray-400 hover:text-gray-900 dark:hover:text-white cursor-pointer ms-1" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10 .5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 10 .5ZM9.5 4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM12 15H8a1 1 0 0 1 0-2h1v-3H8a1 1 0 0 1 0-2h2a1 1 0 0 1 1 1v4h1a1 1 0 0 1 0 2Z"/>
+              </svg>
+              <div data-popover id="bytes-info" role="tooltip" class="absolute z-10 invisible inline-block text-sm text-gray-500 transition-opacity duration-300 bg-white border border-gray-200 rounded-lg shadow-xs opacity-0 w-72 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-400">
+                  <div class="p-3 space-y-2">
+                    <h3 class="font-semibold text-gray-900 dark:text-white">Bandwidth</h3>
+                    <p>The bandwidth speed used for transfers passing through our server.</p>
+                    
+                    <h3 class="font-semibold text-gray-900 dark:text-white">Server Side Copy</h3>
+                    <p>The bandwidth speed used for direct copies between remotes.</p>
+                    
+                    <h3 class="font-semibold text-gray-900 dark:text-white">Server Side Moves</h3>
+                    <p>The bandwidth speed used for direct moves between remotes.</p>
+                  <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m1 9 4-4-4-4"/>
+                </svg></a>
+                  </div>
+                  <div data-popper-arrow></div>
+              </div>
+            </h5>
+        </div>
+        <div class="h-64">
+            <div id="bytes-chart"></div>
+        </div>
+    </div>
+
+    <div class="w-full bg-white rounded-lg shadow-sm dark:bg-gray-800 p-2 md:p-4">
+        <div class="flex justify-between mb-4">
+            <h5 class="inline-flex items-center text-gray-500 dark:text-gray-400 leading-none font-normal mb-2">Transfers
+              <svg data-popover-target="jobs-info" data-popover-placement="bottom" class="w-3 h-3 text-gray-400 hover:text-gray-900 dark:hover:text-white cursor-pointer ms-1" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10 .5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 10 .5ZM9.5 4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM12 15H8a1 1 0 0 1 0-2h1v-3H8a1 1 0 0 1 0-2h2a1 1 0 0 1 1 1v4h1a1 1 0 0 1 0 2Z"/>
+              </svg>
+              <div data-popover id="jobs-info" role="tooltip" class="absolute z-10 invisible inline-block text-sm text-gray-500 transition-opacity duration-300 bg-white border border-gray-200 rounded-lg shadow-xs opacity-0 w-72 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-400">
+                  <div class="p-3 space-y-2">
+                    <h3 class="font-semibold text-gray-900 dark:text-white">Transfers</h3>
+                    <p>Transfer speed of files moving through our server.</p>
+                    
+                    <h3 class="font-semibold text-gray-900 dark:text-white">Server Side Copies</h3>
+                    <p>Transfer speed of files directly copied between remotes.</p>
+                    
+                    <h3 class="font-semibold text-gray-900 dark:text-white">Server Side Moves</h3>
+                    <p>Transfer speed of files directly moved between remotes.</p>
+                    
+                    <h3 class="font-semibold text-gray-900 dark:text-white">Checks</h3>
+                    <p>Speed of checking whether a file needs to be transferred.</p>
+                  <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m1 9 4-4-4-4"/>
+                </svg></a>
+                  </div>
+                  <div data-popper-arrow></div>
+              </div>
+            </h5>
+        </div>
+        <div class="h-64">
+            <div id="transfers-chart"></div>
+        </div>
+    </div>
+</div>
+
 <script>
-    var bytesChart = new Chart(bytesChartElement, {
-        type: 'line',
-        data: {
-            labels: [
-            {% for time in times %}
-            '{{ time|floatformat:0 }}'
-            {% if not forloop.last %},{% endif %}
-            {% endfor %}
-            ],
-            datasets: [{
-                label: 'Bandwidth',
-                data: [
-                    {% for byte in bytes %}
-                    {{ byte }}
-                    {% if not forloop.last %},{% endif %}
-                    {% endfor %}
-                ],
-                borderWidth: 1
-            },
-            {
-                label: 'Server Side Copy',
-                data: [
-                    {% for byte in serverSideCopyBytes %}
-                    {{ byte }}
-                    {% if not forloop.last %},{% endif %}
-                    {% endfor %}
-                ],
-                borderWidth: 1
-            },
-            {
-                label: 'Server Side Move',
-                data: [
-                    {% for byte in serverSideMoveBytes %}
-                    {{ byte }}
-                    {% if not forloop.last %},{% endif %}
-                    {% endfor %}
-                ],
-                borderWidth: 1
-            }]
-        },
-        options: {
-            scales: {
-                y: {
-                    stacked: true,
-                    ticks: {
-                        color: 'rgba(255, 255, 255, 1)', // Change y-axis text color
-                        callback: function(value) {
-                            return value + ' MB/s';
-                        }
-                    }
-                },
-                x: {
-                    ticks: {
-                        color: 'rgba(255, 255, 255, 1)', // Change x-axis text color
-                        callback: function(value, index, ticks) {
-                            return this.getLabelForValue(value) + 's';
-                        }
-                    }
-                }
-            },
-            plugins: {
-                legend: {
-                    labels: {
-                        color: 'rgba(255, 255, 255, 1)' // Change legend text color
-                    }
-                },
-                zoom: {
-                    pan: {
-                        enabled: true,
-                        mode: 'x',
-                        modifierKey: 'ctrl',
-                    },
-                    zoom: {
-                        drag: {
-                            enabled: true
-                        },
-                        mode: 'x'
-                    }
-                }
-            },
-            animation: {
-                duration: 0
+
+var optionsBytes = {
+    chart: {
+      height: "100%",
+      maxWidth: "100%",
+      group: "detailCharts",
+      id: "bytes-chart",
+      redrawOnWindowResize: true,
+      type: "line",
+      fontFamily: "Inter, sans-serif",
+      dropShadow: {
+        enabled: false,
+      },
+      toolbar: {
+        show: true,
+      },
+      animations: {
+          enabled: false, // Disable loading animation
+      },
+    },
+    tooltip: {
+        enabled: true,
+        y: {
+            formatter: function (value) {
+                return value.toFixed(2) + ' megabytes per second'; // Format for tooltip
             }
-        }
-    });
-
-
-
-    
-    var transfersChart = new Chart(transfersChartElement, {
-        type: 'line',
-        data: {
-            labels: [
-            {% for time in times %}
-            '{{ time|floatformat:0 }}'
-            {% if not forloop.last %},{% endif %}
-            {% endfor %}
-            ],
-            datasets: [{
-                label: 'Transfers',
-                data: [
-                    {% for transfer in transferSpeed %}
-                    {{ transfer }}
-                    {% if not forloop.last %},{% endif %}
-                    {% endfor %}
-                ],
-                borderWidth: 1
-            },
-            {
-                label: 'Server Side Copies',
-                data: [
-                    {% for transfer in transferSpeedServerSideCopy %}
-                    {{ transfer }}
-                    {% if not forloop.last %},{% endif %}
-                    {% endfor %}
-                ],
-                borderWidth: 1
-            },
-            {
-                label: 'Server Side Moves',
-                data: [
-                    {% for transfer in transferSpeedServerSideMove %}
-                    {{ transfer }}
-                    {% if not forloop.last %},{% endif %}
-                    {% endfor %}
-                ],
-                borderWidth: 1
-            },
-            {
-                label: 'Checks',
-                data: [
-                    {% for check in checks %}
-                    {{ check }}
-                    {% if not forloop.last %},{% endif %}
-                    {% endfor %}
-                ],
-                borderWidth: 1
-            }]
         },
-        options: {
-            scales: {
-                y: {
-                    stacked: true,
-                    ticks: {
-                        color: 'rgba(255, 255, 255, 1)', // Change y-axis text color
-                        callback: function(value) {
-                            return value + ' /s';
-                        }
-                    }
-                },
-                x: {
-                    ticks: {
-                        color: 'rgba(255, 255, 255, 1)', // Change x-axis text color
-                        callback: function(value, index, ticks) {
-                            return this.getLabelForValue(value) + 's';
-                        }
-                    }
-                }
-            },
-            plugins: {
-                legend: {
-                    labels: {
-                        color: 'rgba(255, 255, 255, 1)' // Change legend text color
-                    }
-                },
-                zoom: {
-                    pan: {
-                        enabled: true,
-                        mode: 'x',
-                        modifierKey: 'ctrl',
-                    },
-                    zoom: {
-                        drag: {
-                            enabled: true
-                        },
-                        mode: 'x'
-                    }
-                }
-            },
-            animation: {
-                duration: 0 // Disable the initial loading animation (As it gets really bad after multiple updates)
-            }
+        x: {
+            show: false,
         }
-    });
-    
-    // Enable animation for subsequent updates
-    bytesChart.options.animation.duration = 1000;
-    transfersChart.options.animation.duration = 1000;
+    },
+    dataLabels: {
+      enabled: false,
+    },
+    stroke: {
+      width: 6,
+    },
+    grid: {
+      show: true,
+      strokeDashArray: 4,
+      padding: {
+        left: 2,
+        right: 2,
+        top: -26
+      },
+    },
+    series: [
+      {
+        name: "Bandwidth",
+        data: [
+        {% for byte in bytes %}
+        {{ byte }}
+        {% if not forloop.last %},{% endif %}
+        {% endfor %}
+        ],
+        color: "oklch(0.707 0.165 254.624)",
+      },      
+      {
+        name: "Server Side Copy",
+        data: [
+        {% for byte in serverSideCopyBytes %}
+        {{ byte }}
+        {% if not forloop.last %},{% endif %}
+        {% endfor %}
+        ],
+        color: "oklch(0.789 0.154 211.53)",
+      },
+      {
+        name: "Server Side Move",
+        data: [
+        {% for byte in serverSideMoveBytes %}
+        {{ byte }}
+        {% if not forloop.last %},{% endif %}
+        {% endfor %}
+        ],
+        color: "oklch(0.702 0.183 293.541)",
+      },
+    ],
+    legend: {
+      show: false
+    },
+    stroke: {
+      curve: 'smooth'
+    },
+    xaxis: {
+      categories: [
+      {% for time in times %}
+      '{{ time|floatformat:0 }}'
+      {% if not forloop.last %},{% endif %}
+      {% endfor %}
+      ],
+      labels: {
+        show: true,
+        style: {
+          fontFamily: "Inter, sans-serif",
+          cssClass: 'text-xs font-normal fill-gray-500 dark:fill-gray-400'
+        },
+        formatter: function (value) {
+          return value + 's';
+        }
+      },
+      axisBorder: {
+        show: false,
+      },
+      axisTicks: {
+        show: false,
+      },
+      
+    },
+    yaxis: {
+        show: true,
+        labels: {
+          show: true,
+          style: {
+            fontFamily: "Inter, sans-serif",
+            cssClass: 'text-xs font-normal fill-gray-500 dark:fill-gray-400'
+          },
+          formatter: function (value) {
+            return value + ' MB/s';
+          }
+        }
+      },
+  }
+  
+  if (document.getElementById("bytes-chart") && typeof ApexCharts !== 'undefined') {
+    var BytesChart = new ApexCharts(document.getElementById("bytes-chart"), optionsBytes);
+    BytesChart.render();
+  }
+</script>
 
-    bytesChart.update('none');
-    transfersChart.update('none');
+
+<script>
+
+var optionsJobs = {
+    chart: {
+      height: "100%",
+      maxWidth: "100%",
+      group: "detailCharts",
+      id: "transfers-chart",
+      redrawOnWindowResize: true,
+      type: "line",
+      fontFamily: "Inter, sans-serif",
+      dropShadow: {
+        enabled: false,
+      },
+      toolbar: {
+        show: true,
+      },
+      animations: {
+        enabled: false, // Disable loading animation
+      },
+    },
+    tooltip: {
+        enabled: true,
+        y: {
+            formatter: function (value) {
+                return value.toFixed(2) + ' per second'; // Format for tooltip
+            }
+        },
+        x: {
+            show: false,
+        }
+    },
+    dataLabels: {
+      enabled: false,
+    },
+    stroke: {
+      width: 6,
+    },
+    grid: {
+      show: true,
+      strokeDashArray: 4,
+      padding: {
+        left: 2,
+        right: 2,
+        top: -26
+      },
+    },
+    series: [
+      {
+        name: "Transfers",
+        data: [
+        {% for transfer in transferSpeed %}
+        {{ transfer }}
+        {% if not forloop.last %},{% endif %}
+        {% endfor %}
+        ],
+        color: "oklch(0.707 0.165 254.624)",// Blue 400
+      },
+      {
+        name: "Server Side Copies",
+        data: [
+        {% for transfer in transferSpeedServerSideCopy %}
+        {{ transfer }}
+        {% if not forloop.last %},{% endif %}
+        {% endfor %}
+        ],
+        color: "oklch(0.777 0.152 181.912)",// Teal 400
+      },
+      {
+        name: "Server Side Moves",
+        data: [
+        {% for transfer in transferSpeedServerSideMove %}
+        {{ transfer }}
+        {% if not forloop.last %},{% endif %}
+        {% endfor %}
+        ],
+        color: "oklch(0.841 0.238 128.85)",// Lime 400
+      },
+      {
+        name: "Checks",
+        data: [
+        {% for check in checks %}
+        {{ check }}
+        {% if not forloop.last %},{% endif %}
+        {% endfor %}
+        ],
+        color: "oklch(0.828 0.189 84.429)",// Amber 400
+      },
+    ],
+    legend: {
+      show: false
+    },
+    stroke: {
+      curve: 'smooth'
+    },
+    xaxis: {
+      categories: [
+      {% for time in times %}
+      '{{ time|floatformat:0 }}'
+      {% if not forloop.last %},{% endif %}
+      {% endfor %}
+      ],
+      labels: {
+        show: true,
+        style: {
+          fontFamily: "Inter, sans-serif",
+          cssClass: 'text-xs font-normal fill-gray-500 dark:fill-gray-400'
+        },
+        formatter: function (value) {
+          return value + 's';
+        }
+      },
+      axisBorder: {
+        show: false,
+      },
+      axisTicks: {
+        show: false,
+      },
+    },
+    yaxis: {
+        show: true,
+        labels: {
+          show: true,
+          style: {
+            fontFamily: "Inter, sans-serif",
+            cssClass: 'text-xs font-normal fill-gray-500 dark:fill-gray-400'
+          },
+          formatter: function (value) {
+            return value + ' /s';
+          }
+        }
+      },
+  }
+  
+  if (document.getElementById("transfers-chart") && typeof ApexCharts !== 'undefined') {
+    var TransfersChart = new ApexCharts(document.getElementById("transfers-chart"), optionsJobs);
+    TransfersChart.render();
+  }
+  
 </script>

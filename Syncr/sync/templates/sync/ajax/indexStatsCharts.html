@@ -1,177 +1,288 @@
 {% load custom_filters %}
 
-<div class="grid grid-cols-1 md:grid-cols-2 mb-4 gap-x-4 gap-y-4">
-    <figure class="rounded-lg flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700">
-        <blockquote class="w-full mb-2 text-gray-500 dark:text-gray-400">
-            <canvas id="bytesChart"></canvas>
-        </blockquote>
-        <button id="resetBytesZoom" class="hover:cursor-pointer mt-2 text-white bg-gray-800 hover:bg-gray-900 focus:outline-none focus:ring-4 focus:ring-gray-300 font-medium rounded-lg text-sm px-5 py-2.5 mb-2 dark:bg-gray-800 dark:hover:bg-gray-700 dark:focus:ring-gray-700 dark:border-gray-700">Reset Zoom</button>
-    </figure>
-    <figure class="rounded-lg flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700">
-        <blockquote class="w-full mb-2 text-gray-500 dark:text-gray-400">
-            <canvas id="jobsChart"></canvas>
-        </blockquote>
-        <button id="resetJobsZoom" class="hover:cursor-pointer mt-2 text-white bg-gray-800 hover:bg-gray-900 focus:outline-none focus:ring-4 focus:ring-gray-300 font-medium rounded-lg text-sm px-5 py-2.5 mb-2 dark:bg-gray-800 dark:hover:bg-gray-700 dark:focus:ring-gray-700 dark:border-gray-700">Reset Zoom</button>
-    </figure>
+<div class="grid grid-cols-2 gap-4">
+    <div class="w-full bg-white rounded-lg shadow-sm dark:bg-gray-800 p-2 md:p-4">
+        <div class="flex justify-between mb-4">
+            <h5 class="inline-flex items-center text-gray-500 dark:text-gray-400 leading-none font-normal mb-2">Bandwidth - Last 14 days
+              <svg data-popover-target="bytes-info" data-popover-placement="bottom" class="w-3 h-3 text-gray-400 hover:text-gray-900 dark:hover:text-white cursor-pointer ms-1" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10 .5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 10 .5ZM9.5 4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM12 15H8a1 1 0 0 1 0-2h1v-3H8a1 1 0 0 1 0-2h2a1 1 0 0 1 1 1v4h1a1 1 0 0 1 0 2Z"/>
+              </svg>
+              <div data-popover id="bytes-info" role="tooltip" class="absolute z-10 invisible inline-block text-sm text-gray-500 transition-opacity duration-300 bg-white border border-gray-200 rounded-lg shadow-xs opacity-0 w-72 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-400">
+                  <div class="p-3 space-y-2">
+                    <h3 class="font-semibold text-gray-900 dark:text-white">Bandwidth</h3>
+                    <p>The bandwidth used for transfers passing through our server.</p>
+                    
+                    <h3 class="font-semibold text-gray-900 dark:text-white">Server Side Copy Bytes</h3>
+                    <p>The bandwidth used for direct file copies between remotes.</p>
+                    
+                    <h3 class="font-semibold text-gray-900 dark:text-white">Server Side Move Bytes</h3>
+                    <p>The bandwidth used for direct file moves between remotes.</p>                    
+                  <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m1 9 4-4-4-4"/>
+                </svg></a>
+                  </div>
+                  <div data-popper-arrow></div>
+              </div>
+            </h5>
+        </div>
+        <div class="h-64">
+            <div id="bytes-chart"></div>
+        </div>
+    </div>
+
+    <div class="w-full bg-white rounded-lg shadow-sm dark:bg-gray-800 p-2 md:p-4">
+        <div class="flex justify-between mb-4">
+            <h5 class="inline-flex items-center text-gray-500 dark:text-gray-400 leading-none font-normal mb-2">Jobs Run - Last 14 days
+              <svg data-popover-target="jobs-info" data-popover-placement="bottom" class="w-3 h-3 text-gray-400 hover:text-gray-900 dark:hover:text-white cursor-pointer ms-1" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10 .5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 10 .5ZM9.5 4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM12 15H8a1 1 0 0 1 0-2h1v-3H8a1 1 0 0 1 0-2h2a1 1 0 0 1 1 1v4h1a1 1 0 0 1 0 2Z"/>
+              </svg>
+              <div data-popover id="jobs-info" role="tooltip" class="absolute z-10 invisible inline-block text-sm text-gray-500 transition-opacity duration-300 bg-white border border-gray-200 rounded-lg shadow-xs opacity-0 w-72 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-400">
+                  <div class="p-3 space-y-2">
+                    <h3 class="font-semibold text-gray-900 dark:text-white">Jobs Run</h3>
+                    <p>Total number of jobs completed.</p>
+                    
+                    <h3 class="font-semibold text-gray-900 dark:text-white">Errored Jobs</h3>
+                    <p>Total number of jobs that completed with errors.</p>                    
+                  <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m1 9 4-4-4-4"/>
+                </svg></a>
+                  </div>
+                  <div data-popper-arrow></div>
+              </div>
+            </h5>
+        </div>
+        <div class="h-64">
+            <div id="jobs-chart"></div>
+        </div>
+    </div>
 </div>
 
-{% comment %} Scripts below {% endcomment %}
 <script>
-    const bytesChart = document.getElementById('bytesChart');
-    const bytesChartInstance = new Chart(bytesChart, {
-        type: 'line',
-        data: {
-            labels: [
-            {% for day in days %}
-            '{{ day }}'
-            {% if not forloop.last %},{% endif %}
-            {% endfor %}
-            ],
-            datasets: [{
-                label: 'Gigabytes',
-                data: [
-                    {% for byte in bytes %}
-                    {{ byte }}
-                    {% if not forloop.last %},{% endif %}
-                    {% endfor %}
-                ],
-                borderWidth: 1
-            },
-            {
-                label: 'Server Side Copy Gigabytes',
-                data: [
-                    {% for byte in serverSideCopyBytes %}
-                    {{ byte }}
-                    {% if not forloop.last %},{% endif %}
-                    {% endfor %}
-                ],
-                borderWidth: 1
-            },
-            {
-                label: 'Server Side Move Gigabytes',
-                data: [
-                    {% for byte in serverSideMoveBytes %}
-                    {{ byte }}
-                    {% if not forloop.last %},{% endif %}
-                    {% endfor %}
-                ],
-                borderWidth: 1
-            }]
-        },
-        options: {
-            scales: {
-                y: {
-                    stacked: true,
-                    ticks: {
-                        color: 'rgba(255, 255, 255, 1)', // Change y-axis text color
-                        callback: function(value) {
-                            return value + ' GB'; // Add "GB" to the y-axis labels
-                        }
-                    }
-                },
-                x: {
-                    ticks: {
-                        color: 'rgba(255, 255, 255, 1)' // Change x-axis text color
-                    }
-                }
-            },
-            plugins: {
-                legend: {
-                    labels: {
-                        color: 'rgba(255, 255, 255, 1)' // Change legend text color
-                    }
-                },
-                zoom: {
-                    pan: {
-                        enabled: true,
-                        mode: 'x',
-                        modifierKey: 'ctrl',
-                    },
-                    zoom: {
-                        drag: {
-                            enabled: true
-                        },
-                        mode: 'x'
-                    }
-                }
-            }
-        }
-    });
 
-    document.getElementById('resetBytesZoom').addEventListener('click', function() {
-        bytesChartInstance.resetZoom();
-    });
+const optionsBytes = {
+    chart: {
+      height: "100%",
+      maxWidth: "100%",
+      group: "indexCharts",
+      id: "bytes-chart",
+      redrawOnWindowResize: true,
+      type: "line",
+      fontFamily: "Inter, sans-serif",
+      dropShadow: {
+        enabled: false,
+      },
+      toolbar: {
+        show: true,
+      },
+    },
+    tooltip: {
+      enabled: true,
+      y: {
+        formatter: function (value) {
+            return value.toFixed(2) + ' Gigabytes'; // Format for tooltip
+            }
+        },
+      x: {
+        show: false,
+      },
+    },
+    dataLabels: {
+      enabled: false,
+    },
+    stroke: {
+      width: 6,
+    },
+    grid: {
+      show: true,
+      strokeDashArray: 4,
+      padding: {
+        left: 2,
+        right: 2,
+        top: -26
+      },
+    },
+    series: [
+      {
+        name: "Bandwidth",
+        data: [
+        {% for byte in bytes %}
+        {{ byte }}
+        {% if not forloop.last %},{% endif %}
+        {% endfor %}
+        ],
+        color: "oklch(0.707 0.165 254.624)",
+      },      
+      {
+        name: "Server Side Copy Bytes",
+        data: [
+        {% for byte in serverSideCopyBytes %}
+        {{ byte }}
+        {% if not forloop.last %},{% endif %}
+        {% endfor %}
+        ],
+        color: "oklch(0.789 0.154 211.53)",
+      },
+      {
+        name: "Server Side Move Bytes",
+        data: [
+        {% for byte in serverSideMoveBytes %}
+        {{ byte }}
+        {% if not forloop.last %},{% endif %}
+        {% endfor %}
+        ],
+        color: "oklch(0.702 0.183 293.541)",
+      },
+    ],
+    legend: {
+      show: false
+    },
+    stroke: {
+      curve: 'smooth'
+    },
+    xaxis: {
+      categories: [
+      {% for day in days %}
+      '{{ day }}'
+      {% if not forloop.last %},{% endif %}
+      {% endfor %}
+      ],
+      labels: {
+        show: true,
+        style: {
+          fontFamily: "Inter, sans-serif",
+          cssClass: 'text-xs font-normal fill-gray-500 dark:fill-gray-400'
+        }
+      },
+      axisBorder: {
+        show: false,
+      },
+      axisTicks: {
+        show: false,
+      },
+    },
+    yaxis: {
+        show: true,
+        labels: {
+          show: true,
+          style: {
+            fontFamily: "Inter, sans-serif",
+            cssClass: 'text-xs font-normal fill-gray-500 dark:fill-gray-400'
+          },
+          formatter: function (value) {
+            return value + ' GB';
+          }
+        }
+      },
+  }
+  
+  if (document.getElementById("bytes-chart") && typeof ApexCharts !== 'undefined') {
+    const BytesChart = new ApexCharts(document.getElementById("bytes-chart"), optionsBytes);
+    BytesChart.render();
+  }
 </script>
-<script>
-    const jobsChart = document.getElementById('jobsChart');
-    const jobsChartInstance = new Chart(jobsChart, {
-        type: 'line',
-        data: {
-            labels: [
-            {% for day in days %}
-            '{{ day }}'
-            {% if not forloop.last %},{% endif %}
-            {% endfor %}
-            ],
-            datasets: [{
-                label: 'Jobs Run',
-                data: [
-                    {% for count in jobsRun %}
-                    {{ count }}
-                    {% if not forloop.last %},{% endif %}
-                    {% endfor %}
-                ],
-                borderWidth: 1
-            },
-            {
-                label: 'Errored Jobs',
-                data: [
-                    {% for count in jobsErrored %}
-                    {{ count }}
-                    {% if not forloop.last %},{% endif %}
-                    {% endfor %}
-                ],
-                borderWidth: 1
-            }]
-        },
-        options: {
-            scales: {
-                y: {
-                    stacked: true,
-                    ticks: {
-                        color: 'rgba(255, 255, 255, 1)' // Change y-axis text color
-                    }
-                },
-                x: {
-                    ticks: {
-                        color: 'rgba(255, 255, 255, 1)' // Change x-axis text color
-                    }
-                }
-            },
-            plugins: {
-                legend: {
-                    labels: {
-                        color: 'rgba(255, 255, 255, 1)' // Change legend text color
-                    }
-                },
-                zoom: {
-                    pan: {
-                        enabled: true,
-                        mode: 'x',
-                        modifierKey: 'ctrl',
-                    },
-                    zoom: {
-                        drag: {
-                            enabled: true
-                        },
-                        mode: 'x'
-                    }
-                }
-            }
-        }
-    });
 
-    document.getElementById('resetJobsZoom').addEventListener('click', function() {
-        jobsChartInstance.resetZoom();
-    });
+
+<script>
+
+const optionsJobs = {
+    chart: {
+      height: "100%",
+      maxWidth: "100%",
+      group: "indexCharts",
+      id: "jobs-chart",
+      redrawOnWindowResize: true,
+      type: "line",
+      fontFamily: "Inter, sans-serif",
+      dropShadow: {
+        enabled: false,
+      },
+      toolbar: {
+        show: true,
+      },
+    },
+    tooltip: {
+      enabled: true,
+      x: {
+        show: false,
+      },
+    },
+    dataLabels: {
+      enabled: false,
+    },
+    stroke: {
+      width: 6,
+    },
+    grid: {
+      show: true,
+      strokeDashArray: 4,
+      padding: {
+        left: 2,
+        right: 2,
+        top: -26
+      },
+    },
+    series: [
+      {
+        name: "Jobs Run",
+        data: [
+        {% for count in jobsRun %}
+        {{ count }}
+        {% if not forloop.last %},{% endif %}
+        {% endfor %}
+        ],
+        color: "oklch(0.789 0.154 211.53)",
+      },
+      {
+        name: "Errored Jobs",
+        data: [
+        {% for count in jobsErrored %}
+        {{ count }}
+        {% if not forloop.last %},{% endif %}
+        {% endfor %}
+        ],
+        color: "oklch(0.712 0.194 13.428)",
+      },
+    ],
+    legend: {
+      show: false
+    },
+    stroke: {
+      curve: 'smooth'
+    },
+    xaxis: {
+      categories: [
+      {% for day in days %}
+      '{{ day }}'
+      {% if not forloop.last %},{% endif %}
+      {% endfor %}
+      ],
+      labels: {
+        show: true,
+        style: {
+          fontFamily: "Inter, sans-serif",
+          cssClass: 'text-xs font-normal fill-gray-500 dark:fill-gray-400'
+        }
+      },
+      axisBorder: {
+        show: false,
+      },
+      axisTicks: {
+        show: false,
+      },
+    },
+    yaxis: {
+        show: true,
+        labels: {
+          show: true,
+          style: {
+            fontFamily: "Inter, sans-serif",
+            cssClass: 'text-xs font-normal fill-gray-500 dark:fill-gray-400'
+          }
+        }
+      },
+  }
+  
+  if (document.getElementById("jobs-chart") && typeof ApexCharts !== 'undefined') {
+    const JobsChart = new ApexCharts(document.getElementById("jobs-chart"), optionsJobs);
+    JobsChart.render();
+  }
+  
 </script>
