@@ -24,7 +24,7 @@
               </div>
             </h5>
         </div>
-        <div class="h-64">
+        <div class="h-64 p-2">
             <div id="bytes-chart"></div>
         </div>
     </div>
@@ -49,7 +49,7 @@
               </div>
             </h5>
         </div>
-        <div class="h-64">
+        <div class="h-64 p-2">
             <div id="jobs-chart"></div>
         </div>
     </div>
@@ -144,6 +144,7 @@ const optionsBytes = {
       {% if not forloop.last %},{% endif %}
       {% endfor %}
       ],
+      type: 'datetime',
       labels: {
         show: true,
         style: {
@@ -254,6 +255,7 @@ const optionsJobs = {
       {% if not forloop.last %},{% endif %}
       {% endfor %}
       ],
+      type: 'datetime',
       labels: {
         show: true,
         style: {

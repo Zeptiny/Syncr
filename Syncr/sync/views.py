@@ -95,7 +95,7 @@ class ajaxIndexStatsChartsView(View):
         # Prepare the context for the chart
         days = [start_date + timedelta(days=i) for i in range(14)]
         context = {
-            'days': [day.strftime("%m-%d") for day in days],
+            'days': [day for day in days],
             'bytes': [],
             'serverSideCopyBytes': [],
             'serverSideMoveBytes': [],
@@ -117,7 +117,7 @@ class ajaxIndexStatsChartsView(View):
                 context['serverSideMoveBytes'].append(0)
                 context['jobsRun'].append(0)
                 context['jobsErrored'].append(0)
-        print(context)
+                
         return render(request, 'sync/ajax/indexStatsCharts.html', context)
 
 # Remotes
