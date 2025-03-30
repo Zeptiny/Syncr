@@ -53,6 +53,11 @@
     </div>
   </nav>  
 
+  {% if messages %}
+    {% for message in messages %}
+        <p class="text-red-200">{{ message }}</p>
+    {% endfor %}
+  {% endif %}
     <div class="mx-auto p-2 max-w-7xl">
         {% block content %}{% endblock content %}
     </div>
