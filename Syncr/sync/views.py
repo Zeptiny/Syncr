@@ -95,7 +95,7 @@ class ajaxIndexStatsChartsView(View):
         # Prepare the context for the chart
         days = [start_date + timedelta(days=i) for i in range(14)]
         context = {
-            'days': [day for day in days],
+            'days': [day.strftime("%m/%d") for day in days],
             'bytes': [],
             'serverSideCopyBytes': [],
             'serverSideMoveBytes': [],
