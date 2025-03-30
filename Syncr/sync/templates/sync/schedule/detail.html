@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block content %}
+
+<div class="my-4">
+    <a href="{% url 'sync:schedule' %}" class="rounded-lg p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">Back to Schedules</a>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+    <figure class="rounded-lg flex flex-col items-top p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
+        <blockquote class="flex justify-between gap-4 mx-auto mb-2 text-gray-500 dark:text-gray-400">
+            <div>
+                <p>Source</p>
+                {% if schedule.srcFs_content_type.model == 'union' %}
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white">union:{{schedule.srcFs.name}}</h3>
+                    {% for remote in schedule.srcFs.remotes.all %}
+                        <h1>{{remote}}</h1>
+                    {% endfor %}
+                {% else %}
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{schedule.srcFs.type}}:{{schedule.srcFs.name}}</h3>
+                {% endif %}
+            </div>
+            <div>
+                <p>Destination</p>
+                {% if schedule.dstFs_content_type.model == 'union' %}
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-white">union:{{schedule.dstFs.name}}</h3>
+                    {% for remote in schedule.dstFs.remotes.all %}
+                        <h1>{{remote}}</h1>
+                    {% endfor %}
+                {% else %}
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{schedule.dstFs.type}}:{{schedule.dstFs.name}}</h3>
+                {% endif %}
+            </div>
+        </blockquote>   
+    </figure>
+    <figure class="rounded-lg flex flex-col items-top p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
+        <blockquote class="flex flex-col gap-4 mx-auto mb-2 text-gray-500 dark:text-gray-400">
+            <div>
+                <p>Type</p>
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{schedule.type}}</h3>
+            </div>
+            <div>
+                <p>Cron</p>
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{schedule.cron}}</h3>
+            </div>
+        </blockquote>   
+    </figure>
+</div>
+
+
+<figure class="mt-2 rounded-lg flex flex-col items-top p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
+    <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+        <p class="my-2">Options</p>
+        <div class="grid grid-cols-6">
+            {% for key, value in schedule.options.items %}
+                <h3>{{ key }}: {{ value }}</h3>
+            {% endfor %}
+        </div>
+    </blockquote>   
+</figure>
+
+
+<div class="rounded-t-lg flex justify-between items-center mt-2 dark:bg-gray-700 px-2">
+    <div>
+        <h1 class="text-2xl font-bold dark:text-gray-200 mt-2">
+            Jobs executed by this schedule
+        </h1>
+        <p class="mt-1 text-sm font-normal text-gray-500 dark:text-gray-400">Only the last 20 entries are shown here</p>
+    </div>
+    <div>
+        <a href="{% url 'sync:jobList' %}?callee={{schedule.id}}" class="p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">View All</a>
+    </div>
+</div>
+<div id="jobQuery" hx-get="{% url 'sync:scheduleDetailJobs' schedule.id %}" hx-trigger="load"></div>
+
+{% endblock content %}

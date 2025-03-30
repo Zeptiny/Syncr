@@ -544,6 +544,34 @@ class deleteScheduleView(View):
         
         return redirect('sync:schedule')
 
+class scheduleDetailView(View):
+    def get(self, request, scheduleId):
+        schedule = get_object_or_404(models.Schedule, pk=scheduleId)
+        
+        if schedule.user != request.user:
+            return redirect('sync:schedule')
+        
+        context = {
+            'schedule': schedule
+        }
+        
+        return render(request, 'sync/schedule/detail.html', context)
+    
+class scheduleDetailJobsView(View):
+    def get(self, request, scheduleId):
+        schedule = get_object_or_404(models.Schedule, pk=scheduleId)
+        
+        if schedule.user != request.user:
+            return redirect('sync:schedule')
+        
+        jobs = models.Job.objects.filter(schedule=schedule).order_by('-startTime')[:20] # Only get the last 20
+        
+        context = {
+            'jobs': jobs,
+            'schedule': schedule,
+        }
+        
+        return render(request, 'sync/schedule/ajax/jobs.html', context)
 # Ajax Views Below
 
         

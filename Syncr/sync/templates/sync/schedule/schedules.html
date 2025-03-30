@@ -45,7 +45,7 @@
         </thead>
         <tbody>
             {% for schedule in user.schedules.all %}
-            <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700 border-gray-200">
+            <tr onclick="window.location='{% url 'sync:scheduleDetail' schedule.id %}'" class="hover:cursor-pointer hover:dark:bg-gray-700 bg-white border-b dark:bg-gray-800 dark:border-gray-700 border-gray-200">
                 <td scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white">
                     {{schedule.name}}
                 </td>
@@ -72,7 +72,8 @@
                         data-name="{{ schedule.name }}" 
                         data-type="schedule" 
                         class="hover:cursor-pointer p-2 text-center" 
-                        type="button">
+                        type="button"    
+                        onclick="event.stopPropagation();">
                         Delete
                     </button>
                 </td>
