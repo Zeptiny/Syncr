@@ -373,9 +373,10 @@ class jobListView(View):
                 )
                             
             if job_type:
-                filters &= Q(type=job_type)
+                if job_type != 'any':
+                    filters &= Q(type=job_type)
             if callee:
-                filters &= Q(schedule__isnull=True) if callee == 'manual' else Q(schedule__name=callee)
+                filters &= Q(schedule__isnull=True) if callee == 'manual' else Q(schedule__id=callee)
             if status:
                 status_filters = {
                     'success': Q(success=True, finished=True),

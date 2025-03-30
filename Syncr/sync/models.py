@@ -63,7 +63,7 @@ class Job(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     schedule = models.ForeignKey(Schedule, on_delete=models.CASCADE, null=True, related_name="jobs")# The schedule that called the job, if it's null, it was created manually/forced
     
-    type = models.CharField(choices=TASK_TYPES.items(), max_length=127, default="sync/copy")
+    type = models.CharField(choices=[(key, value['display']) for key, value in TASK_TYPES.items()], max_length=127, default="sync/copy")
     
     srcFs_content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name='job_srcFs_content_type', null=True)
     srcFs_object_id = models.PositiveIntegerField(null=True)
