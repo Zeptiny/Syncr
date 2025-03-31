@@ -1,9 +1,41 @@
 {% extends "base.html" %}
 
 {% block content %}
-<form method="post">
+<form method="post" class="mx-auto max-w-sm">
     {% csrf_token %}
-    {{form.as_p}}
-    <button>Register</button>
+
+    <div class="mt-4">
+        <label for="{{ form.username.id_for_label }}" class="block text-gray-900 dark:text-white">{{ form.username.label }}</label>
+        {% if form.username.errors %}
+            <p class="block mb-2 text-red-500 dark:text-red-400">{{ form.username.errors|join:", " }}</p>
+        {% endif %}
+        {{ form.username }}
+    </div>
+
+    <div class="mt-4">
+        <label for="{{ form.email.id_for_label }}" class="block text-gray-900 dark:text-white">{{ form.email.label }}</label>
+        {% if form.email.errors %}
+            <p class="block mb-2 text-red-500 dark:text-red-400">{{ form.email.errors|join:", " }}</p>
+        {% endif %}
+        {{ form.email }}
+    </div>
+
+    <div class="mt-4">
+        <label for="{{ form.password1.id_for_label }}" class="block text-gray-900 dark:text-white">{{ form.password1.label }}</label>
+        {% if form.password1.errors %}
+            <p class="block mb-2 text-red-500 dark:text-red-400">{{ form.password1.errors|join:", " }}</p>
+        {% endif %}
+        {{ form.password1 }}
+    </div>
+
+    <div class="mt-4">
+        <label for="{{ form.password2.id_for_label }}" class="block text-gray-900 dark:text-white">{{ form.password2.label }}</label>
+        {% if form.password2.errors %}
+            <p class="block mb-2 text-red-500 dark:text-red-400">{{ form.password2.errors|join:", " }}</p>
+        {% endif %}
+        {{ form.password2 }}
+    </div>
+
+    <button type="submit" class="mt-2 hover:cursor-pointer text-white bg-gray-800 hover:bg-gray-900 focus:outline-none focus:ring-4 focus:ring-gray-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-gray-800 dark:hover:bg-gray-700 dark:focus:ring-gray-700 dark:border-gray-700">Register</button>
 </form>
 {% endblock content %}

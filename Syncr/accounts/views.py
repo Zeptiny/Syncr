@@ -4,9 +4,12 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.decorators import login_required
+from . import forms
 
 class loginView(View):
     def get(self, request):
+        if request.user.is_authenticated:
+            return redirect('sync:index')
         return render(request, 'accounts/login.html')
 
     def post(self, request):
@@ -30,14 +33,14 @@ class logoutView(View):
     
 class registerView(View):
     def get(self, request):
-        form = UserCreationForm()
+        form = forms.AccountCreationForm()
         context = {
             'form': form,
         }
         return render(request, 'accounts/register.html', context)
 
     def post(self, request):
-        form = UserCreationForm(request.POST)
+        form = forms.AccountCreationForm(request.POST)
         
         if form.is_valid():
             user = form.save()
@@ -46,7 +49,6 @@ class registerView(View):
             return redirect('sync:index')
         
         else:
-            messages.error(request, "Registration failed. Please try again.")
             context = {
                 'form': form,
             }
