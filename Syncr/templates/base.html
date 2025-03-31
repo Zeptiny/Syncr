@@ -91,10 +91,19 @@
   </nav>  
 
   {% if messages %}
-    {% for message in messages %}
-        <p class="text-red-200">{{ message }}</p>
+    <div class="mx-auto text-lg text-center border rounded-lg max-w-xl my-4">
+      {% for message in messages %}
+        <p class="
+            {% if message.tags == 'success' %}text-green-300{% endif %}
+            {% if message.tags == 'error' %}text-red-300{% endif %}
+            {% if message.tags == 'warning' %}text-yellow-300{% endif %}
+            {% if message.tags == 'info' %}text-blue-300{% endif %}
+        ">
+            {{ message }}
+        </p>
     {% endfor %}
-  {% endif %}
+    </div>
+{% endif %}
     <div class="mx-auto p-2 max-w-7xl">
         {% block content %}{% endblock content %}
     </div>
