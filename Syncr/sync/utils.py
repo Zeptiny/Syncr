@@ -210,7 +210,7 @@ def autoQueryRunningJobStats(jobObject) -> None:
     # We need those variables to calculate the speed
     # We don't store it in the model as it's irrelevant
     # (<CurrentTransfers> - <LastTransfers>) / 15
-    lastTransfers = lastTransfersSSCopy = lastTransfersSSMove = lastChecks = 0
+    lastTransfers = lastSpeed = lastTransfersSSCopy = lastTransfersSSMove = lastChecks = lastServerSideCopyBytes = lastServerSideMoveBytes = 0
     while(True):
         startTime = timezone.now()
         
@@ -223,13 +223,12 @@ def autoQueryRunningJobStats(jobObject) -> None:
         
         # We shall only update if the job isn't finished to not fuck up any data
         # Yes, it means we can lose up to 15 seconds of the last data
-        lastStatsRun = models.jobRunStatistics.objects.filter(job=jobObject).latest('dateTime')
         models.jobRunStatistics.objects.create(
             job=jobObject,
             
-            speed = combinedQuery.get('speed'),
-            speedServerSideCopy = ((combinedQuery.get('serverSideCopyBytes') - lastStatsRun.speedServerSideCopy) / 15),
-            speedServerSideMove = ((combinedQuery.get('serverSideMoveBytes') - lastStatsRun.speedServerSideMove) / 15),
+            speed = ((combinedQuery.get('speed') - lastSpeed) / 15),
+            speedServerSideCopy = ((combinedQuery.get('serverSideCopyBytes') - lastServerSideCopyBytes) / 15),
+            speedServerSideMove = ((combinedQuery.get('serverSideMoveBytes') - lastServerSideMoveBytes) / 15),
             
             transferSpeed = (combinedQuery.get('transfers') - lastTransfers) / 15,
             transferSpeedServerSideCopy = ((combinedQuery.get('serverSideCopies') - lastTransfersSSCopy) / 15),
@@ -239,9 +238,14 @@ def autoQueryRunningJobStats(jobObject) -> None:
         )
         
         # Update the lastTransfers
+        lastSpeed = combinedQuery.get('speed') # We still get the speed this way so we can get the avarage of the last 15 seconds
+        lastServerSideCopyBytes = combinedQuery.get('serverSideCopyBytes')
+        lastServerSideMoveBytes = combinedQuery.get('serverSideMoveBytes')
+        
         lastTransfers = combinedQuery.get('transfers')
         lastTransfersSSCopy = combinedQuery.get('serverSideCopies')
         lastTransfersSSMove = combinedQuery.get('serverSideMoves')
+        
         lastChecks = combinedQuery.get('checks')
         
         endTime = timezone.now()
