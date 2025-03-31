@@ -298,6 +298,28 @@ class genericCopyOptionsForm(forms.Form):
         })
     )
     
+    checkers = forms.IntegerField(
+        required=False,
+        initial=4,
+        min_value=1,
+        max_value=128,
+        help_text="Number of parallel metadata checks (1-128)",
+        widget=forms.NumberInput(attrs={
+            'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-16 p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'
+        })
+    )
+        
+    transfers = forms.IntegerField(
+        required=False,
+        initial=8,
+        min_value=1,
+        max_value=64,
+        help_text="Number of file transfers to run in parallel (1-64)",
+        widget=forms.NumberInput(attrs={
+            'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-16 p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'
+        })
+    )
+    
     
 
 class jobsSearchForm(forms.Form):
