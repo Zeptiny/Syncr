@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block content %}
+<div>
+    {% for notification in notifications %}
+        <h2>{{notification.created_at}}</h2>
+        <h1>{{notification.message}}</h1>
+    {% endfor %}
+</div>
+{% endblock content %}
