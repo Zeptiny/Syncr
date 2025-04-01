@@ -1,0 +1,24 @@
+<div id="notification-container">
+    {% for notification in notifications|slice:5 %}
+        <div id="notification-dropdown-{{notification.id}}" class="p-2 rounded-lg dark:hover:bg-gray-600 dark:text-gray-200 dark:hover:text-white">
+            <a href="{{notification.url}}">
+                <h1>{{ notification.message }}</h1>
+                <div class="flex justify-between">
+                    <h2 class="text-sm text-gray-100 dark:text-gray-400">{{ notification.created_at|date:"D d M" }}</h2>
+                    <form action="{% url 'notifications:markAsRead' notification.id %}" method="POST" hx-post="{% url 'notifications:markAsRead' notification.id %}" hx-target="#notification-container">
+                        {% csrf_token %}
+                        <button type="submit" class="markAsReadButton text-sm text-gray-100 dark:text-gray-400 hover:dark:text-gray-200">
+                            Mark as read
+                        </button>
+                    </form>
+                </div>
+            </a>
+        </div>
+    {% endfor %}
+    {% if notifications.count > 5 %}
+        <h1 class="p-2 my-2 text-sm text-gray-900 dark:text-white">... and {{ unread_notifications.count|add:"-5" }} more</h1>
+    {% endif %}
+    {% if notifications.count == 0 %}
+        <h1 class="p-2 my-2 text-sm text-gray-900 dark:text-white">No new notifications</h1>
+    {% endif %}
+</div>

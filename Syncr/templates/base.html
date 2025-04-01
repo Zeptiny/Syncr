@@ -61,51 +61,47 @@
 
           <li>
             <button id="dropdownNotifications" data-dropdown-toggle="dropdownNotificationsMenu" class="text-sm p-2 text-center inline-flex items-center relative" type="button">
-              <div class="relative">
-                  <svg class="w-8 h-8 dark:fill-gray-200 dark:hover:fill-blue-500" 
-                      data-slot="icon" aria-hidden="true" fill="currentColor" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-                      <path clip-rule="evenodd" d="M12 5a4 4 0 0 0-8 0v2.379a1.5 1.5 0 0 1-.44 1.06L2.294 9.707a1 1 0 0 0-.293.707V11a1 1 0 0 0 1 1h2a3 3 0 1 0 6 0h2a1 1 0 0 0 1-1v-.586a1 1 0 0 0-.293-.707L12.44 8.44A1.5 1.5 0 0 1 12 7.38V5Zm-5.5 7a1.5 1.5 0 0 0 3 0h-3Z" fill-rule="evenodd"></path>
-                  </svg>
-                  {% if unread_notifications.count > 0 %}
-                  <span class="absolute top-0 right-0 text-xs font-bold text-white bg-red-500 rounded-full w-5 h-5 flex items-center justify-center">
-                      {{ unread_notifications.count }}
-                  </span>
-                  {% endif %}
-              </div>
-          </button>
+                <div class="relative">
+                    <svg class="w-8 h-8 dark:fill-gray-200 dark:hover:fill-blue-500" 
+                        data-slot="icon" aria-hidden="true" fill="currentColor" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                        <path clip-rule="evenodd" d="M12 5a4 4 0 0 0-8 0v2.379a1.5 1.5 0 0 1-.44 1.06L2.294 9.707a1 1 0 0 0-.293.707V11a1 1 0 0 0 1 1h2a3 3 0 1 0 6 0h2a1 1 0 0 0 1-1v-.586a1 1 0 0 0-.293-.707L12.44 8.44A1.5 1.5 0 0 1 12 7.38V5Zm-5.5 7a1.5 1.5 0 0 0 3 0h-3Z" fill-rule="evenodd"></path>
+                    </svg>
+                    {% if unread_notifications.count > 0 %}
+                    <span id="notification-count" class="absolute top-0 right-0 text-xs font-bold text-white bg-red-500 rounded-full w-5 h-5 flex items-center justify-center">
+                        {{ unread_notifications.count }}
+                    </span>
+                    {% endif %}
+                </div>
+            </button>
             <div id="dropdownNotificationsMenu" class="z-10 hidden bg-white divide-y divide-gray-100 rounded-lg shadow-sm w-64 dark:bg-gray-700 dark:divide-gray-600">
-              <div class="px-4 py-3 text-sm text-gray-900 dark:text-white">
-                <h1>{{ unread_notifications.count }} unread notifications</h1>
-              </div>
-              <div class="px-4 py-3 text-sm text-gray-900 dark:text-white">
-                {% for notification in unread_notifications|slice:5 %}
-                    <div id="notification-dropdown-{{notification.id}}" class="p-2 rounded-lg dark:hover:bg-gray-600 dark:text-gray-200 dark:hover:text-white">
-                      <a href="{{notification.url}}">
-                        <h1>{{ notification.message }}</h1>
-                        <div class="flex justify-between">
-                          <h2 class="text-sm text-gray-100 dark:text-gray-400">{{ notification.created_at|date:"D d M" }}</h2>
-                          <form action="{% url 'notifications:markAsRead' notification.id %}" method="POST" hx-post="{% url 'notifications:markAsRead' notification.id %}" hx-target="#notification-dropdown-{{notification.id}}" hx-swap="outerHTML">
-                            {% csrf_token %}
-                            <button type="submit" class="text-sm text-gray-100 dark:text-gray-400 hover:dark:text-gray-200">
-                                Mark as read
-                            </button>
-                          </form>
-                        </div>
-                      </a>
-                    </div>
-                {% endfor %}
-                {% if unread_notifications.count > 5 %}
-                    <h1 class="my-2">... and {{ unread_notifications.count|add:"-5" }} more</h1>
-                {% endif %}
-                {% if unread_notifications.count == 0 %}
-                    <h1 class="my-2">No new notifications</h1>
-                {% endif %}
-              </div>
-              <div class="py-2">
-                <a href="{% url 'notifications:notifications' %}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 dark:text-gray-200 dark:hover:text-white">View All</a>
-              </div>
+                <div class="px-4 py-3 text-sm text-gray-900 dark:text-white">
+                    <h1><span id="notification-count-dropdown">{{ unread_notifications.count }}</span> unread notifications</h1> 
+                </div>
+                <div id="notification-container" hx-get="{% url 'notifications:dropdown' %}" hx-trigger="load">
+                </div>
             </div>
-          </li>
+        </li>
+
+        <script>
+          document.addEventListener('click', function (event) {
+            // Check if the clicked element has the "markAsReadButton" class
+            if (event.target.classList.contains('markAsReadButton')) {
+              let notificationCount = document.getElementById('notification-count');
+              let notificationCountDropdown = document.getElementById('notification-count-dropdown');
+              if (notificationCount) {
+                let count = parseInt(notificationCount.textContent, 10);
+                if (count > 0) {
+                  count -= 1;
+                  notificationCount.textContent = count;
+                  notificationCountDropdown.textContent = count;
+                  if (count === 0) {
+                    notificationCount.remove();
+                  }
+                }
+              }
+            }
+          });
+        </script>
 
 
           <li>
