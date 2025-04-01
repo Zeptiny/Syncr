@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     'sync',
     'servers',
     'accounts',
+    'notifications',
     
     # 3 party apps
     'huey.contrib.djhuey',
@@ -73,6 +74,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'notifications.context_processors.unread_notifications',
             ],
         },
     },
