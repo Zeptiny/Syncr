@@ -118,11 +118,11 @@
                 <div>{{user.username}}</div>
                 <div class="font-medium truncate">{{user.email}}</div>
               </div>
-              {% comment %} <ul class="py-2 text-sm text-gray-700 dark:text-gray-200" aria-labelledby="dropdownAccount">
+              <ul class="py-2 text-sm text-gray-700 dark:text-gray-200" aria-labelledby="dropdownAccount">
                 <li>
-                  <a href="{% url 'accounts:logout' %}" class="block px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white">Logout</a>
+                  <a href="{% url 'notifications:contactList' %}" class="block px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white">Contacts</a>
                 </li>
-              </ul> {% endcomment %}
+              </ul>
               <div class="py-2">
                 <a href="{% url 'accounts:logout' %}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 dark:text-gray-200 dark:hover:text-white">Logout</a>
               </div>

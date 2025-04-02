@@ -10,3 +10,12 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.user.username}: {self.message[:20]}..."
+    
+    
+class Contact(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="contacts")
+    name = models.CharField(max_length=31)
+    
+    # Contact types:
+    email = models.EmailField(null=True, blank=True)
+    discord_webhook = models.URLField(null=True, blank=True)

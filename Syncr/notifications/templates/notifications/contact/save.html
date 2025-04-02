@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block content %}
+<form action="" method="POST" class="max-w-lg mx-auto">
+    {% csrf_token %}
+
+    <div class="mt-8">
+        <label for="{{ form.name.id_for_label }}" class="block text-gray-900 dark:text-white">{{ form.name.label }}</label>
+        <p class="block mb-2 text-gray-900 dark:text-gray-300">The name of this contact group</p>
+        {{ form.name }}
+    </div>
+
+    <h1 class="block text-lg text-gray-900 dark:text-white mt-8">
+        Ways of contact
+    </h1>
+
+    <div class="mt-4">
+        <label for="{{ form.email.id_for_label }}" class="block text-gray-900 dark:text-white">{{ form.email.label }}</label>
+        {{ form.email }}
+    </div>
+
+
+    <div class="mt-4">
+        <label for="{{ form.discord_webhook.id_for_label }}" class="block text-gray-900 dark:text-white">{{ form.discord_webhook.label }}</label>
+        {{ form.discord_webhook }}
+    </div>
+
+    <button type="submit" class="mt-2 hover:cursor-pointer text-white bg-gray-800 hover:bg-gray-900 focus:outline-none focus:ring-4 focus:ring-gray-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-gray-800 dark:hover:bg-gray-700 dark:focus:ring-gray-700 dark:border-gray-700">Submit</button>
+</form>
+{% endblock content %}
