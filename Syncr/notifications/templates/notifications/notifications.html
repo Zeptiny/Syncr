@@ -2,10 +2,49 @@
 {% load static %}
 
 {% block content %}
-<div>
-    {% for notification in notifications %}
-        <h2>{{notification.created_at}}</h2>
-        <h1>{{notification.message}}</h1>
-    {% endfor %}
+<div class="rounded-t-lg flex justify-between items-center mt-2 dark:bg-gray-700 p-2">
+    <div>
+        <h1 class="text-2xl font-bold dark:text-gray-200 mt-2">
+            Notifications
+        </h1>
+        <p class="mt-1 text-sm font-normal text-gray-500 dark:text-gray-400">Alerts and important messages</p>
+        {% comment %} <p class="mt-1 text-sm font-normal text-gray-500 dark:text-gray-400">Only the last 20 entries are shown here</p> {% endcomment %}
+    </div>
+    {% comment %} <div>
+        <a href="{% url 'notifications:contactNew' %}" class="p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">Create New Contact</a>
+    </div> {% endcomment %}
 </div>
+{% if notifications.count < 1 %}
+<p class="text-gray-700 bg-gray-50 dark:bg-gray-800 dark:text-gray-400 p-2 max-w-full">You have no notifications</p>
+{% else %}
+<div class="relative overflow-x-auto">
+    <table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+            <tr>
+                <th scope="col" class="px-6 py-3">
+                    Date
+                </th>
+                <th scope="col" class="px-6 py-3">
+                    Message
+                </th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for notification in notifications %}
+            <tr onclick="window.location='{{notification.url}}'" class="hover:cursor-pointer bg-white border-b hover:dark:bg-gray-700 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 border-gray-200
+                    {% if not notification.is_read %}
+                        bg-gray-100 dark:bg-gray-900
+                    {% endif %}">
+                <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white">
+                    {{notification.created_at|date:"SHORT_DATETIME_FORMAT"}}
+                </th>
+                <td class="px-6 py-4">
+                    {{notification.message}}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
 {% endblock content %}
