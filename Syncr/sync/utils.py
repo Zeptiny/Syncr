@@ -10,7 +10,7 @@ import threading
 def createJobHandler(type: str, 
                      srcFs_content_type, srcFs_object_id, srcFsPath, 
                      dstFs_content_type, dstFs_object_id, dstFsPath, 
-                     options, server, user, **kwargs) -> None:
+                     options, server, user, contacts, **kwargs) -> None:
     # Start the job
     if type == "sync/copy" or type == "sync/sync" or type == "sync/move":
         payload = {
@@ -53,6 +53,8 @@ def createJobHandler(type: str,
         options=options,
         **combinedQuery
     )
+    jobObject.contacts.set(contacts) # Many to many field
+    jobObject.save()
     
     # Crate the first statistic model, as we need one "base"
     # we havent even started the query, so its safe to assume all 0 (I think)

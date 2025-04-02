@@ -32,6 +32,7 @@ def check_schedules_cron():
                              options=schedule.options,
                              server=schedule.server,
                              user=schedule.user,
+                             contacts=schedule.contacts.all(),
                              # Kwargs below
                              schedule=schedule)
             print(f"Starting schedule {schedule.id} - {schedule.name}")

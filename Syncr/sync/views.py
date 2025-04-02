@@ -301,6 +301,7 @@ class createJobView(View):
         srcFsPath = form.cleaned_data['srcFsPath']
         dstFsPath = form.cleaned_data['dstFsPath']
         server = form.cleaned_data['server']
+        contacts = form.cleaned_data['contacts']
         
         # Correctly formatting the path:
         srcFsPath = srcFsPath.replace(" ", "")
@@ -334,7 +335,8 @@ class createJobView(View):
                                dstFsPath=dstFsPath, 
                                options=options,
                                server=server, 
-                               user=request.user)
+                               user=request.user,
+                               contacts=contacts)
         
         return redirect('sync:index')
 
@@ -531,6 +533,9 @@ class createScheduleView(View):
         if schedule.dstFsPath[0] != "/":
             schedule.dstFsPath = "/" + schedule.dstFsPath
         
+        schedule.save()
+        
+        schedule.contacts.set(form.cleaned_data['contacts']) # Many to many field
         schedule.save()
         
         return redirect('sync:schedule')

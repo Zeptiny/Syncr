@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError
 from .settings import TASK_TYPES, REMOTE_TYPES
 
 from servers.models import Server
+from notifications.models import Contact
 
 class Remote(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="remotes")
@@ -48,6 +49,8 @@ class Schedule(models.Model):
     
     options = models.JSONField(default=dict) # The options that should be passed to the job
     
+    contacts = models.ManyToManyField(Contact, blank=True) # The contacts that should be notified when the job kabooms
+    
     def save(self, *args, **kwargs):
         # Validate srcFs
         if self.srcFs_content_type and self.srcFs_content_type.model not in ['remote', 'union']:
@@ -78,6 +81,8 @@ class Job(models.Model):
     server = models.ForeignKey(Server, on_delete=models.SET_NULL, null=True, related_name="jobs") # The server on where the job run
     
     options = models.JSONField(default=dict) # The options that should be passed to the job
+    
+    contacts = models.ManyToManyField(Contact, blank=True) # The contacts that should be notified when the job kabooms
 
     # Status dependent
     # Gathered via rclone rc job/status jobid=<id> --rc-addr=

@@ -19,3 +19,6 @@ class Contact(models.Model):
     # Contact types:
     email = models.EmailField(null=True, blank=True)
     discord_webhook = models.URLField(null=True, blank=True)
+    
+    def __str__(self):
+        return f"{self.name}"

@@ -2,6 +2,7 @@ from django import forms
 from . import models
 
 from servers.models import Server
+from notifications.models import Contact
 
 from .settings import TASK_TYPES
 
@@ -111,6 +112,15 @@ class jobCreateForm(forms.Form):
         initial="/",
         widget=forms.TextInput(attrs={'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'})
     )
+    
+    
+    contacts = forms.ModelMultipleChoiceField(
+        queryset=Contact.objects.none(),  # Default to an empty queryset
+        widget=forms.CheckboxSelectMultiple(attrs={
+            'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'
+        }),
+        required=False,
+    )
 
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop('request')
@@ -140,6 +150,8 @@ class jobCreateForm(forms.Form):
             widget=remoteWidget(request=self.request)  # Pass the request object
         )
         
+        self.fields['contacts'].queryset = Contact.objects.filter(user=self.request.user)
+        
 
 class scheduleCreateForm(forms.ModelForm):
     srcFs = forms.ChoiceField(
@@ -153,7 +165,7 @@ class scheduleCreateForm(forms.ModelForm):
     
     class Meta:
         model = models.Schedule
-        fields = ['name', 'type', 'cron', 'srcFsPath', 'dstFsPath', 'server']
+        fields = ['name', 'type', 'cron', 'srcFsPath', 'dstFsPath', 'server', 'contacts']
         labels = {
             'name': 'Schedule Name',
             'type': 'Schedule Type',
@@ -216,6 +228,15 @@ class scheduleCreateForm(forms.ModelForm):
             choices=[(key, value['display']) for key, value in TASK_TYPES.items()],
             widget=TaskTypeWidget()
         )
+        
+        self.fields['contacts'] =forms.ModelMultipleChoiceField(
+            queryset=Contact.objects.filter(user=self.request.user),  # Default to an empty queryset
+            widget=forms.CheckboxSelectMultiple(attrs={
+                'class': 'bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500'
+            }),
+            required=False,
+        )
+
         
     # TO-DO
     # ENSURE THE CRON IS CORRECTLY FORMATTED
