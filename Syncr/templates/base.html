@@ -77,10 +77,15 @@
             </button>
             <div id="dropdownNotificationsMenu" class="z-10 hidden bg-white divide-y divide-gray-100 rounded-lg shadow-sm w-64 dark:bg-gray-700 dark:divide-gray-600">
                 <div class="px-4 py-3 text-sm text-gray-900 dark:text-white">
-                    <h1><span id="notification-count-dropdown">{{ unread_notifications.count }}</span> unread notifications</h1> 
+                  <h1><span id="notification-count-dropdown">{{ unread_notifications.count }}</span> unread notifications</h1> 
                 </div>
-                <div id="notification-container" hx-get="{% url 'notifications:dropdown' %}" hx-trigger="load">
+                  <div id="notification-container" hx-get="{% url 'notifications:dropdown' %}" hx-trigger="load">
                 </div>
+                <a href="{% url 'notifications:notifications' %}">
+                  <div class="dark:hover:bg-gray-600 dark:text-gray-200 dark:hover:text-white">
+                    <h1 class="p-2 my-2 text-sm text-gray-900 dark:text-white">View All</h1>
+                  </div>
+                </a>
             </div>
         </li>
 
