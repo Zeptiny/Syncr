@@ -9,11 +9,11 @@ from notifications.utils import send_notification
 #
 
 @receiver(post_save, sender=Job)
-def send_job_completion_notification(sender, instance, created, **kwargs):
-    # Job has failed
+def send_job_failure_notification(sender, instance, created, **kwargs):
     if not created and instance.finished and not instance.success:
         send_notification(
             user = instance.user,
+            instance = instance,
             url = reverse("sync:detail", args=[instance.id]),
             message = (
                 f"Job {instance.id}"
