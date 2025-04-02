@@ -256,23 +256,27 @@
 
 
     <h1 class="block mt-8 text-xl text-gray-900 dark:text-white">Contact List</h1>
-    <p class="block mb-2 text-gray-900 dark:text-gray-300">Who should be notified if this job fails?</p>
-    <div class="grid grid-cols-3 gap-2">
-        {% for choice in form.contacts %}
-        <label class="bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500
-        hover:cursor-pointer dark:hover:bg-gray-800 dark:has-checked:bg-blue-500">
-                <input 
-                    type="checkbox" 
-                    class="hidden" 
-                    name="{{ form.contacts.name }}" 
-                    value="{{ choice.data.value }}"
-                >
-                <div class="flex flex-col">
-                    <span class="font-medium">{{choice.data.label}}</span>
-                </div>
-            </label>
-        {% endfor %}
-    </div>
+    {% if form.contacts.field.queryset.exists %}
+        <p class="block mb-2 text-gray-900 dark:text-gray-300">Who should be notified if this job fails?</p>
+        <div class="grid grid-cols-3 gap-2">
+            {% for choice in form.contacts %}
+            <label class="bg-gray-50 rounded-lg border border-gray-300 text-gray-900 text-sm block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500
+            hover:cursor-pointer dark:hover:bg-gray-800 dark:has-checked:bg-blue-500">
+                    <input 
+                        type="checkbox" 
+                        class="hidden" 
+                        name="{{ form.contacts.name }}" 
+                        value="{{ choice.data.value }}"
+                    >
+                    <div class="flex flex-col">
+                        <span class="font-medium">{{choice.data.label}}</span>
+                    </div>
+                </label>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="text-gray-900 dark:text-gray-300">No contacts available to notify, <a href="{% url 'notifications:contactNew' %}" class="text-blue-300 hover:text-blue-500">create one now</a>.</p>
+    {% endif %}
 
 
     <div class="mt-8">
