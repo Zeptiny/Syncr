@@ -8,6 +8,7 @@ from django.db.models.functions import TruncDate
 from django.utils import timezone
 from datetime import timedelta
 from django.contrib.contenttypes.models import ContentType
+from django.contrib import messages
 
 from django.core.paginator import Paginator
 from django.db.models import Q
@@ -174,9 +175,11 @@ class createRemoteView(View):
             remote.user = request.user
             remote.save()
             
+            messages.add_message(request, messages.SUCCESS, f"Remote {remote.name} saved successfully.")
             return redirect('sync:remote')
         
         else:
+            messages.add_message(request, messages.ERROR, f"Failed to save remote {remote.name}.")
             context = {
                 'form': form,
                 'remote_fields': REMOTE_FIELDS
@@ -189,6 +192,7 @@ class deleteRemoteView(View):
         
         if remote.user == request.user:
             remote.delete()
+            messages.add_message(request, messages.SUCCESS, f"Remote {remote.name} deleted successfully.")
         
         return redirect('sync:remote')
 
@@ -239,9 +243,11 @@ class createUnionView(View):
             union.remotes.clear()  # Clear all existing remotes
             form.save_m2m()
             
+            messages.add_message(request, messages.SUCCESS, f"Union {union.name} saved successfully.")
             return redirect('sync:remote')
         
         else:
+            messages.add_message(request, messages.ERROR, f"Failed to save union {union.name}.")
             context = {
                 'form': form
             }
@@ -253,6 +259,7 @@ class deleteUnionView(View):
         
         if union.user == request.user:
             union.delete()
+            messages.add_message(request, messages.SUCCESS, f"Union {union.name} deleted successfully.")
         
         return redirect('sync:remote')
 # Jobs
@@ -338,6 +345,7 @@ class createJobView(View):
                                user=request.user,
                                contacts=contacts)
         
+        messages.add_message(request, messages.SUCCESS, f"Job created successfully.")
         return redirect('sync:index')
 
 class detailView(View):
@@ -489,6 +497,7 @@ class createScheduleView(View):
             context = {
                 'form': form
             }
+            messages.add_message(request, messages.ERROR, f"Failed to save schedule.")
             return render(request, 'sync/schedule/create.html', context)
         
         if form.cleaned_data['type'] == "sync/copy" or "sync/sync" or "sync/move":
@@ -498,6 +507,7 @@ class createScheduleView(View):
                 context = {
                     'form': form,
                 }
+                messages.add_message(request, messages.ERROR, f"Failed to save schedule.")
                 return render(request, 'sync/job/create.html', context)
         
         #
@@ -538,6 +548,8 @@ class createScheduleView(View):
         schedule.contacts.set(form.cleaned_data['contacts']) # Many to many field
         schedule.save()
         
+        
+        messages.add_message(request, messages.SUCCESS, f"Schedule {schedule.name} saved successfully.")
         return redirect('sync:schedule')
         
 
@@ -547,6 +559,7 @@ class deleteScheduleView(View):
         
         if schedule.user == request.user:
             schedule.delete()
+            messages.add_message(request, messages.SUCCESS, f"Schedule {schedule.name} deleted successfully.")
         
         return redirect('sync:schedule')
 
