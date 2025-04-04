@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'accounts',
     'notifications',
     'feedbacks',
+    'billing',
     
     # 3 party apps
     'huey.contrib.djhuey',
