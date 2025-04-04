@@ -7,17 +7,98 @@
     <a href="{% url 'sync:index' %}" class="rounded-lg p-2 text-gray-900 dark:text-white bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-300 dark:hover:bg-gray-700">Back to Home</a>
 </div>
 
-{% if isFinished %}
-<div id="jobQuery" hx-get="{% url 'sync:jobQuery' jobId %}" hx-trigger="load"></div>
-{% else %}
-<div id="jobQuery" hx-get="{% url 'sync:jobQuery' jobId %}" hx-trigger="every 5s, load"></div>
+
+{% if job.error %}
+<figure class="rounded-lg col-span-6 flex flex-col items-top p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
+    <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+        <h3 class="text-lg font-semibold text-red-200">{{job.error}}</h3>
+        <div class="grid grid-cols-2">
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Errors: {{job.errors}}</h3>
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Fatal Error: {{job.fatalError}}</h3>
+        </div>
+    </blockquote>   
+</figure>
 {% endif %}
 
-{% if isFinished %}
-<div id="jobQueryChartsJS" hx-get="{% url 'sync:jobQueryCharts' jobId %}" hx-trigger="load"></div>
-{% else %}
-<div id="jobQueryChartsJS" hx-get="{% url 'sync:jobQueryCharts' jobId %}" hx-trigger="every 15s, load"></div>
+{% if isDryRun %}
+<figure class="rounded-lg col-span-6 flex flex-col items-top p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
+    <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+        <h3 class="text-lg font-semibold text-red-200">This job is a DryRun, no files were transferred.</h3>
+    </blockquote>   
+</figure>
 {% endif %}
 
-<div id="jobQueryChartsJS"></div>
+<div class="grid grid-cols-2 gap-2 my-2">
+    <figure class="rounded-lg flex flex-col items-top p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700">
+        <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+            <div class="flex justify-between gap-4">
+                <div>
+                    <p>ID</p>
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{job.id}}</h3>
+                </div>
+                <div>
+                    <p>Type</p>
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{job.type}}</h3>
+                </div>
+                <div>
+                    <p>Calee</p>
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{ job.schedule.name|default:"Manual" }}</h3>
+                </div>
+            </div>
+        </blockquote>   
+    </figure>
+
+    <figure class="rounded-lg flex flex-col items-top p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700">
+        <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+            <div class="grid md:grid-cols-2 gap-4">
+                <div>
+                    <p>Source</p>
+                    {% if job.srcFs_content_type.model == 'union' %}
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">union:{{job.srcFs.name}}</h3>
+                        {% for remote in job.srcFs.remotes.all %}
+                            <h1>{{remote}}</h1>
+                        {% endfor %}
+                    {% else %}
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{job.srcFs.type}}:{{job.srcFs.name}}</h3>
+                    {% endif %}
+                </div>
+                <div>
+                    <p>Destination</p>
+                    {% if job.dstFs_content_type.model == 'union' %}
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white">union:{{job.dstFs.name}}</h3>
+                        {% for remote in job.dstFs.remotes.all %}
+                            <h1>{{remote}}</h1>
+                        {% endfor %}
+                    {% else %}
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{job.dstFs.type}}:{{job.dstFs.name}}</h3>
+                    {% endif %}
+                </div>
+            </div>
+        </blockquote>   
+    </figure>
+</div>
+
+<figure class="my-2 rounded-lg col-span-6 flex flex-col items-top p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
+    <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
+        <p class="my-2">Options</p>
+        <div class="grid grid-cols-3 md:grid-cols-6">
+            {% for key, value in job.options.items %}
+                <h3>{{ key|title }}: {{ value }}</h3>
+            {% endfor %}
+        </div>
+    </blockquote>   
+</figure>
+
+{% if job.finished %}
+<div id="jobQuery" hx-get="{% url 'sync:jobQuery' job.id %}" hx-trigger="load"></div>
+{% else %}
+<div id="jobQuery" hx-get="{% url 'sync:jobQuery' job.id %}" hx-trigger="every 5s, load"></div>
+{% endif %}
+
+{% if job.finished %}
+<div id="jobQueryChartsJS" hx-get="{% url 'sync:jobQueryCharts' job.id %}" hx-trigger="load"></div>
+{% else %}
+<div id="jobQueryChartsJS" hx-get="{% url 'sync:jobQueryCharts' job.id %}" hx-trigger="every 15s, load"></div>
+{% endif %}
+
 {% endblock content %}

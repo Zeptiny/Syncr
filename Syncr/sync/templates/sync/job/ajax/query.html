@@ -1,30 +1,7 @@
 {% load custom_filters %}
-<div class="grid grid-cols-1 md:grid-cols-6 mb-4 gap-x-4 gap-y-4">
-    {% if job.error %}
-    <figure class="rounded-lg col-span-6 flex flex-col items-top p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
-        <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
-            <h3 class="text-lg font-semibold text-red-200">{{job.error}}</h3>
-            <div class="grid grid-cols-2">
-                <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Errors: {{job.errors}}</h3>
-                <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Fatal Error: {{job.fatalError}}</h3>
-            </div>
-        </blockquote>   
-    </figure>
-    {% endif %}
+<div class="grid grid-cols-1 md:grid-cols-6 mb-2 gap-2">
     <figure class="rounded-lg col-span-6 flex flex-col p-2 bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
         <blockquote class="mb-2 text-gray-500 dark:text-gray-400">
-            <div>
-                <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">Job {{ job.id }} - {{ job.type }} - {{ job.schedule.name|default:"Manual" }} ({{ job.startTime|date:"d/m/y H:i" }})</h3>
-            </div>
-
-            <div>
-                <h3 class="mb-2">Source: 
-                    <span class="text-lg font-semibold text-gray-900 dark:text-white">{{job.srcFs.type}}:{{job.srcFs.name}}</span>
-                    <span class="text-lg font-semibold text-gray-900 dark:text-white">-></span>
-                    Destination: 
-                    <span class="text-lg font-semibold text-gray-900 dark:text-white">{{job.dstFs.type}}:{{job.dstFs.name}}</span>
-            </div>
-
             <div class="grid grid-cols-3 text-center">
                 <div>
                     <p class="mt-2">Status</p>
@@ -105,17 +82,6 @@
             <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Renames: {{job.renames}}</h3>
             <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Deletes: {{job.deletes}}</h3>
             <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Deleted dirs: {{job.deletedDirs}}</h3>
-        </blockquote>   
-    </figure>
-
-    <figure class="rounded-lg col-span-6 flex flex-col items-top p-2 text-center bg-white border-b border-gray-200  dark:bg-gray-800 dark:border-gray-700">
-        <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
-            <p class="my-2">Options</p>
-            <div class="grid grid-cols-6">
-                {% for key, value in job.options.items %}
-                    <h3>{{ key }}: {{ value }}</h3>
-                {% endfor %}
-            </div>
         </blockquote>   
     </figure>
 </div>

@@ -350,10 +350,10 @@ class createJobView(View):
 
 class detailView(View):
     def get(self, request, jobId):
-        isFinished = models.Job.objects.get(pk=jobId).finished
+        job = models.Job.objects.get(pk=jobId)
         context = {
-            'jobId': jobId,
-            'isFinished': isFinished
+            'job': job,
+            'isDryRun': job.options.get('DryRun')
         }
         return render(request, 'sync/job/detail.html', context)
 
