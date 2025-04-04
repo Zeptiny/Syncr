@@ -40,8 +40,8 @@
                     <h3 class="font-semibold text-gray-900 dark:text-white">Jobs Run</h3>
                     <p>Total number of jobs completed.</p>
                     
-                    <h3 class="font-semibold text-gray-900 dark:text-white">Errored Jobs</h3>
-                    <p>Total number of jobs that completed with errors.</p>                    
+                    <h3 class="font-semibold text-gray-900 dark:text-white">Failed Jobs</h3>
+                    <p>Total number of jobs that failed to complete.</p>                    
                   <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m1 9 4-4-4-4"/>
                 </svg></a>
                   </div>
@@ -231,9 +231,9 @@ const optionsJobs = {
         color: "oklch(0.789 0.154 211.53)",
       },
       {
-        name: "Errored Jobs",
+        name: "Failed Jobs",
         data: [
-        {% for count in jobsErrored %}
+        {% for count in jobsFailed %}
         {{ count }}
         {% if not forloop.last %},{% endif %}
         {% endfor %}

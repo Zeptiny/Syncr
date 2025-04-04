@@ -137,7 +137,7 @@ class DailyStatistics(models.Model):
     serverSideCopyBytes = models.BigIntegerField(default=0)
     serverSideMoveBytes = models.BigIntegerField(default=0)
     jobs_run = models.IntegerField(default=0)
-    errored_jobs = models.IntegerField(default=0)
+    failed_jobs = models.IntegerField(default=0)
 
 
 # Statistics gathered while the job is running

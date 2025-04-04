@@ -20,10 +20,10 @@
     <a href="{% url 'sync:jobList' %}?status=failed&last_x_days=30" class="rounded-lg flex flex-col items-center justify-center p-2 text-center bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 hover:dark:bg-gray-700 hover:bg-gray-300">
         <figure>
             <blockquote class="mx-auto mb-2 text-gray-500 dark:text-gray-400">
-                <p class="my-2">Errored Jobs</p>
+                <p class="my-2">Failed Jobs</p>
                 <h3 class="text-lg font-semibold 
-                {% if erroredJobs > 0 %} text-red-200 {% else %} text-gray-900 dark:text-white {% endif %}"> 
-                    {{erroredJobs}}
+                {% if failedJobs > 0 %} text-red-200 {% else %} text-gray-900 dark:text-white {% endif %}"> 
+                    {{failedJobs}}
                 </h3>
                 <p class="my-2 flex items-center text-sm">
                     <svg class="me-1.5 h-4 w-4 text-gray-500 dark:text-gray-400" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24">

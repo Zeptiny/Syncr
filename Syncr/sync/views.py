@@ -28,7 +28,7 @@ class ajaxIndexStatsView(View):
         context = {
             'runningJobs': models.Job.objects.filter(finished=False, user=request.user).count(),
             'scheduledJobs': models.Schedule.objects.filter(user=request.user).count(),
-            'erroredJobs': models.Job.objects.filter(success=False, user=request.user, startTime__gte=(timezone.now() - timedelta(days=30))).count(),
+            'failedJobs': models.Job.objects.filter(success=False, user=request.user, startTime__gte=(timezone.now() - timedelta(days=30))).count(),
             'totalBandwidth': models.Job.objects.filter(user=request.user, startTime__gte=(timezone.now() - timedelta(days=30))).aggregate(totalBandwidth=Sum('bytes'))['totalBandwidth'] or 0
         }
         return render(request, 'sync/ajax/indexStats.html', context)
@@ -86,7 +86,7 @@ class ajaxIndexStatsChartsView(View):
                 total_server_side_copy_bytes=Sum('serverSideCopyBytes', default=0),
                 total_server_side_move_bytes=Sum('serverSideMoveBytes', default=0),
                 jobs_run=Count('id'),
-                jobs_errored=Count('id', filter=Q(success=False)),
+                jobs_failed=Count('id', filter=Q(success=False)),
             )
         )
 
@@ -101,7 +101,7 @@ class ajaxIndexStatsChartsView(View):
             'serverSideCopyBytes': [],
             'serverSideMoveBytes': [],
             'jobsRun': [],
-            'jobsErrored': [],
+            'jobsFailed': [],
         }
 
         # Populate the context with data or defaults
@@ -111,13 +111,13 @@ class ajaxIndexStatsChartsView(View):
                 context['serverSideCopyBytes'].append(stats_by_date[day]['total_server_side_copy_bytes'] / 1_000_000_000)  # Convert to GB
                 context['serverSideMoveBytes'].append(stats_by_date[day]['total_server_side_move_bytes'] / 1_000_000_000)  # Convert to GB
                 context['jobsRun'].append(stats_by_date[day]['jobs_run'])
-                context['jobsErrored'].append(stats_by_date[day]['jobs_errored'])
+                context['jobsFailed'].append(stats_by_date[day]['jobs_failed'])
             else:
                 context['bytes'].append(0)
                 context['serverSideCopyBytes'].append(0)
                 context['serverSideMoveBytes'].append(0)
                 context['jobsRun'].append(0)
-                context['jobsErrored'].append(0)
+                context['jobsFailed'].append(0)
                 
         return render(request, 'sync/ajax/indexStatsCharts.html', context)
 

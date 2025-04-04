@@ -88,7 +88,7 @@ def collect_daily_statistics():
         serverSideMoveBytes = bandwidth['serverSideMoveBytes'] or 0
         
         jobs_run = jobs_yesterday.count()
-        errored_jobs = jobs_yesterday.filter(success=False).count()
+        failed_jobs = jobs_yesterday.filter(success=False).count()
 
         DailyStatistics.objects.create(
             user=user,
@@ -97,5 +97,5 @@ def collect_daily_statistics():
             serverSideCopyBytes = serverSideCopyBytes,
             serverSideMoveBytes = serverSideMoveBytes,
             jobs_run=jobs_run,
-            errored_jobs=errored_jobs
+            failed_jobs=failed_jobs
         )
