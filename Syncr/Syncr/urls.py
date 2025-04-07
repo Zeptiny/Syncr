@@ -26,6 +26,5 @@ urlpatterns = [
     path('server/', include('servers.urls')),
     path('accounts/', include('accounts.urls')),
     path('notifications/', include('notifications.urls')),
-    path('feedback/', include('feedbacks.urls')),
-    path('billing/', include('billing.urls')),
+    path('feedback/', include('feedbacks.urls'))
 ]  + static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

@@ -36,8 +36,7 @@ INSTALLED_APPS = [
     'servers',
     'accounts',
     'notifications',
-    'feedbacks',
-    'billing',
+    'feedbacks'
     
     # 3 party apps
     'huey.contrib.djhuey',
