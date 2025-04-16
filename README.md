@@ -24,6 +24,9 @@ DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
     - Docs
     - Docker 
 
+- Workflows
+    - Add actual testing
+
 ## Things that I may add, but I'm unsure how and if they are even fisable:
 - Split the work between multiple servers to improve effiency
 - Analyze the jobs and provide recommendations for rclone configs that may improve effiency
