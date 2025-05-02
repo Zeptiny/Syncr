@@ -125,10 +125,12 @@ services:
     command: 'rcd --rc-no-auth --rc-addr=${RCLONE_ADDR}:${RCLONE_PORT}'
     networks:
       - backend
+      - public
     # As auth isn't implemented yet, rclone is only acessible from inside the docker network
     # ports:
     #   - ${RCLONE_PORT}:${RCLONE_PORT}
 networks:
+  public:
   proxy:
     external: true
   backend:
