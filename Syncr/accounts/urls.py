@@ -9,5 +9,5 @@ urlpatterns = [
     path('logout/', views.logoutView.as_view(), name='logout'),
 ]
 
-if os.environ.get("DJANGO_REGISTRATION_ENABLED"):
-    urlpatterns += path('register/', views.registerView.as_view(), name='register')
+if os.environ.get("DJANGO_REGISTRATION_ENABLED") == "True":
+    urlpatterns += [path('register/', views.registerView.as_view(), name='register')]
