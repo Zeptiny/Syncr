@@ -59,6 +59,8 @@ DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
 - Distribute jobs across multiple servers to improve performance
 - Suggest optimal rclone settings based on job analysis
 
+## Breaking bugs
+- Unions are ignoring more than one remote, making it appear that only one remote is in the union
 
 ## Other & technical information
 - The scheduled jobs are checked every minute with cron_validator using huey if they should be executed, schedules cannot be less than 1 minute.
