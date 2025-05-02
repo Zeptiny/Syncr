@@ -44,6 +44,11 @@ DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
 - Multi selection
 - Network cap
 
+### Remotes/Unions
+- Labels/tags
+- Groups (For better visualization)
+- Multi bucket support for S3 remotes
+
 ### Running:
 - Docs
 
