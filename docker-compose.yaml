@@ -1,0 +1,76 @@
+services:
+
+  postgres:
+    container_name: syncr-postgres
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME}
+      POSTGRES_USER: ${DATABASE_USERNAME}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+    ports:
+      - ${DATABASE_PORT}:${DATABASE_PORT}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    env_file:
+      - .env
+
+    
+  web:
+    container_name: syncr-web
+    build: .
+    command: web
+    depends_on:
+      - postgres
+    environment:
+      SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DEBUG: ${DJANGO_DEBUG}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS}
+      DATABASE_NAME: ${DATABASE_NAME}
+      DATABASE_USERNAME: ${DATABASE_USERNAME}
+  
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      DATABASE_HOST: ${DATABASE_HOST}
+      DATABASE_PORT: ${DATABASE_PORT}
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+
+
+  huey:
+    container_name: syncr-huey
+    build: .
+    command: huey
+    environment:
+      SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DEBUG: ${DJANGO_DEBUG}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS}
+      DATABASE_NAME: ${DATABASE_NAME}
+      DATABASE_USERNAME: ${DATABASE_USERNAME}
+  
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      DATABASE_HOST: ${DATABASE_HOST}
+      DATABASE_PORT: ${DATABASE_PORT}
+    depends_on:
+      - web
+
+  rclone:
+    container_name: syncr-rclone
+    image: rclone/rclone
+    restart: always
+    devices:
+      - /dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+    command: 'rcd --rc-no-auth --rc-addr=${RCLONE_ADDR}:${RCLONE_PORT}'
+    # As auth isn't implemented yet, rclone is only acessible from inside the docker network
+    # ports:
+    #   - ${RCLONE_PORT}:${RCLONE_PORT}
+
+volumes:
+   postgres_data:
