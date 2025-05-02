@@ -50,9 +50,9 @@ DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
 - Make them work?
 
 ### Accounts
-- Option to disable register
+- Option to disable registration
 
-### Idead (Unknown Feasibility)
+### Ideas (Unknown Feasibility)
 - Distribute jobs across multiple servers to improve performance
 - Suggest optimal rclone settings based on job analysis
 
