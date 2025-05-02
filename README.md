@@ -70,7 +70,7 @@ If you REALLY want to trust this while in development, or want to give some feed
 1. Clone this repository
 
 ```
-git clone https://github.com/Zeptiny/Sync.git && cd Syncr
+git clone https://github.com/Zeptiny/Syncr.git && cd Syncr
 ``` 
 
 2. Configure the environment
@@ -83,6 +83,7 @@ Edit the `.env` with your prefereed editor (May it be our lord and savior `vim`)
 
 
 3. Start the docker compose
+
 At this moment, you will need to build the project, the command is as follows:
 ```
 docker compose up -d --build
