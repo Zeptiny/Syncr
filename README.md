@@ -3,71 +3,66 @@
 THIS PROJECT IS NOT FINISHED AND DOES NOT REPRESENT IT'S FINAL STATE, THINGS WILL BREAK, PLEASE DO NOT USE IT.
 DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
 
+## Overview
+**Syncr** is a Django-based app that uses [Rclone](https://rclone.org/) to handle file synchronization tasks between remote storage services. It allows you to:
+
+- Manage multiple Rclone servers
+- Schedule or manually run sync jobs
+- Receive notifications (currently via Discord)
+- Use temporary, on-the-fly remotes with zero persistence
+
+
+## Features
+
+- **Rclone operations**: `sync`, `copy`, `move`
+- **Remote configuration on the fly**
+- **Job scheduling via crontab**
+- **Protocol support**: S3 and SFTP
+- **Notifications**: Discord Webhooks
+- **Multi-server support**: allows to have multiple remote rclone instances.
+
+
 ## TO-DO
-- Notifications:
-    - Email notifications
-    - SMS
-    - Slack (Unsure how to use it)
+### Notifications:
+- Email notifications
+- SMS
+- Slack (Unsure how to use it)
 
-- Protocols:
-    - Add more protocols (Only S3 and SFTP is supported)
-    - Add key support for SFTP
-
-- Sincronization:
-    - Add retries
-
-- Servers:
-    - Authentication
-    - Server Creation outside of admin
-    - Fallback servers
-    - Multi selection
-    - Network cap
-
-- Running:
-    - Docs
-    - Docker 
-
-- Workflows
-    - Add actual testing
-
-## Things that I may add, but I'm unsure how and if they are even fisable:
-- Split the work between multiple servers to improve effiency
-- Analyze the jobs and provide recommendations for rclone configs that may improve effiency
-
-## Description
-This is a sincronization app made with Django and using Rclone to transfer the files.
-
-Jobs can be scheduled with a crontab, with the minimum frequency of 1 minute.
-
-It works by sending the remote configuration and creating a on-the-fly remote with rclone, the remotes are not saved on the rclone config, nothing is.
-
-Each rclone instance is considered a "server", making possible to have multiple instances and be select on a per job or schedule basis
-
-
-## Currently supported
 ### Protocols:
-- S3
-- SFTP
+- Add more protocols (Only S3 and SFTP is supported)
+- Add key support for SFTP
 
-### Rclone operations
-- Sync
-- Copy
-- Move
+### Sincronization:
+- Add retry support
 
-### Notification medium
-- Discord Webhook
+### Servers:
+- Authentication
+- Server Creation outside of admin
+- Fallback servers
+- Multi selection
+- Network cap
+
+### Running:
+- Docs
+
+### Github Workflows
+- Make them work?
+
+### Idead (Unknown Feasibility)
+- Distribute jobs across multiple servers to improve performance
+- Suggest optimal rclone settings based on job analysis
 
 
-# Running this thing on docker
+# Installation & Setup
 If you REALLY want to trust this while in development, or want to give some feedback, here's how to run it:
 
-1. Clone this repository and go into it
+1. Clone this repository
 
 ```
 git clone https://github.com/Zeptiny/Sync.git && cd Syncr
 ``` 
 
-1. Edit the .env
+2. Configure the environment
 
 Make a copy of the example:
 ```
@@ -83,28 +78,43 @@ docker compose up -d --build
 ```
 It will take a few seconds/minutes, depending on your system
 
-4. Create the admin user
-First, enter into the web container
+4. Create the superuser
 ```
 docker exec -it syncr-web sh
-```
-Next, create the super user:
-```
 python manage.py createsuperuser
+exit
 ```
-Enter the required information, when done, exit with the command `exit` 
+Enter the required information.
 
-5. Login into the interface
+5. Access the interface
 
-Access the Syncr by the IP and port you configured, enter your credentials, you should be logged into the home page.
+Access your browser and go to `http://127.0.0.1:8000`
 
 6. Add the servers
 
-For the app to be usable, you need to add the server from witch will be made the transferences, those being rclone instances.
-In the provided docker compose, there already is a rclone instance, however, you can connect from other machines, providers, etc.
+For the app to be usable, you need to add the server from where the transfers will be done, those being rclone instances.
+In the provided docker compose, there already is a rclone instance, you can also add how many you want.
 
-Go to the admin interface -> `<ip>:<port>/admin` (Yes, I will make a form, I sort of forgot)
+Go to the admin interface -> `http://127.0.0.1:8000/admin` (Yes, I will make a form, I sort of forgot)
 Add a server: servers -> add
 
-Fill the form with the rclone information, rclone authentication isn't yet inplemented.
-If you are using the default provided docker compose, the rclone host can be `syncr-rclone`
+Rclone authentication isn't yet implemented, if you are using the default provided docker compose, use `syncr-rclone` as the host.
+
+7. Add the Remotes
+For the sincronization to work, you will need to specify the remotes from witch syncr can access.
+Returning to the home screen, click on "Remotes" and then "Create New Remote".
+Fill the form for each remote you want to use.
+
+8. Running your first Job
+Return to the home screen, and then click on "Run Manual Job"
+You will be able to select the sync type, remote, path, and other options
+When running the job, you will be redirected to the job description with it's information.
+
+
+9. Scheduling job
+On the navbar, select "Schedules" and then "Create New Schedule"
+The creation is similar to the manual job creation, except for the need of a cron frequency to be added, that's when your job will be run.
+
+
+10. Done!
+That's it, you can also specify a contact list to be notified when a job goes wrong, currently, only Discord Webhook is working.
