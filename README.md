@@ -134,3 +134,8 @@ The creation is similar to the manual job creation, except for the need of a cro
 10. Done!
 
 That's it, you can also specify a contact list to be notified when a job goes wrong, currently, only Discord Webhook is working.
+
+### Using TLS 
+
+You can also use your own domain by using the `.env.tls.example` and `docker-compose-tls.yaml` files.
+Fill the information as normal, also, do not forget to create the docker network with `docker network create proxy` and to change the permissions of the traefik directory with `sudo chown -R $USER:$USER traefik`, TLS shouold be handled automatically with Let's Encrypt and everything should work fine.

@@ -1,0 +1,126 @@
+services:
+
+  traefik:
+    image: traefik:v3.3.6
+    container_name: syncr-traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL: ${TRAEFIK_LE_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/data:/data
+      - ./traefik/config/traefik.yml:/traefik.yml:ro
+      - ./traefik/config/certificates:/certificates
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.rule=Host(${TRAEFIK_DOMAIN})"
+      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik.service=api@internal"
+
+
+  postgres:
+    container_name: syncr-postgres
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME}
+      POSTGRES_USER: ${DATABASE_USERNAME}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+    ports:
+      - ${DATABASE_PORT}:${DATABASE_PORT}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    env_file:
+      - .env
+    networks:
+      - backend
+
+    
+  web:
+    container_name: syncr-web
+    build: .
+    command: web
+    depends_on:
+      - postgres
+    environment:
+      SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DEBUG: ${DJANGO_DEBUG}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS}
+      CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS}
+      DATABASE_NAME: ${DATABASE_NAME}
+      DATABASE_USERNAME: ${DATABASE_USERNAME}
+  
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      DATABASE_HOST: ${DATABASE_HOST}
+      DATABASE_PORT: ${DATABASE_PORT}
+      
+    # Remove when using trefik
+    # ports:
+    #   - "8000:8000"
+    env_file:
+      - .env
+    networks:
+      - backend
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.syncr.entrypoints=websecure"
+      - "traefik.http.routers.syncr.rule=Host(${DJANGO_TRAEFIK_DOMAIN})"
+      - "traefik.http.routers.syncr.tls.certresolver=letsencrypt"
+      - "traefik.http.services.syncr.loadbalancer.server.port=8000"
+
+
+  huey:
+    container_name: syncr-huey
+    build: .
+    command: huey
+    environment:
+      SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DEBUG: ${DJANGO_DEBUG}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS}
+      DATABASE_NAME: ${DATABASE_NAME}
+      DATABASE_USERNAME: ${DATABASE_USERNAME}
+  
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      DATABASE_HOST: ${DATABASE_HOST}
+      DATABASE_PORT: ${DATABASE_PORT}
+    depends_on:
+      - web
+    networks:
+      - backend
+
+  rclone:
+    container_name: syncr-rclone
+    image: rclone/rclone
+    restart: always
+    devices:
+      - /dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+    command: 'rcd --rc-no-auth --rc-addr=${RCLONE_ADDR}:${RCLONE_PORT}'
+    networks:
+      - backend
+    # As auth isn't implemented yet, rclone is only acessible from inside the docker network
+    # ports:
+    #   - ${RCLONE_PORT}:${RCLONE_PORT}
+networks:
+  proxy:
+    external: true
+  backend:
+    internal: true
+
+volumes:
+   postgres_data:
