@@ -59,7 +59,8 @@ DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
 
 ## Other & technical information
 - The scheduled jobs are checked every minute with cron_validator using huey if they should be executed, schedules cannot be less than 1 minute.
-- Credentials are never saved to the rclone configuration of any server, they are always maintained on the django database.
+- Huey uses redis as the backend storage
+- Remote credentials are never saved to the rclone configuration of any server, they are always maintained on the django database.
 - There is support for multiple users, as well as a registration page.
 - Jobs are executed sending the information to the rclone remote API, the remotes/unions are then created on-the-fly.
 

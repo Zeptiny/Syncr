@@ -78,6 +78,12 @@ services:
       - "traefik.http.services.syncr.loadbalancer.server.port=8000"
 
 
+  # Only used for Huey
+  redis: 
+    image: redis:7-alpine
+    container_name: syncr-redis
+    restart: unless-stopped
+    
   huey:
     container_name: syncr-huey
     build: .
@@ -92,7 +98,11 @@ services:
       DATABASE_PASSWORD: ${DATABASE_PASSWORD}
       DATABASE_HOST: ${DATABASE_HOST}
       DATABASE_PORT: ${DATABASE_PORT}
+
+      HUEY_REDIS_HOST: ${HUEY_REDIS_HOST}
+      HUEY_REDIS_PORT: ${HUEY_REDIS_PORT}
     depends_on:
+      - redis
       - web
     networks:
       - backend

@@ -30,8 +30,10 @@ DEBUG = os.environ.get("DEBUG", default=0)
 
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS","127.0.0.1").split(",")
 
-# Needed for TLS
-CSRF_TRUSTED_ORIGINS = os.environ.get("DJANGO_ALLOWED_HOSTS","").split(",")
+# Only use if the env variable is set
+if os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS"):
+    # Needed for TLS
+    CSRF_TRUSTED_ORIGINS = os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS","").split(",")
 
 
 # Application definition
@@ -151,14 +153,18 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # python manage.py run_huey
 HUEY = {
-    'huey_class': 'huey.SqliteHuey',
+    'huey_class': 'huey.RedisHuey',
     'name': 'Syncr-Huey',
     'immediate': False,  # If DEBUG=True, run synchronously.
+    'connection': {
+        'host': os.environ.get('HUEY_REDIS_HOST', 'localhost'),
+        'port': int(os.environ.get('HUEY_REDIS_PORT', 6379)),
+    },
     'consumer': {
-        'blocking': True,  # Use blocking list pop instead of polling Redis.
         'loglevel': logging.DEBUG,
         'workers': 4,
         'scheduler_interval': 1,
         'simple_log': True,
+        'worker_type': 'thread',
     },
 }
