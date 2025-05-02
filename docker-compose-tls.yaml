@@ -22,7 +22,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.traefik.entrypoints=websecure"
-      - "traefik.http.routers.traefik.rule=Host(${TRAEFIK_DOMAIN})"
+      - "traefik.http.routers.traefik.rule=Host(`${TRAEFIK_DOMAIN}`)"
       - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
       - "traefik.http.routers.traefik.service=api@internal"
 
@@ -73,7 +73,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.syncr.entrypoints=websecure"
-      - "traefik.http.routers.syncr.rule=Host(${DJANGO_TRAEFIK_DOMAIN})"
+      - "traefik.http.routers.syncr.rule=Host(`${DJANGO_TRAEFIK_DOMAIN}`)"
       - "traefik.http.routers.syncr.tls.certresolver=letsencrypt"
       - "traefik.http.services.syncr.loadbalancer.server.port=8000"
 
@@ -83,6 +83,8 @@ services:
     image: redis:7-alpine
     container_name: syncr-redis
     restart: unless-stopped
+    networks:
+      - backend
     
   huey:
     container_name: syncr-huey
