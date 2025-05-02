@@ -101,20 +101,24 @@ Add a server: servers -> add
 Rclone authentication isn't yet implemented, if you are using the default provided docker compose, use `syncr-rclone` as the host.
 
 7. Add the Remotes
+
 For the sincronization to work, you will need to specify the remotes from witch syncr can access.
 Returning to the home screen, click on "Remotes" and then "Create New Remote".
 Fill the form for each remote you want to use.
 
 8. Running your first Job
+
 Return to the home screen, and then click on "Run Manual Job"
 You will be able to select the sync type, remote, path, and other options
 When running the job, you will be redirected to the job description with it's information.
 
 
 9. Scheduling job
+
 On the navbar, select "Schedules" and then "Create New Schedule"
 The creation is similar to the manual job creation, except for the need of a cron frequency to be added, that's when your job will be run.
 
 
 10. Done!
+
 That's it, you can also specify a contact list to be notified when a job goes wrong, currently, only Discord Webhook is working.
