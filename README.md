@@ -35,6 +35,7 @@ DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
 
 ### Sincronization:
 - Add retry support
+- Warn if no data changed in x time or x transfers
 
 ### Servers:
 - Authentication
