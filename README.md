@@ -50,9 +50,6 @@ DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
 ### Github Workflows
 - Make them work?
 
-### Accounts
-- Option to disable registration
-
 ### Ideas (Unknown Feasibility)
 - Distribute jobs across multiple servers to improve performance
 - Suggest optimal rclone settings based on job analysis
