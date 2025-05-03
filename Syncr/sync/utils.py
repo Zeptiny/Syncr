@@ -84,7 +84,8 @@ def createOnTheFlyFsHandler(fs_type, fs_object_id, server, path) -> str:
         
         # Properly format the union remote with quoted upstreams
         upstreams = [
-            createOnTheFlyRemote(remote, server, path) for remote in union.remotes.all()
+            # BUG / TO-DO, the remote path of a remote that is part of a union can only be the root
+            createOnTheFlyRemote(remote, server, "/") for remote in union.remotes.all()
         ]
         
         # Ensure there are no empty upstreams
