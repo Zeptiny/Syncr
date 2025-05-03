@@ -49,6 +49,7 @@ DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
 - Groups (For better visualization)
 - Multi bucket support for S3 remotes
 - Per remote path for union (At the time, it only accepts root)
+- Add Union policy options
 
 ### Running:
 - Docs
