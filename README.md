@@ -144,3 +144,16 @@ That's it, you can also specify a contact list to be notified when a job goes wr
 
 You can also use your own domain by using the `.env.tls.example` and `docker-compose-tls.yaml` files.
 Fill the information as normal, also, do not forget to create the docker network with `docker network create proxy` and to change the permissions of the traefik directory with `sudo chown -R $USER:$USER traefik`, TLS shouold be handled automatically with Let's Encrypt and everything should work fine.
+
+## Screenshots
+### Home page
+![Home Page](./screenshots/home.png)
+
+### Job Creation
+![Job Creation](./screenshots/job_creation.png)
+
+### Job Detail
+![Job Detail](./screenshots/job_detail.png)
+
+### Job Search
+![Job Search](./screenshots/job_search.png)
