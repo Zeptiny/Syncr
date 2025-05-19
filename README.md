@@ -58,6 +58,7 @@ DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
 - Make them work?
 
 ### Ideas (Unknown Feasibility)
+- Restic support
 - Distribute jobs across multiple servers to improve performance
 - Suggest optimal rclone settings based on job analysis
 
