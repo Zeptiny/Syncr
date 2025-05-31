@@ -24,6 +24,12 @@ DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
 
 
 ## TO-DO
+
+### Slave Server - Priority
+Make a "slave" server, that will be responsible to communicate with a local rclone and restic instance.
+This will allow better control, as well monitoring and simplified communication.
+The "Control" server, this repository, will communicate with the slaves.
+
 ### Notifications:
 - Email notifications
 - SMS
@@ -36,6 +42,7 @@ DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
 ### Sincronization:
 - Add retry support
 - Warn if no data changed in x time or x transfers
+- Add Restic support
 
 ### Servers:
 - Authentication
@@ -58,17 +65,28 @@ DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
 - Make them work?
 
 ### Ideas (Unknown Feasibility)
-- Restic support
 - Distribute jobs across multiple servers to improve performance
 - Suggest optimal rclone settings based on job analysis
 
+## Screenshots
+### Home page
+![Home Page](./screenshots/home.png)
+
+### Job Creation
+![Job Creation](./screenshots/job_creation.png)
+
+### Job Detail
+![Job Detail](./screenshots/job_detail.png)
+
+### Job Search
+![Job Search](./screenshots/job_search.png)
+
 ## Other & technical information
-- The scheduled jobs are checked every minute with cron_validator using huey if they should be executed, schedules cannot be less than 1 minute.
+- The scheduled jobs are checked every minute with cron_validator, using huey, if they should be executed, schedules cannot be less than 1 minute.
 - Huey uses redis as the backend storage
 - Remote credentials are never saved to the rclone configuration of any server, they are always maintained on the django database.
 - There is support for multiple users, as well as a registration page.
 - Jobs are executed sending the information to the rclone remote API, the remotes/unions are then created on-the-fly.
-
 
 # Installation & Setup
 If you REALLY want to trust this while in development, or want to give some feedback, here's how to run it:
@@ -144,17 +162,4 @@ That's it, you can also specify a contact list to be notified when a job goes wr
 ### Using TLS 
 
 You can also use your own domain by using the `.env.tls.example` and `docker-compose-tls.yaml` files.
-Fill the information as normal, also, do not forget to create the docker network with `docker network create proxy` and to change the permissions of the traefik directory with `sudo chown -R $USER:$USER traefik`, TLS shouold be handled automatically with Let's Encrypt and everything should work fine.
-
-## Screenshots
-### Home page
-![Home Page](./screenshots/home.png)
-
-### Job Creation
-![Job Creation](./screenshots/job_creation.png)
-
-### Job Detail
-![Job Detail](./screenshots/job_detail.png)
-
-### Job Search
-![Job Search](./screenshots/job_search.png)
+Fill the information as normal, also, do not forget to create the docker network with `docker network create proxy` and to change the permissions of the traefik directory with `sudo chown -R $USER:$USER traefik`, TLS should be handled automatically with Let's Encrypt.
