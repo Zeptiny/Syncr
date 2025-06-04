@@ -64,9 +64,9 @@ The "Control" server, this repository, will communicate with the slaves.
 ### Github Workflows
 - Make them work?
 
-### Ideas (Unknown Feasibility)
-- Distribute jobs across multiple servers to improve performance
-- Suggest optimal rclone settings based on job analysis
+### Known Bugs
+- S3 remotes with KMS encryption fails checksum
+- Sometimes the bandwidth can go negative, specially in jobs that are running for longer periods
 
 ## Screenshots
 ### Home page
