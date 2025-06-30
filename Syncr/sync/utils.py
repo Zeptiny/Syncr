@@ -5,6 +5,23 @@ from time import sleep
 from . import models
 import requests
 import threading
+import base64
+import os
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+
+## OBSCURE SPECIFIC
+# Fixed AES-256 key (copied from obscure.go)
+crypt_key = bytes([
+    0x9c, 0x93, 0x5b, 0x48, 0x73, 0x0a, 0x55, 0x4d,
+    0x6b, 0xfd, 0x7c, 0x63, 0xc8, 0x86, 0xa9, 0x2b,
+    0xd3, 0x90, 0x19, 0x8e, 0xb8, 0x12, 0x8a, 0xfb,
+    0xf4, 0xde, 0x16, 0x2b, 0x8b, 0x95, 0xf6, 0x38,
+])
+
+AES_BLOCK_SIZE = 16  # AES block size in bytes
+
+
 
 # Job creation functions
 def createJobHandler(type: str, 
@@ -138,13 +155,20 @@ def createOnTheFlyRemote(remote, server, path) -> str:
     
     return formattedRemote
 
-def obscure(plainPass, server):
-    password = requests.post(f"http://{server.host}:{server.port}/core/obscure", json={
-        "clear": plainPass
-    })
-    password.raise_for_status()
-    
-    return password.json().get("obscured")
+def crypt(data: bytes, iv: bytes):
+    """Encrypt or decrypt using AES-CTR (symmetrical operation)."""
+    cipher = Cipher(algorithms.AES(crypt_key), modes.CTR(iv))
+    encryptor = cipher.encryptor()
+    return encryptor.update(data) + encryptor.finalize()
+
+
+def obscure(plainPass):
+    """Obscure the plaintext string."""
+    data = plainPass.encode('utf-8')
+    iv = os.urandom(AES_BLOCK_SIZE)
+    encrypted = crypt(data, iv)
+    out = iv + encrypted
+    return base64.urlsafe_b64encode(out).rstrip(b'=').decode('ascii')
 
 
 
