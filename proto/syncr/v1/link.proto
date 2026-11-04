@@ -357,6 +357,14 @@ enum JobErrorCode {
   JOB_ERROR_CODE_EXECUTION_FAILED = 5;
   // An unexpected worker-side error.
   JOB_ERROR_CODE_INTERNAL = 6;
+  // A source or destination (directory, file, repository) does not exist.
+  JOB_ERROR_CODE_NOT_FOUND = 7;
+  // The tool reported a temporary failure that retrying the job may fix
+  // (network errors, rate limits, a locked repository).
+  JOB_ERROR_CODE_TEMPORARY = 8;
+  // The job stopped because a limit from its spec was reached (e.g. rclone
+  // --max-transfer or --max-duration); the work done so far is kept.
+  JOB_ERROR_CODE_LIMIT_REACHED = 9;
 }
 
 // WorkerState is a snapshot (not an event) of the jobs a worker currently
@@ -467,10 +475,15 @@ message JobSpec {
 message RemoteDefinition {
   // Alias used to reference the remote from locations and from other remotes
   // (e.g. union upstreams). Unique within a JobSpec; must match
-  // ^[a-z][a-z0-9_]{0,62}$ so it maps cleanly to an environment variable name.
+  // ^[a-z][a-z0-9_]{1,62}$ so it maps cleanly to an environment variable name
+  // and is never mistaken for a Windows drive letter. Within one JobSpec no
+  // alias may be another alias followed by "_" (e.g. "s3" and "s3_eu"),
+  // because their environment variable names would overlap.
   string alias = 1;
 
-  // rclone backend type, e.g. "s3", "sftp", "local", "union", "b2".
+  // rclone backend type, e.g. "s3", "sftp", "union", "b2". Workers reject
+  // "local" (local paths use an empty Location.remote and are checked against
+  // local_roots) and wrapping backends other than "union".
   string backend_type = 2;
 
   // Non-secret options keyed by rclone option name (e.g. "provider",
@@ -478,12 +491,47 @@ message RemoteDefinition {
   map<string, string> options = 3;
 
   // Secret options keyed by rclone option name (e.g. "secret_access_key",
-  // "pass"). Values are final rclone values, already obscured by the
-  // controller where the backend requires it. Workers keep them in memory
-  // only and never log them.
+  // "pass"). Values are plain; keys listed in obscure_keys are obscured by
+  // the worker before they reach rclone. Workers keep them in memory only and
+  // never log them.
   map<string, string> secrets = 4;
 
-  reserved 5 to 9;
+  // Keys of secrets that rclone expects in its "obscured" form (e.g. "pass"
+  // for sftp, ftp, webdav and smb). Each key must be present in secrets.
+  repeated string obscure_keys = 5;
+
+  // Upstreams of a "union" remote, in order. Required (at least two) when
+  // backend_type is "union" and forbidden otherwise; the "upstreams" option
+  // must not be set.
+  repeated UnionUpstream union_upstreams = 6;
+
+  reserved 7 to 9;
+}
+
+// UnionUpstream is one member of a union remote.
+message UnionUpstream {
+  // Where the upstream lives: the alias of another, non-union remote in the
+  // same JobSpec plus a path on it, or (empty remote) an absolute local path
+  // inside the worker's local_roots.
+  Location location = 1;
+
+  // How the union may use the upstream.
+  UnionUpstreamMode mode = 2;
+
+  reserved 3 to 9;
+}
+
+// UnionUpstreamMode restricts what a union does with an upstream.
+enum UnionUpstreamMode {
+  // Same as READ_WRITE.
+  UNION_UPSTREAM_MODE_UNSPECIFIED = 0;
+  // Files may be read, changed and created (rclone's default).
+  UNION_UPSTREAM_MODE_READ_WRITE = 1;
+  // Read only (rclone ":ro").
+  UNION_UPSTREAM_MODE_READ_ONLY = 2;
+  // Existing files may be changed, but no new files are created (rclone
+  // ":nc").
+  UNION_UPSTREAM_MODE_NO_CREATE = 3;
 }
 
 // Location is a path on a remote or on the worker's local filesystem.
