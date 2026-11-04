@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -271,6 +272,46 @@ func TestReadWithheldResults(t *testing.T) {
 	b = o.Read(0, 0)
 	if b.More || len(b.Withheld) != 0 {
 		t.Errorf("Read(0,0) withheld %v", ids(b.Withheld))
+	}
+}
+
+func TestReadBounded(t *testing.T) {
+	t.Parallel()
+	o := New(nil, Options{HighWater: 4, CoalesceAt: 4})
+	big := func(job string, n int) *syncrv1.Event {
+		return &syncrv1.Event{Payload: &syncrv1.Event_JobResult{JobResult: &syncrv1.JobResult{
+			JobId: job, Status: syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED, Warnings: []string{strings.Repeat("x", n)},
+		}}}
+	}
+	mustAppend(t, o, started("a"))      // 2
+	mustAppend(t, o, big("a", 1000))    // 3
+	mustAppend(t, o, started("b"))      // 4
+	mustAppend(t, o, big("b", 100_000)) // 5
+	mustAppend(t, o, started("c"))      // 6
+
+	// The budget stops before the event that would exceed it; the withheld
+	// results and the stats describe the whole outbox.
+	b := o.ReadBounded(1, 0, 2000)
+	if describe(b.Events) != "2:start(a) 3:result(a) 4:start(b)" || !b.More || len(b.Withheld) != 1 || b.Withheld[0].GetJobId() != "b" {
+		t.Errorf("ReadBounded(1,0,2000) = %s more=%v withheld=%d", describe(b.Events), b.More, len(b.Withheld))
+	}
+	if b.Head != 6 || b.Backlog != 6 || !b.Saturated {
+		t.Errorf("stats: head %d backlog %d saturated %v", b.Head, b.Backlog, b.Saturated)
+	}
+	// An event larger than the budget is still returned on its own.
+	b = o.ReadBounded(4, 0, 10)
+	if describe(b.Events) != "5:result(b)" || !b.More {
+		t.Errorf("ReadBounded(4,0,10) = %s more=%v", describe(b.Events), b.More)
+	}
+	// The event limit applies too; zero means unbounded.
+	if b = o.ReadBounded(0, 2, 1<<30); describe(b.Events) != "1:hello 2:start(a)" {
+		t.Errorf("ReadBounded(0,2,1G) = %s", describe(b.Events))
+	}
+	if b = o.ReadBounded(0, 0, 0); len(b.Events) != 6 || b.More {
+		t.Errorf("ReadBounded(0,0,0) = %s", describe(b.Events))
+	}
+	if b = o.ReadBounded(6, 0, 10); len(b.Events) != 0 || b.More || b.Head != 6 {
+		t.Errorf("ReadBounded(6,0,10) = %+v", b)
 	}
 }
 

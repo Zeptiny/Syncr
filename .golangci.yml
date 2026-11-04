@@ -336,6 +336,63 @@ linters:
             - github.com/Zeptiny/Syncr/internal/worker/agent
             - github.com/Zeptiny/Syncr/internal/worker/outbox
 
+        # The worker transports move linkcore envelopes over HTTP; they know
+        # nothing of runners, the agent's internals or the controller.
+        worker-transport:
+          list-mode: strict
+          files: ["**/internal/worker/transport/**", "!$test"]
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/Zeptiny/Syncr/gen
+            - google.golang.org/protobuf
+            - github.com/Zeptiny/Syncr/internal/link
+            - github.com/Zeptiny/Syncr/internal/worker/linkcore
+        # Transport tests drive a real agent with fake runners.
+        worker-transport-tests:
+          list-mode: strict
+          files: ["**/internal/worker/transport/**/*_test.go"]
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/Zeptiny/Syncr/gen
+            - google.golang.org/protobuf
+            - github.com/Zeptiny/Syncr/internal/link
+            - github.com/Zeptiny/Syncr/internal/worker/linkcore
+            - github.com/Zeptiny/Syncr/internal/worker/agent
+            - github.com/Zeptiny/Syncr/internal/worker/outbox
+            - github.com/Zeptiny/Syncr/internal/worker/runner
+            - github.com/Zeptiny/Syncr/internal/worker/transport
+
+        # The controller's link transports: Connect handlers and clients over
+        # the dispatcher and the worker service; no adapters.
+        controller-link-transports:
+          list-mode: strict
+          files: ["**/internal/controller/dispatch/active/**", "**/internal/controller/dispatch/passive/**", "!$test"]
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/Zeptiny/Syncr/gen
+            - google.golang.org/protobuf
+            - github.com/Zeptiny/Syncr/internal/link
+            - github.com/Zeptiny/Syncr/internal/domain
+            - github.com/Zeptiny/Syncr/internal/app/workers
+            - github.com/Zeptiny/Syncr/internal/controller/dispatch
+
+        # End-to-end tests of the worker link wire both sides in one process
+        # with the in-memory adapters; they hold no production code.
+        e2e:
+          files: ["**/internal/e2e/**"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters/postgres
+              desc: link e2e tests use the in-memory adapters (memstore, idgen, secrets)
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters/api
+              desc: link e2e tests drive the use cases directly
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters/notify
+              desc: link e2e tests use the in-memory adapters (memstore, idgen, secrets)
+            - pkg: github.com/Zeptiny/Syncr/cmd
+              desc: link e2e tests wire the packages themselves
+
         # Sibling implementations of one extension point stay independent.
         runner-rclone:
           files: ["**/internal/worker/runner/rclone/**"]

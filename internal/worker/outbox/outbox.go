@@ -67,6 +67,7 @@ import (
 	"sync"
 	"uuid"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
@@ -250,6 +251,13 @@ type Batch struct {
 	// (or after afterSeq if none were returned): results that exist but are
 	// not part of this batch.
 	Withheld []*syncrv1.JobResult
+	// Head is the last assigned seq at the time of the read.
+	Head int64
+	// Backlog is the number of unacked events at the time of the read,
+	// including the returned ones; Saturated reports that it was at or above
+	// the high-water mark.
+	Backlog   int
+	Saturated bool
 }
 
 // Read is Pending plus the results it withholds, read atomically. A caller
@@ -257,6 +265,15 @@ type Batch struct {
 // that description consistent with the events it sends: a job whose result
 // is not in the batch is still held as far as the batch's reader knows.
 func (o *Outbox) Read(afterSeq int64, limit int) Batch {
+	return o.ReadBounded(afterSeq, limit, 0)
+}
+
+// ReadBounded is Read with a soft bound on the total encoded size of the
+// returned events: events are added in seq order while their encoded sizes
+// (proto.Size) sum to at most maxBytes, but the first pending event is
+// always returned, however large, so a big event cannot block the outbox.
+// A maxBytes <= 0 means no size bound.
+func (o *Outbox) ReadBounded(afterSeq int64, limit, maxBytes int) Batch {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	start := o.indexAfter(afterSeq)
@@ -264,11 +281,26 @@ func (o *Outbox) Read(afterSeq int64, limit int) Batch {
 	if limit > 0 && end-start > limit {
 		end = start + limit
 	}
-	var b Batch
+	if maxBytes > 0 && end > start {
+		size := proto.Size(o.events[start])
+		cut := start + 1
+		for ; cut < end; cut++ {
+			size += proto.Size(o.events[cut])
+			if size > maxBytes {
+				break
+			}
+		}
+		end = cut
+	}
+	b := Batch{
+		More:      end < len(o.events),
+		Head:      o.head,
+		Backlog:   len(o.events),
+		Saturated: len(o.events) >= o.highWater,
+	}
 	if end > start {
 		b.Events = append([]*syncrv1.Event(nil), o.events[start:end]...)
 	}
-	b.More = end < len(o.events)
 	for _, e := range o.events[end:] {
 		if r := e.GetJobResult(); r != nil {
 			b.Withheld = append(b.Withheld, r)
