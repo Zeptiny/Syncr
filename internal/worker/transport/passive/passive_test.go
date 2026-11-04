@@ -2,20 +2,13 @@ package passive
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/hex"
-	"encoding/pem"
 	"errors"
-	"math/big"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,40 +22,25 @@ import (
 	"github.com/Zeptiny/Syncr/internal/worker/agent"
 	"github.com/Zeptiny/Syncr/internal/worker/linkcore"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
+	"github.com/Zeptiny/Syncr/internal/worker/tlscert"
 )
 
 const secret = "0123456789abcdef-secret"
 
-// writeCert writes a self-signed certificate for 127.0.0.1 and returns the
-// file paths and the certificate.
+// writeCert writes a self-signed certificate for 127.0.0.1 (generated like
+// setup does) and returns the file paths and the certificate.
 func writeCert(t *testing.T) (certFile, keyFile string, cert *x509.Certificate) {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "worker"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)}, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	pair, err := tlscert.Generate(tlscert.Options{Hostname: "worker", IPs: []net.IP{net.IPv4(127, 0, 0, 1)}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
 	certFile, keyFile = filepath.Join(dir, "c.pem"), filepath.Join(dir, "k.pem")
-	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+	if _, err := tlscert.Write(certFile, keyFile, pair, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cert, err = x509.ParseCertificate(der)
+	cert, err = x509.ParseCertificate(pair.CertDER)
 	if err != nil {
 		t.Fatal(err)
 	}

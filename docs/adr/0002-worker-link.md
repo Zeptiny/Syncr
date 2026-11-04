@@ -147,3 +147,5 @@ What the controller can rely on:
 - Worker: `internal/worker/transport/active` runs the Report and Poll loops
   of the linkcore contract; `internal/worker/transport/passive` serves
   WorkerLinkService over TLS.
+- How the binaries wire all of this, and the order in which they shut down,
+  is in [ADR 0005](0005-runtime-wiring.md).

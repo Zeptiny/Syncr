@@ -18,9 +18,10 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
-	"github.com/Zeptiny/Syncr/internal/adapters/idgen"    //nolint:depguard // tests wire the services with the in-memory adapters
-	"github.com/Zeptiny/Syncr/internal/adapters/memstore" //nolint:depguard // tests wire the services with the in-memory adapters
-	"github.com/Zeptiny/Syncr/internal/adapters/secrets"  //nolint:depguard // tests wire the services with the in-memory adapters
+	"github.com/Zeptiny/Syncr/internal/adapters/broker"
+	"github.com/Zeptiny/Syncr/internal/adapters/idgen"
+	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
+	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -62,7 +63,7 @@ type testEnv struct {
 	t      *testing.T
 	srv    *httptest.Server
 	store  *memstore.Store
-	broker *memstore.Broker
+	broker *broker.Broker
 	clock  *clock.Fake
 	wsvc   *workers.Service
 	jsvc   *jobs.Service
@@ -73,6 +74,13 @@ type testEnv struct {
 // newEnv starts a server. mutate may adjust the Deps before the handler is
 // built (e.g. to drop the authenticator).
 func newEnv(t *testing.T, mutate ...func(*Deps)) *testEnv {
+	t.Helper()
+	return newEnvServer(t, nil, mutate...)
+}
+
+// newEnvServer is newEnv with a hook that configures the http.Server before
+// it starts (e.g. its timeouts).
+func newEnvServer(t *testing.T, configure func(*http.Server), mutate ...func(*Deps)) *testEnv {
 	t.Helper()
 	key := secrets.Key{ID: 1, Bytes: make([]byte, secrets.KeySize)}
 	if _, err := crand.Read(key.Bytes); err != nil {
@@ -85,7 +93,7 @@ func newEnv(t *testing.T, mutate ...func(*Deps)) *testEnv {
 	e := &testEnv{
 		t:      t,
 		store:  memstore.New(),
-		broker: memstore.NewBroker(),
+		broker: broker.New(),
 		clock:  clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)),
 		logs:   &logBuffer{},
 	}
@@ -117,7 +125,11 @@ func newEnv(t *testing.T, mutate ...func(*Deps)) *testEnv {
 	for _, m := range mutate {
 		m(&deps)
 	}
-	e.srv = httptest.NewServer(NewHandler(deps))
+	e.srv = httptest.NewUnstartedServer(NewHandler(deps))
+	if configure != nil {
+		configure(e.srv.Config)
+	}
+	e.srv.Start()
 	t.Cleanup(e.srv.Close)
 	e.worker = e.addWorker()
 	return e

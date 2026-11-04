@@ -43,8 +43,10 @@ message GetInfoResponse {
 
 // WorkerAdminService enrolls, registers and manages workers.
 //
-// PROVISIONAL (Milestone 2): no authentication yet. Milestone 3 adds users and
-// sessions, restricts this service to admins and may change these messages.
+// PROVISIONAL (Milestone 2): protected by the controller's shared admin token
+// ("Authorization: Bearer <api.admin_token>"; without one configured the
+// service is not served). Milestone 3 adds users and sessions, restricts this
+// service to admins and may change these messages.
 service WorkerAdminService {
   // CreateEnrollmentToken creates a short-lived, single-use token for
   // `syncr-worker setup --token`. The token is returned once; the controller
@@ -231,8 +233,9 @@ message RemoveWorkerResponse {}
 
 // JobService runs and observes jobs.
 //
-// PROVISIONAL (Milestone 2): no authentication yet, and RunJob takes an
-// explicit worker and a complete JobSpec with inline remote credentials.
+// PROVISIONAL (Milestone 2): protected by the shared admin token like
+// WorkerAdminService, and RunJob takes an explicit worker and a complete
+// JobSpec with inline remote credentials.
 // Milestone 3 replaces it with jobs built from stored remotes and kinds,
 // owned by users; these messages may change.
 service JobService {
@@ -265,6 +268,12 @@ service JobService {
   // live sample sends progress. The stream ends after the job reaches a
   // terminal status (at once for a finished job). Intermediate progress
   // samples may be skipped for slow readers; status changes never are.
+  //
+  // The stream can also end before the job finishes: with DEADLINE_EXCEEDED
+  // after the controller's maximum watch duration (api.watch_max_duration),
+  // or with UNAVAILABLE when the controller shuts down. Clients then call
+  // WatchJob again; its first message is the current job, so nothing is
+  // missed.
   rpc WatchJob(WatchJobRequest) returns (stream WatchJobResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }

@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -948,15 +949,28 @@ func TestSelfCheckPassiveProbe(t *testing.T) {
 		{"foreign certificate", func(string) TLSProbe {
 			return func(context.Context, string) (string, error) { return strings.Repeat("ab", 32), nil }
 		}, "another program may own that port"},
+		{"listening after a moment", func(fp string) TLSProbe {
+			var calls atomic.Int32
+			return func(context.Context, string) (string, error) {
+				if calls.Add(1) < 3 {
+					return "", errors.New("connection refused")
+				}
+				return fp, nil
+			}
+		}, "ok    the worker serves the certificate"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t)
 			// The probe is told the fingerprint through a pointer filled in
 			// after the certificate exists: use the stored certificate.
+			var probe TLSProbe
 			r.setup.Probe = func(ctx context.Context, addr string) (string, error) {
 				fp, _ := tlscert.FingerprintFile(filepath.Join(r.data, "tls", "worker.crt"))
-				return tt.probe(fp)(ctx, addr)
+				if probe == nil {
+					probe = tt.probe(fp)
+				}
+				return probe(ctx, addr)
 			}
 			r.mustRun(r.passiveOptions(Options{}))
 			mustContain(t, "output", r.out.String(), tt.want)

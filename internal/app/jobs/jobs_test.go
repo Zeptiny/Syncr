@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Zeptiny/Syncr/internal/adapters/broker"
 	"github.com/Zeptiny/Syncr/internal/adapters/idgen"
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
 	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
@@ -24,7 +25,7 @@ import (
 // recorder implements jobs.Broker (forwarding to memstore), jobs.Notifier
 // and jobs.Waker, and remembers every call.
 type recorder struct {
-	*memstore.Broker
+	*broker.Broker
 	mu        sync.Mutex
 	updates   []jobs.Update
 	failed    []jobs.Job
@@ -106,7 +107,7 @@ func newEnv(t *testing.T) *env {
 	e := &env{
 		store: memstore.New(),
 		clock: clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)),
-		rec:   &recorder{Broker: memstore.NewBroker()},
+		rec:   &recorder{Broker: broker.New()},
 	}
 	e.svc, err = jobs.New(jobs.Deps{
 		Jobs: e.store, Samples: e.store, Cipher: cipher, Clock: e.clock, IDs: &idgen.Sequential{},

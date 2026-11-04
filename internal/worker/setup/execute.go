@@ -310,7 +310,7 @@ func (s *Setup) selfCheck(ctx context.Context, p *plan, res *Result) (service.St
 	}
 
 	if p.opts.Mode == config.LinkPassive && !p.opts.NoService && s.Probe != nil {
-		fp, err := s.Probe(ctx, p.listenProbe)
+		fp, err := s.probeListener(ctx, p.listenProbe)
 		switch {
 		case err != nil:
 			warn("no TLS answer from %s yet (%v); look at the service log if the controller cannot connect", p.listenProbe, err)
@@ -321,6 +321,28 @@ func (s *Setup) selfCheck(ctx context.Context, p *plan, res *Result) (service.St
 		}
 	}
 	return state, nil
+}
+
+// maxProbeWait bounds how long the self-check waits for a passive worker's
+// TLS listener.
+const maxProbeWait = 10 * time.Second
+
+// probeListener probes the passive worker's TLS listener, retrying while it
+// does not answer: the service runs before the worker has resolved its tools
+// and opened its port.
+func (s *Setup) probeListener(ctx context.Context, addr string) (string, error) {
+	deadline := time.Now().Add(min(s.Timing.Timeout, maxProbeWait))
+	for {
+		fp, err := s.Probe(ctx, addr)
+		if err == nil || !time.Now().Before(deadline) {
+			return fp, err
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(s.Timing.Interval):
+		}
+	}
 }
 
 // waitRunning polls until the service has been seen running Stable times in

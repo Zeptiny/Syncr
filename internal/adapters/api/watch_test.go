@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -311,4 +312,28 @@ func TestWatchJobUnaryTimeoutDoesNotApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.nextJob(syncrv1.JobStatus_JOB_STATUS_DISPATCHED)
+}
+
+func TestWatchJobOutlivesServerTimeouts(t *testing.T) {
+	t.Parallel()
+	// Server-wide read and write timeouts far below the stream's lifetime
+	// must not end it: the handler extends its connection's deadlines.
+	e := newEnvServer(t, func(srv *http.Server) {
+		srv.ReadTimeout, srv.WriteTimeout = 100*time.Millisecond, 100*time.Millisecond
+	}, func(d *Deps) { d.WatchKeepalive = 40 * time.Millisecond })
+	j := e.runJob()
+	w := e.watch(t.Context(), j.GetId())
+	w.nextJob(syncrv1.JobStatus_JOB_STATUS_QUEUED)
+	deadline := time.Now().Add(400 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		w.nextJob(syncrv1.JobStatus_JOB_STATUS_QUEUED) // keepalives keep coming
+	}
+	if _, _, err := e.jsvc.MarkRunning(t.Context(), e.worker, e.jobID(j), testEpoch, e.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if m := w.next(); m.GetJob().GetStatus() == syncrv1.JobStatus_JOB_STATUS_DISPATCHED {
+			break
+		}
+	}
 }

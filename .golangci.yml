@@ -130,6 +130,7 @@ linters:
             - github.com/Zeptiny/Syncr/internal/domain
             - github.com/Zeptiny/Syncr/internal/app
             - github.com/Zeptiny/Syncr/internal/adapters/memstore
+            - github.com/Zeptiny/Syncr/internal/adapters/broker
             - github.com/Zeptiny/Syncr/internal/adapters/idgen
             - github.com/Zeptiny/Syncr/internal/adapters/secrets
             - github.com/Zeptiny/Syncr/internal/platform/clock
@@ -170,18 +171,23 @@ linters:
 
         # Adapters never import each other; cmd/ wires them.
         adapter-api:
-          files: ["**/internal/adapters/api/**"]
+          files: ["**/internal/adapters/api/**", "!$test"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters/
+              desc: adapters must not import each other; wire them in cmd/
+            - pkg: github.com/Zeptiny/Syncr/internal/controller
+              desc: the API calls use cases (internal/app), not controller internals
+            - pkg: github.com/Zeptiny/Syncr/internal/worker
+              desc: controller code must not import worker code
+        # API tests wire the real services with the in-memory adapters (store,
+        # broker, cipher, IDs); nothing heavier.
+        adapter-api-tests:
+          files: ["**/internal/adapters/api/**/*_test.go"]
           deny:
             - pkg: github.com/Zeptiny/Syncr/internal/adapters/postgres
-              desc: adapters must not import each other; wire them in cmd/
+              desc: API tests use the in-memory adapters (memstore, broker, idgen, secrets)
             - pkg: github.com/Zeptiny/Syncr/internal/adapters/notify
-              desc: adapters must not import each other; wire them in cmd/
-            - pkg: github.com/Zeptiny/Syncr/internal/adapters/memstore
-              desc: adapters must not import each other; wire them in cmd/
-            - pkg: github.com/Zeptiny/Syncr/internal/adapters/secrets
-              desc: adapters must not import each other; wire them in cmd/
-            - pkg: github.com/Zeptiny/Syncr/internal/adapters/idgen
-              desc: adapters must not import each other; wire them in cmd/
+              desc: API tests use the in-memory adapters (memstore, broker, idgen, secrets)
             - pkg: github.com/Zeptiny/Syncr/internal/controller
               desc: the API calls use cases (internal/app), not controller internals
             - pkg: github.com/Zeptiny/Syncr/internal/worker
@@ -237,10 +243,15 @@ linters:
               desc: adapters implement app ports; cmd/ wires them to controller internals
             - pkg: github.com/Zeptiny/Syncr/internal/worker
               desc: controller code must not import worker code
-        # The in-memory store, the cipher and the ID generator are leaves
-        # among the adapters (their tests may borrow a sibling, e.g. idgen).
+        # The in-memory store, the broker, the cipher and the ID generator are
+        # leaves among the adapters (their tests may borrow a sibling, e.g. idgen).
         adapter-memstore:
           files: ["**/internal/adapters/memstore/**", "!$test"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters/
+              desc: adapters must not import each other; wire them in cmd/
+        adapter-broker:
+          files: ["**/internal/adapters/broker/**", "!$test"]
           deny:
             - pkg: github.com/Zeptiny/Syncr/internal/adapters/
               desc: adapters must not import each other; wire them in cmd/
@@ -286,11 +297,11 @@ linters:
           files: ["**/internal/controller/**/*_test.go"]
           deny:
             - pkg: github.com/Zeptiny/Syncr/internal/adapters/api
-              desc: tests use the in-memory adapters (memstore, idgen, secrets)
+              desc: tests use the in-memory adapters (memstore, broker, idgen, secrets)
             - pkg: github.com/Zeptiny/Syncr/internal/adapters/postgres
-              desc: tests use the in-memory adapters (memstore, idgen, secrets)
+              desc: tests use the in-memory adapters (memstore, broker, idgen, secrets)
             - pkg: github.com/Zeptiny/Syncr/internal/adapters/notify
-              desc: tests use the in-memory adapters (memstore, idgen, secrets)
+              desc: tests use the in-memory adapters (memstore, broker, idgen, secrets)
         worker:
           files: ["**/internal/worker/**"]
           deny:
@@ -362,6 +373,7 @@ linters:
             - github.com/Zeptiny/Syncr/internal/worker/agent
             - github.com/Zeptiny/Syncr/internal/worker/outbox
             - github.com/Zeptiny/Syncr/internal/worker/runner
+            - github.com/Zeptiny/Syncr/internal/worker/tlscert
             - github.com/Zeptiny/Syncr/internal/worker/transport
 
         # The controller's link transports: Connect handlers and clients over
@@ -385,11 +397,11 @@ linters:
           files: ["**/internal/e2e/**"]
           deny:
             - pkg: github.com/Zeptiny/Syncr/internal/adapters/postgres
-              desc: link e2e tests use the in-memory adapters (memstore, idgen, secrets)
+              desc: link e2e tests use the in-memory adapters (memstore, broker, idgen, secrets)
             - pkg: github.com/Zeptiny/Syncr/internal/adapters/api
               desc: link e2e tests drive the use cases directly
             - pkg: github.com/Zeptiny/Syncr/internal/adapters/notify
-              desc: link e2e tests use the in-memory adapters (memstore, idgen, secrets)
+              desc: link e2e tests use the in-memory adapters (memstore, broker, idgen, secrets)
             - pkg: github.com/Zeptiny/Syncr/cmd
               desc: link e2e tests wire the packages themselves
 

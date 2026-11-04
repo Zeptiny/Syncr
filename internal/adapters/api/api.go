@@ -9,6 +9,11 @@
 // the controller's api.admin_token. Without an authenticator the protected
 // services are not served at all.
 //
+// WatchJob streams extend their connection's read and write deadlines (to
+// Deps.WatchMaxDuration plus a grace period), so the composition root may set
+// http.Server ReadTimeout and WriteTimeout for ordinary calls without cutting
+// streams short.
+//
 // Allowed dependencies: the standard library, connect, the generated
 // protobuf code, internal/domain, internal/app/... services and
 // internal/platform packages. It must not import other adapters; the
@@ -18,6 +23,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -124,14 +130,38 @@ func mountProtected(mux *http.ServeMux, deps Deps, logger *slog.Logger, opts []c
 	errs := errorMapper{log: logger}
 
 	mux.Handle(syncrv1connect.NewWorkerAdminServiceHandler(&workerAdminHandler{workers: deps.Workers, errs: errs}, protected...))
-	mux.Handle(syncrv1connect.NewJobServiceHandler(&jobHandler{
+	watchMax := cmp.Or(deps.WatchMaxDuration, defaultWatchMaxDuration)
+	jobsPath, jobsHandler := syncrv1connect.NewJobServiceHandler(&jobHandler{
 		jobs:      deps.Jobs,
 		errs:      errs,
 		log:       logger,
 		base:      base,
-		watchMax:  cmp.Or(deps.WatchMaxDuration, defaultWatchMaxDuration),
+		watchMax:  watchMax,
 		keepalive: cmp.Or(deps.WatchKeepalive, defaultWatchKeepalive),
-	}, protected...))
+	}, protected...)
+	mux.Handle(jobsPath, extendWatchDeadlines(jobsHandler, watchMax+watchDeadlineGrace, logger))
+}
+
+// watchDeadlineGrace is added to the watch duration limit for the
+// connection deadlines of a WatchJob stream.
+const watchDeadlineGrace = 30 * time.Second
+
+// extendWatchDeadlines lifts the connection's read and write deadlines of a
+// WatchJob call to limit, so the server-wide http.Server ReadTimeout and
+// WriteTimeout (meant for ordinary calls) cannot cut a stream short: a read
+// deadline would cancel the stream's context, a write deadline would drop
+// its messages. The stream itself ends after the watch duration limit.
+func extendWatchDeadlines(next http.Handler, limit time.Duration, logger *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == syncrv1connect.JobServiceWatchJobProcedure {
+			rc := http.NewResponseController(w)
+			deadline := time.Now().Add(limit)
+			if err := errors.Join(rc.SetReadDeadline(deadline), rc.SetWriteDeadline(deadline)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+				logger.WarnContext(r.Context(), "cannot extend the deadlines of a job watch", "error", err.Error())
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // unaryTimeout bounds unary calls; streams are bounded by their handlers.

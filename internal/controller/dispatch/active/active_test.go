@@ -16,6 +16,7 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
+	"github.com/Zeptiny/Syncr/internal/adapters/broker"
 	"github.com/Zeptiny/Syncr/internal/adapters/idgen"
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
 	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
@@ -59,7 +60,7 @@ func newEnv(t *testing.T, o envOptions) *env {
 	hub := dispatch.NewHub()
 	e.jobs, err = jobs.New(jobs.Deps{
 		Jobs: store, Samples: store, Cipher: cipher, Clock: e.clock, IDs: ids,
-		Broker: memstore.NewBroker(), Notifier: jobs.NopNotifier{}, Waker: hub,
+		Broker: broker.New(), Notifier: jobs.NopNotifier{}, Waker: hub,
 	}, jobs.Config{})
 	if err != nil {
 		t.Fatal(err)

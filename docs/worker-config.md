@@ -57,7 +57,7 @@ link:
   # Active mode: the worker calls the controller.
   controller_url: https://syncr.example.com   # SYNCR_CONTROLLER_URL
   controller_ca_file: ""     # SYNCR_CONTROLLER_CA_FILE (optional)
-  worker_secret: wsec_...    # SYNCR_WORKER_SECRET
+  worker_secret: syncr_ws_...    # SYNCR_WORKER_SECRET
 
   # Passive mode: the controller calls the worker over TLS.
   # listen_addr: ":7443"                      # SYNCR_LISTEN_ADDR
@@ -90,6 +90,28 @@ its CA (or at the certificate itself). The CA is added to the system roots. A
 passive worker is authenticated differently: the controller pins the SHA-256
 fingerprint of the certificate in `tls_cert_file` (the 64 hex digits that setup
 prints), so a self-signed certificate is the normal case.
+
+### At runtime
+
+`syncr-worker run` starts the link of `mode` once the tools are resolved:
+
+- **active**: the worker reports its events about once a second while jobs
+  run (a heartbeat every 15 s otherwise) and long-polls the controller for
+  commands (25 s). It needs no open port. When the controller is unreachable it
+  retries with backoff (up to 30 s) and keeps every result until the
+  controller acknowledges it, so a controller restart loses nothing.
+- **passive**: the worker serves TLS on `listen_addr` and the controller calls
+  it (about once a second while busy, every 15 s while idle). A port already in
+  use fails the start.
+- **no mode**: the worker starts, logs that it is not enrolled and waits.
+
+On stop (service stop, Ctrl-C, SIGTERM) the worker cancels its running jobs
+(rclone and restic get 10 s to exit, then they are killed), reports them as
+cancelled by the shutdown (the controller shows them `interrupted`, code
+`worker_shutdown`), and gives the controller up to 5 s to collect those
+results. The whole stop stays under 20 s, the time a service
+manager allows. If the worker dies instead (crash, power loss), the controller
+marks its running jobs `interrupted` (`worker_restarted`) when it comes back.
 
 ### Secrets
 

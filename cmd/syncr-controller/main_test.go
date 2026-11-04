@@ -3,13 +3,20 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	controllerconfig "github.com/Zeptiny/Syncr/internal/controller/config"
+	"github.com/Zeptiny/Syncr/internal/worker/tlscert"
 
 	"connectrpc.com/connect"
 
@@ -21,15 +28,51 @@ func envOf(vars map[string]string) func(string) (string, bool) {
 	return func(k string) (string, bool) { v, ok := vars[k]; return v, ok }
 }
 
+// testKey is 32 zero bytes in base64 (a test value, not a secret).
+const testKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+// devEnv is the environment of a controller on the memory store, listening
+// on a free loopback port and logging JSON, plus extra.
+func devEnv(extra map[string]string) map[string]string {
+	env := map[string]string{
+		"SYNCR_HTTP_ADDR":        "127.0.0.1:0",
+		"SYNCR_LOG_FORMAT":       "json",
+		"SYNCR_SECRETS_KEY":      testKey,
+		"SYNCR_DEV_MEMORY_STORE": "true",
+	}
+	for k, v := range extra {
+		env[k] = v
+	}
+	return env
+}
+
+// syncBuffer is a goroutine-safe log sink.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func TestRunServesAndShutsDown(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	var logs bytes.Buffer
+	var logs syncBuffer
 	ready := make(chan net.Addr, 1)
 	done := make(chan error, 1)
-	env := envOf(map[string]string{"SYNCR_HTTP_ADDR": "127.0.0.1:0", "SYNCR_LOG_FORMAT": "json"})
+	env := envOf(devEnv(nil))
 	go func() { done <- run(ctx, nil, io.Discard, &logs, env, ready) }()
 
 	var addr net.Addr
@@ -70,8 +113,24 @@ func TestRunServesAndShutsDown(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("controller did not shut down")
 	}
-	if !strings.Contains(logs.String(), `"msg":"controller stopped"`) {
-		t.Errorf("logs: %s", logs.String())
+	// Every shutdown step is logged, in order.
+	out := logs.String()
+	last := -1
+	for _, step := range []string{
+		`"msg":"shutdown: started`,
+		`"msg":"shutdown: http server stopped"`,
+		`"msg":"shutdown: passive supervisor and dispatch sweeper stopped"`,
+		`"msg":"shutdown: store closed"`,
+		`"msg":"controller stopped"`,
+	} {
+		i := strings.Index(out, step)
+		if i < 0 || i < last {
+			t.Errorf("log step %s missing or out of order:\n%s", step, out)
+		}
+		last = i
+	}
+	if !strings.Contains(out, "DEVELOPMENT MODE") {
+		t.Errorf("no memory store warning:\n%s", out)
 	}
 }
 
@@ -83,6 +142,27 @@ func TestRunVersion(t *testing.T) {
 	}
 	if !strings.HasPrefix(out.String(), "syncr-controller ") {
 		t.Errorf("output %q", out.String())
+	}
+}
+
+func TestRunRefusesToStartWithoutStoreOrKey(t *testing.T) {
+	t.Parallel()
+	err := run(t.Context(), nil, io.Discard, io.Discard, envOf(map[string]string{"SYNCR_HTTP_ADDR": "127.0.0.1:0"}), nil)
+	for _, want := range []string{"secrets.key is required", "database.url is required"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("run() = %v, want error containing %q", err, want)
+		}
+	}
+	env := devEnv(nil)
+	delete(env, "SYNCR_DEV_MEMORY_STORE")
+	env["SYNCR_DATABASE_URL"] = "postgres://syncr:hunter2@127.0.0.1:1/syncr?sslmode=disable&connect_timeout=1"
+	env["SYNCR_DATABASE_CONNECT_TIMEOUT"] = "1s"
+	err = run(t.Context(), nil, io.Discard, io.Discard, envOf(env), nil)
+	if err == nil || !strings.Contains(err.Error(), "open the database") {
+		t.Errorf("run() with an unreachable database = %v", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("error leaks the database password: %v", err)
 	}
 }
 
@@ -98,5 +178,172 @@ func TestRunRejectsInvalidConfig(t *testing.T) {
 	}
 	if err := run(t.Context(), []string{"-bogus"}, io.Discard, io.Discard, envOf(nil), nil); !errors.Is(err, errUsage) {
 		t.Fatalf("run(-bogus) = %v, want errUsage", err)
+	}
+}
+
+// startController runs the controller with env until the test ends and
+// returns its address.
+func startController(t *testing.T, env map[string]string, logs io.Writer) net.Addr {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	ready := make(chan net.Addr, 1)
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, nil, io.Discard, logs, envOf(env), ready) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("run() = %v after shutdown", err)
+			}
+		case <-time.After(20 * time.Second):
+			t.Error("controller did not shut down")
+		}
+	})
+	select {
+	case addr := <-ready:
+		return addr
+	case err := <-done:
+		t.Fatalf("run() exited early: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("controller did not start")
+	}
+	return nil
+}
+
+const testAdminToken = "test-admin-token-0123456789-abcdefghij"
+
+type bearer struct{ next http.RoundTripper }
+
+func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+testAdminToken)
+	return b.next.RoundTrip(r)
+}
+
+func waitLog(t *testing.T, logs *syncBuffer, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(logs.String(), want) {
+		if time.Now().After(deadline) {
+			t.Fatalf("log %q did not appear:\n%s", want, logs.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestRunWiresAPIAndLink drives the wired controller over direct TLS: the
+// admin API creates a token, the enrollment service redeems it, and
+// registering or removing a passive worker wakes the passive supervisor at
+// once (its periodic resync is 30 s).
+func TestRunWiresAPIAndLink(t *testing.T) {
+	t.Parallel()
+	pair, err := tlscert.Generate(tlscert.Options{Hostname: "localhost", IPs: []net.IP{net.IPv4(127, 0, 0, 1)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	certFile, keyFile := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	if _, err := tlscert.Write(certFile, keyFile, pair, true); err != nil {
+		t.Fatal(err)
+	}
+	var logs syncBuffer
+	env := devEnv(map[string]string{
+		"SYNCR_ADMIN_TOKEN":           testAdminToken,
+		"SYNCR_HTTP_TLS_CERT_FILE":    certFile,
+		"SYNCR_HTTP_TLS_KEY_FILE":     keyFile,
+		"SYNCR_LOG_LEVEL":             "debug",
+		"SYNCR_HTTP_CLIENT_IP_HEADER": "X-Forwarded-For",
+		"SYNCR_HTTP_TRUSTED_PROXIES":  "127.0.0.1",
+	})
+	addr := startController(t, env, &logs)
+
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(pair.CertPEM)
+	tr := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
+	base := "https://" + addr.String()
+	admin := syncrv1connect.NewWorkerAdminServiceClient(&http.Client{Transport: bearer{tr}}, base)
+	ctx := t.Context()
+
+	// Unauthenticated admin calls are refused.
+	anon := syncrv1connect.NewWorkerAdminServiceClient(&http.Client{Transport: tr}, base)
+	if _, err := anon.ListWorkers(ctx, connect.NewRequest(&syncrv1.ListWorkersRequest{})); connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Fatalf("anonymous ListWorkers = %v", err)
+	}
+
+	tok, err := admin.CreateEnrollmentToken(ctx, connect.NewRequest(&syncrv1.CreateEnrollmentTokenRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	enroll := syncrv1connect.NewEnrollmentServiceClient(&http.Client{Transport: tr}, base)
+	resp, err := enroll.Enroll(ctx, connect.NewRequest(&syncrv1.EnrollRequest{
+		EnrollmentToken: tok.Msg.GetToken(), Name: "laptop", Os: "linux", Arch: "amd64",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Msg.GetWorkerId() == "" || resp.Msg.GetWorkerSecret() == "" {
+		t.Fatalf("enroll = %v", resp.Msg)
+	}
+
+	// A passive worker starts its link at once, and stops it on removal.
+	reg, err := admin.RegisterPassiveWorker(ctx, connect.NewRequest(&syncrv1.RegisterPassiveWorkerRequest{
+		Name: "nas", Url: "https://127.0.0.1:1", CertFingerprint: strings.Repeat("ab", 32),
+		PairingSecret: "pairing-secret-0123456789-abcdefghij",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLog(t, &logs, `"msg":"passive worker link started"`)
+	if _, err := admin.RemoveWorker(ctx, connect.NewRequest(&syncrv1.RemoveWorkerRequest{WorkerId: reg.Msg.GetWorker().GetId()})); err != nil {
+		t.Fatal(err)
+	}
+	waitLog(t, &logs, `"msg":"passive worker removed; stopping its link"`)
+
+	list, err := admin.ListWorkers(ctx, connect.NewRequest(&syncrv1.ListWorkersRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(list.Msg.GetWorkers()); n != 1 || list.Msg.GetWorkers()[0].GetName() != "laptop" {
+		t.Errorf("workers = %v", list.Msg.GetWorkers())
+	}
+
+	// The container health check finds the TLS listener.
+	var out bytes.Buffer
+	hcEnv := devEnv(map[string]string{"SYNCR_HTTP_ADDR": addr.String(), "SYNCR_HTTP_TLS_CERT_FILE": certFile, "SYNCR_HTTP_TLS_KEY_FILE": keyFile})
+	if err := run(ctx, []string{"-healthcheck"}, &out, io.Discard, envOf(hcEnv), nil); err != nil || strings.TrimSpace(out.String()) != "ok" {
+		t.Errorf("-healthcheck = %v, output %q", err, out.String())
+	}
+}
+
+func TestHealthcheckFailsWhenNothingListens(t *testing.T) {
+	t.Parallel()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	_ = l.Close()
+	if err := run(t.Context(), []string{"-healthcheck"}, io.Discard, io.Discard, envOf(map[string]string{"SYNCR_HTTP_ADDR": addr}), nil); err == nil {
+		t.Error("-healthcheck succeeded without a controller")
+	}
+}
+
+func TestEnrollClientKey(t *testing.T) {
+	t.Parallel()
+	key, err := enrollClientKey(controllerconfig.HTTP{})
+	if err != nil || key != nil {
+		t.Fatalf("no header: key %v, err %v (want the default PeerIP)", key, err)
+	}
+	key, err = enrollClientKey(controllerconfig.HTTP{ClientIPHeader: "X-Real-IP", TrustedProxies: []string{"10.0.0.0/8"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := http.Header{"X-Real-Ip": []string{"198.51.100.4"}}
+	if got := key(connect.Peer{Addr: "10.1.2.3:4444"}, h); got != "198.51.100.4" {
+		t.Errorf("from a trusted proxy: %q", got)
+	}
+	if got := key(connect.Peer{Addr: "192.0.2.9:4444"}, h); got != "192.0.2.9" {
+		t.Errorf("from an untrusted peer: %q", got)
 	}
 }

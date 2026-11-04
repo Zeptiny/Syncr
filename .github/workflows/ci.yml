@@ -137,12 +137,33 @@ jobs:
           echo "rclone=$rclone" >> "$GITHUB_OUTPUT"
           echo "restic=$restic" >> "$GITHUB_OUTPUT"
       - name: go test -tags integration
-        # Docker is available on the runner, so the MinIO and SFTP
-        # (testcontainers) tests run too.
+        # Docker is available on the runner, so the Postgres, MinIO and SFTP
+        # (testcontainers) tests run too, and so do the end-to-end tests of
+        # the real binaries (internal/e2e/system): they build both binaries,
+        # run the controller on Postgres, enroll workers with `setup` and
+        # kill and restart the processes mid-job.
         env:
           SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
           SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
         run: go test -tags integration -count=1 -timeout 20m ./...
+      - name: go test -race (link wiring and e2e, integration tag)
+        # The unit -race run covers every package without the integration
+        # tag; this adds the integration tests of the composition roots, the
+        # link transports and the in-process link e2e under the race
+        # detector. (The binary e2e builds its binaries without -race, so it
+        # is not repeated here.)
+        env:
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: >-
+          go test -race -tags integration -count=1 -timeout 15m
+          ./cmd/...
+          ./internal/e2e
+          ./internal/controller/...
+          ./internal/adapters/...
+          ./internal/worker/agent/...
+          ./internal/worker/linkcore/...
+          ./internal/worker/transport/...
       - name: Build the worker for the service test
         run: go build -o "$RUNNER_TEMP/syncr-worker" ./cmd/syncr-worker
       - name: Real systemd service (install, start, stop, uninstall)

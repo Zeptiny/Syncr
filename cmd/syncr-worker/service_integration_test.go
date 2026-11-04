@@ -104,7 +104,11 @@ func TestIntegrationRealService(t *testing.T) {
 	out := mustRun("setup", "--passive",
 		"--listen", "127.0.0.1:"+port, "--advertise-url", "https://127.0.0.1:"+port,
 		"--data-dir", data, "--config", cfg)
-	for _, want := range []string{"Setup complete", "Fingerprint:", "Pairing secret:", "service syncr-worker is running"} {
+	// The self-check finds the service's worker serving the certificate
+	// setup generated (the passive link runs even before any controller
+	// registers it).
+	for _, want := range []string{"Setup complete", "Fingerprint:", "Pairing secret:", "service syncr-worker is running",
+		"ok    the worker serves the certificate with the printed fingerprint"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("setup output lacks %q", want)
 		}

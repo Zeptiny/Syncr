@@ -48,7 +48,7 @@ package and one registration line:
 | Notification channel | `notify.Channel` | `internal/adapters/notify/<channel>` (Milestone 4) |
 | Worker transport | `transport.Link` | `internal/worker/transport/{active,passive}` (Milestone 2) |
 | Tool provisioning | `tools.Provider` chain | `internal/worker/tools` (Milestone 2) |
-| Storage | per-aggregate repository ports | `internal/adapters/postgres` (Milestone 3) |
+| Storage | per-aggregate repository ports | `internal/adapters/postgres` (Milestone 2) |
 
 Job kinds are not declared separately: a kind is the name of the
 `JobSpec.operation` field in `link.proto` (`link.KindOf`), so the controller

@@ -6,6 +6,8 @@
 #
 # Mount the data the worker may access and list it in the worker's
 # local_roots; the container user (uid 10001) needs permission on it.
+# deploy/docker-compose.yml has an optional worker service that enrolls on
+# first start.
 
 ARG GO_VERSION=1.27.3
 ARG RCLONE_VERSION=1.75.2
@@ -42,5 +44,15 @@ COPY --from=restic /usr/bin/restic /usr/local/bin/restic
 COPY --from=build /out/syncr-worker /usr/local/bin/syncr-worker
 USER syncr:syncr
 WORKDIR /var/lib/syncr
+# The pinned tools of this image, and the data directory (keep it on a
+# volume: it holds the worker's configuration and secret once enrolled).
+ENV SYNCR_DATA_DIR=/var/lib/syncr \
+    SYNCR_RCLONE_PATH=/usr/local/bin/rclone \
+    SYNCR_RESTIC_PATH=/usr/local/bin/restic
 ENTRYPOINT ["/usr/local/bin/syncr-worker"]
-CMD ["run"]
+# Enroll once (writes /var/lib/syncr/worker.yaml), e.g.:
+#   docker run --rm -v syncr-worker:/var/lib/syncr syncr-worker setup --no-service \
+#     --controller https://syncr.example.com --token <token> --local-root /data \
+#     --config /var/lib/syncr/worker.yaml
+# then run it with the default command.
+CMD ["run", "--config", "/var/lib/syncr/worker.yaml"]

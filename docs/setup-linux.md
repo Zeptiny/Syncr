@@ -18,7 +18,7 @@ single-use token (the token expires, and works once):
 sudo install -m 0755 syncr-worker /usr/local/bin/syncr-worker
 
 # 2. enroll and install
-sudo syncr-worker setup --controller https://syncr.example.com --token wtok_...
+sudo syncr-worker setup --controller https://syncr.example.com --token syncr_et_...
 ```
 
 Sample output:
@@ -66,7 +66,7 @@ entry stays on the controller; delete it there.
 ## User mode (no root)
 
 ```sh
-syncr-worker setup --user --controller https://syncr.example.com --token wtok_...
+syncr-worker setup --user --controller https://syncr.example.com --token syncr_et_...
 ```
 
 Config goes to `~/.config/syncr/worker.yaml`, data to `~/.local/share/syncr`,
@@ -105,7 +105,7 @@ Or let setup register it with a token:
 
 ```sh
 sudo syncr-worker setup --passive --listen :7443 --advertise-url https://nas.example.com:7443 \
-     --controller https://syncr.example.com --token wtok_...
+     --controller https://syncr.example.com --token syncr_et_...
 ```
 
 The certificate lists the host of `--advertise-url`, the machine's host name
@@ -162,7 +162,9 @@ Then delete the worker in the controller UI.
 - **`cannot reach the controller`**: check the URL, DNS, firewall and proxy.
   `curl -v https://syncr.example.com` from the same machine shows the cause.
 - **`does not answer the Syncr enrollment API`**: `--controller` must be the
-  base URL, without `/api`; a reverse proxy must forward `/syncr.v1.EnrollmentService/`.
+  base URL, without `/api`; a reverse proxy must forward `/syncr.v1.EnrollmentService/` and
+  `/syncr.v1.ControllerLinkService/`, with a read/idle timeout above 40 s (active workers
+  long-poll for 25 s) and request bodies of up to 16 MiB.
 - **`installing a system service needs elevated rights`**: use `sudo`, or `--user`.
 - **`the service did not stay running`**: read the log with `journalctl -u syncr-worker -n 50`.
   A missing tool shows as `required tools are not available`; fix with

@@ -12,8 +12,8 @@ import (
 
 // PassiveConfig tunes PassiveLoop. Zero fields take the defaults.
 type PassiveConfig struct {
-	// BusyInterval is the pause between rounds while the worker holds jobs
-	// or was just sent commands.
+	// BusyInterval is the pause between rounds while the worker holds jobs,
+	// was just sent commands or just returned events.
 	BusyInterval time.Duration
 	// IdleInterval is the pause between rounds while the worker is idle
 	// (its heartbeat).
@@ -52,8 +52,11 @@ func (c PassiveConfig) withDefaults() PassiveConfig {
 //     if there are any, deliver them with Command and apply its acks.
 //
 // The next round starts at once if the worker said has_more, after
-// BusyInterval if it holds jobs or was sent commands, after IdleInterval
-// otherwise, and early when the worker's commands change (Hub). A failed
+// BusyInterval if it holds jobs, was sent commands or returned events (the
+// next Pull acknowledges them, so a worker's last results, e.g. while it
+// shuts down, do not wait an idle interval for their ack), after
+// IdleInterval otherwise, and early when the worker's commands change (Hub).
+// A failed
 // round is retried with exponential backoff; it does not count as contact,
 // so the worker turns offline after the workers' OfflineAfter.
 //
@@ -108,7 +111,8 @@ func (l *PassiveLoop) Run(ctx context.Context) error {
 }
 
 // Round performs one round (see PassiveLoop). busy reports that the worker
-// holds jobs or was sent commands; more that it has further events.
+// holds jobs, was sent commands or returned events to acknowledge; more that
+// it has further events.
 func (l *PassiveLoop) Round(ctx context.Context) (busy, more bool, err error) {
 	w, err := l.svc.workers.Get(ctx, l.workerID)
 	if err != nil {
@@ -136,5 +140,6 @@ func (l *PassiveLoop) Round(ctx context.Context) (busy, more bool, err error) {
 			return false, false, err
 		}
 	}
-	return len(pull.GetState().GetJobs()) > 0 || len(cmds) > 0, pull.GetHasMore(), nil
+	busy = len(pull.GetState().GetJobs()) > 0 || len(cmds) > 0 || len(pull.GetEvents()) > 0
+	return busy, pull.GetHasMore(), nil
 }

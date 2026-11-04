@@ -1,4 +1,11 @@
-package memstore
+// Package broker is the controller's in-process live job broker: it
+// implements jobs.Broker, fanning job updates out to the WatchJob streams of
+// this controller process. It holds no durable state; a watcher that
+// reconnects re-reads the job first, so nothing is lost on a restart.
+//
+// Allowed dependencies: the standard library, internal/domain and
+// internal/app/jobs (whose port it implements).
+package broker
 
 import (
 	"context"
@@ -16,9 +23,9 @@ import (
 const maxQueued = 256
 
 // errClosed is returned by Next after Close.
-var errClosed = errors.New("memstore: subscription closed")
+var errClosed = errors.New("broker: subscription closed")
 
-// Broker is an in-process jobs.Broker. Create it with NewBroker; safe for
+// Broker is an in-process jobs.Broker. Create it with New; safe for
 // concurrent use.
 type Broker struct {
 	mu   sync.Mutex
@@ -27,8 +34,8 @@ type Broker struct {
 
 var _ jobs.Broker = (*Broker)(nil)
 
-// NewBroker returns a Broker without subscribers.
-func NewBroker() *Broker {
+// New returns a Broker without subscribers.
+func New() *Broker {
 	return &Broker{subs: make(map[domain.JobID]map[*subscription]struct{})}
 }
 

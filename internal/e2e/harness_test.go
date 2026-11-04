@@ -2,23 +2,16 @@ package e2e
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/hex"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	mrand "math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -30,6 +23,7 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
+	"github.com/Zeptiny/Syncr/internal/adapters/broker"
 	"github.com/Zeptiny/Syncr/internal/adapters/idgen"
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
 	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
@@ -43,6 +37,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/worker/agent"
 	"github.com/Zeptiny/Syncr/internal/worker/linkcore"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
+	"github.com/Zeptiny/Syncr/internal/worker/tlscert"
 	wactive "github.com/Zeptiny/Syncr/internal/worker/transport/active"
 	wpassive "github.com/Zeptiny/Syncr/internal/worker/transport/passive"
 )
@@ -124,7 +119,7 @@ func (c *controller) start() {
 	c.hub = dispatch.NewHub()
 	c.jobs, err = jobs.New(jobs.Deps{
 		Jobs: c.store, Samples: c.store, Cipher: c.cipher, Clock: c.clock, IDs: c.ids,
-		Broker: memstore.NewBroker(), Notifier: jobs.NopNotifier{}, Waker: c.hub,
+		Broker: broker.New(), Notifier: jobs.NopNotifier{}, Waker: c.hub,
 	}, jobs.Config{SampleInterval: time.Millisecond})
 	if err != nil {
 		c.t.Fatal(err)
@@ -547,41 +542,21 @@ func pairingSecret() string {
 	return "pair_" + hex.EncodeToString(b)
 }
 
-// selfSigned writes a self-signed ECDSA certificate for a worker (no host
-// names: the controller pins it) and returns the file paths and the
-// fingerprint.
+// selfSigned writes a self-signed certificate for a worker, generated like
+// syncr-worker setup does (the controller pins it), and returns the file
+// paths and the fingerprint.
 func selfSigned(t *testing.T) (certFile, keyFile, fingerprint string) {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject:      pkix.Name{CommonName: "syncr-worker"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyDER, err := x509.MarshalECPrivateKey(key)
+	pair, err := tlscert.Generate(tlscert.Options{Hostname: "syncr-worker"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
 	certFile, keyFile = filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
-	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+	if _, err := tlscert.Write(certFile, keyFile, pair, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(der)
-	return certFile, keyFile, hex.EncodeToString(sum[:])
+	return certFile, keyFile, pair.Fingerprint
 }
 
 // ---------------------------------------------------------------------------

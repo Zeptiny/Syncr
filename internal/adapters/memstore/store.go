@@ -1,8 +1,9 @@
 // Package memstore is an in-memory implementation of the controller's
 // repository ports (workers.Repository, workers.TokenRepository,
-// jobs.Repository, jobs.SampleRepository) and of the live job broker
-// (jobs.Broker). It backs unit tests and a development controller without
-// Postgres; everything is lost when the process exits.
+// jobs.Repository, jobs.SampleRepository). It backs unit tests and a
+// development controller without Postgres (dev.memory_store); everything is
+// lost when the process exits. The live job broker is a separate adapter
+// (internal/adapters/broker), used by every controller.
 //
 // It follows the ports' contracts exactly, including the conditional
 // updates, so tests against it exercise the same concurrency rules a

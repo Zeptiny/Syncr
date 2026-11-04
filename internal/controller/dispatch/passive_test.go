@@ -160,11 +160,12 @@ func TestPassiveLoopRunsAJob(t *testing.T) {
 		if got := e.job(j.ID); got.Status != domain.JobSucceeded {
 			t.Fatalf("job = %s", got.Status)
 		}
-		// Idle again: the next pull comes 15s later.
-		time.Sleep(15 * time.Second)
+		// The next pull, a second later, acknowledges the result; then the
+		// worker is idle again and the next pull comes 15s after that.
+		time.Sleep(16 * time.Second)
 		synctest.Wait()
 		_, at = c.history()
-		if want := []time.Duration{time.Second, 2 * time.Second, 17 * time.Second}; !slices.Equal(at, want) {
+		if want := []time.Duration{time.Second, 2 * time.Second, 3 * time.Second, 18 * time.Second}; !slices.Equal(at, want) {
 			t.Errorf("pulls at %v, want %v", at, want)
 		}
 		if wk := e.worker(wid); wk.Link.AckSeq != 4 {

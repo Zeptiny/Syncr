@@ -1,4 +1,4 @@
-package memstore_test
+package broker_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
+	"github.com/Zeptiny/Syncr/internal/adapters/broker"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
@@ -28,7 +28,7 @@ func describe(u jobs.Update) string {
 
 func TestBrokerOrderAndCoalescing(t *testing.T) {
 	t.Parallel()
-	b := memstore.NewBroker()
+	b := broker.New()
 	id, other := domain.NewJobID(), domain.NewJobID()
 	b.Publish(jobUpdate(id, 1)) // before subscribing: not delivered
 	sub := b.Subscribe(id)
@@ -57,7 +57,7 @@ func TestBrokerOrderAndCoalescing(t *testing.T) {
 
 func TestBrokerWakesBlockedReader(t *testing.T) {
 	t.Parallel()
-	b := memstore.NewBroker()
+	b := broker.New()
 	id := domain.NewJobID()
 	sub := b.Subscribe(id)
 	defer sub.Close()
@@ -79,7 +79,7 @@ func TestBrokerWakesBlockedReader(t *testing.T) {
 
 func TestBrokerClose(t *testing.T) {
 	t.Parallel()
-	b := memstore.NewBroker()
+	b := broker.New()
 	id := domain.NewJobID()
 	sub := b.Subscribe(id)
 	other := b.Subscribe(id)
@@ -100,7 +100,7 @@ func TestBrokerClose(t *testing.T) {
 
 func TestBrokerBoundsAStalledReader(t *testing.T) {
 	t.Parallel()
-	b := memstore.NewBroker()
+	b := broker.New()
 	id := domain.NewJobID()
 	sub := b.Subscribe(id)
 	defer sub.Close()

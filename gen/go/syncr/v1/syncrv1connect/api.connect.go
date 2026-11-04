@@ -398,6 +398,12 @@ type JobServiceClient interface {
 	// live sample sends progress. The stream ends after the job reaches a
 	// terminal status (at once for a finished job). Intermediate progress
 	// samples may be skipped for slow readers; status changes never are.
+	//
+	// The stream can also end before the job finishes: with DEADLINE_EXCEEDED
+	// after the controller's maximum watch duration (api.watch_max_duration),
+	// or with UNAVAILABLE when the controller shuts down. Clients then call
+	// WatchJob again; its first message is the current job, so nothing is
+	// missed.
 	WatchJob(context.Context, *connect.Request[v1.WatchJobRequest]) (*connect.ServerStreamForClient[v1.WatchJobResponse], error)
 }
 
@@ -504,6 +510,12 @@ type JobServiceHandler interface {
 	// live sample sends progress. The stream ends after the job reaches a
 	// terminal status (at once for a finished job). Intermediate progress
 	// samples may be skipped for slow readers; status changes never are.
+	//
+	// The stream can also end before the job finishes: with DEADLINE_EXCEEDED
+	// after the controller's maximum watch duration (api.watch_max_duration),
+	// or with UNAVAILABLE when the controller shuts down. Clients then call
+	// WatchJob again; its first message is the current job, so nothing is
+	// missed.
 	WatchJob(context.Context, *connect.Request[v1.WatchJobRequest], *connect.ServerStream[v1.WatchJobResponse]) error
 }
 

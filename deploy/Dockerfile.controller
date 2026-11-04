@@ -3,6 +3,10 @@
 # Controller image: static binary on distroless, running as non-root.
 # Build from the repository root:
 #   docker build -f deploy/Dockerfile.controller -t syncr-controller .
+#
+# Configure it with SYNCR_* variables (see README.md): at least
+# SYNCR_DATABASE_URL, SYNCR_SECRETS_KEY and SYNCR_ADMIN_TOKEN.
+# deploy/docker-compose.yml runs it with Postgres.
 
 ARG GO_VERSION=1.27.3
 
@@ -27,4 +31,8 @@ FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=build /out/syncr-controller /usr/local/bin/syncr-controller
 USER nonroot:nonroot
 EXPOSE 8080
+# The image has no shell or curl: the binary checks its own /healthz (over
+# loopback, honoring SYNCR_HTTP_ADDR and the TLS settings).
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
+    CMD ["/usr/local/bin/syncr-controller", "-healthcheck"]
 ENTRYPOINT ["/usr/local/bin/syncr-controller"]

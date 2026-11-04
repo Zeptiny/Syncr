@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/adapters/broker"
 	"github.com/Zeptiny/Syncr/internal/adapters/idgen"
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
 	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
@@ -28,7 +29,7 @@ import (
 // recorder is the broker (forwarding to memstore) and notifier of the test
 // controller; it remembers published statuses and failure notifications.
 type recorder struct {
-	*memstore.Broker
+	*broker.Broker
 	mu sync.Mutex
 	// history holds the status of every published job version. Concurrent
 	// changes may publish out of order; the version orders them.
@@ -37,7 +38,7 @@ type recorder struct {
 }
 
 func newRecorder() *recorder {
-	return &recorder{Broker: memstore.NewBroker(), history: make(map[domain.JobID]map[int64]domain.JobStatus)}
+	return &recorder{Broker: broker.New(), history: make(map[domain.JobID]map[int64]domain.JobStatus)}
 }
 
 func (r *recorder) Publish(u jobs.Update) {

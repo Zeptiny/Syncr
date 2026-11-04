@@ -14,7 +14,7 @@ exactly that path), for example `C:\Program Files\Syncr\`, then in an
 **elevated** PowerShell (Run as administrator):
 
 ```powershell
-& 'C:\Program Files\Syncr\syncr-worker.exe' setup --controller https://syncr.example.com --token wtok_...
+& 'C:\Program Files\Syncr\syncr-worker.exe' setup --controller https://syncr.example.com --token syncr_et_...
 ```
 
 Useful flags: `--name`, `--local-root 'D:\Shares'` (repeatable; without one jobs
@@ -30,7 +30,7 @@ entry stays on the controller; delete it there).
 ## User mode (no administrator)
 
 ```powershell
-syncr-worker.exe setup --user --controller https://syncr.example.com --token wtok_...
+syncr-worker.exe setup --user --controller https://syncr.example.com --token syncr_et_...
 ```
 
 Windows only lets administrators create services, so `--user` registers a
