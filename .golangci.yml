@@ -203,6 +203,13 @@ linters:
               desc: the store implements app ports and knows nothing else
             - pkg: github.com/Zeptiny/Syncr/internal/worker
               desc: controller code must not import worker code
+        # storetest is test support: the store's tests run it, its production
+        # code must not import it.
+        adapter-postgres-prod:
+          files: ["**/internal/adapters/postgres/**", "!$test"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters/storetest
+              desc: storetest is test support; only tests may import it
         adapter-notify:
           files: ["**/internal/adapters/notify/**"]
           deny:
