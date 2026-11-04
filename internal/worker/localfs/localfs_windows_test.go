@@ -55,9 +55,24 @@ func TestCleanAbsWindows(t *testing.T) {
 		{`\\.\PhysicalDrive0`, ""},      // device
 		{`//./C:/data`, ""},             // device, with slashes
 		{`C:\data\NUL`, ""},             // reserved name
-		{`C:\data\con.txt`, ""},         // reserved name with extension
+		{`C:\data\con.txt`, ""},         // reserved name with extension (a file on Windows 11)
+		{`C:\data\CON .txt`, ""},        // trailing space before the extension
+		{`C:\data\nul.`, ""},            // trailing dot
+		{`C:\data\lpt1.log`, ""},        // port with extension
+		{`C:\data\com¹`, ""},            // superscript digit
+		{`C:\data\LPT³.txt`, ""},        // superscript digit with extension
+		{`C:\data\conin$`, ""},          // console input
+		{`C:\data\CONOUT$`, ""},         // console output
 		{`C:\data\COM1\x`, ""},          // reserved name in the middle
+		{`C:\x\aux\y`, ""},              // nested component
+		{`C:\x\Prn.tar.gz\y`, ""},       // nested, double extension
 		{`C:\data\file.txt:stream`, ""}, // alternate data stream
+		{`C:\data\console`, `C:\data\console`},
+		{`C:\data\conx.txt`, `C:\data\conx.txt`},
+		{`C:\data\lpt10`, `C:\data\lpt10`},
+		{`C:\data\COM10\x`, `C:\data\COM10\x`},
+		{`C:\data\auxiliary\nul1`, `C:\data\auxiliary\nul1`},
+		{`C:\data\file.con`, `C:\data\file.con`},
 	}
 	for _, tt := range tests {
 		got, err := cleanAbs(tt.path)

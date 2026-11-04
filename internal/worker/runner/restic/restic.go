@@ -68,7 +68,11 @@ func New(cfg Config) ([]runner.Runner, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	e := &engine{cfg: cfg, goos: runtime.GOOS, log: cfg.Logger}
+	rcloneOpts, err := rcloneOptions(cfg.RclonePath, rcloneArgs())
+	if err != nil {
+		return nil, fmt.Errorf("restic: Config.RclonePath: %w", err)
+	}
+	e := &engine{cfg: cfg, goos: runtime.GOOS, log: cfg.Logger, rcloneOpts: rcloneOpts}
 	if e.log == nil {
 		e.log = slog.New(slog.DiscardHandler)
 	}
@@ -97,6 +101,8 @@ type engine struct {
 	cfg  Config
 	goos string
 	log  *slog.Logger
+	// rcloneOpts are the restic flags that start rclone (see rcloneOptions).
+	rcloneOpts []string
 }
 
 // kindRunner is the runner.Runner of one restic job kind.
@@ -160,10 +166,7 @@ func (e *engine) run(ctx context.Context, kind string, job runner.Job, cmd comma
 
 	argv := []string{"--repo=" + repo}
 	if viaRclone {
-		argv = append(argv,
-			"--option=rclone.program="+e.cfg.RclonePath,
-			"--option=rclone.args="+rcloneArgs,
-		)
+		argv = append(argv, e.rcloneOpts...)
 	}
 	argv = append(argv, "--json")
 	if e.cfg.CacheDir == "" || cmd.noCache {
@@ -231,14 +234,6 @@ func incompleteWarnings(s *session) []string {
 	warnings := []string{fmt.Sprintf("%d %s could not be read; the snapshot is incomplete", n, noun)}
 	return append(warnings, s.itemErrors...)
 }
-
-// rcloneArgs are the arguments restic passes to rclone ("-o rclone.args").
-// They replace restic's default ("serve restic --stdio --b2-hard-delete"):
-// "--config=" makes rclone ignore any rclone.conf of the worker's user, since
-// remotes come only from the environment; the other two flags keep restic's
-// defaults that its documentation asks for (real deletes on B2 and Google
-// Drive).
-const rcloneArgs = "serve restic --stdio --config= --b2-hard-delete --drive-use-trash=false"
 
 // baseEnv builds the child's variables: the job's remotes (RCLONE_CONFIG_*
 // only), the repository password and the restic tuning variables.

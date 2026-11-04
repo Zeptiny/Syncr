@@ -11,7 +11,8 @@
 // # Repositories
 //
 // A repository on a remote alias is opened as "rclone:<alias>:<path>". restic
-// launches rclone itself ("-o rclone.program=<rclone>"), so the environment
+// launches rclone itself ("-o rclone.program=<rclone>", quoted for restic's
+// CSV and shell-like parsing by rcloneOptions), so the environment
 // that defines the remotes (RCLONE_CONFIG_<ALIAS>_*, produced by RemoteEnv)
 // is part of restic's environment; rclone runs with "--config=" so no
 // rclone.conf of the worker's user is ever read. An empty remote is a local

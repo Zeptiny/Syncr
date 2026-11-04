@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -147,6 +148,18 @@ func TestIntegrationResticBackupToRcloneRepository(t *testing.T) {
 	data, repo := t.TempDir(), t.TempDir()
 	writeTree(t, data, map[string]int{"docs/a.txt": 1000, "docs/b.txt": 2000})
 
+	// restic reads each --option value as a CSV record (a pflag
+	// StringSlice), then splits rclone.program with its own shell-like
+	// splitter, in which a backslash outside quotes separates fields
+	// (D:\a\rclone.exe would run "D:"). The restic runner encodes this in
+	// general (rcloneOptions in runner/restic, which this package cannot
+	// import); here the program is double-quoted for the splitter and the
+	// whole option quoted for CSV.
+	if strings.ContainsAny(rclone, "\"\r\n") || strings.HasSuffix(rclone, `\`) {
+		t.Skipf("rclone path %q cannot be quoted for restic this simply", rclone)
+	}
+	programOption := `"rclone.program=""` + rclone + `"""`
+
 	sup := New(Options{})
 	resticRun := func(args ...string) []map[string]any {
 		t.Helper()
@@ -154,7 +167,7 @@ func TestIntegrationResticBackupToRcloneRepository(t *testing.T) {
 			Path: restic,
 			Args: append([]string{
 				"--repo", "rclone:repo:" + repo,
-				"--option", "rclone.program=" + rclone,
+				"--option", programOption,
 				"--option", "rclone.args=serve restic --stdio --config=",
 				"--json",
 			}, args...),

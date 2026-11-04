@@ -14,15 +14,24 @@ import (
 // checkPlatform rejects Windows paths that are absolute but must not be used:
 // device and verbatim paths (\\.\, \\?\), which bypass normalization and
 // can name raw devices, and components that are reserved device names (NUL,
-// CON, COM1...) or contain a colon (alternate data streams).
+// CON, COM1, con.txt...) or contain a colon (alternate data streams).
+//
+// Reserved names are checked explicitly by isReservedName, independently of
+// the Windows version: filepath.IsLocal accepts "con.txt" on Windows 11 and
+// Server 2025. IsLocal is still applied afterwards as a second opinion.
 func checkPlatform(clean string) error {
 	vol := filepath.VolumeName(clean)
 	if strings.HasPrefix(vol, `\\.\`) || strings.HasPrefix(vol, `\\?\`) || strings.HasPrefix(vol, `\??\`) {
 		return errors.New("device and verbatim paths are not supported")
 	}
 	for _, c := range components(clean[len(vol):]) {
-		if !filepath.IsLocal(c) {
-			return fmt.Errorf("component %q is a reserved name or contains ':'", c)
+		switch {
+		case strings.ContainsRune(c, ':'):
+			return fmt.Errorf("component %q contains ':' (alternate data stream)", c)
+		case isReservedName(c):
+			return fmt.Errorf("component %q is a reserved device name", c)
+		case !filepath.IsLocal(c):
+			return fmt.Errorf("component %q is not a valid file name", c)
 		}
 	}
 	return nil

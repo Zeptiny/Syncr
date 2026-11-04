@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -559,5 +560,78 @@ func TestIntegrationLockedRepository(t *testing.T) {
 	cancel()
 	if err := <-done; !runner.Canceled(err) {
 		t.Errorf("backup err = %v, want cancellation", err)
+	}
+}
+
+// TestIntegrationRcloneInAwkwardDirectory runs restic's rclone backend with
+// the rclone binary in a directory whose name restic's own argument splitter
+// or its CSV reading of --option would break apart unless the runner quotes
+// it: spaces, commas, both quote characters and backslashes ('$', '%' and
+// parentheses are not special to restic but are to shells). Backslashes and double quotes are only valid in
+// file names outside Windows; on Windows the regular tests cover backslashes
+// (every path has them).
+func TestIntegrationRcloneInAwkwardDirectory(t *testing.T) {
+	rclone := toolPath(t, "SYNCR_TEST_RCLONE")
+	toolPath(t, "SYNCR_TEST_RESTIC")
+	names := []string{`syncr it's, $HOME %TEMP% (x86) dir`}
+	if runtime.GOOS != "windows" {
+		names = append(names, `syncr "dq", \back\slash dir`, "syncr\ttab dir")
+	}
+	base := awkwardBase(t)
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			prog := filepath.Join(base, name, filepath.Base(rclone))
+			copyExecutable(t, rclone, prog)
+			h := newHarnessWith(t, func(_ *harness, cfg *Config) { cfg.RclonePath = prog })
+			src := h.local("data")
+			writeFile(t, filepath.Join(src, "a.txt"), []byte("awkward\n"))
+			h.init(itPassword)
+			res, _ := h.backup(&syncrv1.ResticBackup{Paths: []string{src}})
+			if b := res.Output.GetResticBackup(); b.GetSnapshotId() == "" || b.GetFilesNew() != 1 {
+				t.Fatalf("backup output = %v, want one new file", b)
+			}
+		})
+	}
+}
+
+// awkwardBase returns a fresh directory for copies of rclone: under /dev/shm
+// where available (tmpfs, so the copy costs no disk), else under the test's
+// temp dir.
+func awkwardBase(t *testing.T) string {
+	t.Helper()
+	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
+		dir, err := os.MkdirTemp("/dev/shm", "syncr-it-")
+		if err == nil {
+			t.Cleanup(func() {
+				if err := os.RemoveAll(dir); err != nil {
+					t.Errorf("remove %s: %v", dir, err)
+				}
+			})
+			return dir
+		}
+	}
+	return t.TempDir()
+}
+
+func copyExecutable(t *testing.T, src, dst string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
