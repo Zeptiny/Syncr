@@ -773,6 +773,11 @@ func TestDryRunDefaultPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+			// The config is validated with the host's filepath rules, so a simulated
+			// foreign-OS path (e.g. /var/lib/syncr on Windows) cannot pass validation.
+			if tt.goos != runtime.GOOS && !filepath.IsAbs(tt.wants[0]) {
+				t.Skipf("simulated %s default paths are not absolute on a %s host", tt.goos, runtime.GOOS)
+			}
 			r := newRig(t)
 			env := map[string]string{"ProgramData": programData, "LocalAppData": localAppData}
 			r.setup.System.GOOS = tt.goos
