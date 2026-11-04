@@ -3,13 +3,17 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Zeptiny/Syncr/internal/platform/version"
+	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
 )
 
 func testEnv(vars map[string]string) (*env, *bytes.Buffer, *bytes.Buffer) {
@@ -75,15 +79,45 @@ func (f *fixture) runEnv(extra map[string]string) (*env, *bytes.Buffer) {
 	return e, stderr
 }
 
+// notifyReady makes `run` close the returned channel once the worker is
+// ready: it has been built, logged "worker ready" and started its link
+// (through e.link, or the real link). A context canceled before then aborts
+// startup, which is an error, not a clean stop.
+func notifyReady(e *env) <-chan struct{} {
+	ready := make(chan struct{})
+	start := e.linkStarter()
+	var once sync.Once
+	e.link = func(ctx context.Context, cfg workerconfig.Config, w *worker, log *slog.Logger) (func(), error) {
+		defer once.Do(func() { close(ready) })
+		return start(ctx, cfg, w, log)
+	}
+	return ready
+}
+
+// awaitReady waits until ready is closed, failing the test if run returns
+// first.
+func awaitReady(t *testing.T, ready <-chan struct{}, done <-chan int, stderr fmt.Stringer) {
+	t.Helper()
+	select {
+	case <-ready:
+	case code := <-done:
+		t.Fatalf("run returned %d before the worker was ready: %s", code, stderr)
+	case <-time.After(time.Minute):
+		t.Fatal("the worker did not become ready")
+	}
+}
+
 func TestRunBlocksUntilCancelled(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	f := newFixture(t)
 	e, stderr := f.runEnv(nil)
+	ready := notifyReady(e)
 
 	done := make(chan int, 1)
 	go func() { done <- run(ctx, []string{"run"}, e) }()
 
+	awaitReady(t, ready, done, stderr)
 	select {
 	case code := <-done:
 		t.Fatalf("run returned %d before cancellation (stderr: %s)", code, stderr)

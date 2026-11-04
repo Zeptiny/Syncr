@@ -309,10 +309,11 @@ func TestRunUnderServiceManagerUsesTheHost(t *testing.T) {
 	e, stderr := f.runEnv(nil)
 	host := &fakeHost{logOut: &strings.Builder{}}
 	e.host = host
+	ready := notifyReady(e)
 
 	done := make(chan int, 1)
 	go func() { done <- run(ctx, []string{"run"}, e) }()
-	time.Sleep(100 * time.Millisecond)
+	awaitReady(t, ready, done, stderr)
 	cancel()
 	select {
 	case code := <-done:
@@ -371,9 +372,10 @@ func TestRunStartsAndStopsTheLink(t *testing.T) {
 		started, gotW = cfg.Link.Mode, w
 		return func() { mu.Lock(); stopped = true; mu.Unlock() }, nil
 	}
+	ready := notifyReady(e)
 	done := make(chan int, 1)
 	go func() { done <- run(ctx, []string{"run"}, e) }()
-	time.Sleep(100 * time.Millisecond)
+	awaitReady(t, ready, done, stderr)
 	cancel()
 	if code := <-done; code != exitOK {
 		t.Fatalf("exit %d: %s", code, stderr)
@@ -414,9 +416,10 @@ func TestRunLogFileAndHideConsole(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	logPath := filepath.Join(t.TempDir(), "logs", "worker.log")
 	e, stderr = f.runEnv(nil)
+	ready := notifyReady(e)
 	done := make(chan int, 1)
 	go func() { done <- run(ctx, []string{"run", "--log-file", logPath}, e) }()
-	time.Sleep(100 * time.Millisecond)
+	awaitReady(t, ready, done, stderr)
 	cancel()
 	if code := <-done; code != exitOK {
 		t.Fatalf("exit %d: %s", code, stderr)

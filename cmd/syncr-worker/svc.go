@@ -87,7 +87,7 @@ func serviceCmd(ctx context.Context, e *env, args []string) error {
 
 	switch action {
 	case "install":
-		if _, err := os.Stat(cfgPath); err != nil { //nolint:gosec // the operator's --config path
+		if _, err := os.Stat(cfgPath); err != nil { //nolint:gosec,nolintlint // the operator's --config path; gosec flags it only on some GOOS
 			return fmt.Errorf("the config file %s is not readable (%w): run '%s setup' first, or point --config at it", cfgPath, err, name)
 		}
 		if err := mgr.Install(ctx, spec); err != nil {

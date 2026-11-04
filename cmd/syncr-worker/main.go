@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"runtime"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/Zeptiny/Syncr/internal/platform/config"
 	"github.com/Zeptiny/Syncr/internal/platform/version"
+	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
 	"github.com/Zeptiny/Syncr/internal/worker/paths"
 	"github.com/Zeptiny/Syncr/internal/worker/service"
 )
@@ -64,6 +66,17 @@ func (e *env) serviceHost() service.Host {
 		return e.host
 	}
 	return service.NewHost()
+}
+
+// linkStarter returns the function that starts the link inside `run`:
+// e.link, or startLink.
+func (e *env) linkStarter() linkStarter {
+	if e.link != nil {
+		return e.link
+	}
+	return func(ctx context.Context, cfg workerconfig.Config, w *worker, log *slog.Logger) (func(), error) {
+		return startLink(ctx, cfg, w, log, linkInfo{version: e.info, hostname: os.Hostname})
+	}
 }
 
 // pathsEnv returns the environment for locating the default data directory.

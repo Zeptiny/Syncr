@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -106,13 +105,7 @@ func runWorker(ctx context.Context, e *env, configPath string, logOut io.Writer)
 	}
 	logger.Info("worker ready", "job_kinds", w.registry.Kinds())
 
-	start := e.link
-	if start == nil {
-		start = func(ctx context.Context, cfg workerconfig.Config, w *worker, log *slog.Logger) (func(), error) {
-			return startLink(ctx, cfg, w, log, linkInfo{version: e.info, hostname: os.Hostname})
-		}
-	}
-	stop, err := start(ctx, cfg, w, logger)
+	stop, err := e.linkStarter()(ctx, cfg, w, logger)
 	if err != nil {
 		return err
 	}
