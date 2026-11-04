@@ -281,3 +281,59 @@ jobs:
           path: bin/
           if-no-files-found: error
           retention-days: 7
+
+  docker-images:
+    name: docker images (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: syncr-controller, dockerfile: Dockerfile.controller }
+          - { image: syncr-worker, dockerfile: Dockerfile.worker }
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # git describe needs tags
+      - name: Version build args
+        id: version
+        # Same values as the build job, so the images report the same version.
+        run: |
+          echo "version=$(git describe --tags --match 'v*' --dirty 2>/dev/null || echo dev)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - name: Build ${{ matrix.image }}
+        uses: docker/build-push-action@v7
+        with:
+          # The Dockerfiles COPY from the repository root.
+          context: .
+          file: deploy/${{ matrix.dockerfile }}
+          push: false
+          load: true
+          tags: ${{ matrix.image }}:ci
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ steps.version.outputs.commit }}
+            BUILD_TIME=${{ steps.version.outputs.built }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      - name: Smoke test syncr-controller
+        if: matrix.image == 'syncr-controller'
+        # The image is distroless (no shell), so the entrypoint is overridden
+        # to call the binary directly. The health check must fail here: no
+        # server is running in the container.
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/syncr-controller syncr-controller:ci -version
+          if docker run --rm --entrypoint /usr/local/bin/syncr-controller syncr-controller:ci -healthcheck; then
+            echo "::error::-healthcheck succeeded without a running server"
+            exit 1
+          fi
+      - name: Smoke test syncr-worker
+        if: matrix.image == 'syncr-worker'
+        # The pinned rclone and restic must be runnable inside the image.
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/syncr-worker syncr-worker:ci version
+          docker run --rm --entrypoint /usr/local/bin/rclone syncr-worker:ci version
+          docker run --rm --entrypoint /usr/local/bin/restic syncr-worker:ci version
