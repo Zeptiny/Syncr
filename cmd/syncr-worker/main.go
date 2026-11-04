@@ -46,6 +46,7 @@ type env struct {
 	stdout, stderr io.Writer
 	lookupEnv      config.LookupEnv
 	info           version.Info
+	tools          toolsOverrides // zero value: pinned tools, real network
 }
 
 // command is one subcommand. Adding a subcommand means adding an entry to
@@ -60,6 +61,7 @@ func commands() []command {
 	return []command{
 		{name: "run", summary: "run the worker until interrupted", run: runCmd},
 		{name: "setup", summary: "enroll this machine and install the worker service", run: setupCmd},
+		{name: "tools", summary: "provision and inspect the pinned rclone and restic binaries", run: toolsCmd},
 		{name: "version", summary: "print version information", run: versionCmd},
 	}
 }
