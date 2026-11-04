@@ -36,6 +36,14 @@ tools:
   # Let the worker download missing pinned tools at startup
   # (checksum-verified). Off by default.
   download: false            # SYNCR_TOOLS_DOWNLOAD
+
+# How many jobs run at once (1-64). Further jobs wait in a local queue and
+# start in the order the controller sent them.
+max_concurrent_jobs: 2       # SYNCR_MAX_CONCURRENT_JOBS
+
+# Minimum time between two progress reports of one job (100ms-1m). The last
+# sample of a job is always reported before its result.
+progress_interval: 1s        # SYNCR_PROGRESS_INTERVAL
 ```
 
 ## Tools

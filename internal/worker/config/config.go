@@ -1,6 +1,7 @@
 // Package config defines the worker's configuration file and environment
-// variables. Milestone 2 adds the link settings (mode, controller URL,
-// listen address, credentials).
+// variables. Milestone 2 adds the job settings (concurrency, progress
+// interval) and the link settings (mode, controller URL, listen address,
+// credentials).
 //
 // Paths are validated for the host the worker runs on: they must be
 // absolute there (a Windows worker needs "C:\..." paths, a Linux worker
@@ -14,6 +15,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Zeptiny/Syncr/internal/platform/logging"
 )
@@ -36,7 +38,24 @@ type Config struct {
 
 	// Tools says where rclone and restic come from.
 	Tools ToolsConfig `yaml:"tools"`
+
+	// MaxConcurrentJobs is how many jobs the worker runs at once; further
+	// jobs wait in a local queue, in order.
+	MaxConcurrentJobs int `yaml:"max_concurrent_jobs" env:"SYNCR_MAX_CONCURRENT_JOBS"`
+
+	// ProgressInterval is the minimum time between two progress reports of
+	// one job (the last sample is always reported).
+	ProgressInterval time.Duration `yaml:"progress_interval" env:"SYNCR_PROGRESS_INTERVAL"`
 }
+
+// Defaults and bounds of the job settings.
+const (
+	DefaultMaxConcurrentJobs = 2
+	MaxMaxConcurrentJobs     = 64
+	DefaultProgressInterval  = time.Second
+	MinProgressInterval      = 100 * time.Millisecond
+	MaxProgressInterval      = time.Minute
+)
 
 // ToolsConfig configures provisioning of the pinned rclone and restic
 // binaries (see internal/worker/tools). The resolution order is: explicit
@@ -60,7 +79,11 @@ type ToolsConfig struct {
 
 // Default returns the configuration used when nothing is overridden.
 func Default() Config {
-	return Config{Log: logging.DefaultConfig()}
+	return Config{
+		Log:               logging.DefaultConfig(),
+		MaxConcurrentJobs: DefaultMaxConcurrentJobs,
+		ProgressInterval:  DefaultProgressInterval,
+	}
 }
 
 // Validate reports every invalid setting.
@@ -70,6 +93,12 @@ func (c *Config) Validate() error {
 	errs = append(errs, checkAbs("tools.dir", c.Tools.Dir, true))
 	errs = append(errs, checkAbs("tools.rclone_path", c.Tools.RclonePath, true))
 	errs = append(errs, checkAbs("tools.restic_path", c.Tools.ResticPath, true))
+	if c.MaxConcurrentJobs < 1 || c.MaxConcurrentJobs > MaxMaxConcurrentJobs {
+		errs = append(errs, fmt.Errorf("max_concurrent_jobs: %d is outside 1..%d", c.MaxConcurrentJobs, MaxMaxConcurrentJobs))
+	}
+	if c.ProgressInterval < MinProgressInterval || c.ProgressInterval > MaxProgressInterval {
+		errs = append(errs, fmt.Errorf("progress_interval: %s is outside %s..%s", c.ProgressInterval, MinProgressInterval, MaxProgressInterval))
+	}
 	seen := make(map[string]bool, len(c.LocalRoots))
 	for i, root := range c.LocalRoots {
 		field := fmt.Sprintf("local_roots[%d]", i)
