@@ -1,0 +1,3 @@
+{"message_type":"status","seconds_elapsed":1,"percent_done":1,"total_files":2,"files_done":2,"total_bytes":24000006,"bytes_done":24000006}
+{"message_type":"status","seconds_elapsed":2,"percent_done":1,"total_files":2,"files_done":2,"total_bytes":24000006,"bytes_done":24000006}
+{"message_type":"summary","files_new":2,"files_changed":0,"files_unmodified":0,"dirs_new":4,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":14,"tree_blobs":5,"data_added":24002922,"data_added_packed":24003738,"total_files_processed":2,"total_bytes_processed":24000006,"total_duration":2.873687242,"backup_start":"2026-11-04T04:04:49.468435653Z","backup_end":"2026-11-04T04:04:52.342122906Z","snapshot_id":"948693b6b1b380704c307d1746e8b2b7d40369f114b769b5137413675f86e5a2"}

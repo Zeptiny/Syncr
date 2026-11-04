@@ -9,6 +9,8 @@
 # Go test and coverage artifacts
 *.test
 *.out
+# Test fixtures are always tracked, whatever their extension.
+!**/testdata/**
 *.prof
 coverage.*
 /.cache/
