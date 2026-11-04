@@ -1,12 +1,19 @@
-// Package paths resolves the worker's default data directory.
+// Package paths resolves the worker's default data directory and config file.
 //
-// Defaults:
+// Data directory defaults:
 //
 //	Linux, system   /var/lib/syncr
 //	Linux, user     $XDG_DATA_HOME/syncr, else ~/.local/share/syncr
 //	Windows, system %ProgramData%\Syncr
 //	Windows, user   %LocalAppData%\Syncr
 //	macOS, user     ~/Library/Application Support/syncr (development only)
+//
+// Config file defaults (worker.yaml):
+//
+//	Linux, system   /etc/syncr/worker.yaml
+//	Linux, user     $XDG_CONFIG_HOME/syncr/worker.yaml, else ~/.config/syncr/worker.yaml
+//	Windows         <data directory>\worker.yaml
+//	macOS           <data directory>/worker.yaml (development only)
 //
 // Allowed dependencies: the standard library.
 package paths
@@ -116,3 +123,30 @@ func ScratchDir(dataDir string) string { return filepath.Join(dataDir, "scratch"
 // CacheDir returns the directory under dataDir for tool caches that may be
 // kept between jobs, such as restic's repository cache.
 func CacheDir(dataDir string) string { return filepath.Join(dataDir, "cache") }
+
+// ConfigFileName is the name of the worker's configuration file.
+const ConfigFileName = "worker.yaml"
+
+// ConfigFile returns the default path of the worker's configuration file for
+// mode. On Linux it follows the usual /etc and XDG conventions; elsewhere the
+// file lives in the data directory.
+func ConfigFile(mode Mode, env Env) (string, error) {
+	if env.GOOS == "windows" || env.GOOS == "darwin" {
+		dir, err := DataDir(mode, env)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(dir, ConfigFileName), nil
+	}
+	if mode == ModeSystem {
+		return "/etc/syncr/" + ConfigFileName, nil
+	}
+	if xdg, ok := env.LookupEnv("XDG_CONFIG_HOME"); ok && filepath.IsAbs(xdg) {
+		return filepath.Join(xdg, "syncr", ConfigFileName), nil
+	}
+	home, err := env.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("paths: find home directory: %w", err)
+	}
+	return filepath.Join(home, ".config", "syncr", ConfigFileName), nil
+}
