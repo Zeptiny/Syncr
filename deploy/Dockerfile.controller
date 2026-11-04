@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1
+#
+# Controller image: static binary on distroless, running as non-root.
+# Build from the repository root:
+#   docker build -f deploy/Dockerfile.controller -t syncr-controller .
+
+ARG GO_VERSION=1.27.3
+
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY . .
+ARG TARGETOS TARGETARCH
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_TIME=
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+      -ldflags "-s -w \
+        -X github.com/Zeptiny/Syncr/internal/platform/version.version=${VERSION} \
+        -X github.com/Zeptiny/Syncr/internal/platform/version.commit=${COMMIT} \
+        -X github.com/Zeptiny/Syncr/internal/platform/version.buildTime=${BUILD_TIME}" \
+      -o /out/syncr-controller ./cmd/syncr-controller
+
+FROM gcr.io/distroless/static-debian13:nonroot
+COPY --from=build /out/syncr-controller /usr/local/bin/syncr-controller
+USER nonroot:nonroot
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/syncr-controller"]

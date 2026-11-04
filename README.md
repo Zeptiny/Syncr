@@ -1,165 +1,125 @@
-# Syncr - Remote sincronization with rclone
+# Syncr
 
-THIS PROJECT IS NOT FINISHED AND DOES NOT REPRESENT IT'S FINAL STATE, THINGS WILL BREAK, PLEASE DO NOT USE IT.
-DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
+Self-hosted manager for [rclone](https://rclone.org/) sync jobs and
+[restic](https://restic.net/) backups: one controller with a web UI, any
+number of workers on servers and desktops (Linux first, Windows second).
 
-## Overview
-**Syncr** is a Django-based app that uses [Rclone](https://rclone.org/) to handle file synchronization tasks between remote storage services. It allows you to:
+> **Status: v2 rewrite in progress.** This branch is a Go rewrite and is not
+> usable yet. Milestone 1 (foundation) provides the skeleton: wire contracts,
+> binaries that start and stop cleanly, the process supervisor and the job
+> runner contract. The previous Django version lives on `main` (tag
+> `django-final`).
 
-- Manage multiple Rclone servers
-- Schedule or manually run sync jobs
-- Receive notifications (currently via Discord)
-- Use temporary, on-the-fly remotes with zero persistence
-
-
-## Features
-
-- **Rclone operations**: `sync`, `copy`, `move`
-- **Remote configuration on the fly**
-- **Rclone Unions support**
-- **Job scheduling via crontab**
-- **Protocol support**: S3 and SFTP
-- **Notifications**: Discord Webhooks
-- **Multi-server support**: allows to have multiple remote rclone instances.
-
-
-## TO-DO
-
-### Slave Server - Priority
-Make a "slave" server, that will be responsible to communicate with a local rclone and restic instance.
-This will allow better control, as well monitoring and simplified communication.
-The "Control" server, this repository, will communicate with the slaves.
-
-### Notifications:
-- Email notifications
-- SMS
-- Slack (Unsure how to use it)
-
-### Protocols:
-- Add more protocols (Only S3 and SFTP is supported)
-- Add key support for SFTP
-
-### Sincronization:
-- Add retry support
-- Warn if no data changed in x time or x transfers
-- Add Restic support
-
-### Servers:
-- Authentication
-- Server Creation outside of admin
-- Fallback servers
-- Multi selection
-- Network cap
-
-### Remotes/Unions
-- Labels/tags
-- Groups (For better visualization)
-- Multi bucket support for S3 remotes
-- Per remote path for union (At the time, it only accepts root)
-- Add Union policy options
-
-### Running:
-- Docs
-
-### Github Workflows
-- Make them work?
-
-### Known Bugs
-- S3 remotes with KMS encryption fails checksum
-- Sometimes the bandwidth can go negative, specially in jobs that are running for longer periods
-
-## Screenshots
-### Home page
-![Home Page](./screenshots/home.png)
-
-### Job Creation
-![Job Creation](./screenshots/job_creation.png)
-
-### Job Detail
-![Job Detail](./screenshots/job_detail.png)
-
-### Job Search
-![Job Search](./screenshots/job_search.png)
-
-## Other & technical information
-- The scheduled jobs are checked every minute with cron_validator, using huey, if they should be executed, schedules cannot be less than 1 minute.
-- Huey uses redis as the backend storage
-- Remote credentials are never saved to the rclone configuration of any server, they are always maintained on the django database.
-- There is support for multiple users, as well as a registration page.
-- Jobs are executed sending the information to the rclone remote API, the remotes/unions are then created on-the-fly.
-
-# Installation & Setup
-If you REALLY want to trust this while in development, or want to give some feedback, here's how to run it:
-
-1. Clone this repository
+## Architecture
 
 ```
-git clone https://github.com/Zeptiny/Syncr.git && cd Syncr
-``` 
-
-2. Configure the environment
-
-Make a copy of the example:
+ Browser (React SPA, embedded in the controller)
+        │  HTTPS · Connect-RPC
+        ▼
+ ┌──────────────── syncr-controller (Go) ─────────────────┐
+ │ users · remotes (encrypted secrets) · restic repos ·   │
+ │ schedules · job state machine · notifications          │──► Postgres
+ └────────────────────────┬───────────────────────────────┘
+                          │ worker link: unary RPCs over HTTP/1.1
+                          │  active:  worker → controller (Report / Poll)
+                          │  passive: controller → worker (Command / Pull, pinned TLS)
+                          ▼
+ syncr-worker (Go, Linux/Windows service) ── supervises rclone / restic child processes
 ```
-cp .env.example .env
+
+- **Controller**: the only component that talks to Postgres. API, scheduler,
+  dispatch and the job state machine live here.
+- **Worker**: a small supervisor. Every job is a pinned `rclone` or `restic`
+  child process with a minimal environment; remotes are passed as
+  `RCLONE_CONFIG_<ALIAS>_*` environment variables, never as connection
+  strings. Progress comes from the tools' JSON output.
+- **Worker link**: the same messages in both directions; workers buffer events
+  in an outbox with `(epoch, seq)` so nothing is lost across reconnects, and
+  the controller reconciles after restarts.
+- **Modularity**: ports and adapters with constructor injection; `cmd/` is the
+  only composition root. New backends, job kinds, notifiers and transports are
+  added as one package plus one registration line. Layering is enforced by
+  `depguard` in golangci-lint.
+
+Design records: [architecture](docs/adr/0001-architecture.md),
+[worker link](docs/adr/0002-worker-link.md),
+[child-process engines](docs/adr/0003-child-process-engines.md).
+
+## Repository layout
+
 ```
-Edit the `.env` with your prefereed editor (May it be our lord and savior `vim`)
-
-
-3. Start the docker compose
-
-At this moment, you will need to build the project, the command is as follows:
+proto/syncr/v1/           wire contracts (api.proto, link.proto)
+gen/go/                   generated protobuf + Connect code (committed)
+cmd/syncr-controller/     controller composition root
+cmd/syncr-worker/         worker composition root and CLI (run, setup, version)
+internal/domain/          entity IDs, job status state machine, domain errors
+internal/link/            link logic shared by both sides (job kinds today)
+internal/adapters/api/    Connect handlers and health endpoint
+internal/controller/      controller-only packages (config)
+internal/worker/proc/     child-process supervisor (env allowlist, line streaming, cancellation)
+internal/worker/runner/   Runner contract and registry for job kinds
+internal/worker/config/   worker configuration
+internal/platform/        leaf helpers: config loading, logging, redaction, HTTP server, version
+deploy/                   Dockerfiles and the dev compose stack
+docs/adr/                 architecture decision records
 ```
-docker compose up -d --build
+
+## Development
+
+Requirements: Go (version from `go.mod`), [buf](https://buf.build/),
+[golangci-lint](https://golangci-lint.run/) v2, Docker (for the dev stack),
+GNU make.
+
+```sh
+make help              # list targets
+make generate          # buf generate (plugins pinned via `go tool`)
+make lint              # buf lint + golangci-lint (with layering rules)
+make test              # unit tests
+make test-race         # unit tests with the race detector (needs cgo)
+make test-integration  # real rclone/restic: SYNCR_TEST_RCLONE=… SYNCR_TEST_RESTIC=…
+make build             # bin/syncr-controller, bin/syncr-worker (GOOS/GOARCH to cross-compile)
+make dev-up            # Postgres 17, MinIO and SFTP on 127.0.0.1 (see deploy/docker-compose.dev.yml)
 ```
-It will take a few seconds/minutes, depending on your system
 
-4. Create the superuser
+Run the controller and check it:
+
+```sh
+./bin/syncr-controller            # listens on :8080 by default
+curl localhost:8080/healthz
+curl -H 'Content-Type: application/json' -d '{}' \
+  localhost:8080/syncr.v1.SystemService/GetInfo
 ```
-docker exec -it syncr-web sh
-python manage.py createsuperuser
-exit
+
+The worker currently starts and idles until stopped (the link arrives in
+Milestone 2):
+
+```sh
+./bin/syncr-worker run
+./bin/syncr-worker version
 ```
-Enter the required information.
 
-5. Access the interface
+### Configuration
 
-Access your browser and go to `http://127.0.0.1:8000`
+Both binaries read an optional YAML file (`--config path` or
+`SYNCR_CONFIG`), then apply `SYNCR_*` environment overrides, then validate.
+Unknown keys are rejected.
 
-6. Add the servers
+```yaml
+# controller.yaml
+http:
+  addr: ":8080"              # SYNCR_HTTP_ADDR
+  read_header_timeout: 10s   # SYNCR_HTTP_READ_HEADER_TIMEOUT
+  shutdown_timeout: 15s      # SYNCR_HTTP_SHUTDOWN_TIMEOUT
+log:
+  level: info                # SYNCR_LOG_LEVEL: debug, info, warn, error
+  format: text               # SYNCR_LOG_FORMAT: text or json
+```
 
-For the app to be usable, you need to add the server from where the transfers will be done, those being rclone instances.
-In the provided docker compose, there already is a rclone instance, you can also add how many you want.
+The worker accepts the same `log` section today.
 
-Go to the admin interface -> `http://127.0.0.1:8000/admin` (Yes, I will make a form, I sort of forgot)
-Add a server: servers -> add
+### Images
 
-Rclone authentication isn't yet implemented, if you are using the default provided docker compose, use `syncr-rclone` as the host.
-
-7. Add the Remotes
-
-For the sincronization to work, you will need to specify the remotes from witch syncr can access.
-Returning to the home screen, click on "Remotes" and then "Create New Remote".
-Fill the form for each remote you want to use.
-
-8. Running your first Job
-
-Return to the home screen, and then click on "Run Manual Job"
-You will be able to select the sync type, remote, path, and other options
-When running the job, you will be redirected to the job description with it's information.
-
-
-9. Scheduling job
-
-On the navbar, select "Schedules" and then "Create New Schedule"
-The creation is similar to the manual job creation, except for the need of a cron frequency to be added, that's when your job will be run.
-
-
-10. Done!
-
-That's it, you can also specify a contact list to be notified when a job goes wrong, currently, only Discord Webhook is working.
-
-### Using TLS 
-
-You can also use your own domain by using the `.env.tls.example` and `docker-compose-tls.yaml` files.
-Fill the information as normal, also, do not forget to create the docker network with `docker network create proxy` and to change the permissions of the traefik directory with `sudo chown -R $USER:$USER traefik`, TLS should be handled automatically with Let's Encrypt.
+```sh
+docker build -f deploy/Dockerfile.controller -t syncr-controller .   # distroless, non-root
+docker build -f deploy/Dockerfile.worker -t syncr-worker .           # Debian slim, rclone v1.75.2, restic 0.19.1, non-root
+```

@@ -1,0 +1,13 @@
+# Keep the build context small and free of local artifacts/secrets.
+.git
+bin
+dist
+web/node_modules
+web/dist
+**/*.test
+**/*.out
+.env
+.env.*
+*.local.yaml
+*.local.yml
+deploy/*.yml

@@ -1,0 +1,19 @@
+# Code generation: https://buf.build/docs/configuration/v2/buf-gen-yaml
+#
+# Plugins run through `go tool`, so their versions are pinned by go.mod
+# (the same google.golang.org/protobuf and connectrpc.com/connect versions the
+# code links against). Output is committed; CI fails if it drifts.
+version: v2
+clean: true
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/Zeptiny/Syncr/gen/go
+plugins:
+  - local: ["go", "tool", "protoc-gen-go"]
+    out: gen/go
+    opt: paths=source_relative
+  - local: ["go", "tool", "protoc-gen-connect-go"]
+    out: gen/go
+    opt: paths=source_relative

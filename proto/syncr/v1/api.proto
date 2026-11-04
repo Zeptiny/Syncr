@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package syncr.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Controller API used by the web UI and tooling. Served over Connect (JSON or
+// binary), gRPC and gRPC-Web on the controller's HTTP address.
+
+// SystemService exposes information about the controller itself.
+service SystemService {
+  // GetInfo returns build information. It has no side effects, so Connect
+  // clients may call it with HTTP GET.
+  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+// GetInfoRequest is empty; reserved for future filters.
+message GetInfoRequest {}
+
+// GetInfoResponse describes the running controller build.
+message GetInfoResponse {
+  // Release version, e.g. "v2.0.0", or "dev" for local builds.
+  string version = 1;
+
+  // VCS commit the binary was built from, or "unknown".
+  string commit = 2;
+
+  // When the binary was built; unset if unknown.
+  google.protobuf.Timestamp build_time = 3;
+}

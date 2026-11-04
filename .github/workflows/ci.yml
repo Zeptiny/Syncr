@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [v2, main]
+  pull_request:
+    branches: [v2, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOLANGCI_LINT_VERSION: v2.15.0
+  BUF_VERSION: "1.75.0"
+
+jobs:
+  lint:
+    name: golangci-lint (${{ matrix.goos }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Lint Windows-only files (build tags) as well as Unix ones.
+        goos: [linux, windows]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v9
+        env:
+          GOOS: ${{ matrix.goos }}
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+  proto:
+    name: buf lint + generate drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: ${{ env.BUF_VERSION }}
+          setup_only: true
+      - name: buf lint
+        run: buf lint
+      - name: buf format
+        run: buf format --diff --exit-code
+      - name: Generated code is up to date
+        # Plugins run via `go tool`, pinned by go.mod.
+        run: |
+          buf generate
+          git add -N gen
+          git diff --exit-code -- gen
+
+  test:
+    name: go test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...
+      - name: go test -race
+        if: runner.os == 'Linux'
+        run: go test -race ./...
+      - name: go mod tidy is clean
+        if: runner.os == 'Linux'
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+  build:
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # git describe needs tags
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: make build
+        run: make build GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: syncr-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: bin/
+          if-no-files-found: error
+          retention-days: 7

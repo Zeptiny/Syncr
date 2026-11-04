@@ -1,0 +1,281 @@
+# golangci-lint v2 configuration: https://golangci-lint.run/docs/configuration/
+#
+# Besides the usual correctness and style linters, depguard enforces the
+# layering from docs/adr/0001-architecture.md. When a rule blocks you, the fix
+# is almost always to declare a small interface (port) in the consuming
+# package and wire the implementation in cmd/, not to relax the rule.
+version: "2"
+
+run:
+  tests: true
+  build-tags:
+    - integration
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - depguard
+    - errcheck
+    - errname
+    - errorlint
+    - gochecknoglobals # no package-level mutable state
+    - gochecknoinits # no init() side effects
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - noctx
+    - nolintlint
+    - revive
+    - sloglint
+    - staticcheck
+    - unconvert
+    - unused
+    - usestdlibvars
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # readability over struct packing
+        - shadow # err shadowing is idiomatic
+
+    misspell:
+      locale: US
+      ignore-rules:
+        - cancelled # job status value; "canceled" is used in Go identifiers
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: exported
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: unused-parameter
+        - name: var-declaration
+        - name: var-naming
+
+    sloglint:
+      no-mixed-args: true
+      kv-only: true
+      static-msg: true
+      key-naming-case: snake
+
+    depguard:
+      rules:
+        # Libraries nobody should use.
+        banned:
+          files: ["$all"]
+          deny:
+            - pkg: github.com/pkg/errors
+              desc: use the standard errors package and fmt.Errorf with %w
+            - pkg: gopkg.in/yaml
+              desc: use go.yaml.in/yaml/v3 (the maintained fork)
+            - pkg: github.com/golang/protobuf
+              desc: deprecated; use google.golang.org/protobuf
+            - pkg: io/ioutil
+              desc: deprecated; use io and os
+            - pkg: math/rand$
+              desc: use math/rand/v2 or crypto/rand
+
+        # internal/domain is the innermost layer: standard library only.
+        domain:
+          list-mode: strict
+          files: ["**/internal/domain/**"]
+          allow:
+            - $gostd
+
+        # Use cases depend only on the domain and on ports they declare.
+        app:
+          list-mode: strict
+          files: ["**/internal/app/**"]
+          allow:
+            - $gostd
+            - github.com/Zeptiny/Syncr/internal/domain
+
+        # Platform helpers are leaves: no Syncr business code.
+        platform:
+          files: ["**/internal/platform/**"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/domain
+              desc: platform packages are generic infrastructure
+            - pkg: github.com/Zeptiny/Syncr/internal/app
+              desc: platform packages are generic infrastructure
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters
+              desc: platform packages are generic infrastructure
+            - pkg: github.com/Zeptiny/Syncr/internal/controller
+              desc: platform packages are generic infrastructure
+            - pkg: github.com/Zeptiny/Syncr/internal/worker
+              desc: platform packages are generic infrastructure
+            - pkg: github.com/Zeptiny/Syncr/internal/link
+              desc: platform packages are generic infrastructure
+            - pkg: github.com/Zeptiny/Syncr/internal/backend
+              desc: platform packages are generic infrastructure
+            - pkg: github.com/Zeptiny/Syncr/gen
+              desc: platform packages are generic infrastructure
+
+        # The link core is shared by both sides of the link.
+        link:
+          files: ["**/internal/link/**"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/app
+              desc: link is shared protocol logic; use cases call it, not the reverse
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters
+              desc: link is shared protocol logic
+            - pkg: github.com/Zeptiny/Syncr/internal/controller
+              desc: link is shared by controller and worker
+            - pkg: github.com/Zeptiny/Syncr/internal/worker
+              desc: link is shared by controller and worker
+
+        # Adapters never import each other; cmd/ wires them.
+        adapter-api:
+          files: ["**/internal/adapters/api/**"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters/postgres
+              desc: adapters must not import each other; wire them in cmd/
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters/notify
+              desc: adapters must not import each other; wire them in cmd/
+            - pkg: github.com/Zeptiny/Syncr/internal/controller
+              desc: the API calls use cases (internal/app), not controller internals
+            - pkg: github.com/Zeptiny/Syncr/internal/worker
+              desc: controller code must not import worker code
+        adapter-postgres:
+          files: ["**/internal/adapters/postgres/**"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters/api
+              desc: adapters must not import each other; wire them in cmd/
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters/notify
+              desc: adapters must not import each other; wire them in cmd/
+            - pkg: github.com/Zeptiny/Syncr/internal/controller
+              desc: the store implements app ports and knows nothing else
+            - pkg: github.com/Zeptiny/Syncr/internal/worker
+              desc: controller code must not import worker code
+        adapter-notify:
+          files: ["**/internal/adapters/notify/**"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters/api
+              desc: adapters must not import each other; wire them in cmd/
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters/postgres
+              desc: adapters must not import each other; wire them in cmd/
+            - pkg: github.com/Zeptiny/Syncr/internal/controller
+              desc: notifiers implement app ports and knows nothing else
+            - pkg: github.com/Zeptiny/Syncr/internal/worker
+              desc: controller code must not import worker code
+
+        # Backend descriptors are pure data + mapping.
+        backend:
+          files: ["**/internal/backend/**"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/app
+              desc: backends are an extension point consumed by use cases
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters
+              desc: backends must not depend on adapters
+            - pkg: github.com/Zeptiny/Syncr/internal/controller
+              desc: backends must not depend on controller internals
+            - pkg: github.com/Zeptiny/Syncr/internal/worker
+              desc: backends must not depend on worker internals
+
+        # Controller and worker never import each other.
+        controller:
+          files: ["**/internal/controller/**"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/worker
+              desc: controller code must not import worker code
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters
+              desc: controller internals are wired to adapters in cmd/
+        worker:
+          files: ["**/internal/worker/**"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/controller
+              desc: worker code must not import controller code
+            - pkg: github.com/Zeptiny/Syncr/internal/app
+              desc: worker code must not import controller use cases
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters
+              desc: worker code must not import controller adapters
+
+        # Sibling implementations of one extension point stay independent.
+        runner-rclone:
+          files: ["**/internal/worker/runner/rclone/**"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/worker/runner/restic
+              desc: runners must not import each other; share code via a separate package
+        runner-restic:
+          files: ["**/internal/worker/runner/restic/**"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/worker/runner/rclone
+              desc: runners must not import each other; share code via a separate package
+        transport-active:
+          files: ["**/internal/worker/transport/active/**", "**/internal/controller/dispatch/active/**"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/worker/transport/passive
+              desc: transports must not import each other; share code via internal/link
+            - pkg: github.com/Zeptiny/Syncr/internal/controller/dispatch/passive
+              desc: transports must not import each other; share code via internal/link
+        transport-passive:
+          files: ["**/internal/worker/transport/passive/**", "**/internal/controller/dispatch/passive/**"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/worker/transport/active
+              desc: transports must not import each other; share code via internal/link
+            - pkg: github.com/Zeptiny/Syncr/internal/controller/dispatch/active
+              desc: transports must not import each other; share code via internal/link
+
+  exclusions:
+    generated: strict
+    presets:
+      - std-error-handling
+    paths:
+      - ^gen/
+    rules:
+      - path: _test\.go
+        linters:
+          - gochecknoglobals
+          - gosec
+          - noctx
+          - sloglint # tests log deliberately unusual shapes
+      # The supervisor exists to launch configurable subprocesses; arguments
+      # are built from typed specs by runners, never from a shell string.
+      - path: internal/worker/proc/
+        text: "G204"
+        linters:
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/Zeptiny/Syncr
+  exclusions:
+    generated: strict
+    paths:
+      - ^gen/
