@@ -1,0 +1,18 @@
+# sqlc configuration: https://docs.sqlc.dev/en/latest/reference/config.html
+#
+# Generates the typed query layer of the Postgres store. The schema is the
+# goose migrations (sqlc ignores the "-- +goose Down" sections). Output is
+# committed; CI fails if `sqlc generate` changes anything. The sqlc version
+# is pinned in the Makefile and the CI workflow (SQLC_VERSION).
+version: "2"
+sql:
+  - engine: postgresql
+    schema: internal/adapters/postgres/migrations
+    queries: internal/adapters/postgres/queries
+    gen:
+      go:
+        package: db
+        out: internal/adapters/postgres/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true

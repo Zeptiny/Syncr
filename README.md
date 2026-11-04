@@ -162,7 +162,17 @@ secrets:
   key: ""                    # SYNCR_SECRETS_KEY: 32 random bytes, base64 (openssl rand -base64 32)
   key_id: 1                  # SYNCR_SECRETS_KEY_ID
   previous_keys: []          # SYNCR_SECRETS_PREVIOUS_KEYS: "<id>:<key>,..." kept for decryption while rotating
+database:
+  url: ""                    # SYNCR_DATABASE_URL: postgres://user:password@host:5432/syncr?sslmode=require
+  max_conns: 10              # SYNCR_DATABASE_MAX_CONNS: connection pool size
+  connect_timeout: 10s       # SYNCR_DATABASE_CONNECT_TIMEOUT
 ```
+
+The database URL contains the password; it is never logged or printed. The
+Postgres store applies its embedded schema migrations under an advisory lock,
+so several controllers can start at once. For local
+development, `make dev-up` starts Postgres with the credentials from
+`deploy/docker-compose.dev.yml`.
 
 The secrets key encrypts job specs and worker secrets at rest. Back it up:
 without it, stored secrets cannot be read.

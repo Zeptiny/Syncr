@@ -16,6 +16,9 @@ concurrency:
 env:
   GOLANGCI_LINT_VERSION: v2.15.0
   BUF_VERSION: "1.75.0"
+  # Run with `go run` (pinned here and in the Makefile), so no install step is
+  # needed and the generated code cannot depend on a stray local version.
+  SQLC_VERSION: v1.31.1
 
 jobs:
   lint:
@@ -63,6 +66,24 @@ jobs:
           buf generate
           git add -N gen
           git diff --exit-code -- gen
+
+  sqlc:
+    name: sqlc generate drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true # modules and build cache, keyed by go.sum
+          cache-dependency-path: go.sum
+      - name: sqlc vet
+        run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@${{ env.SQLC_VERSION }} vet
+      - name: Generated code is up to date
+        run: |
+          go run github.com/sqlc-dev/sqlc/cmd/sqlc@${{ env.SQLC_VERSION }} generate
+          git add -N internal/adapters/postgres/db
+          git diff --exit-code -- internal/adapters/postgres/db
 
   test:
     name: go test (${{ matrix.os }})

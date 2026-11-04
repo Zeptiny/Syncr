@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	platformconfig "github.com/Zeptiny/Syncr/internal/platform/config"
 	"github.com/Zeptiny/Syncr/internal/platform/logging"
+	"github.com/Zeptiny/Syncr/internal/platform/redact"
 )
 
 // testKey is 32 zero bytes in base64 (a test value, not a secret).
@@ -46,6 +48,16 @@ func TestValidate(t *testing.T) {
 		{"previous key id clash", func(c *Config) {
 			c.Secrets = Secrets{Key: testKey, KeyID: 1, PreviousKeys: []string{"1:" + testKey}}
 		}, "used twice"},
+		{"database url", func(c *Config) { c.Database.URL = "postgres://u:p@db:5432/syncr?sslmode=disable" }, ""},
+		{"database postgresql scheme", func(c *Config) { c.Database.URL = "postgresql://db/syncr" }, ""},
+		{"database socket host", func(c *Config) { c.Database.URL = "postgres:///syncr?host=/var/run/postgresql" }, ""},
+		{"database dsn", func(c *Config) { c.Database.URL = "host=db dbname=syncr" }, ""},
+		{"database wrong scheme", func(c *Config) { c.Database.URL = "mysql://u:p@db/x" }, "database.url: scheme"},
+		{"database no host", func(c *Config) { c.Database.URL = "postgres://u:p@/syncr" }, "database.url: missing host"},
+		{"database garbage", func(c *Config) { c.Database.URL = "not a url" }, "database.url: want"},
+		{"database bad url", func(c *Config) { c.Database.URL = "postgres://u:p@db:port/x" }, "database.url: not a valid URL"},
+		{"database zero conns", func(c *Config) { c.Database.MaxConns = 0 }, "database.max_conns"},
+		{"database zero timeout", func(c *Config) { c.Database.ConnectTimeout = 0 }, "database.connect_timeout"},
 		{"previous key malformed", func(c *Config) {
 			c.Secrets = Secrets{Key: testKey, KeyID: 1, PreviousKeys: []string{testKey}}
 		}, "previous_keys[0]: want <id>:<base64 key>"},
@@ -85,5 +97,49 @@ func TestLoad(t *testing.T) {
 	}
 	if cfg.Log.Format != logging.FormatText || cfg.Log.Level.String() != "DEBUG" {
 		t.Errorf("Log = %+v", cfg.Log)
+	}
+}
+
+func TestLoadDatabase(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "controller.yaml")
+	content := "database:\n  url: postgres://syncr:from-file@db/syncr\n  max_conns: 4\n  connect_timeout: 3s\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"SYNCR_DATABASE_URL": "postgres://syncr:hunter2@db:5432/syncr?sslmode=require", "SYNCR_DATABASE_MAX_CONNS": "25"}
+
+	cfg := Default()
+	if cfg.Database.Configured() {
+		t.Fatal("the default configuration must not name a database")
+	}
+	err := platformconfig.Load(path, func(k string) (string, bool) { v, ok := env[k]; return v, ok }, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := cfg.Database
+	if !db.Configured() || db.URL.Reveal() != env["SYNCR_DATABASE_URL"] || db.MaxConns != 25 || db.ConnectTimeout != 3*time.Second {
+		t.Errorf("Database = %+v", db)
+	}
+	// The URL carries the password: no formatting of the config may show it.
+	for _, out := range []string{fmt.Sprintf("%v", cfg), fmt.Sprintf("%+v", cfg), fmt.Sprintf("%#v", cfg)} {
+		if strings.Contains(out, "hunter2") {
+			t.Errorf("config formatting leaks the database password: %s", out)
+		}
+	}
+}
+
+func TestDatabaseErrorsDoNotEchoTheURL(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"postgres://u:hunter2@db:port/x", "mysql://u:hunter2@db/x", "hunter2 is not a url"} {
+		cfg := Default()
+		cfg.Database.URL = redact.Secret(raw)
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatalf("%q validated", raw)
+		}
+		if strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("error echoes the URL: %v", err)
+		}
 	}
 }

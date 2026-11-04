@@ -13,11 +13,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Zeptiny/Syncr/internal/platform/logging"
+	"github.com/Zeptiny/Syncr/internal/platform/redact"
 )
 
 // Config is the controller configuration.
@@ -26,7 +28,27 @@ type Config struct {
 	Log     logging.Config `yaml:"log"`
 	Secrets Secrets        `yaml:"secrets"`
 	API     API            `yaml:"api"`
+	// Database configures the Postgres store.
+	Database Database `yaml:"database"`
 }
+
+// Database configures the Postgres connection pool (internal/adapters/postgres).
+type Database struct {
+	// URL is the connection string, a postgres:// URL or a key/value DSN,
+	// e.g. postgres://syncr:password@db:5432/syncr?sslmode=require. It is
+	// empty until the controller is deployed against a database; Configured
+	// reports whether it is set. It is a redact.Secret because it carries the
+	// password: it is never printed or logged.
+	URL redact.Secret `yaml:"url" env:"SYNCR_DATABASE_URL"`
+	// MaxConns is the maximum number of pooled connections.
+	MaxConns int32 `yaml:"max_conns" env:"SYNCR_DATABASE_MAX_CONNS"`
+	// ConnectTimeout bounds opening one connection and the first ping at
+	// startup.
+	ConnectTimeout time.Duration `yaml:"connect_timeout" env:"SYNCR_DATABASE_CONNECT_TIMEOUT"`
+}
+
+// Configured reports whether a database URL is set.
+func (d Database) Configured() bool { return strings.TrimSpace(d.URL.Reveal()) != "" }
 
 // Secrets configures the encryption of secrets at rest (job specs, worker
 // secrets) with AES-256-GCM (internal/adapters/secrets). Keys are 32 random
@@ -73,12 +95,16 @@ func Default() Config {
 		Log:     logging.DefaultConfig(),
 		Secrets: Secrets{KeyID: 1},
 		API:     DefaultAPI(),
+		Database: Database{
+			MaxConns:       10,
+			ConnectTimeout: 10 * time.Second,
+		},
 	}
 }
 
 // Validate reports every invalid setting.
 func (c *Config) Validate() error {
-	return errors.Join(c.HTTP.validate(), c.Log.Validate(), c.Secrets.validate(), c.API.validate())
+	return errors.Join(c.HTTP.validate(), c.Log.Validate(), c.Secrets.validate(), c.API.validate(), c.Database.validate())
 }
 
 func (h HTTP) validate() error {
@@ -93,6 +119,45 @@ func (h HTTP) validate() error {
 		errs = append(errs, errors.New("http.shutdown_timeout must be positive"))
 	}
 	return errors.Join(errs...)
+}
+
+func (d Database) validate() error {
+	var errs []error
+	if d.Configured() {
+		if err := validateDatabaseURL(d.URL.Reveal()); err != nil {
+			errs = append(errs, fmt.Errorf("database.url: %w", err))
+		}
+	}
+	if d.MaxConns < 1 {
+		errs = append(errs, errors.New("database.max_conns must be at least 1"))
+	}
+	if d.ConnectTimeout <= 0 {
+		errs = append(errs, errors.New("database.connect_timeout must be positive"))
+	}
+	return errors.Join(errs...)
+}
+
+// validateDatabaseURL accepts a postgres:// or postgresql:// URL with a host
+// or socket path, or a libpq key/value DSN. It never echoes the value: the
+// string carries the password, and url.Parse errors quote their input.
+func validateDatabaseURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if !strings.Contains(raw, "://") {
+		if !strings.Contains(raw, "=") {
+			return errors.New("want a postgres:// URL or a key=value connection string")
+		}
+		return nil
+	}
+	u, err := url.Parse(raw)
+	switch {
+	case err != nil:
+		return errors.New("not a valid URL")
+	case u.Scheme != "postgres" && u.Scheme != "postgresql":
+		return errors.New("scheme must be postgres or postgresql")
+	case u.Host == "" && u.Query().Get("host") == "":
+		return errors.New("missing host")
+	}
+	return nil
 }
 
 func (s Secrets) validate() error {
