@@ -25,6 +25,7 @@ type Config struct {
 	HTTP    HTTP           `yaml:"http"`
 	Log     logging.Config `yaml:"log"`
 	Secrets Secrets        `yaml:"secrets"`
+	API     API            `yaml:"api"`
 }
 
 // Secrets configures the encryption of secrets at rest (job specs, worker
@@ -71,12 +72,13 @@ func Default() Config {
 		},
 		Log:     logging.DefaultConfig(),
 		Secrets: Secrets{KeyID: 1},
+		API:     DefaultAPI(),
 	}
 }
 
 // Validate reports every invalid setting.
 func (c *Config) Validate() error {
-	return errors.Join(c.HTTP.validate(), c.Log.Validate(), c.Secrets.validate())
+	return errors.Join(c.HTTP.validate(), c.Log.Validate(), c.Secrets.validate(), c.API.validate())
 }
 
 func (h HTTP) validate() error {
