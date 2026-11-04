@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	platformconfig "github.com/Zeptiny/Syncr/internal/platform/config"
 )
@@ -51,6 +52,21 @@ func TestDefaultsDenyLocalAccessAndDownload(t *testing.T) {
 	}
 	if len(cfg.LocalRoots) != 0 || cfg.Tools.Download || cfg.DataDir != "" || cfg.Tools.Dir != "" {
 		t.Errorf("Default() = %+v, want empty roots, no download and platform default directories", cfg)
+	}
+	if cfg.MaxConcurrentJobs != 2 || cfg.ProgressInterval != time.Second {
+		t.Errorf("job defaults = %d, %s", cfg.MaxConcurrentJobs, cfg.ProgressInterval)
+	}
+}
+
+func TestJobSettings(t *testing.T) {
+	t.Parallel()
+	cfg, err := load(t, "max_concurrent_jobs: 4\nprogress_interval: 2s\n", nil)
+	if err != nil || cfg.MaxConcurrentJobs != 4 || cfg.ProgressInterval != 2*time.Second {
+		t.Fatalf("from YAML: %d, %s, %v", cfg.MaxConcurrentJobs, cfg.ProgressInterval, err)
+	}
+	cfg, err = load(t, "max_concurrent_jobs: 4\n", map[string]string{"SYNCR_MAX_CONCURRENT_JOBS": "8", "SYNCR_PROGRESS_INTERVAL": "500ms"})
+	if err != nil || cfg.MaxConcurrentJobs != 8 || cfg.ProgressInterval != 500*time.Millisecond {
+		t.Fatalf("from env: %d, %s, %v", cfg.MaxConcurrentJobs, cfg.ProgressInterval, err)
 	}
 }
 
@@ -144,6 +160,10 @@ func TestValidate(t *testing.T) {
 		{name: "NUL in root", mutate: func(c *Config) { c.LocalRoots = []string{abs + "\x00"} }, want: []string{"NUL"}},
 		{name: "duplicate root", mutate: func(c *Config) { c.LocalRoots = []string{abs, filepath.Join(abs, "x", "..")} }, want: []string{"local_roots[1]", "more than once"}},
 		{name: "bad log format", mutate: func(c *Config) { c.Log.Format = "xml" }, want: []string{"format"}},
+		{name: "no job slots", mutate: func(c *Config) { c.MaxConcurrentJobs = 0 }, want: []string{"max_concurrent_jobs", "outside 1..64"}},
+		{name: "too many job slots", mutate: func(c *Config) { c.MaxConcurrentJobs = 65 }, want: []string{"max_concurrent_jobs"}},
+		{name: "progress too often", mutate: func(c *Config) { c.ProgressInterval = 10 * time.Millisecond }, want: []string{"progress_interval"}},
+		{name: "progress too rare", mutate: func(c *Config) { c.ProgressInterval = time.Hour }, want: []string{"progress_interval"}},
 		{name: "everything at once", mutate: func(c *Config) {
 			c.DataDir = "d"
 			c.LocalRoots = []string{"r"}

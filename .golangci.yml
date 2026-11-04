@@ -294,6 +294,41 @@ linters:
             - pkg: github.com/Zeptiny/Syncr/internal/adapters
               desc: worker code must not import controller adapters
 
+        # The worker link core: outbox <- agent <- linkcore <- transports.
+        # The outbox is a leaf that knows only events.
+        worker-outbox:
+          list-mode: strict
+          files: ["**/internal/worker/outbox/**"]
+          allow:
+            - $gostd
+            - github.com/Zeptiny/Syncr/gen
+            - google.golang.org/protobuf
+        # The agent runs jobs through the runner contract; concrete runners
+        # and tools are wired in cmd/, and it knows nothing of transports.
+        worker-agent:
+          files: ["**/internal/worker/agent/**", "!$test"]
+          deny:
+            - pkg: github.com/Zeptiny/Syncr/internal/worker/runner/
+              desc: the agent uses the runner contract; concrete runners are registered in cmd/
+            - pkg: github.com/Zeptiny/Syncr/internal/worker/proc
+              desc: the agent uses the runner contract, not processes
+            - pkg: github.com/Zeptiny/Syncr/internal/worker/tools
+              desc: tool versions reach the agent as constructor inputs from cmd/
+            - pkg: github.com/Zeptiny/Syncr/internal/worker/linkcore
+              desc: linkcore builds on the agent, not the reverse
+            - pkg: github.com/Zeptiny/Syncr/internal/worker/transport
+              desc: transports build on linkcore, not the reverse
+        # linkcore maps envelopes to agent calls; no networking, no runners.
+        worker-linkcore:
+          list-mode: strict
+          files: ["**/internal/worker/linkcore/**", "!$test"]
+          allow:
+            - $gostd
+            - github.com/Zeptiny/Syncr/gen
+            - google.golang.org/protobuf
+            - github.com/Zeptiny/Syncr/internal/worker/agent
+            - github.com/Zeptiny/Syncr/internal/worker/outbox
+
         # Sibling implementations of one extension point stay independent.
         runner-rclone:
           files: ["**/internal/worker/runner/rclone/**"]
