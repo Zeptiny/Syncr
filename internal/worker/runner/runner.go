@@ -17,6 +17,7 @@ package runner
 import (
 	"context"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/types/known/durationpb"
 
@@ -90,6 +91,44 @@ type Result struct {
 	// Output is the kind-specific output (e.g. the snapshot ID of a restic
 	// backup). Nil for kinds without output and for failed runs.
 	Output *syncrv1.JobOutput
+
+	// Warnings are non-fatal problems of a run that returned a nil error,
+	// for example "3 items could not be read" for a restic backup that
+	// created its snapshot. They are reported as JobResult.warnings. Runners
+	// scrub them of secrets and bound them with LimitWarnings.
+	Warnings []string
+}
+
+// Bounds of Result.Warnings, matching the JobResult.warnings contract.
+const (
+	// MaxWarnings is the maximum number of warnings of one result.
+	MaxWarnings = 10
+	// MaxWarningBytes is the maximum length of one warning in bytes.
+	MaxWarningBytes = 500
+)
+
+// LimitWarnings returns warnings without empty entries, each clipped to
+// MaxWarningBytes on a UTF-8 boundary (with a "..." suffix when clipped), and
+// at most MaxWarnings of them. It returns nil if nothing is left.
+func LimitWarnings(warnings []string) []string {
+	var out []string
+	for _, w := range warnings {
+		if w == "" {
+			continue
+		}
+		if len(out) == MaxWarnings {
+			break
+		}
+		if len(w) > MaxWarningBytes {
+			cut := MaxWarningBytes
+			for cut > 0 && !utf8.RuneStart(w[cut]) {
+				cut--
+			}
+			w = w[:cut] + "..."
+		}
+		out = append(out, w)
+	}
+	return out
 }
 
 // EmitFunc publishes a progress snapshot of the running job.

@@ -20,15 +20,20 @@ import (
 // Environment variables read by the tools commands.
 const (
 	toolsDirEnv = "SYNCR_TOOLS_DIR"
+	dataDirEnv  = "SYNCR_DATA_DIR"
 	// A tool's explicit binary path is SYNCR_<TOOL>_PATH, e.g. SYNCR_RCLONE_PATH.
 )
 
-// toolsOverrides lets tests replace the manifest and the network; the zero
-// value means the pinned tools and the real network.
+// toolsOverrides lets tests replace the manifest, the network and the version
+// runner; the zero value means the pinned tools, the real network and the
+// real supervisor.
 type toolsOverrides struct {
 	manifest   *tools.Manifest
 	httpClient *http.Client
 	baseURL    string
+	// runner runs "<tool> version" when resolving tools for the worker; nil
+	// means the worker's process supervisor.
+	runner tools.Runner
 }
 
 func (o toolsOverrides) pinned() tools.Manifest {
@@ -68,7 +73,10 @@ func toolsCmd(ctx context.Context, e *env, args []string) error {
 }
 
 // toolsDir resolves the tools directory: the flag, else $SYNCR_TOOLS_DIR,
-// else <worker data dir>/tools.
+// else <data dir>/tools where the data directory is $SYNCR_DATA_DIR or the
+// platform default. These are the same rules `run` applies to the
+// environment; a data_dir or tools.dir set only in a config file is not seen
+// here, so pass --dir for those.
 func toolsDir(e *env, flagValue string) (string, error) {
 	if flagValue != "" {
 		return flagValue, nil
@@ -76,7 +84,10 @@ func toolsDir(e *env, flagValue string) (string, error) {
 	if v, ok := e.lookupEnv(toolsDirEnv); ok && v != "" {
 		return v, nil
 	}
-	pe := paths.Env{GOOS: runtime.GOOS, LookupEnv: e.lookupEnv, UserHomeDir: os.UserHomeDir, Geteuid: os.Geteuid}
+	if v, ok := e.lookupEnv(dataDirEnv); ok && v != "" {
+		return paths.ToolsDir(v), nil
+	}
+	pe := e.pathsEnv()
 	data, err := paths.DataDir(paths.DefaultMode(pe), pe)
 	if err != nil {
 		return "", fmt.Errorf("find the worker data directory (use --dir): %w", err)

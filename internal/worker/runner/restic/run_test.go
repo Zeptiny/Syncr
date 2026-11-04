@@ -3,6 +3,7 @@ package restic
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"slices"
@@ -257,16 +258,17 @@ func TestExitCodes(t *testing.T) {
 	tests := []struct {
 		code     int
 		sentinel error
+		wire     syncrv1.JobErrorCode
 		contains string
 	}{
-		{1, nil, "command failed (exit code 1)"},
-		{2, nil, "internal error in restic (exit code 2)"},
-		{3, nil, "some source data could not be read (exit code 3)"}, // not a backup
-		{10, ErrRepositoryNotFound, "repository does not exist (exit code 10)"},
-		{11, ErrRepositoryLocked, "repository is locked by another operation (exit code 11)"},
-		{12, ErrWrongPassword, "wrong repository password (exit code 12)"},
-		{130, ErrInterrupted, "interrupted (exit code 130)"},
-		{42, nil, "(exit code 42)"},
+		{1, nil, failed, "command failed (exit code 1)"},
+		{2, nil, failed, "internal error in restic (exit code 2)"},
+		{3, nil, failed, "some source data could not be read (exit code 3)"}, // not a backup
+		{10, ErrRepositoryNotFound, syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_NOT_FOUND, "repository does not exist (exit code 10)"},
+		{11, ErrRepositoryLocked, syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_LOCKED, "repository is locked by another operation (exit code 11)"},
+		{12, ErrWrongPassword, syncrv1.JobErrorCode_JOB_ERROR_CODE_WRONG_PASSWORD, "wrong repository password (exit code 12)"},
+		{130, ErrInterrupted, failed, "interrupted (exit code 130)"},
+		{42, nil, failed, "(exit code 42)"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.contains, func(t *testing.T) {
@@ -274,7 +276,7 @@ func TestExitCodes(t *testing.T) {
 			te := newTestEnv(t)
 			te.sup.exited(tc.code).stderr = []string{`{"message_type":"exit_error","code":1,"message":"Fatal: details from restic"}`}
 			res, _, err := te.run(pruneSpec())
-			mustFail(t, err, failed)
+			mustFail(t, err, tc.wire)
 			if res.ExitCode != tc.code {
 				t.Errorf("ExitCode = %d, want %d", res.ExitCode, tc.code)
 			}
@@ -341,6 +343,54 @@ func TestBackupWithUnreadableFilesSucceedsWithWarnings(t *testing.T) {
 	}
 	if res.Stats.Errors != 1 {
 		t.Errorf("Stats.Errors = %d, want 1 (one unreadable directory)", res.Stats.Errors)
+	}
+	if len(res.Warnings) != 2 ||
+		res.Warnings[0] != "1 item could not be read; the snapshot is incomplete" ||
+		!strings.Contains(res.Warnings[1], "/srv/data/src/locked") ||
+		!strings.Contains(res.Warnings[1], "permission denied") {
+		t.Errorf("Warnings = %q, want the count and the reason for the unreadable directory", res.Warnings)
+	}
+}
+
+func TestBackupWarningsAreScrubbedAndBounded(t *testing.T) {
+	t.Parallel()
+	te := newTestEnv(t)
+	te.sup.exited(3)
+	te.sup.stdout = fixture(t, "backup_warn.out")[:1] // the summary only
+	for i := range 30 {
+		item := fmt.Sprintf("/data/f%02d", i)
+		msg := "open " + item + ": denied " + testSecret + strings.Repeat("x", 800)
+		te.sup.stderr = append(te.sup.stderr,
+			fmt.Sprintf(`{"message_type":"error","error":{"message":%q},"during":"archival","item":%q}`, msg, item))
+	}
+	res, _, err := te.run(backupSpec(remoteRepo(), &syncrv1.ResticBackup{Paths: []string{te.local("src")}}))
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if res.Stats.Errors != 30 || res.Warnings[0] != "30 items could not be read; the snapshot is incomplete" {
+		t.Errorf("Errors = %d, Warnings[0] = %q", res.Stats.Errors, res.Warnings[0])
+	}
+	if len(res.Warnings) != runner.MaxWarnings {
+		t.Errorf("len(Warnings) = %d, want %d", len(res.Warnings), runner.MaxWarnings)
+	}
+	for _, w := range res.Warnings {
+		if strings.Contains(w, testSecret) {
+			t.Errorf("warning leaks a secret: %q", w)
+		}
+		if len(w) > runner.MaxWarningBytes+len("...") {
+			t.Errorf("warning has %d bytes", len(w))
+		}
+	}
+}
+
+func TestCleanBackupHasNoWarnings(t *testing.T) {
+	t.Parallel()
+	te := newTestEnv(t)
+	te.sup.exited(0)
+	te.sup.stdout = fixture(t, "backup.out")
+	res, _, err := te.run(backupSpec(remoteRepo(), &syncrv1.ResticBackup{Paths: []string{te.local("src")}}))
+	if err != nil || len(res.Warnings) != 0 {
+		t.Errorf("err = %v, Warnings = %q", err, res.Warnings)
 	}
 }
 

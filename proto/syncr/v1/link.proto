@@ -304,7 +304,14 @@ message JobResult {
   // Kind-specific output; unset for kinds without output (e.g. transfers).
   JobOutput output = 8;
 
-  reserved 9 to 19;
+  // Non-fatal problems of a job that nevertheless SUCCEEDED, for example
+  // "3 items could not be read" for a restic backup that exited with code 3
+  // after creating its snapshot. Scrubbed of secrets, at most 10 entries of
+  // at most 500 bytes each. Empty for a clean run and for FAILED or
+  // CANCELLED jobs (their error carries the reason).
+  repeated string warnings = 9;
+
+  reserved 10 to 19;
 }
 
 // JobOutput is the kind-specific output of a finished job. Field names match
@@ -360,11 +367,21 @@ enum JobErrorCode {
   // A source or destination (directory, file, repository) does not exist.
   JOB_ERROR_CODE_NOT_FOUND = 7;
   // The tool reported a temporary failure that retrying the job may fix
-  // (network errors, rate limits, a locked repository).
+  // (network errors, rate limits).
   JOB_ERROR_CODE_TEMPORARY = 8;
   // The job stopped because a limit from its spec was reached (e.g. rclone
   // --max-transfer or --max-duration); the work done so far is kept.
   JOB_ERROR_CODE_LIMIT_REACHED = 9;
+  // The restic repository does not exist at the given location (restic exit
+  // code 10). Run restic_init first or fix the location.
+  JOB_ERROR_CODE_REPOSITORY_NOT_FOUND = 10;
+  // The restic repository is locked by another operation (restic exit code
+  // 11). The controller serializes jobs per repository, so this means a stale
+  // lock or a client outside Syncr; retrying later may succeed.
+  JOB_ERROR_CODE_REPOSITORY_LOCKED = 11;
+  // The restic repository password is wrong (restic exit code 12). Retrying
+  // cannot succeed.
+  JOB_ERROR_CODE_WRONG_PASSWORD = 12;
 }
 
 // WorkerState is a snapshot (not an event) of the jobs a worker currently
@@ -669,7 +686,9 @@ message ResticBackup {
   // --host override; empty uses the worker's host name.
   string host = 5;
 
-  // --use-fs-snapshot (Windows VSS). Ignored on other platforms.
+  // --use-fs-snapshot (Windows VSS). Setting it on a worker that is not
+  // running on Windows is an error (INVALID_SPEC), not silently ignored: the
+  // caller asked for a consistent snapshot that cannot be provided.
   bool use_fs_snapshot = 6;
 
   // --exclude-caches: skip directories containing a CACHEDIR.TAG.
@@ -742,6 +761,8 @@ message ResticForget {
 
 // ResticForgetOutput lists the snapshots removed by forget.
 message ResticForgetOutput {
+  // IDs of the snapshots removed. When ResticForget.dry_run is set nothing was
+  // removed and this lists the snapshots that WOULD be removed.
   repeated string removed_snapshot_ids = 1;
 
   reserved 2 to 9;

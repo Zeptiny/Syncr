@@ -162,6 +162,23 @@ func (b *Builder) Remotes(remotes []*syncrv1.RemoteDefinition) (*Env, error) {
 	return env, nil
 }
 
+// Env returns the variables that define remotes (RCLONE_CONFIG_<ALIAS>_*
+// only), after the same validation as Build. It adapts the Builder to the
+// restic runner's RemoteEnv port: restic starts rclone itself, passes it
+// "--config=" and its own scratch directory, so the isolation variables of
+// Build are neither needed nor wanted there. Secrets are included in clear
+// (or obscured, per ObscureKeys); the map is the caller's to modify.
+//
+// The restic package does not import this one and this one does not import
+// restic: the composition root checks that *Builder satisfies the port.
+func (b *Builder) Env(remotes []*syncrv1.RemoteDefinition) (map[string]string, error) {
+	env, err := b.Remotes(remotes)
+	if err != nil {
+		return nil, err
+	}
+	return env.Vars(), nil
+}
+
 // Isolate creates an empty rclone config file and a cache directory inside
 // dir and returns the variables that point rclone at them, so a host
 // rclone.conf (e.g. a desktop user's ~/.config/rclone/rclone.conf) is never

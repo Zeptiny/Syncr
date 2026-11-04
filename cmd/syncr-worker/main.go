@@ -14,10 +14,12 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"github.com/Zeptiny/Syncr/internal/platform/config"
 	"github.com/Zeptiny/Syncr/internal/platform/version"
+	"github.com/Zeptiny/Syncr/internal/worker/paths"
 )
 
 const name = "syncr-worker"
@@ -47,6 +49,11 @@ type env struct {
 	lookupEnv      config.LookupEnv
 	info           version.Info
 	tools          toolsOverrides // zero value: pinned tools, real network
+}
+
+// pathsEnv returns the environment for locating the default data directory.
+func (e *env) pathsEnv() paths.Env {
+	return paths.Env{GOOS: runtime.GOOS, LookupEnv: e.lookupEnv, UserHomeDir: os.UserHomeDir, Geteuid: os.Geteuid}
 }
 
 // command is one subcommand. Adding a subcommand means adding an entry to

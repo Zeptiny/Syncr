@@ -11,8 +11,10 @@ import (
 	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
 )
 
-// runCmd starts the worker and blocks until ctx is cancelled (SIGINT or
-// SIGTERM). Milestone 2 starts the link transport and job agent here.
+// runCmd assembles the worker (tools, local_roots policy, runners) and blocks
+// until ctx is cancelled (SIGINT or SIGTERM). A startup failure, such as a
+// missing tool, is returned and ends the process with a non-zero exit code.
+// Milestone 2 starts the link transport and job agent after buildWorker.
 func runCmd(ctx context.Context, e *env, args []string) error {
 	fs := newFlagSet(e, "run")
 	configPath := fs.String("config", "", "path to the YAML config file (default $"+config.PathEnv+"; optional)")
@@ -33,8 +35,17 @@ func runCmd(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 
-	logger.Info("worker started",
+	logger.Info("worker starting",
 		"version", e.info.Version, "commit", e.info.Commit, "os", runtime.GOOS, "arch", runtime.GOARCH)
+	w, err := buildWorker(ctx, cfg, workerDeps{
+		paths:      e.pathsEnv(),
+		bundledDir: executableDir(),
+		tools:      e.tools,
+	}, logger)
+	if err != nil {
+		return err
+	}
+	logger.Info("worker ready", "job_kinds", w.registry.Kinds())
 	logger.Warn("worker link not implemented yet; idling until stopped")
 	<-ctx.Done()
 	logger.Info("worker stopped")

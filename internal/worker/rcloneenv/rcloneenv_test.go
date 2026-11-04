@@ -434,3 +434,39 @@ func TestRemotePath(t *testing.T) {
 		t.Errorf("RemotePath() = %q", got)
 	}
 }
+
+func TestBuilderEnvReturnsOnlyRemoteVariables(t *testing.T) {
+	t.Parallel()
+	b := NewBuilder(nil)
+	vars, err := b.Env([]*syncrv1.RemoteDefinition{
+		remote("bk", "s3", withOptions("provider", "Minio"), withSecrets("secret_access_key", "s3cret")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vars["RCLONE_CONFIG_BK_TYPE"] != "s3" || vars["RCLONE_CONFIG_BK_PROVIDER"] != "Minio" ||
+		vars["RCLONE_CONFIG_BK_SECRET_ACCESS_KEY"] != "s3cret" {
+		t.Errorf("vars = %v", vars)
+	}
+	for k := range vars {
+		if !strings.HasPrefix(k, "RCLONE_CONFIG_BK_") {
+			t.Errorf("unexpected variable %q: only remote definitions belong here", k)
+		}
+	}
+	if _, ok := vars[EnvConfig]; ok {
+		t.Errorf("isolation variable %s leaked into the restic environment", EnvConfig)
+	}
+
+	// The same validation as Build applies.
+	_, err = b.Env([]*syncrv1.RemoteDefinition{remote("loc", "local")})
+	if !errors.Is(err, ErrInvalidRemote) {
+		t.Errorf("Env(local backend) err = %v, want ErrInvalidRemote", err)
+	}
+
+	// The returned map is a copy.
+	vars["RCLONE_CONFIG_BK_TYPE"] = "changed"
+	again, err := b.Env([]*syncrv1.RemoteDefinition{remote("bk", "s3")})
+	if err != nil || again["RCLONE_CONFIG_BK_TYPE"] != "s3" {
+		t.Errorf("second Env = %v, %v", again, err)
+	}
+}

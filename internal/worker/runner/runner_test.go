@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -153,5 +155,37 @@ func TestProgressProto(t *testing.T) {
 	}
 	if got := p.Proto(); !proto.Equal(got, want) {
 		t.Errorf("Proto() = %v, want %v", got, want)
+	}
+}
+
+func TestLimitWarnings(t *testing.T) {
+	t.Parallel()
+	if got := LimitWarnings(nil); got != nil {
+		t.Errorf("LimitWarnings(nil) = %v, want nil", got)
+	}
+	if got := LimitWarnings([]string{"", ""}); got != nil {
+		t.Errorf("LimitWarnings(empty entries) = %v, want nil", got)
+	}
+
+	many := make([]string, 25)
+	for i := range many {
+		many[i] = "warning"
+	}
+	if got := LimitWarnings(many); len(got) != MaxWarnings {
+		t.Errorf("len = %d, want %d", len(got), MaxWarnings)
+	}
+
+	// Clipping never splits a multi-byte rune.
+	long := strings.Repeat("é", MaxWarningBytes) // 2 bytes per rune
+	got := LimitWarnings([]string{long})
+	if len(got) != 1 || !utf8.ValidString(got[0]) || !strings.HasSuffix(got[0], "...") {
+		t.Fatalf("clipped = %q", got)
+	}
+	if len(got[0]) > MaxWarningBytes+len("...") {
+		t.Errorf("len = %d, want at most %d", len(got[0]), MaxWarningBytes+3)
+	}
+
+	if got := LimitWarnings([]string{"short"}); len(got) != 1 || got[0] != "short" {
+		t.Errorf("short warning changed: %v", got)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +104,27 @@ func (it *itest) run(ctx context.Context, t *testing.T, mode syncrv1.RcloneTrans
 
 func local(path string) *syncrv1.Location { return &syncrv1.Location{Path: path} }
 
+// quirky returns a file or directory name with characters that would break a
+// shell, a connection string or an INI file. Windows forbids the double quote
+// in names, so there it is left out; the other characters stay.
+func quirky(name string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ReplaceAll(name, `"`, "")
+	}
+	return name
+}
+
+// requireContainers skips the test where Docker cannot run Linux containers:
+// on Windows, GitHub's runners only offer Windows containers, and a
+// developer's Docker may be unavailable or in Windows-container mode.
+func requireContainers(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: testcontainers needs Linux containers, and Windows CI runners only run Windows containers")
+	}
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+}
+
 // writeFiles creates files with random content and returns their total size.
 func writeFiles(t *testing.T, root string, files map[string]int) int64 {
 	t.Helper()
@@ -168,7 +190,7 @@ func TestIntegrationLocalCopySyncMove(t *testing.T) {
 	t.Setenv("RCLONE_CONFIG_SRC_TYPE", "memory")
 
 	src, dst := it.dir(t, "src"), it.dir(t, "dst")
-	total := writeFiles(t, src, map[string]int{"a.txt": 10, "sub/b.bin": 300_000, "sub/deeper/c.bin": 70_000, "with space 'q\".txt": 5})
+	total := writeFiles(t, src, map[string]int{"a.txt": 10, "sub/b.bin": 300_000, "sub/deeper/c.bin": 70_000, quirky("with space 'q\".txt"): 5})
 	want := tree(t, src)
 
 	// copy
@@ -277,6 +299,8 @@ func TestIntegrationCancelMidTransfer(t *testing.T) {
 		// SIGINT handler only when a backend registers cleanup work (the
 		// local backend removes partial files); otherwise the default
 		// action kills it, which is fine as there is nothing to clean up.
+		// Windows has no SIGINT for console programs: the supervisor kills
+		// the process, so there only "terminated, not successful" is checked.
 		graceful bool
 	}{
 		{"local destination", 32 << 20, func(it *itest) *syncrv1.Location { return local(filepath.Join(it.root, "dst")) }, true},
@@ -291,6 +315,11 @@ func TestIntegrationCancelMidTransfer(t *testing.T) {
 			f, err := os.Create(filepath.Join(src, "huge.bin"))
 			if err != nil {
 				t.Fatal(err)
+			}
+			// Unix filesystems make the extended file sparse by themselves;
+			// NTFS needs it asked for, or Truncate would allocate the size.
+			if err := markSparse(f); err != nil {
+				t.Logf("cannot mark the file sparse (it will occupy %d bytes): %v", tt.size, err)
 			}
 			if err := f.Truncate(tt.size); err != nil {
 				t.Fatal(err)
@@ -325,7 +354,12 @@ func TestIntegrationCancelMidTransfer(t *testing.T) {
 			if elapsed := time.Since(start); elapsed > 15*time.Second {
 				t.Errorf("cancel took %v", elapsed)
 			}
-			if tt.graceful && res.ExitCode != 130 {
+			switch {
+			case runtime.GOOS == "windows":
+				if res.ExitCode == 0 {
+					t.Errorf("exit code 0 after a cancelled transfer; the process should have been killed")
+				}
+			case tt.graceful && res.ExitCode != 130:
 				t.Errorf("exit code %d, want 130 (rclone stopped on SIGINT)", res.ExitCode)
 			}
 			if samples == 0 || res.Stats.Bytes == 0 || res.Stats.Bytes >= tt.size {
@@ -360,7 +394,7 @@ func TestIntegrationMissingSource(t *testing.T) {
 
 func TestIntegrationUnionOfLocalDirs(t *testing.T) {
 	it := newITest(t)
-	a, b, dst := it.dir(t, "a dir"), it.dir(t, "b \"dir\""), it.dir(t, "dst")
+	a, b, dst := it.dir(t, "a dir"), it.dir(t, quirky("b \"dir\"")), it.dir(t, "dst")
 	writeFiles(t, a, map[string]int{"from-a.txt": 10, "shared/x.txt": 5})
 	writeFiles(t, b, map[string]int{"from-b.txt": 20, "shared/y.txt": 6})
 
@@ -443,7 +477,7 @@ func cloneDef(d *syncrv1.RemoteDefinition) *syncrv1.RemoteDefinition {
 
 func TestIntegrationMinIO(t *testing.T) {
 	it := newITest(t)
-	testcontainers.SkipIfProviderIsNotHealthy(t)
+	requireContainers(t)
 	// The secret contains characters that would break a connection string
 	// or an INI file; MinIO only accepts the request signatures if it
 	// arrives intact.
@@ -475,7 +509,7 @@ func TestIntegrationMinIO(t *testing.T) {
 
 func TestIntegrationSFTP(t *testing.T) {
 	it := newITest(t)
-	testcontainers.SkipIfProviderIsNotHealthy(t)
+	requireContainers(t)
 	// atmoz/sftp splits its argument on ":", so the password avoids it.
 	const user, pass = "syncr", `p'a"s,s w$rd`
 	ctr, err := testcontainers.Run(t.Context(), sftpImage,

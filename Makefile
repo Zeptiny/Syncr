@@ -24,9 +24,11 @@ GOOS   ?= $(shell $(GO) env GOOS)
 GOARCH ?= $(shell $(GO) env GOARCH)
 EXE    := $(if $(filter windows,$(GOOS)),.exe,)
 
-# Binaries used by integration tests (override to point at pinned tools).
-SYNCR_TEST_RCLONE ?= $(shell command -v rclone 2>/dev/null)
-SYNCR_TEST_RESTIC ?= $(shell command -v restic 2>/dev/null)
+# Pinned rclone/restic used by integration tests. `make tools` downloads them
+# (checksum-verified) into TOOLS_DIR. To use other binaries instead, set
+# SYNCR_TEST_RCLONE and SYNCR_TEST_RESTIC (environment or make arguments);
+# they must report the pinned versions, see `syncr-worker tools status`.
+TOOLS_DIR ?= $(CURDIR)/.cache/tools
 
 .PHONY: help
 help: ## Show this help
@@ -50,10 +52,26 @@ test: ## Run unit tests
 test-race: ## Run unit tests with the race detector (needs cgo)
 	CGO_ENABLED=1 $(GO) test -race ./...
 
+.PHONY: tools
+tools: ## Fetch the pinned rclone and restic into .cache/tools (TOOLS_DIR)
+	$(GO) run ./cmd/syncr-worker tools fetch --dir "$(TOOLS_DIR)"
+
+# Integration tests need the pinned tools and, for the MinIO tests, Docker.
+# Setting both SYNCR_TEST_RCLONE and SYNCR_TEST_RESTIC skips the fetch;
+# otherwise missing ones come from `tools fetch`, whose last output column is
+# the binary's path.
 .PHONY: test-integration
-test-integration: ## Run integration tests against real rclone/restic binaries
-	SYNCR_TEST_RCLONE="$(SYNCR_TEST_RCLONE)" SYNCR_TEST_RESTIC="$(SYNCR_TEST_RESTIC)" \
-		$(GO) test -tags integration -count=1 ./...
+test-integration: ## Run integration tests against the pinned tools (fetched like `make tools`)
+	@set -e; \
+	rclone='$(SYNCR_TEST_RCLONE)'; restic='$(SYNCR_TEST_RESTIC)'; \
+	if [ -z "$$rclone" ] || [ -z "$$restic" ]; then \
+		out=$$($(GO) run ./cmd/syncr-worker tools fetch --dir "$(TOOLS_DIR)"); \
+		echo "$$out"; \
+		[ -n "$$rclone" ] || rclone=$$(echo "$$out" | sed -n 's/^rclone  *[^ ]*  *[^ ]*  *[^ ]*  *//p'); \
+		[ -n "$$restic" ] || restic=$$(echo "$$out" | sed -n 's/^restic  *[^ ]*  *[^ ]*  *[^ ]*  *//p'); \
+	fi; \
+	echo "SYNCR_TEST_RCLONE=$$rclone"; echo "SYNCR_TEST_RESTIC=$$restic"; \
+	SYNCR_TEST_RCLONE="$$rclone" SYNCR_TEST_RESTIC="$$restic" $(GO) test -tags integration -count=1 ./...
 
 .PHONY: build
 build: ## Build both binaries into $(BIN_DIR)/ (set GOOS/GOARCH to cross-compile)

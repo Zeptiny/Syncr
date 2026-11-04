@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -55,17 +56,34 @@ func TestDispatch(t *testing.T) {
 	}
 }
 
+// runEnv returns a command environment whose configuration comes only from
+// SYNCR_* variables, with fake tools.
+func (f *fixture) runEnv(extra map[string]string) (*env, *bytes.Buffer) {
+	vars := map[string]string{
+		"SYNCR_LOG_FORMAT":  "json",
+		"SYNCR_DATA_DIR":    f.cfg.DataDir,
+		"SYNCR_LOCAL_ROOTS": strings.Join(f.cfg.LocalRoots, ","),
+		"SYNCR_RCLONE_PATH": f.cfg.Tools.RclonePath,
+		"SYNCR_RESTIC_PATH": f.cfg.Tools.ResticPath,
+	}
+	maps.Copy(vars, extra)
+	e, _, stderr := testEnv(vars)
+	e.tools = f.deps.tools
+	return e, stderr
+}
+
 func TestRunBlocksUntilCancelled(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
-	e, _, stderr := testEnv(map[string]string{"SYNCR_LOG_FORMAT": "json"})
+	f := newFixture(t)
+	e, stderr := f.runEnv(nil)
 
 	done := make(chan int, 1)
 	go func() { done <- run(ctx, []string{"run"}, e) }()
 
 	select {
 	case code := <-done:
-		t.Fatalf("run returned %d before cancellation", code)
+		t.Fatalf("run returned %d before cancellation (stderr: %s)", code, stderr)
 	case <-time.After(100 * time.Millisecond):
 	}
 	cancel()
@@ -77,8 +95,39 @@ func TestRunBlocksUntilCancelled(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("run did not stop after cancellation")
 	}
-	if !strings.Contains(stderr.String(), `"msg":"worker stopped"`) {
-		t.Errorf("logs: %s", stderr)
+	for _, want := range []string{`"msg":"worker ready"`, `"job_kinds":["rclone_transfer"`, `"msg":"worker stopped"`} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("logs lack %s:\n%s", want, stderr)
+		}
+	}
+}
+
+func TestRunExitsNonZeroWhenToolsAreMissing(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, stderr := f.runEnv(map[string]string{"SYNCR_RCLONE_PATH": "", "SYNCR_RESTIC_PATH": ""})
+
+	if code := run(t.Context(), []string{"run"}, e); code != exitError {
+		t.Fatalf("exit code %d, want %d", code, exitError)
+	}
+	for _, want := range []string{"syncr-worker run:", "required tools are not available", "tools fetch --dir", "SYNCR_TOOLS_DOWNLOAD"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr lacks %q:\n%s", want, stderr)
+		}
+	}
+}
+
+func TestRunRejectsInvalidWorkerConfig(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, stderr := f.runEnv(map[string]string{"SYNCR_LOCAL_ROOTS": "relative", "SYNCR_DATA_DIR": "also-relative"})
+	if code := run(t.Context(), []string{"run"}, e); code != exitError {
+		t.Fatalf("exit code %d, want %d", code, exitError)
+	}
+	for _, want := range []string{"local_roots[0]", "data_dir"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr lacks %q (all problems should be reported):\n%s", want, stderr)
+		}
 	}
 }
 

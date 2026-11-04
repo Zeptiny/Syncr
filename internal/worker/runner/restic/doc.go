@@ -31,11 +31,15 @@
 //
 // # Outcomes
 //
-// Exit codes are mapped in ExitError and Class. A backup that exits with 3
-// ("some source data could not be read") still created a snapshot: the runner
-// returns that snapshot's output with a nil error, ExitCode 3 and a non-zero
-// Stats.Errors, which is the closest representation the wire contract offers
-// to "succeeded with warnings".
+// Exit codes are mapped in ExitError and jobErrorCode: 10, 11 and 12 become
+// the wire codes REPOSITORY_NOT_FOUND, REPOSITORY_LOCKED and WRONG_PASSWORD
+// (and the Err* sentinels), everything else EXECUTION_FAILED. A backup that
+// exits with 3 ("some source data could not be read") still created a
+// snapshot: the runner returns that snapshot's output with a nil error,
+// ExitCode 3, a non-zero Stats.Errors and Result.Warnings ("N items could not
+// be read; the snapshot is incomplete" plus the first reasons restic gave,
+// scrubbed and bounded by runner.LimitWarnings). The job status stays
+// SUCCEEDED.
 //
 // Per-repository serialization is the controller's job; a lock conflict
 // (exit 11) is reported as ErrRepositoryLocked.

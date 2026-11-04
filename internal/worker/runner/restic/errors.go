@@ -24,6 +24,7 @@ const (
 	maxFailureDetail    = 1000
 	maxTailLines        = 4
 	maxTailLineBytes    = 400
+	maxItemErrors       = runner.MaxWarnings - 1 // plus the summary warning
 	redactedPlaceholder = "[redacted]"
 )
 
@@ -34,8 +35,8 @@ const (
 const ExitIncomplete = exitIncomplete
 
 // Sentinel errors classifying restic failures. Use errors.Is on the error
-// returned by a runner. They all report syncrv1.JobErrorCode EXECUTION_FAILED
-// until the wire contract grows dedicated codes (see jobErrorCode).
+// returned by a runner. The first three also have dedicated wire codes
+// (REPOSITORY_NOT_FOUND, REPOSITORY_LOCKED, WRONG_PASSWORD; see jobErrorCode).
 var (
 	// ErrRepositoryNotFound: the repository does not exist (exit code 10).
 	ErrRepositoryNotFound = errors.New("repository does not exist")
@@ -114,13 +115,17 @@ func headline(code int) string {
 	return "command failed"
 }
 
-// jobErrorCode maps a restic failure to the wire error code. The contract has
-// no dedicated codes for a missing repository, a lock conflict or a wrong
-// password yet, so all of them are EXECUTION_FAILED; callers that need the
-// distinction use errors.Is with the Err* sentinels. When the proto grows
-// REPOSITORY_NOT_FOUND, REPOSITORY_LOCKED and WRONG_PASSWORD, this is the
-// only place to change.
-func jobErrorCode(*ExitError) syncrv1.JobErrorCode {
+// jobErrorCode maps a restic failure to the wire error code: the dedicated
+// repository codes for exit codes 10, 11 and 12, EXECUTION_FAILED otherwise.
+func jobErrorCode(e *ExitError) syncrv1.JobErrorCode {
+	switch e.ExitCode {
+	case exitNoRepository:
+		return syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_NOT_FOUND
+	case exitLocked:
+		return syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_LOCKED
+	case exitWrongPassword:
+		return syncrv1.JobErrorCode_JOB_ERROR_CODE_WRONG_PASSWORD
+	}
 	return syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED
 }
 

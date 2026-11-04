@@ -108,3 +108,11 @@ func windowsDataDir(mode Mode, env Env) (string, error) {
 
 // ToolsDir returns the default managed tools directory under dataDir.
 func ToolsDir(dataDir string) string { return filepath.Join(dataDir, "tools") }
+
+// ScratchDir returns the directory under dataDir where jobs get private
+// temporary directories (rclone config and cache, restic temp files).
+func ScratchDir(dataDir string) string { return filepath.Join(dataDir, "scratch") }
+
+// CacheDir returns the directory under dataDir for tool caches that may be
+// kept between jobs, such as restic's repository cache.
+func CacheDir(dataDir string) string { return filepath.Join(dataDir, "cache") }

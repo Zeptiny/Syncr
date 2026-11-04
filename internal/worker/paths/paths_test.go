@@ -82,6 +82,13 @@ func TestToolsDirAndString(t *testing.T) {
 	if got, want := ToolsDir(filepath.Join("a", "b")), filepath.Join("a", "b", "tools"); got != want {
 		t.Errorf("ToolsDir = %q, want %q", got, want)
 	}
+	data := filepath.Join("a", "b")
+	if got, want := ScratchDir(data), filepath.Join(data, "scratch"); got != want {
+		t.Errorf("ScratchDir = %q, want %q", got, want)
+	}
+	if got, want := CacheDir(data), filepath.Join(data, "cache"); got != want {
+		t.Errorf("CacheDir = %q, want %q", got, want)
+	}
 	if ModeUser.String() != "user" || ModeSystem.String() != "system" {
 		t.Error("unexpected Mode.String")
 	}

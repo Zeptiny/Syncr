@@ -100,38 +100,54 @@ const (
 	// A source or destination (directory, file, repository) does not exist.
 	JobErrorCode_JOB_ERROR_CODE_NOT_FOUND JobErrorCode = 7
 	// The tool reported a temporary failure that retrying the job may fix
-	// (network errors, rate limits, a locked repository).
+	// (network errors, rate limits).
 	JobErrorCode_JOB_ERROR_CODE_TEMPORARY JobErrorCode = 8
 	// The job stopped because a limit from its spec was reached (e.g. rclone
 	// --max-transfer or --max-duration); the work done so far is kept.
 	JobErrorCode_JOB_ERROR_CODE_LIMIT_REACHED JobErrorCode = 9
+	// The restic repository does not exist at the given location (restic exit
+	// code 10). Run restic_init first or fix the location.
+	JobErrorCode_JOB_ERROR_CODE_REPOSITORY_NOT_FOUND JobErrorCode = 10
+	// The restic repository is locked by another operation (restic exit code
+	// 11). The controller serializes jobs per repository, so this means a stale
+	// lock or a client outside Syncr; retrying later may succeed.
+	JobErrorCode_JOB_ERROR_CODE_REPOSITORY_LOCKED JobErrorCode = 11
+	// The restic repository password is wrong (restic exit code 12). Retrying
+	// cannot succeed.
+	JobErrorCode_JOB_ERROR_CODE_WRONG_PASSWORD JobErrorCode = 12
 )
 
 // Enum value maps for JobErrorCode.
 var (
 	JobErrorCode_name = map[int32]string{
-		0: "JOB_ERROR_CODE_UNSPECIFIED",
-		1: "JOB_ERROR_CODE_INVALID_SPEC",
-		2: "JOB_ERROR_CODE_UNSUPPORTED_KIND",
-		3: "JOB_ERROR_CODE_PATH_NOT_ALLOWED",
-		4: "JOB_ERROR_CODE_TOOL_UNAVAILABLE",
-		5: "JOB_ERROR_CODE_EXECUTION_FAILED",
-		6: "JOB_ERROR_CODE_INTERNAL",
-		7: "JOB_ERROR_CODE_NOT_FOUND",
-		8: "JOB_ERROR_CODE_TEMPORARY",
-		9: "JOB_ERROR_CODE_LIMIT_REACHED",
+		0:  "JOB_ERROR_CODE_UNSPECIFIED",
+		1:  "JOB_ERROR_CODE_INVALID_SPEC",
+		2:  "JOB_ERROR_CODE_UNSUPPORTED_KIND",
+		3:  "JOB_ERROR_CODE_PATH_NOT_ALLOWED",
+		4:  "JOB_ERROR_CODE_TOOL_UNAVAILABLE",
+		5:  "JOB_ERROR_CODE_EXECUTION_FAILED",
+		6:  "JOB_ERROR_CODE_INTERNAL",
+		7:  "JOB_ERROR_CODE_NOT_FOUND",
+		8:  "JOB_ERROR_CODE_TEMPORARY",
+		9:  "JOB_ERROR_CODE_LIMIT_REACHED",
+		10: "JOB_ERROR_CODE_REPOSITORY_NOT_FOUND",
+		11: "JOB_ERROR_CODE_REPOSITORY_LOCKED",
+		12: "JOB_ERROR_CODE_WRONG_PASSWORD",
 	}
 	JobErrorCode_value = map[string]int32{
-		"JOB_ERROR_CODE_UNSPECIFIED":      0,
-		"JOB_ERROR_CODE_INVALID_SPEC":     1,
-		"JOB_ERROR_CODE_UNSUPPORTED_KIND": 2,
-		"JOB_ERROR_CODE_PATH_NOT_ALLOWED": 3,
-		"JOB_ERROR_CODE_TOOL_UNAVAILABLE": 4,
-		"JOB_ERROR_CODE_EXECUTION_FAILED": 5,
-		"JOB_ERROR_CODE_INTERNAL":         6,
-		"JOB_ERROR_CODE_NOT_FOUND":        7,
-		"JOB_ERROR_CODE_TEMPORARY":        8,
-		"JOB_ERROR_CODE_LIMIT_REACHED":    9,
+		"JOB_ERROR_CODE_UNSPECIFIED":          0,
+		"JOB_ERROR_CODE_INVALID_SPEC":         1,
+		"JOB_ERROR_CODE_UNSUPPORTED_KIND":     2,
+		"JOB_ERROR_CODE_PATH_NOT_ALLOWED":     3,
+		"JOB_ERROR_CODE_TOOL_UNAVAILABLE":     4,
+		"JOB_ERROR_CODE_EXECUTION_FAILED":     5,
+		"JOB_ERROR_CODE_INTERNAL":             6,
+		"JOB_ERROR_CODE_NOT_FOUND":            7,
+		"JOB_ERROR_CODE_TEMPORARY":            8,
+		"JOB_ERROR_CODE_LIMIT_REACHED":        9,
+		"JOB_ERROR_CODE_REPOSITORY_NOT_FOUND": 10,
+		"JOB_ERROR_CODE_REPOSITORY_LOCKED":    11,
+		"JOB_ERROR_CODE_WRONG_PASSWORD":       12,
 	}
 )
 
@@ -1349,7 +1365,13 @@ type JobResult struct {
 	StartedAt  *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
 	FinishedAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
 	// Kind-specific output; unset for kinds without output (e.g. transfers).
-	Output        *JobOutput `protobuf:"bytes,8,opt,name=output,proto3" json:"output,omitempty"`
+	Output *JobOutput `protobuf:"bytes,8,opt,name=output,proto3" json:"output,omitempty"`
+	// Non-fatal problems of a job that nevertheless SUCCEEDED, for example
+	// "3 items could not be read" for a restic backup that exited with code 3
+	// after creating its snapshot. Scrubbed of secrets, at most 10 entries of
+	// at most 500 bytes each. Empty for a clean run and for FAILED or
+	// CANCELLED jobs (their error carries the reason).
+	Warnings      []string `protobuf:"bytes,9,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1436,6 +1458,13 @@ func (x *JobResult) GetFinishedAt() *timestamppb.Timestamp {
 func (x *JobResult) GetOutput() *JobOutput {
 	if x != nil {
 		return x.Output
+	}
+	return nil
+}
+
+func (x *JobResult) GetWarnings() []string {
+	if x != nil {
+		return x.Warnings
 	}
 	return nil
 }
@@ -2795,7 +2824,9 @@ type ResticBackup struct {
 	Tags []string `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty"`
 	// --host override; empty uses the worker's host name.
 	Host string `protobuf:"bytes,5,opt,name=host,proto3" json:"host,omitempty"`
-	// --use-fs-snapshot (Windows VSS). Ignored on other platforms.
+	// --use-fs-snapshot (Windows VSS). Setting it on a worker that is not
+	// running on Windows is an error (INVALID_SPEC), not silently ignored: the
+	// caller asked for a consistent snapshot that cannot be provided.
 	UseFsSnapshot bool `protobuf:"varint,6,opt,name=use_fs_snapshot,json=useFsSnapshot,proto3" json:"use_fs_snapshot,omitempty"`
 	// --exclude-caches: skip directories containing a CACHEDIR.TAG.
 	ExcludeCaches bool `protobuf:"varint,7,opt,name=exclude_caches,json=excludeCaches,proto3" json:"exclude_caches,omitempty"`
@@ -3176,8 +3207,10 @@ func (x *ResticForget) GetDryRun() bool {
 
 // ResticForgetOutput lists the snapshots removed by forget.
 type ResticForgetOutput struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	RemovedSnapshotIds []string               `protobuf:"bytes,1,rep,name=removed_snapshot_ids,json=removedSnapshotIds,proto3" json:"removed_snapshot_ids,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// IDs of the snapshots removed. When ResticForget.dry_run is set nothing was
+	// removed and this lists the snapshots that WOULD be removed.
+	RemovedSnapshotIds []string `protobuf:"bytes,1,rep,name=removed_snapshot_ids,json=removedSnapshotIds,proto3" json:"removed_snapshot_ids,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -3686,7 +3719,7 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\arenames\x18\a \x01(\x03R\arenames\x12\x16\n" +
 	"\x06errors\x18\b \x01(\x03R\x06errors\x123\n" +
 	"\aelapsed\x18\t \x01(\v2\x19.google.protobuf.DurationR\aelapsedJ\x04\b\n" +
-	"\x10\x14\"\xf1\x02\n" +
+	"\x10\x14\"\x8d\x03\n" +
 	"\tJobResult\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x121\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x19.syncr.v1.JobResultStatusR\x06status\x12(\n" +
@@ -3697,7 +3730,9 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"started_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"finishedAt\x12+\n" +
-	"\x06output\x18\b \x01(\v2\x13.syncr.v1.JobOutputR\x06outputJ\x04\b\t\x10\x14\"\xf3\x01\n" +
+	"\x06output\x18\b \x01(\v2\x13.syncr.v1.JobOutputR\x06output\x12\x1a\n" +
+	"\bwarnings\x18\t \x03(\tR\bwarningsJ\x04\b\n" +
+	"\x10\x14\"\xf3\x01\n" +
 	"\tJobOutput\x12C\n" +
 	"\rrestic_backup\x18\x15 \x01(\v2\x1c.syncr.v1.ResticBackupOutputH\x00R\fresticBackup\x12C\n" +
 	"\rrestic_forget\x18\x16 \x01(\v2\x1c.syncr.v1.ResticForgetOutputH\x00R\fresticForget\x12L\n" +
@@ -3904,7 +3939,7 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\x1dJOB_RESULT_STATUS_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bJOB_RESULT_STATUS_SUCCEEDED\x10\x01\x12\x1c\n" +
 	"\x18JOB_RESULT_STATUS_FAILED\x10\x02\x12\x1f\n" +
-	"\x1bJOB_RESULT_STATUS_CANCELLED\x10\x03*\xde\x02\n" +
+	"\x1bJOB_RESULT_STATUS_CANCELLED\x10\x03*\xd0\x03\n" +
 	"\fJobErrorCode\x12\x1e\n" +
 	"\x1aJOB_ERROR_CODE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bJOB_ERROR_CODE_INVALID_SPEC\x10\x01\x12#\n" +
@@ -3915,7 +3950,11 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\x17JOB_ERROR_CODE_INTERNAL\x10\x06\x12\x1c\n" +
 	"\x18JOB_ERROR_CODE_NOT_FOUND\x10\a\x12\x1c\n" +
 	"\x18JOB_ERROR_CODE_TEMPORARY\x10\b\x12 \n" +
-	"\x1cJOB_ERROR_CODE_LIMIT_REACHED\x10\t*\xa2\x01\n" +
+	"\x1cJOB_ERROR_CODE_LIMIT_REACHED\x10\t\x12'\n" +
+	"#JOB_ERROR_CODE_REPOSITORY_NOT_FOUND\x10\n" +
+	"\x12$\n" +
+	" JOB_ERROR_CODE_REPOSITORY_LOCKED\x10\v\x12!\n" +
+	"\x1dJOB_ERROR_CODE_WRONG_PASSWORD\x10\f*\xa2\x01\n" +
 	"\x11UnionUpstreamMode\x12#\n" +
 	"\x1fUNION_UPSTREAM_MODE_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eUNION_UPSTREAM_MODE_READ_WRITE\x10\x01\x12!\n" +

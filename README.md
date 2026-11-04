@@ -4,11 +4,12 @@ Self-hosted manager for [rclone](https://rclone.org/) sync jobs and
 [restic](https://restic.net/) backups: one controller with a web UI, any
 number of workers on servers and desktops (Linux first, Windows second).
 
-> **Status: v2 rewrite in progress.** This branch is a Go rewrite and is not
-> usable yet. Milestone 1 (foundation) provides the skeleton: wire contracts,
-> binaries that start and stop cleanly, the process supervisor and the job
-> runner contract. The previous Django version lives on `main` (tag
-> `django-final`).
+> **Status: v2 rewrite in progress. Milestone 1 complete: the worker can run
+> rclone/restic jobs locally; the link and controller come next.** The worker
+> assembles the pinned tools, the `local_roots` policy and the rclone and
+> restic runners at startup, but nothing sends it jobs yet (the worker link is
+> Milestone 2), so this branch is not usable end to end. The previous Django
+> version lives on `main` (tag `django-final`).
 
 ## Architecture
 
@@ -51,13 +52,17 @@ Design records: [architecture](docs/adr/0001-architecture.md),
 proto/syncr/v1/           wire contracts (api.proto, link.proto)
 gen/go/                   generated protobuf + Connect code (committed)
 cmd/syncr-controller/     controller composition root
-cmd/syncr-worker/         worker composition root and CLI (run, setup, version)
+cmd/syncr-worker/         worker composition root and CLI (run, setup, tools, version)
 internal/domain/          entity IDs, job status state machine, domain errors
 internal/link/            link logic shared by both sides (job kinds today)
 internal/adapters/api/    Connect handlers and health endpoint
 internal/controller/      controller-only packages (config)
 internal/worker/proc/     child-process supervisor (env allowlist, line streaming, cancellation)
-internal/worker/runner/   Runner contract and registry for job kinds
+internal/worker/runner/   Runner contract and registry; runner/rclone and runner/restic implement it
+internal/worker/tools/    pinned rclone/restic provisioning (configured, bundled, managed download, PATH)
+internal/worker/localfs/  local_roots policy for local paths
+internal/worker/rcloneenv/ env-defined rclone remotes (RCLONE_CONFIG_*), secrets handling
+internal/worker/paths/    default data, scratch, cache and tools directories
 internal/worker/config/   worker configuration
 internal/platform/        leaf helpers: config loading, logging, redaction, HTTP server, version
 deploy/                   Dockerfiles and the dev compose stack
@@ -68,7 +73,7 @@ docs/adr/                 architecture decision records
 
 Requirements: Go (version from `go.mod`), [buf](https://buf.build/),
 [golangci-lint](https://golangci-lint.run/) v2, Docker (for the dev stack),
-GNU make.
+GNU make (optional: CI does not use it).
 
 ```sh
 make help              # list targets
@@ -76,7 +81,8 @@ make generate          # buf generate (plugins pinned via `go tool`)
 make lint              # buf lint + golangci-lint (with layering rules)
 make test              # unit tests
 make test-race         # unit tests with the race detector (needs cgo)
-make test-integration  # real rclone/restic: SYNCR_TEST_RCLONE=… SYNCR_TEST_RESTIC=…
+make tools             # fetch the pinned rclone and restic into .cache/tools
+make test-integration  # real rclone/restic (fetched as above), MinIO/SFTP via Docker
 make build             # bin/syncr-controller, bin/syncr-worker (GOOS/GOARCH to cross-compile)
 make dev-up            # Postgres 17, MinIO and SFTP on 127.0.0.1 (see deploy/docker-compose.dev.yml)
 ```
@@ -90,13 +96,45 @@ curl -H 'Content-Type: application/json' -d '{}' \
   localhost:8080/syncr.v1.SystemService/GetInfo
 ```
 
-The worker currently starts and idles until stopped (the link arrives in
-Milestone 2):
+The worker resolves the pinned rclone and restic, builds its runners and then
+idles until stopped (the link arrives in Milestone 2). It exits non-zero with
+an explanation if a tool is missing:
 
 ```sh
-./bin/syncr-worker run
+./bin/syncr-worker tools fetch    # install the pinned tools (or set tools.download: true)
+./bin/syncr-worker run --config worker.yaml
+./bin/syncr-worker tools status   # what each tool source offers
 ./bin/syncr-worker version
 ```
+
+### Running integration tests
+
+Unit tests (`go test ./...`) need nothing but Go. Integration tests are behind
+the `integration` build tag and run the real rclone and restic through the real
+supervisor, runners and `local_roots` policy:
+
+```sh
+make test-integration
+# which does, by hand:
+go run ./cmd/syncr-worker tools fetch --dir .cache/tools     # pinned, checksum-verified
+SYNCR_TEST_RCLONE=.cache/tools/rclone/<version>/<os>-<arch>/rclone \
+SYNCR_TEST_RESTIC=.cache/tools/restic/<version>/<os>-<arch>/restic \
+  go test -tags integration -count=1 ./...
+```
+
+- `SYNCR_TEST_RCLONE` and `SYNCR_TEST_RESTIC` must point at binaries of the
+  pinned versions (`syncr-worker tools status` shows them). Tests that need a
+  tool skip when its variable is unset. Setting both variables makes
+  `make test-integration` skip the download.
+- The MinIO and SFTP tests start containers with testcontainers, so they need
+  Docker with Linux containers. They use the images of
+  `deploy/docker-compose.dev.yml` and skip themselves when Docker is
+  unavailable. On Windows they always skip (Windows runners only run Windows
+  containers); the local-only tests (rclone local transfers, union, cancel,
+  restic local lifecycle, `local_roots`, tool provisioning, worker wiring) run
+  there for real.
+- CI runs both flavors: `integration-linux` (with Docker) and
+  `integration-windows` (local-only).
 
 ### Configuration
 
@@ -115,7 +153,8 @@ log:
   format: text               # SYNCR_LOG_FORMAT: text or json
 ```
 
-The worker accepts the same `log` section today.
+The worker accepts the same `log` section plus `data_dir`, `local_roots` and a
+`tools` section; see [worker configuration](docs/worker-config.md).
 
 ### Images
 

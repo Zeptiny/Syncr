@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -83,6 +84,9 @@ type session struct {
 	// per phase, e.g. "scan" and "archival").
 	errItems map[string]struct{}
 	errLines int64
+	// itemErrors are the first maxItemErrors distinct item errors in order
+	// of appearance ("<item>: <message>"), for warnings.
+	itemErrors []string
 
 	exit *message // exit_error
 
@@ -175,11 +179,39 @@ func (s *session) itemError(m *message) {
 	}
 	if m.Item == "" {
 		s.errLines++
-	} else {
+		s.noteItemError("", m)
+	} else if _, seen := s.errItems[m.Item]; !seen {
 		s.errItems[m.Item] = struct{}{}
+		s.noteItemError(m.Item, m)
 	}
 	s.prog.Errors = max(s.prog.Errors, s.errLines+int64(len(s.errItems)))
 	s.publish()
+}
+
+// noteItemError remembers the first few item errors for warnings. Messages
+// usually name the item already; if not, it is prepended.
+func (s *session) noteItemError(item string, m *message) {
+	if len(s.itemErrors) >= maxItemErrors {
+		return
+	}
+	msg := ""
+	if m.Error != nil {
+		msg = m.Error.Message
+	}
+	switch {
+	case msg == "":
+		msg = item
+	case item != "" && !strings.Contains(msg, item):
+		msg = item + ": " + msg
+	}
+	if msg != "" {
+		s.itemErrors = append(s.itemErrors, clip(msg, maxTailLineBytes))
+	}
+}
+
+// unreadable is the number of distinct items restic could not read.
+func (s *session) unreadable() int64 {
+	return s.errLines + int64(len(s.errItems))
 }
 
 // setProgress folds a snapshot into the cumulative progress: counters never

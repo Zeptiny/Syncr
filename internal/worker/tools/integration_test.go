@@ -11,12 +11,20 @@ import (
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 )
 
-// TestPinnedLinuxAmd64Artifacts downloads the real pinned rclone and restic
-// archives, checks them against the embedded SHA-256s and, where the host can
-// run them, confirms the extracted binaries report the pinned versions.
-func TestPinnedLinuxAmd64Artifacts(t *testing.T) {
-	target := Platform{OS: "linux", Arch: "amd64"}
+// TestPinnedArtifacts downloads the real pinned rclone and restic archives of
+// the host platform (linux/amd64 when the manifest has none for it), checks
+// them against the embedded SHA-256s and, where the host can run them,
+// confirms the extracted binaries report the pinned versions. On a CI runner
+// this therefore verifies the pins of the platform that runs the worker.
+func TestPinnedArtifacts(t *testing.T) {
 	manifest := DefaultManifest()
+	target := HostPlatform()
+	for _, spec := range manifest.Tools {
+		if _, err := spec.Artifact(target); err != nil {
+			target = Platform{OS: "linux", Arch: "amd64"}
+			break
+		}
+	}
 	sup := proc.New(proc.Options{})
 	dir := t.TempDir()
 
@@ -45,7 +53,7 @@ func TestPinnedLinuxAmd64Artifacts(t *testing.T) {
 			if info.Size() < 10<<20 {
 				t.Errorf("%s is only %d bytes", got.Path, info.Size())
 			}
-			if filepath.Base(got.Path) != spec.Name {
+			if filepath.Base(got.Path) != spec.Binary(target.OS) {
 				t.Errorf("binary name %s", filepath.Base(got.Path))
 			}
 

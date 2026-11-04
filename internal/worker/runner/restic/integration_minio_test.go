@@ -5,6 +5,8 @@ package restic
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -12,17 +14,24 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/worker/localfs"
+	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
 )
 
 // minioImage is the image of deploy/docker-compose.dev.yml.
 const minioImage = "pgsty/minio:RELEASE.2026-08-04T00-00-00Z"
 
 // TestIntegrationMinIOLifecycle runs the full lifecycle on a repository in an
-// S3 bucket, defined as an rclone remote purely through environment
-// variables, like on a real worker.
+// S3 bucket, like on a real worker: the remote is defined purely through
+// environment variables by the real rcloneenv.Builder, and local paths
+// (backup sources, restore targets) are checked by the real localfs.Policy.
+// No fakes sit between the runners and the tools.
 func TestIntegrationMinIOLifecycle(t *testing.T) {
 	toolPath(t, "SYNCR_TEST_RESTIC")
 	toolPath(t, "SYNCR_TEST_RCLONE")
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: testcontainers needs Linux containers, and Windows CI runners only run Windows containers")
+	}
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
 	const accessKey, secretKey = "syncr-dev", "syncr-dev-secret"
@@ -55,7 +64,14 @@ func TestIntegrationMinIOLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := newHarness(t)
+	h := newHarnessWith(t, func(h *harness, cfg *Config) {
+		policy, err := localfs.NewPolicy([]string{h.root})
+		if err != nil {
+			t.Fatalf("localfs.NewPolicy: %v", err)
+		}
+		cfg.Paths = policy
+		cfg.Remotes = rcloneenv.NewBuilder(policy)
+	})
 	h.defs = []*syncrv1.RemoteDefinition{{
 		Alias:       "minio",
 		BackendType: "s3",
@@ -65,11 +81,21 @@ func TestIntegrationMinIOLifecycle(t *testing.T) {
 			"region":           "us-east-1",
 			"access_key_id":    accessKey,
 			"force_path_style": "true",
-			"env_auth":         "false",
 		},
 		Secrets: map[string]string{"secret_access_key": secretKey},
 	}}
 	// rclone creates the bucket on init.
 	h.loc = &syncrv1.Location{Remote: "minio", Path: "syncr-restic-it/repo"}
 	runLifecycle(t, h)
+
+	// The real policy rejects what is outside local_roots, whatever the
+	// repository location: here a backup source.
+	outside := filepath.Join(filepath.Dir(h.root), "elsewhere")
+	writeFile(t, filepath.Join(outside, "secret.txt"), []byte("not for backups"))
+	_, _, err = h.run(t.Context(), func(s *syncrv1.JobSpec) {
+		s.Operation = &syncrv1.JobSpec_ResticBackup{ResticBackup: &syncrv1.ResticBackup{
+			Repository: h.repo(itPassword), Paths: []string{outside},
+		}}
+	})
+	mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED)
 }

@@ -3,6 +3,7 @@ package restic
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -127,6 +128,10 @@ func (r *kindRunner) Run(ctx context.Context, job runner.Job, emit runner.EmitFu
 	if err != nil && !runner.Canceled(err) {
 		err = sc.Error(err)
 	}
+	for i, w := range res.Warnings {
+		res.Warnings[i] = sc.String(w)
+	}
+	res.Warnings = runner.LimitWarnings(res.Warnings)
 	return res, err
 }
 
@@ -208,10 +213,23 @@ func (e *engine) exitFailure(res runner.Result, kind, verb string, code int, s *
 			// The unreadable items were reported as errors; make sure the
 			// warning is visible even if restic did not list them.
 			res.Stats.Errors = max(res.Stats.Errors, 1)
+			res.Warnings = incompleteWarnings(s)
 			return res, nil
 		}
 	}
 	return res, failure(verb, code, clip(s.detail(), maxFailureDetail))
+}
+
+// incompleteWarnings describes a backup that exited with code 3: how many
+// items could not be read, then the first few reasons restic gave.
+func incompleteWarnings(s *session) []string {
+	n := max(s.unreadable(), 1)
+	noun := "items"
+	if n == 1 {
+		noun = "item"
+	}
+	warnings := []string{fmt.Sprintf("%d %s could not be read; the snapshot is incomplete", n, noun)}
+	return append(warnings, s.itemErrors...)
 }
 
 // rcloneArgs are the arguments restic passes to rclone ("-o rclone.args").

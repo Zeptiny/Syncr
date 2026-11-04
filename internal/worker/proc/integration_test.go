@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -16,7 +17,7 @@ import (
 // Integration tests run the real tools through the supervisor, with the
 // minimal environment, env-defined remotes and JSON output that the rclone
 // and restic runners rely on. Point SYNCR_TEST_RCLONE / SYNCR_TEST_RESTIC at
-// the binaries (make test-integration does this from PATH).
+// the binaries (make test-integration fetches the pinned tools).
 
 func toolPath(t *testing.T, env string) string {
 	t.Helper()
@@ -102,7 +103,11 @@ func TestIntegrationRcloneCopyWithEnvRemotes(t *testing.T) {
 	}
 }
 
-func TestIntegrationRcloneCancelIsGraceful(t *testing.T) {
+// TestIntegrationRcloneCancelStopsTheProcess: on Unix the supervisor sends
+// SIGINT and rclone exits by itself; Windows has no equivalent for console
+// programs, so there the process is killed. Either way Run returns promptly
+// with a *CanceledError.
+func TestIntegrationRcloneCancelStopsTheProcess(t *testing.T) {
 	rclone := toolPath(t, "SYNCR_TEST_RCLONE")
 	src, dst := t.TempDir(), t.TempDir()
 	writeTree(t, src, map[string]int{"big.bin": 8 << 20})
@@ -124,6 +129,12 @@ func TestIntegrationRcloneCancelIsGraceful(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 8*time.Second {
 		t.Errorf("rclone took %v to stop; SIGINT should stop it promptly", elapsed)
+	}
+	if runtime.GOOS == "windows" {
+		if res.ExitCode == 0 {
+			t.Error("exit code 0 after a cancelled transfer; the process should have been killed")
+		}
+		return
 	}
 	if res.ExitCode == -1 {
 		t.Error("rclone was killed instead of exiting on SIGINT")
