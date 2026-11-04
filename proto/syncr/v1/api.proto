@@ -2,10 +2,16 @@ syntax = "proto3";
 
 package syncr.v1;
 
+import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
+import "syncr/v1/link.proto";
 
 // Controller API used by the web UI and tooling. Served over Connect (JSON or
 // binary), gRPC and gRPC-Web on the controller's HTTP address.
+//
+// Errors use the standard codes: NOT_FOUND for unknown IDs, INVALID_ARGUMENT
+// for malformed requests, FAILED_PRECONDITION when the object's state forbids
+// the call.
 
 // SystemService exposes information about the controller itself.
 service SystemService {
@@ -29,4 +35,391 @@ message GetInfoResponse {
 
   // When the binary was built; unset if unknown.
   google.protobuf.Timestamp build_time = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Workers
+// ---------------------------------------------------------------------------
+
+// WorkerAdminService enrolls, registers and manages workers.
+//
+// PROVISIONAL (Milestone 2): no authentication yet. Milestone 3 adds users and
+// sessions, restricts this service to admins and may change these messages.
+service WorkerAdminService {
+  // CreateEnrollmentToken creates a short-lived, single-use token for
+  // `syncr-worker setup --token`. The token is returned once; the controller
+  // stores only its hash.
+  rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateEnrollmentTokenResponse) {}
+
+  // RegisterPassiveWorker adds a passive worker from the URL, certificate
+  // fingerprint and pairing secret that `syncr-worker setup --passive`
+  // printed. The controller starts calling the worker right away.
+  rpc RegisterPassiveWorker(RegisterPassiveWorkerRequest) returns (RegisterPassiveWorkerResponse) {}
+
+  // ListWorkers lists the workers that have not been removed, by name.
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // GetWorker returns one worker.
+  rpc GetWorker(GetWorkerRequest) returns (GetWorkerResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // RenameWorker changes a worker's display name.
+  rpc RenameWorker(RenameWorkerRequest) returns (RenameWorkerResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // RemoveWorker removes a worker: its credentials stop working at once, its
+  // queued jobs fail and its dispatched or running jobs become interrupted
+  // (error code WORKER_REMOVED). Job history is kept.
+  rpc RemoveWorker(RemoveWorkerRequest) returns (RemoveWorkerResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+}
+
+// Worker is an enrolled or registered worker. Secrets are never returned.
+message Worker {
+  // Worker ID (UUID).
+  string id = 1;
+
+  // Display name.
+  string name = 2;
+
+  // Link mode.
+  WorkerMode mode = 3;
+
+  // Connection status derived from the time of the last contact.
+  WorkerStatus status = 4;
+
+  // Last authenticated contact (any link call); unset if never.
+  google.protobuf.Timestamp last_seen = 5;
+
+  // When the worker was enrolled or registered.
+  google.protobuf.Timestamp created_at = 6;
+
+  // PASSIVE only: where the controller reaches the worker.
+  string url = 7;
+
+  // PASSIVE only: the pinned certificate fingerprint, as 64 lower-case hex
+  // digits.
+  string cert_fingerprint = 8;
+
+  // What the worker reported about itself in its latest Hello event; unset
+  // until the worker has connected once.
+  WorkerInfo info = 9;
+
+  reserved 10 to 19;
+}
+
+// WorkerStatus is a worker's connection status.
+enum WorkerStatus {
+  WORKER_STATUS_UNSPECIFIED = 0;
+  // Enrolled or registered, but never connected.
+  WORKER_STATUS_PENDING = 1;
+  // Heard from within the controller's offline threshold.
+  WORKER_STATUS_ONLINE = 2;
+  // Not heard from within the offline threshold.
+  WORKER_STATUS_OFFLINE = 3;
+}
+
+// WorkerInfo is what a worker reports about itself (link Hello event).
+message WorkerInfo {
+  // Worker build version.
+  string worker_version = 1;
+  // GOOS and GOARCH of the worker process.
+  string os = 2;
+  string arch = 3;
+  // Host name, for display.
+  string hostname = 4;
+  // Versions of the supervised tools.
+  repeated ToolVersion tools = 5;
+  // Job kinds the worker can run (JobSpec.operation field names).
+  repeated string job_kinds = 6;
+  // Jobs the worker runs concurrently.
+  int32 max_concurrent_jobs = 7;
+  // Local filesystem roots jobs may touch.
+  repeated string local_roots = 8;
+  // When the worker reported this (its Hello event).
+  google.protobuf.Timestamp reported_at = 9;
+
+  reserved 10 to 19;
+}
+
+// CreateEnrollmentTokenRequest configures the token.
+message CreateEnrollmentTokenRequest {
+  // How long the token stays valid. Unset means the controller default (1h);
+  // the controller rejects values below one minute or above seven days.
+  google.protobuf.Duration ttl = 1;
+}
+
+// CreateEnrollmentTokenResponse carries the token, shown only once.
+message CreateEnrollmentTokenResponse {
+  // The token, for `syncr-worker setup --token <token>`.
+  string token = 1;
+
+  // When the token stops being accepted.
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+// RegisterPassiveWorkerRequest describes a passive worker.
+message RegisterPassiveWorkerRequest {
+  // Display name, 1 to 64 characters.
+  string name = 1;
+
+  // https:// base URL where the worker serves WorkerLinkService, as reachable
+  // from the controller.
+  string url = 2;
+
+  // SHA-256 fingerprint of the worker's certificate (DER) as printed by
+  // setup: 64 hex digits, colons and upper case accepted.
+  string cert_fingerprint = 3;
+
+  // The pairing secret printed by setup: at least 32 printable ASCII
+  // characters without spaces. The controller sends it to the worker in
+  // every call and stores it encrypted.
+  string pairing_secret = 4;
+}
+
+// RegisterPassiveWorkerResponse returns the new worker.
+message RegisterPassiveWorkerResponse {
+  Worker worker = 1;
+}
+
+// ListWorkersRequest is empty; reserved for future filters.
+message ListWorkersRequest {}
+
+// ListWorkersResponse lists workers by name.
+message ListWorkersResponse {
+  repeated Worker workers = 1;
+}
+
+// GetWorkerRequest names a worker.
+message GetWorkerRequest {
+  string worker_id = 1;
+}
+
+// GetWorkerResponse returns the worker.
+message GetWorkerResponse {
+  Worker worker = 1;
+}
+
+// RenameWorkerRequest sets a worker's display name.
+message RenameWorkerRequest {
+  string worker_id = 1;
+  // New name, 1 to 64 characters.
+  string name = 2;
+}
+
+// RenameWorkerResponse returns the renamed worker.
+message RenameWorkerResponse {
+  Worker worker = 1;
+}
+
+// RemoveWorkerRequest names the worker to remove.
+message RemoveWorkerRequest {
+  string worker_id = 1;
+}
+
+// RemoveWorkerResponse is empty.
+message RemoveWorkerResponse {}
+
+// ---------------------------------------------------------------------------
+// Jobs
+// ---------------------------------------------------------------------------
+
+// JobService runs and observes jobs.
+//
+// PROVISIONAL (Milestone 2): no authentication yet, and RunJob takes an
+// explicit worker and a complete JobSpec with inline remote credentials.
+// Milestone 3 replaces it with jobs built from stored remotes and kinds,
+// owned by users; these messages may change.
+service JobService {
+  // RunJob queues a job on a worker. The spec is validated for shape only
+  // (an operation must be set); the worker validates it fully and reports
+  // problems as a FAILED job. The spec is stored encrypted and never
+  // returned by the API.
+  rpc RunJob(RunJobRequest) returns (RunJobResponse) {}
+
+  // GetJob returns one job.
+  rpc GetJob(GetJobRequest) returns (GetJobResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // ListJobs lists jobs, newest first.
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // CancelJob cancels a job. A queued job is cancelled at once; a dispatched
+  // or running job is asked to stop and becomes CANCELLED when the worker
+  // confirms (if it finishes first, its own outcome stands). Cancelling a
+  // finished job changes nothing. Returns the job after the request.
+  rpc CancelJob(CancelJobRequest) returns (CancelJobResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // WatchJob streams a job's status and live progress. The first message is
+  // the current job; then every status change sends the job again and every
+  // live sample sends progress. The stream ends after the job reaches a
+  // terminal status (at once for a finished job). Intermediate progress
+  // samples may be skipped for slow readers; status changes never are.
+  rpc WatchJob(WatchJobRequest) returns (stream WatchJobResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+// Job is one run of a JobSpec on a worker. The spec itself is never
+// returned: it contains secrets.
+message Job {
+  // Job ID (UUID).
+  string id = 1;
+
+  // The worker that runs the job.
+  string worker_id = 2;
+
+  // Job kind: the JobSpec.operation field name, e.g. "rclone_transfer".
+  string kind = 3;
+
+  // Lifecycle status.
+  JobStatus status = 4;
+
+  // Whether a cancel was requested while the job was dispatched or running
+  // and the worker has not confirmed it yet (or finished first).
+  bool cancel_requested = 5;
+
+  // When the job was created.
+  google.protobuf.Timestamp created_at = 6;
+  // When the worker accepted the job; unset while queued.
+  google.protobuf.Timestamp dispatched_at = 7;
+  // When the job's process started (worker clock); unset if it never did.
+  google.protobuf.Timestamp started_at = 8;
+  // When the job reached its terminal status; unset until then.
+  google.protobuf.Timestamp finished_at = 9;
+
+  // How often the job went back to the queue because its worker restarted
+  // before starting it.
+  int32 requeues = 10;
+
+  // Cumulative counters: the final ones for a finished job, the latest
+  // stored sample while it runs, unset before.
+  JobStats stats = 11;
+
+  // Why the job failed or was interrupted (or the cause of a cancellation);
+  // unset for successful jobs.
+  JobError error = 12;
+
+  // Non-fatal problems of a successful job.
+  repeated string warnings = 13;
+
+  // Exit code of the tool process; unset if no process ran or the job has not
+  // finished.
+  optional int32 exit_code = 14;
+
+  // Kind-specific output of a successful job, if the kind has any.
+  JobOutput output = 15;
+
+  reserved 16 to 29;
+}
+
+// JobStatus is the lifecycle status of a job (see internal/domain).
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  // Waiting to be accepted by its worker.
+  JOB_STATUS_QUEUED = 1;
+  // Accepted by the worker, not started yet.
+  JOB_STATUS_DISPATCHED = 2;
+  // The worker started the job's process.
+  JOB_STATUS_RUNNING = 3;
+  // Finished successfully. Terminal.
+  JOB_STATUS_SUCCEEDED = 4;
+  // Failed, or never dispatched. Terminal.
+  JOB_STATUS_FAILED = 5;
+  // Stopped on request. Terminal.
+  JOB_STATUS_CANCELLED = 6;
+  // The worker lost the job (restart, shutdown, removal). Terminal.
+  JOB_STATUS_INTERRUPTED = 7;
+}
+
+// RunJobRequest queues a job.
+message RunJobRequest {
+  // The worker to run the job on.
+  string worker_id = 1;
+
+  // What to run, including inline remote credentials (provisional).
+  JobSpec spec = 2;
+}
+
+// RunJobResponse returns the queued job.
+message RunJobResponse {
+  Job job = 1;
+}
+
+// GetJobRequest names a job.
+message GetJobRequest {
+  string job_id = 1;
+}
+
+// GetJobResponse returns the job.
+message GetJobResponse {
+  Job job = 1;
+}
+
+// ListJobsRequest filters and pages the job list.
+message ListJobsRequest {
+  // Only jobs of this worker; empty means all workers.
+  string worker_id = 1;
+
+  // Only jobs in one of these statuses; empty means all.
+  repeated JobStatus statuses = 2;
+
+  // Maximum number of jobs to return: 1 to 500, 0 means 50.
+  int32 page_size = 3;
+
+  // next_page_token of the previous response; empty for the first page.
+  string page_token = 4;
+}
+
+// ListJobsResponse is one page of jobs, newest first.
+message ListJobsResponse {
+  repeated Job jobs = 1;
+
+  // Token for the next page; empty on the last page.
+  string next_page_token = 2;
+}
+
+// CancelJobRequest names the job to cancel.
+message CancelJobRequest {
+  string job_id = 1;
+}
+
+// CancelJobResponse returns the job after the cancel request.
+message CancelJobResponse {
+  Job job = 1;
+}
+
+// WatchJobRequest names the job to watch.
+message WatchJobRequest {
+  string job_id = 1;
+}
+
+// WatchJobResponse is one update of a watched job.
+message WatchJobResponse {
+  oneof update {
+    // The job after a status change (and as the first message).
+    Job job = 1;
+    // A live progress sample of the running job.
+    JobProgress progress = 2;
+  }
+}
+
+// JobProgress is a live progress sample. Rates are derived by clients from
+// consecutive samples (delta bytes / delta time).
+message JobProgress {
+  // When the worker took the sample (worker clock).
+  google.protobuf.Timestamp time = 1;
+
+  // Cumulative counters.
+  JobStats stats = 2;
 }

@@ -1,0 +1,327 @@
+package dispatch_test
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"testing"
+
+	"google.golang.org/protobuf/proto"
+
+	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
+	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/link"
+)
+
+func TestControllerErrorCodesExistOnTheWire(t *testing.T) {
+	t.Parallel()
+	for _, code := range []string{
+		jobs.CodeInternal, jobs.CodeCancelled, jobs.CodeWorkerShutdown, jobs.CodeDispatchTimeout,
+		jobs.CodeWorkerRestarted, jobs.CodeWorkerLost, jobs.CodeWorkerRemoved,
+	} {
+		if link.ParseErrorCode(code) == syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSPECIFIED {
+			t.Errorf("jobs code %q has no JobErrorCode", code)
+		}
+	}
+}
+
+func TestStartJobDerivationAndAcks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	wid := e.enroll("w")
+	other := e.enroll("other")
+	j := e.run(wid)
+	const ep = "epoch-a"
+
+	cmds, err := e.disp.Commands(ctx, wid, ep)
+	if err != nil || len(cmds) != 1 {
+		t.Fatalf("Commands = (%v, %v), want one StartJob", cmds, err)
+	}
+	sj := cmds[0].GetStartJob()
+	if cmds[0].GetId() != "start:"+j.ID.String() || sj.GetJobId() != j.ID.String() || !proto.Equal(sj.GetSpec(), testSpec("/data")) {
+		t.Errorf("command = %v", cmds[0])
+	}
+	// Redelivered with the same ID until acked; nothing for other workers.
+	again, _ := e.disp.Commands(ctx, wid, ep)
+	if len(again) != 1 || again[0].GetId() != cmds[0].GetId() {
+		t.Errorf("redelivery = %v", again)
+	}
+	if none, _ := e.disp.Commands(ctx, other, "epoch-o"); len(none) != 0 {
+		t.Errorf("another worker got %v", none)
+	}
+
+	// Acks of unknown, malformed and foreign commands are ignored.
+	junk := []*syncrv1.CommandAck{{CommandId: "start:not-a-uuid"}, {CommandId: "bogus"}, {CommandId: "start:" + domain.NewJobID().String()}}
+	if err := e.disp.Ack(ctx, wid, ep, junk); err != nil {
+		t.Errorf("Ack(junk) = %v", err)
+	}
+	if err := e.disp.Ack(ctx, other, "epoch-o", []*syncrv1.CommandAck{{CommandId: cmds[0].GetId()}}); err != nil {
+		t.Errorf("foreign ack = %v", err)
+	}
+	if got := e.job(j.ID); got.Status != domain.JobQueued {
+		t.Fatalf("after foreign acks the job is %s", got.Status)
+	}
+
+	ack := []*syncrv1.CommandAck{{CommandId: cmds[0].GetId()}}
+	for range 3 { // idempotent, also across Report and Poll
+		if err := e.disp.Ack(ctx, wid, ep, ack); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := e.job(j.ID)
+	if got.Status != domain.JobDispatched || got.Epoch != ep || got.Version != 2 {
+		t.Errorf("after acks: %s epoch %q v%d, want dispatched by %s at v2", got.Status, got.Epoch, got.Version, ep)
+	}
+	if left, _ := e.disp.Commands(ctx, wid, ep); len(left) != 0 {
+		t.Errorf("commands after ack = %v", left)
+	}
+}
+
+func TestCommandsAreCapped(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.cfg.MaxCommands = 2
+	e.restart()
+	wid := e.enroll("w")
+	var want []string
+	for range 5 {
+		want = append(want, "start:"+e.run(wid).ID.String())
+	}
+	cmds, err := e.disp.Commands(context.Background(), wid, "ep")
+	if err != nil || len(cmds) != 2 || cmds[0].GetId() != want[0] || cmds[1].GetId() != want[1] {
+		t.Errorf("Commands = %v (%v), want the two oldest", cmds, err)
+	}
+}
+
+func TestUnreadableSpecFailsTheJob(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	wid := e.enroll("w")
+	j, err := e.jobs.Create(ctx, jobs.CreateParams{WorkerID: wid, Kind: "rclone_transfer", Spec: []byte{0xff, 0xff, 0xff}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmds, err := e.disp.Commands(ctx, wid, "ep"); err != nil || len(cmds) != 0 {
+		t.Errorf("Commands = (%v, %v)", cmds, err)
+	}
+	if got := e.job(j.ID); got.Status != domain.JobFailed || got.Error.Code != jobs.CodeInternal {
+		t.Errorf("job = %s %+v", got.Status, got.Error)
+	}
+}
+
+// TestIngestIsIdempotent replays the same outbox under different delivery
+// faults; the outcome must be identical to one clean delivery.
+func TestIngestIsIdempotent(t *testing.T) {
+	t.Parallel()
+	// seq: 1 Hello, 2 JobStarted, 3 Progress, (4 coalesced away), 5 Progress, 6 JobResult
+	tests := []struct {
+		name    string
+		batches [][]int64 // seqs per delivered Report; -1 marks a lost response
+		acks    []int64   // expected ack_seq per delivered batch
+	}{
+		{"once, in order", [][]int64{{1, 2, 3, 5, 6}}, []int64{6}},
+		{"duplicated", [][]int64{{1, 2, 3, 5, 6}, {1, 2, 3, 5, 6}}, []int64{6, 6}},
+		{"reordered within a batch", [][]int64{{6, 3, 1, 5, 2}}, []int64{6}},
+		{"newer batch first, older retry later", [][]int64{{1, 2, 3, 5, 6}, {1, 2, 3}}, []int64{6, 6}},
+		{"response lost, everything resent", [][]int64{{1, 2, 3}, {1, 2, 3, 5, 6}}, []int64{3, 6}},
+		{"overlapping batches", [][]int64{{1, 2}, {2, 3, 5}, {5, 6}}, []int64{2, 5, 6}},
+		{"duplicate seq inside a batch", [][]int64{{1, 2, 2, 3, 5, 6, 6}}, []int64{6}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			wid := e.enroll("w")
+			j := e.run(wid)
+			w := e.newFakeWorker(wid)
+			w.poll() // StartJob, acked with the next request
+			id := j.ID.String()
+			w.start(id)
+			w.progress(id, 10)
+			w.seq++ // seq 4: a coalesced progress event that never reaches the controller
+			w.progress(id, 30)
+			w.finish(id, syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED, nil)
+			bySeq := map[int64]*syncrv1.Event{}
+			for _, ev := range w.outbox {
+				bySeq[ev.GetSeq()] = ev
+			}
+
+			for i, seqs := range tt.batches {
+				req := &syncrv1.ReportRequest{Epoch: w.epoch, Acks: w.acks, State: w.state()}
+				for _, s := range seqs {
+					req.Events = append(req.Events, bySeq[s])
+				}
+				resp, err := e.disp.Report(context.Background(), wid, req)
+				if err != nil || resp.GetAckSeq() != tt.acks[i] {
+					t.Fatalf("batch %d: ack = (%d, %v), want %d", i, resp.GetAckSeq(), err, tt.acks[i])
+				}
+			}
+
+			got := e.job(j.ID)
+			if got.Status != domain.JobSucceeded || got.Version != 4 || got.Stats.Bytes != 1<<33 {
+				t.Errorf("job = %s v%d bytes %d, want succeeded v4 (each change applied once)", got.Status, got.Version, got.Stats.Bytes)
+			}
+			want := []domain.JobStatus{domain.JobQueued, domain.JobDispatched, domain.JobRunning, domain.JobSucceeded}
+			if st := e.rec.statuses(j.ID); !slices.Equal(st, want) {
+				t.Errorf("published statuses = %v", st)
+			}
+			if info := e.worker(wid).Info; info.Version != "v2.0.0-test" || len(info.LocalRoots) != 1 {
+				t.Errorf("worker info = %+v", info)
+			}
+			if wk := e.worker(wid); wk.Link.AckSeq != 6 || wk.Link.Epoch != w.epoch {
+				t.Errorf("link = %+v", wk.Link)
+			}
+		})
+	}
+}
+
+func TestIngestRejectsAndSkips(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	wid, other := e.enroll("w"), e.enroll("other")
+	foreign := e.run(other)
+	w := e.newFakeWorker(wid)
+	w.report() // Hello, ack 1
+
+	// A non-positive seq is a protocol violation: nothing is applied.
+	bad := &syncrv1.ReportRequest{Epoch: w.epoch, Events: []*syncrv1.Event{{Seq: 0, Payload: &syncrv1.Event_JobStarted{JobStarted: &syncrv1.JobStarted{JobId: foreign.ID.String()}}}}}
+	if _, err := e.disp.Report(ctx, wid, bad); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Errorf("seq 0: err = %v, want ErrInvalidArgument", err)
+	}
+	if _, err := e.disp.Report(ctx, wid, &syncrv1.ReportRequest{Epoch: ""}); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Errorf("empty epoch: err = %v", err)
+	}
+
+	// Events about jobs this worker does not own, malformed IDs and
+	// unknown event types are skipped and acknowledged.
+	w.emit(&syncrv1.Event{Payload: &syncrv1.Event_JobStarted{JobStarted: &syncrv1.JobStarted{JobId: foreign.ID.String()}}})
+	w.emit(&syncrv1.Event{Payload: &syncrv1.Event_JobResult{JobResult: &syncrv1.JobResult{JobId: "not-a-uuid", Status: syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED}}})
+	w.emit(&syncrv1.Event{Payload: &syncrv1.Event_Progress{Progress: &syncrv1.Progress{JobId: domain.NewJobID().String()}}})
+	w.emit(&syncrv1.Event{}) // a payload this controller does not know
+	if ack := w.report(); ack != 5 {
+		t.Errorf("ack = %d, want 5 (all skipped events acknowledged)", ack)
+	}
+	if got := e.job(foreign.ID); got.Status != domain.JobQueued {
+		t.Errorf("another worker's job became %s", got.Status)
+	}
+}
+
+func TestJobResultMapping(t *testing.T) {
+	t.Parallel()
+	output := &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticBackup{ResticBackup: &syncrv1.ResticBackupOutput{SnapshotId: "abc"}}}
+	tests := []struct {
+		name     string
+		cancel   bool
+		result   *syncrv1.JobResult
+		status   domain.JobStatus
+		code     string
+		notified bool
+	}{
+		{"succeeded", false, &syncrv1.JobResult{Status: syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED, Warnings: []string{"3 files unreadable"}, Output: output}, domain.JobSucceeded, "", false},
+		{"failed", false, &syncrv1.JobResult{Status: syncrv1.JobResultStatus_JOB_RESULT_STATUS_FAILED, Error: &syncrv1.JobError{Code: syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED, Message: "outside local_roots"}}, domain.JobFailed, "path_not_allowed", true},
+		{"failed without details", false, &syncrv1.JobResult{Status: syncrv1.JobResultStatus_JOB_RESULT_STATUS_FAILED}, domain.JobFailed, jobs.CodeInternal, true},
+		{"cancelled on request", true, &syncrv1.JobResult{Status: syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED, Error: &syncrv1.JobError{Code: syncrv1.JobErrorCode_JOB_ERROR_CODE_CANCELLED}}, domain.JobCancelled, jobs.CodeCancelled, false},
+		{"stopped by worker shutdown", false, &syncrv1.JobResult{Status: syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED, Error: &syncrv1.JobError{Code: syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_SHUTDOWN, Message: "shutting down"}}, domain.JobInterrupted, jobs.CodeWorkerShutdown, true},
+		{"unknown status", false, &syncrv1.JobResult{Status: syncrv1.JobResultStatus(42)}, domain.JobFailed, jobs.CodeInternal, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			wid := e.enroll("w")
+			j := e.run(wid)
+			w := e.newFakeWorker(wid)
+			w.poll()
+			w.start(j.ID.String())
+			w.report()
+			if tt.cancel {
+				if _, err := e.jobs.Cancel(context.Background(), j.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tt.result.JobId = j.ID.String()
+			w.emit(&syncrv1.Event{Payload: &syncrv1.Event_JobResult{JobResult: tt.result}})
+			w.held = nil
+			w.report()
+			got := e.job(j.ID)
+			if got.Status != tt.status || got.Error.Code != tt.code {
+				t.Errorf("job = %s %q, want %s %q", got.Status, got.Error.Code, tt.status, tt.code)
+			}
+			if (e.rec.failures() == 1) != tt.notified {
+				t.Errorf("notifier calls = %d, want notified %v", e.rec.failures(), tt.notified)
+			}
+			if tt.status == domain.JobSucceeded {
+				var out syncrv1.JobOutput
+				if err := proto.Unmarshal(got.Output, &out); err != nil || !proto.Equal(&out, output) || got.Warnings[0] != "3 files unreadable" {
+					t.Errorf("output = %v (%v), warnings %v", &out, err, got.Warnings)
+				}
+			}
+		})
+	}
+}
+
+func TestStaleEpochIsRejected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	wid := e.enroll("w")
+	j := e.run(wid)
+	w := e.newFakeWorker(wid)
+	w.poll()
+	w.start(j.ID.String())
+	old := w.reportRequest() // will be delivered late
+	w.report()
+	w.restart()
+	w.report() // the new process: the job is interrupted
+	before := e.worker(wid)
+	e.clock.Advance(1)
+
+	_, err := e.disp.Report(ctx, wid, old)
+	if !errors.Is(err, dispatch.ErrStaleEpoch) || !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("late request of the old process: err = %v, want ErrStaleEpoch", err)
+	}
+	for _, call := range []func() error{
+		func() error { return e.disp.Ack(ctx, wid, old.GetEpoch(), nil) },
+		func() error { _, err := e.disp.Commands(ctx, wid, old.GetEpoch()); return err },
+	} {
+		if err := call(); !errors.Is(err, dispatch.ErrStaleEpoch) {
+			t.Errorf("err = %v, want ErrStaleEpoch", err)
+		}
+	}
+	after := e.worker(wid)
+	if after.Link.Epoch != w.epoch || after.Link.AckSeq != before.Link.AckSeq || !after.Link.LastSeen.Equal(before.Link.LastSeen) {
+		t.Errorf("a stale request changed the link: %+v -> %+v", before.Link, after.Link)
+	}
+	if got := e.job(j.ID); got.Status != domain.JobInterrupted {
+		t.Errorf("job = %s", got.Status)
+	}
+}
+
+func TestRemovedWorkerIsRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	wid := e.enroll("w")
+	queued, running := e.run(wid), e.run(wid)
+	w := e.newFakeWorker(wid)
+	w.poll()
+	w.start(running.ID.String())
+	w.report()
+	if err := e.workers.Remove(ctx, wid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.disp.Report(ctx, wid, w.reportRequest()); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("Report of a removed worker: err = %v", err)
+	}
+	if got := e.job(queued.ID); got.Status != domain.JobInterrupted && got.Status != domain.JobFailed {
+		t.Errorf("queued/dispatched job = %s", got.Status)
+	}
+	if got := e.job(running.ID); got.Status != domain.JobInterrupted || got.Error.Code != jobs.CodeWorkerRemoved {
+		t.Errorf("running job = %s %q", got.Status, got.Error.Code)
+	}
+}

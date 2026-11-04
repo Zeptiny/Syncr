@@ -53,10 +53,17 @@ proto/syncr/v1/           wire contracts (api.proto, link.proto)
 gen/go/                   generated protobuf + Connect code (committed)
 cmd/syncr-controller/     controller composition root
 cmd/syncr-worker/         worker composition root and CLI (run, setup, tools, version)
-internal/domain/          entity IDs, job status state machine, domain errors
-internal/link/            link logic shared by both sides (job kinds today)
+internal/domain/          entity IDs, job status state machine, worker mode/status, domain errors
+internal/link/            link helpers shared by both sides (job kinds, error codes, auth headers)
+internal/app/workers/     worker registry: enrollment, registration, authentication, link state
+internal/app/jobs/        job lifecycle: create, cancel, watch, every status change, progress samples
+internal/controller/dispatch/ controller side of the worker link: ingest, commands, reconcile, long polls, passive loop
+internal/controller/config/   controller configuration
 internal/adapters/api/    Connect handlers and health endpoint
-internal/controller/      controller-only packages (config)
+internal/adapters/memstore/   in-memory repositories and live job broker (tests, dev)
+internal/adapters/storetest/  contract test suite every store adapter runs
+internal/adapters/secrets/    AES-256-GCM encryption of secrets at rest, with key IDs
+internal/adapters/idgen/      entity ID generators
 internal/worker/proc/     child-process supervisor (env allowlist, line streaming, cancellation)
 internal/worker/runner/   Runner contract and registry; runner/rclone and runner/restic implement it
 internal/worker/tools/    pinned rclone/restic provisioning (configured, bundled, managed download, PATH)
@@ -151,7 +158,14 @@ http:
 log:
   level: info                # SYNCR_LOG_LEVEL: debug, info, warn, error
   format: text               # SYNCR_LOG_FORMAT: text or json
+secrets:
+  key: ""                    # SYNCR_SECRETS_KEY: 32 random bytes, base64 (openssl rand -base64 32)
+  key_id: 1                  # SYNCR_SECRETS_KEY_ID
+  previous_keys: []          # SYNCR_SECRETS_PREVIOUS_KEYS: "<id>:<key>,..." kept for decryption while rotating
 ```
+
+The secrets key encrypts job specs and worker secrets at rest. Back it up:
+without it, stored secrets cannot be read.
 
 The worker accepts the same `log` section plus `data_dir`, `local_roots` and a
 `tools` section; see [worker configuration](docs/worker-config.md).

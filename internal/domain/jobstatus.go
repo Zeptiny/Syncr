@@ -11,13 +11,19 @@ import (
 // Lifecycle:
 //
 //	queued ──► dispatched ──► running ──► succeeded | failed | cancelled | interrupted
-//	   │            │
-//	   │            └──► succeeded | failed | cancelled | interrupted
+//	 ▲ │            │
+//	 │ │            ├──► succeeded | failed | cancelled | interrupted
+//	 │ │            │
+//	 └─┼────────────┘  (re-queued: the worker restarted before starting it)
+//	   │
 //	   └──► failed | cancelled
 //
 // A dispatched job may finish without ever being observed running: the
-// worker's result can be the first event the controller ingests. Terminal
-// statuses never change; a retry is a new job.
+// worker's result can be the first event the controller ingests. A
+// dispatched job goes back to queued when its worker process restarts (new
+// epoch) before starting it, because nothing ran yet; a running job is never
+// re-queued (it becomes interrupted instead). Terminal statuses never
+// change; a retry is a new job.
 type JobStatus string
 
 // Job statuses.
@@ -85,7 +91,7 @@ func (s JobStatus) AllowedTransitions() []JobStatus {
 	case JobQueued:
 		return []JobStatus{JobDispatched, JobFailed, JobCancelled}
 	case JobDispatched:
-		return []JobStatus{JobRunning, JobSucceeded, JobFailed, JobCancelled, JobInterrupted}
+		return []JobStatus{JobQueued, JobRunning, JobSucceeded, JobFailed, JobCancelled, JobInterrupted}
 	case JobRunning:
 		return []JobStatus{JobSucceeded, JobFailed, JobCancelled, JobInterrupted}
 	}

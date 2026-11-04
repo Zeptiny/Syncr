@@ -11,6 +11,9 @@ import (
 	"github.com/Zeptiny/Syncr/internal/platform/logging"
 )
 
+// testKey is 32 zero bytes in base64 (a test value, not a secret).
+const testKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
 func TestDefaultIsValid(t *testing.T) {
 	t.Parallel()
 	cfg := Default()
@@ -33,6 +36,19 @@ func TestValidate(t *testing.T) {
 		{"port out of range", func(c *Config) { c.HTTP.Addr = ":70000" }, "invalid port"},
 		{"zero timeout", func(c *Config) { c.HTTP.ShutdownTimeout = 0 }, "shutdown_timeout"},
 		{"bad log format", func(c *Config) { c.Log.Format = "xml" }, "format"},
+		{"secrets key", func(c *Config) { c.Secrets.Key = testKey }, ""},
+		{"rotation", func(c *Config) {
+			c.Secrets = Secrets{Key: testKey, KeyID: 2, PreviousKeys: []string{"1:" + testKey}}
+		}, ""},
+		{"short key", func(c *Config) { c.Secrets.Key = "c2hvcnQ=" }, "secrets.key: key is 5 bytes"},
+		{"key not base64", func(c *Config) { c.Secrets.Key = "not base64!" }, "secrets.key: key is not valid base64"},
+		{"previous without key", func(c *Config) { c.Secrets.PreviousKeys = []string{"1:" + testKey} }, "needs secrets.key"},
+		{"previous key id clash", func(c *Config) {
+			c.Secrets = Secrets{Key: testKey, KeyID: 1, PreviousKeys: []string{"1:" + testKey}}
+		}, "used twice"},
+		{"previous key malformed", func(c *Config) {
+			c.Secrets = Secrets{Key: testKey, KeyID: 1, PreviousKeys: []string{testKey}}
+		}, "previous_keys[0]: want <id>:<base64 key>"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
