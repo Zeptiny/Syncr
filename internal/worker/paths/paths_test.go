@@ -96,3 +96,37 @@ func TestToolsDirAndString(t *testing.T) {
 		t.Logf("DataDir on this host: %v", err) // environment dependent, informational
 	}
 }
+
+func TestConfigFile(t *testing.T) {
+	t.Parallel()
+	xdg := t.TempDir()
+	home := t.TempDir()
+	tests := []struct {
+		name    string
+		mode    Mode
+		env     Env
+		want    string
+		wantErr bool
+	}{
+		{name: "linux system", mode: ModeSystem, env: fakeEnv("linux", nil, home, 0), want: "/etc/syncr/worker.yaml"},
+		{name: "linux user xdg", mode: ModeUser, env: fakeEnv("linux", map[string]string{"XDG_CONFIG_HOME": xdg}, home, 1000), want: filepath.Join(xdg, "syncr", "worker.yaml")},
+		{name: "linux user relative xdg ignored", mode: ModeUser, env: fakeEnv("linux", map[string]string{"XDG_CONFIG_HOME": "rel"}, home, 1000), want: filepath.Join(home, ".config", "syncr", "worker.yaml")},
+		{name: "linux user fallback", mode: ModeUser, env: fakeEnv("linux", nil, home, 1000), want: filepath.Join(home, ".config", "syncr", "worker.yaml")},
+		{name: "linux user no home", mode: ModeUser, env: fakeEnv("linux", nil, "", 1000), wantErr: true},
+		{name: "windows system", mode: ModeSystem, env: fakeEnv("windows", map[string]string{"ProgramData": `C:\ProgramData`}, home, -1), want: filepath.Join(`C:\ProgramData`, "Syncr", "worker.yaml")},
+		{name: "windows user", mode: ModeUser, env: fakeEnv("windows", map[string]string{"LocalAppData": `C:\Users\a\AppData\Local`}, home, -1), want: filepath.Join(`C:\Users\a\AppData\Local`, "Syncr", "worker.yaml")},
+		{name: "windows missing ProgramData", mode: ModeSystem, env: fakeEnv("windows", nil, home, -1), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ConfigFile(tt.mode, tt.env)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("ConfigFile = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

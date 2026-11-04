@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"maps"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ func testEnv(vars map[string]string) (*env, *bytes.Buffer, *bytes.Buffer) {
 		stderr:    &stderr,
 		lookupEnv: func(k string) (string, bool) { v, ok := vars[k]; return v, ok },
 		info:      version.Info{Version: "v2.0.0-test", Commit: "abc", GoVersion: "go1.27"},
+		host:      interactiveHost{},
 	}, &stdout, &stderr
 }
 
@@ -35,7 +37,8 @@ func TestDispatch(t *testing.T) {
 		{name: "unknown", args: []string{"frobnicate"}, wantCode: exitUsage, wantStderr: `unknown command "frobnicate"`},
 		{name: "version", args: []string{"version"}, wantCode: exitOK, wantStdout: "syncr-worker v2.0.0-test (commit abc"},
 		{name: "version extra args", args: []string{"version", "x"}, wantCode: exitUsage, wantStderr: "unexpected arguments"},
-		{name: "setup", args: []string{"setup"}, wantCode: exitError, wantStderr: "syncr-worker setup: not implemented yet"},
+		{name: "setup without arguments", args: []string{"setup"}, wantCode: exitError, wantStderr: "syncr-worker setup: --controller is required"},
+		{name: "service without action", args: []string{"service"}, wantCode: exitUsage, wantStderr: "install"},
 		{name: "subcommand help", args: []string{"run", "-h"}, wantCode: exitOK, wantStderr: "-config"},
 		{name: "bad flag", args: []string{"run", "-bogus"}, wantCode: exitUsage, wantStderr: "flag provided but not defined"},
 	}
@@ -140,4 +143,14 @@ func TestRunRejectsInvalidConfig(t *testing.T) {
 	if !strings.Contains(stderr.String(), "format") {
 		t.Errorf("stderr: %s", stderr)
 	}
+}
+
+// interactiveHost is a service.Host for a process not started by a service
+// manager, whatever the test runner's parent is.
+type interactiveHost struct{}
+
+func (interactiveHost) Managed() bool { return false }
+
+func (interactiveHost) Run(context.Context, string, io.Writer, func(context.Context, io.Writer) error) error {
+	panic("interactiveHost.Run must not be called")
 }

@@ -1,7 +1,6 @@
 // Package config defines the worker's configuration file and environment
-// variables. Milestone 2 adds the job settings (concurrency, progress
-// interval) and the link settings (mode, controller URL, listen address,
-// credentials).
+// variables: logging, directories, tools, job settings (concurrency,
+// progress interval) and the link to the controller (see LinkConfig).
 //
 // Paths are validated for the host the worker runs on: they must be
 // absolute there (a Windows worker needs "C:\..." paths, a Linux worker
@@ -46,6 +45,10 @@ type Config struct {
 	// ProgressInterval is the minimum time between two progress reports of
 	// one job (the last sample is always reported).
 	ProgressInterval time.Duration `yaml:"progress_interval" env:"SYNCR_PROGRESS_INTERVAL"`
+
+	// Link is how the worker talks to the controller. `syncr-worker setup`
+	// fills it in; an empty link means the worker is not enrolled.
+	Link LinkConfig `yaml:"link"`
 }
 
 // Defaults and bounds of the job settings.
@@ -99,6 +102,7 @@ func (c *Config) Validate() error {
 	if c.ProgressInterval < MinProgressInterval || c.ProgressInterval > MaxProgressInterval {
 		errs = append(errs, fmt.Errorf("progress_interval: %s is outside %s..%s", c.ProgressInterval, MinProgressInterval, MaxProgressInterval))
 	}
+	errs = append(errs, c.Link.Validate())
 	seen := make(map[string]bool, len(c.LocalRoots))
 	for i, root := range c.LocalRoots {
 		field := fmt.Sprintf("local_roots[%d]", i)

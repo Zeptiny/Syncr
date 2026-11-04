@@ -193,3 +193,10 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+// load2 loads path with no environment overrides.
+func load2(path string) (Config, error) {
+	cfg := Default()
+	err := platformconfig.Load(path, func(string) (string, bool) { return "", false }, &cfg)
+	return cfg, err
+}

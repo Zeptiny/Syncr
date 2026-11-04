@@ -143,6 +143,23 @@ jobs:
           SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
           SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
         run: go test -tags integration -count=1 -timeout 20m ./...
+      - name: Build the worker for the service test
+        run: go build -o "$RUNNER_TEMP/syncr-worker" ./cmd/syncr-worker
+      - name: Real systemd service (install, start, stop, uninstall)
+        # Installs the worker as a system unit on this throw-away runner, so
+        # the test binary runs as root. It removes the unit again, also when
+        # it fails.
+        env:
+          SYNCR_TEST_SERVICE: "1"
+          SYNCR_TEST_WORKER: ${{ runner.temp }}/syncr-worker
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: |
+          go test -c -tags integration -o "$RUNNER_TEMP/worker.test" ./cmd/syncr-worker
+          sudo -E "$RUNNER_TEMP/worker.test" -test.run '^TestIntegrationRealService$' -test.v -test.count=1 -test.timeout 10m
+      - name: Service journal (on failure)
+        if: failure()
+        run: sudo journalctl -u syncr-worker --no-pager -n 100 || true
 
   integration-windows:
     name: integration (windows)
@@ -179,6 +196,24 @@ jobs:
           SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
           SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
         run: go test -v -tags integration -count=1 -timeout 30m ./...
+      - name: Build the worker for the service test
+        shell: pwsh
+        run: go build -o "$env:RUNNER_TEMP\syncr-worker.exe" ./cmd/syncr-worker
+      - name: Real Windows Service (install, start, stop, uninstall)
+        # The runner is an elevated administrator and throw-away, so the
+        # worker may be installed as a Windows Service; the test removes it
+        # again, also when it fails.
+        shell: pwsh
+        env:
+          SYNCR_TEST_SERVICE: "1"
+          SYNCR_TEST_WORKER: ${{ runner.temp }}\syncr-worker.exe
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: go test -v -tags integration -count=1 -timeout 15m -run '^TestIntegrationRealService$' ./cmd/syncr-worker
+      - name: Service Event Log entries (on failure)
+        if: failure()
+        shell: pwsh
+        run: Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='syncr-worker'} -MaxEvents 50 -ErrorAction SilentlyContinue | Format-List TimeCreated, LevelDisplayName, Message
 
   build:
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})

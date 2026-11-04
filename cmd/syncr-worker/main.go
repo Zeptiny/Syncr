@@ -20,6 +20,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/platform/config"
 	"github.com/Zeptiny/Syncr/internal/platform/version"
 	"github.com/Zeptiny/Syncr/internal/worker/paths"
+	"github.com/Zeptiny/Syncr/internal/worker/service"
 )
 
 const name = "syncr-worker"
@@ -49,6 +50,20 @@ type env struct {
 	lookupEnv      config.LookupEnv
 	info           version.Info
 	tools          toolsOverrides // zero value: pinned tools, real network
+	// host connects `run` to the service manager; nil means the real one.
+	host service.Host
+	// link starts the link transport inside `run`; nil means startLink.
+	link linkStarter
+	// setup replaces the collaborators of `setup` and `service`; the zero
+	// value means the real service manager, controller and network.
+	setup setupOverrides
+}
+
+func (e *env) serviceHost() service.Host {
+	if e.host != nil {
+		return e.host
+	}
+	return service.NewHost()
 }
 
 // pathsEnv returns the environment for locating the default data directory.
@@ -68,6 +83,7 @@ func commands() []command {
 	return []command{
 		{name: "run", summary: "run the worker until interrupted", run: runCmd},
 		{name: "setup", summary: "enroll this machine and install the worker service", run: setupCmd},
+		{name: "service", summary: "install, remove, start, stop or inspect the worker service", run: serviceCmd},
 		{name: "tools", summary: "provision and inspect the pinned rclone and restic binaries", run: toolsCmd},
 		{name: "version", summary: "print version information", run: versionCmd},
 	}
