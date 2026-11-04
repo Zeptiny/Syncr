@@ -5,24 +5,36 @@ package syncr.v1;
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
-// Worker link: the protocol between the controller and its workers. This is
-// a first draft (Milestone 1) that Milestone 2 refines; field numbers are
-// reserved generously so the shape can grow without breaking changes.
+// Worker link: the protocol between the controller and its workers (see
+// docs/adr/0002-worker-link.md). Unreleased: Milestone 2 may still change it;
+// field numbers are reserved generously so it can grow without breaking
+// changes once released.
 //
-// Design (see docs/adr/0002-worker-link.md):
+// Design:
 //   - Everything is unary over HTTP/1.1, so it works through any proxy and can
 //     be debugged with curl. The same messages flow in both modes.
 //   - Active mode: the worker calls ControllerLinkService (Report, Poll).
 //   - Passive mode: the controller calls WorkerLinkService (Command, Pull).
-//   - Workers authenticate with a per-worker bearer token in the HTTP
-//     Authorization header, never inside messages. The worker identity is
-//     derived from that token.
+//   - Enrollment: a new worker calls EnrollmentService.Enroll once, with a
+//     single-use enrollment token, to obtain its worker ID and secret.
 //   - Workers keep an in-memory outbox of Events. Each event has a seq that
 //     increases strictly within an epoch (a random ID chosen at worker process
 //     start). The controller ingests idempotently by (epoch, seq) and acks the
 //     highest seq it has durably stored; the worker then drops acked events.
 //   - Commands are idempotent: workers deduplicate StartJob/CancelJob by
 //     job_id, and acknowledge commands by Command.id.
+//
+// Authentication (HTTP Authorization header, never inside messages; secrets
+// are compared in constant time):
+//   - ControllerLinkService: "Authorization: Bearer <worker_id>.<secret>".
+//     The worker identity is derived from this header only.
+//   - WorkerLinkService: "Authorization: Bearer <secret>", sent by the
+//     controller. The controller authenticates the worker by its TLS
+//     certificate, whose SHA-256 fingerprint was pinned at registration;
+//     no CA is involved.
+//   - EnrollmentService: no Authorization header; the enrollment token in
+//     the request is the credential.
+// internal/link has helpers that format and parse these headers.
 
 // ControllerLinkService is served by the controller and called by workers in
 // active mode (desktops, NAT, no open ports on the worker).
@@ -31,11 +43,19 @@ service ControllerLinkService {
   // current state. Workers call it about once a second while jobs run and as a
   // heartbeat (~15s) when idle. Safe to retry: ingest is idempotent by
   // (epoch, seq) and acks are idempotent by command id.
+  //
+  // The controller handles a request in this order: a new epoch is adopted
+  // (reconciling the jobs of the previous one), then acks, then events in
+  // seq order, then the state snapshot. A request carrying an epoch the
+  // controller has already replaced by a newer one is rejected with
+  // FAILED_PRECONDITION (it can only be a delayed request of a previous
+  // worker process).
   rpc Report(ReportRequest) returns (ReportResponse) {}
 
-  // Poll long-polls for pending commands. The controller holds the call open
-  // for up to PollRequest.wait and returns early as soon as commands are
-  // available. Commands are redelivered until acknowledged.
+  // Poll long-polls for pending commands. The controller first applies the
+  // request's acks (so acknowledged commands are never returned again), then
+  // holds the call open for up to PollRequest.wait and returns as soon as
+  // commands are available. Commands are redelivered until acknowledged.
   rpc Poll(PollRequest) returns (PollResponse) {}
 }
 
@@ -49,8 +69,23 @@ service WorkerLinkService {
 
   // Pull fetches outbox events after a given seq and acknowledges everything
   // up to and including it. The controller calls it about once a second while
-  // the worker is busy and every ~15s when idle.
+  // the worker is busy and every ~15s when idle, and again at once while
+  // has_more is set.
   rpc Pull(PullRequest) returns (PullResponse) {}
+}
+
+// EnrollmentService is served by the controller next to
+// ControllerLinkService. It is the only link endpoint that needs no worker
+// credentials: `syncr-worker setup --token ...` calls it once to exchange a
+// short-lived, single-use enrollment token (created by an admin) for a worker
+// ID and a long-lived worker secret.
+service EnrollmentService {
+  // Enroll registers a new worker. Fails with UNAUTHENTICATED if the token is
+  // unknown, expired or already used (deliberately indistinguishable), and
+  // with INVALID_ARGUMENT for a malformed request. Not idempotent: a retry
+  // after a lost response fails because the token is spent; the admin then
+  // issues a new token (and may remove the orphaned worker).
+  rpc Enroll(EnrollRequest) returns (EnrollResponse) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -63,9 +98,11 @@ message ReportRequest {
   // restarted and lost all in-memory state; the controller reconciles.
   string epoch = 1;
 
-  // Outbox events not yet acknowledged, in seq order. May be empty
-  // (heartbeat). Under backlog, progress events of the same job may have been
-  // merged into the latest one; JobResult events are never dropped.
+  // Outbox events not yet acknowledged, in seq order, starting at the oldest
+  // unacked one. May be empty (heartbeat). Under backlog, progress events of
+  // the same job may have been merged into the latest one; Hello, JobStarted
+  // and JobResult events are never dropped. Workers bound a batch by count
+  // and by encoded size (about 4 MiB) but always include at least one event.
   repeated Event events = 2;
 
   // Acknowledgements for commands received through Poll.
@@ -93,8 +130,9 @@ message PollRequest {
   string epoch = 1;
 
   // Maximum time the controller may hold the call open before returning an
-  // empty response. The controller caps it (about 25s) to stay below common
-  // proxy idle timeouts.
+  // empty response. Unset means the controller's maximum; zero or negative
+  // means "do not wait". The controller caps it (about 25s) to stay below
+  // common proxy idle timeouts.
   google.protobuf.Duration wait = 2;
 
   // Acknowledgements for commands received in previous polls. Acks may also be
@@ -144,7 +182,13 @@ message PullRequest {
   // Upper bound on the number of events returned. Zero means a worker default.
   int32 max_events = 3;
 
-  reserved 4 to 15;
+  // Soft upper bound on the total encoded size of the returned events, in
+  // bytes. Zero means a worker default (about 4 MiB). The worker always
+  // returns at least one pending event, however large, so a big JobResult
+  // (e.g. a long snapshot list) cannot block the outbox.
+  int32 max_bytes = 4;
+
+  reserved 5 to 15;
 }
 
 // PullResponse returns outbox events and the worker's current state.
@@ -164,6 +208,60 @@ message PullResponse {
   reserved 5 to 15;
 }
 
+// EnrollRequest exchanges an enrollment token for worker credentials.
+message EnrollRequest {
+  // Single-use token from WorkerAdminService.CreateEnrollmentToken.
+  string enrollment_token = 1;
+
+  // Display name of the worker, e.g. its host name. Empty lets the
+  // controller choose one. At most 64 characters; admins can rename workers.
+  string name = 2;
+
+  // Operating system and architecture as reported by Go (GOOS, GOARCH).
+  // Informational; the worker's Hello event updates them.
+  string os = 3;
+  string arch = 4;
+
+  // Link mode. UNSPECIFIED means ACTIVE.
+  WorkerMode mode = 5;
+
+  // PASSIVE only: the https:// base URL where the worker serves
+  // WorkerLinkService, as reachable from the controller.
+  string url = 6;
+
+  // PASSIVE only: SHA-256 fingerprint of the worker's TLS certificate (DER
+  // encoding), as 64 hex digits; colons and upper case are accepted. The
+  // controller pins it instead of trusting a CA.
+  string cert_fingerprint = 7;
+
+  reserved 8 to 15;
+}
+
+// EnrollResponse carries the new worker's credentials. The secret is shown
+// exactly once: the worker stores it in its configuration.
+message EnrollResponse {
+  // The worker's ID (UUID).
+  string worker_id = 1;
+
+  // The worker secret. Active workers send it in every link call; the
+  // controller sends it to passive workers. The controller stores it
+  // encrypted.
+  string worker_secret = 2;
+
+  reserved 3 to 15;
+}
+
+// WorkerMode selects which side of the link initiates calls.
+enum WorkerMode {
+  WORKER_MODE_UNSPECIFIED = 0;
+  // The worker calls the controller (ControllerLinkService). Works behind NAT
+  // and without open ports.
+  WORKER_MODE_ACTIVE = 1;
+  // The controller calls the worker (WorkerLinkService) over TLS with a
+  // pinned certificate.
+  WORKER_MODE_PASSIVE = 2;
+}
+
 // ---------------------------------------------------------------------------
 // Events (worker -> controller)
 // ---------------------------------------------------------------------------
@@ -172,7 +270,11 @@ message PullResponse {
 // an envelope that carries the worker epoch (ReportRequest.epoch,
 // PullResponse.epoch); seq is scoped to that epoch.
 message Event {
-  // Strictly increasing within an epoch, starting at 1.
+  // Strictly increasing within an epoch, starting at 1 (the Hello), but not
+  // contiguous: under backlog the worker coalesces a job's Progress events,
+  // removing older ones. The controller processes the events of a request in
+  // seq order and skips every seq it has already stored, so a batch must
+  // start at the worker's oldest unacked event.
   int64 seq = 1;
 
   // When the worker produced the event.
@@ -230,7 +332,11 @@ message ToolVersion {
   string version = 2;
 }
 
-// JobStarted reports that a job's process was started.
+// JobStarted reports that the worker handed a job to its runner (the job
+// left the worker's local queue). It does not guarantee that a tool process
+// started: the runner may still reject the spec (e.g. PATH_NOT_ALLOWED) and
+// report a FAILED JobResult right after. Every job that ran has exactly one
+// JobStarted, before its Progress events and its JobResult.
 message JobStarted {
   // Controller-assigned job UUID.
   string job_id = 1;
@@ -287,7 +393,9 @@ message JobResult {
   // Terminal status.
   JobResultStatus status = 2;
 
-  // Failure details; unset when status is SUCCEEDED.
+  // Failure details; unset when status is SUCCEEDED. For CANCELLED, code is
+  // CANCELLED (stopped by a CancelJob command) or WORKER_SHUTDOWN (stopped
+  // because the worker is shutting down) and message gives the cause.
   JobError error = 3;
 
   // Final cumulative counters.
@@ -334,7 +442,9 @@ enum JobResultStatus {
   JOB_RESULT_STATUS_SUCCEEDED = 1;
   // The job could not be run or the tool reported a failure.
   JOB_RESULT_STATUS_FAILED = 2;
-  // The job was stopped by a CancelJob command or worker shutdown.
+  // The job was stopped by a CancelJob command or worker shutdown. The
+  // controller records CANCELLED if a cancel was requested and INTERRUPTED
+  // otherwise.
   JOB_RESULT_STATUS_CANCELLED = 3;
 }
 
@@ -382,24 +492,76 @@ enum JobErrorCode {
   // The restic repository password is wrong (restic exit code 12). Retrying
   // cannot succeed.
   JOB_ERROR_CODE_WRONG_PASSWORD = 12;
+
+  // The job was stopped by a CancelJob command (JobResult status
+  // CANCELLED).
+  JOB_ERROR_CODE_CANCELLED = 13;
+  // The job was stopped because the worker is shutting down (JobResult
+  // status CANCELLED). The controller records the job as INTERRUPTED unless
+  // a cancel had been requested; it also uses this code for a CANCELLED
+  // result without a code that nobody asked for.
+  JOB_ERROR_CODE_WORKER_SHUTDOWN = 14;
+
+  // Codes 20 and up are set by the controller, never by workers.
+
+  // The worker did not accept the job within the controller's dispatch
+  // timeout (it was offline or unreachable). Status FAILED.
+  JOB_ERROR_CODE_DISPATCH_TIMEOUT = 20;
+  // The worker restarted (new epoch) while the job was running, so its
+  // outcome is unknown. Status INTERRUPTED.
+  JOB_ERROR_CODE_WORKER_RESTARTED = 21;
+  // The worker no longer holds the job but never reported its result.
+  // Status INTERRUPTED.
+  JOB_ERROR_CODE_WORKER_LOST = 22;
+  // The worker was removed before the job finished. Status FAILED (never
+  // dispatched) or INTERRUPTED.
+  JOB_ERROR_CODE_WORKER_REMOVED = 23;
 }
 
-// WorkerState is a snapshot (not an event) of the jobs a worker currently
-// holds. During reconcile, jobs the controller considers active but missing
-// here become "interrupted", and jobs listed here that the controller
-// considers finished are cancelled.
+// WorkerState is a snapshot (not an event) of the jobs a worker holds,
+// consistent with the events of the envelope that carries it: it lists every
+// job the worker holds now (queued locally or running) plus every job whose
+// JobResult is still in the outbox but not among the envelope's events, and
+// never a job whose JobResult is among them. So a job missing from jobs has
+// its JobResult in the envelope or acknowledged before.
+//
+// The controller reconciles it with its own view (see
+// internal/controller/dispatch): listed jobs it considers finished or does
+// not know are cancelled; a listed job it still considers queued counts as
+// accepted; a job it considers running in this epoch but missing here
+// becomes "interrupted", provided the snapshot is current (last_seq equals
+// the highest seq the controller has stored).
 message WorkerState {
+  // Jobs accepted by the worker that have not finished yet (see above).
   repeated ActiveJob jobs = 1;
 
-  reserved 2 to 9;
+  // Seq of the last event this snapshot accounts for: the last event of the
+  // envelope's events or, when it carries none, the last seq the worker has
+  // assigned in its epoch. It lets the controller recognize a stale snapshot
+  // (a delayed or retried request). Zero means unknown: the controller then
+  // uses the envelope's last event and, for an envelope without events,
+  // skips the rules that need it.
+  int64 last_seq = 2;
+
+  // Unacknowledged events in the worker's outbox, including the envelope's.
+  // Informational (shown to admins, logged when growing).
+  int32 outbox_backlog = 3;
+
+  // True while the outbox is above its high-water mark: the worker admits no
+  // new jobs until the controller acknowledges events.
+  bool outbox_saturated = 4;
+
+  reserved 5 to 9;
 }
 
-// ActiveJob is a job accepted by the worker that has not finished yet.
+// ActiveJob is a job accepted by the worker that has not finished yet (or
+// whose JobResult is not in the envelope yet).
 message ActiveJob {
   // Controller-assigned job UUID.
   string job_id = 1;
 
-  // When the job's process started; unset while the job waits to start.
+  // When the job was handed to its runner (see JobStarted); unset while the
+  // job waits in the worker's local queue for a free slot.
   google.protobuf.Timestamp started_at = 2;
 
   reserved 3 to 9;
@@ -412,7 +574,9 @@ message ActiveJob {
 // Command is an instruction for a worker. Commands are redelivered until
 // acknowledged, so handling must be idempotent.
 message Command {
-  // Controller-assigned command UUID, used for acks.
+  // Controller-assigned command ID, echoed verbatim in CommandAck. Opaque to
+  // workers (do not parse it); at most 128 bytes. The controller derives it
+  // from the job, so a redelivered command keeps its ID.
   string id = 1;
 
   reserved 2 to 9;

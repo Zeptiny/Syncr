@@ -1,27 +1,28 @@
-// Command syncr-controller runs the Syncr controller: the API, the web UI and
-// (from later milestones) scheduling, job dispatch and worker links.
+// Command syncr-controller runs the Syncr controller: the API, the worker
+// link (enrollment, active workers' Report/Poll, the passive supervisor),
+// job dispatch and (from later milestones) the web UI and scheduling.
 //
-// This file is the composition root: it is the only place that reads the
-// process environment, builds adapters and wires them together.
+// This package is the composition root: it is the only place that reads the
+// process environment, builds adapters and wires them together (wire.go;
+// docs/adr/0005-runtime-wiring.md describes the result).
 package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/Zeptiny/Syncr/internal/adapters/api"
 	controllerconfig "github.com/Zeptiny/Syncr/internal/controller/config"
 	"github.com/Zeptiny/Syncr/internal/platform/config"
-	"github.com/Zeptiny/Syncr/internal/platform/httpserver"
 	"github.com/Zeptiny/Syncr/internal/platform/logging"
 	"github.com/Zeptiny/Syncr/internal/platform/version"
 )
@@ -51,6 +52,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, lookupEnv
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", "", "path to the YAML config file (default $"+config.PathEnv+"; optional)")
 	showVersion := fs.Bool("version", false, "print version information and exit")
+	healthcheck := fs.Bool("healthcheck", false, "check that the controller configured like this one answers on /healthz, and exit 0 if it does (for container health checks)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -77,34 +79,56 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, lookupEnv
 		return err
 	}
 
+	if *healthcheck {
+		return checkHealth(ctx, cfg.HTTP, stdout)
+	}
+	if err := cfg.CheckServe(); err != nil {
+		return err
+	}
+
 	logger, err := logging.New(stderr, cfg.Log)
 	if err != nil {
 		return err
 	}
-
-	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.HTTP.Addr)
-	if err != nil {
-		return fmt.Errorf("listen: %w", err)
-	}
-
-	protocols := new(http.Protocols)
-	protocols.SetHTTP1(true)
-	protocols.SetUnencryptedHTTP2(true) // gRPC clients without TLS (h2c)
-	srv := &http.Server{
-		Handler:           api.NewHandler(api.Deps{BuildInfo: info, Logger: logger}),
-		ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout,
-		Protocols:         protocols,
-		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
-	}
-
-	logger.Info("controller starting",
-		"version", info.Version, "commit", info.Commit, "addr", ln.Addr().String())
-	if ready != nil {
-		ready <- ln.Addr()
-	}
-	if err := httpserver.Serve(ctx, srv, ln, cfg.HTTP.ShutdownTimeout); err != nil {
+	if err := serve(ctx, cfg, info, logger, ready); err != nil {
 		return err
 	}
 	logger.Info("controller stopped")
 	return nil
+}
+
+// healthTimeout bounds -healthcheck.
+const healthTimeout = 5 * time.Second
+
+// checkHealth calls /healthz of the controller listening on cfg.Addr over
+// loopback. It verifies only that the process answers, so a TLS certificate
+// is not verified (it is usually issued for a public name, not 127.0.0.1).
+func checkHealth(ctx context.Context, cfg controllerconfig.HTTP, stdout io.Writer) error {
+	_, port, err := net.SplitHostPort(cfg.Addr)
+	if err != nil {
+		return err
+	}
+	scheme := "http"
+	tr := &http.Transport{DisableKeepAlives: true} // no proxy: this is a loopback call
+	if cfg.TLS() {
+		scheme = "https"
+		tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true} //nolint:gosec // loopback liveness probe of this very process; the certificate names the public host
+	}
+	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
+	defer cancel()
+	url := scheme + "://" + net.JoinHostPort("127.0.0.1", port) + "/healthz"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := (&http.Client{Transport: tr}).Do(req)
+	if err != nil {
+		return fmt.Errorf("healthcheck: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("healthcheck: %s answered %s", url, resp.Status)
+	}
+	_, err = fmt.Fprintln(stdout, "ok")
+	return err
 }

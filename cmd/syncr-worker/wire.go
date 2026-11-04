@@ -44,7 +44,7 @@ type workerDeps struct {
 }
 
 // worker is the assembled job-execution side of the worker: everything the
-// link (Milestone 2) needs to run jobs.
+// link (startLink) needs to run jobs.
 type worker struct {
 	// registry holds the runners of every job kind this worker executes.
 	registry *runner.Registry

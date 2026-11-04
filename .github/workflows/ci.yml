@@ -16,6 +16,9 @@ concurrency:
 env:
   GOLANGCI_LINT_VERSION: v2.15.0
   BUF_VERSION: "1.75.0"
+  # Run with `go run` (pinned here and in the Makefile), so no install step is
+  # needed and the generated code cannot depend on a stray local version.
+  SQLC_VERSION: v1.31.1
 
 jobs:
   lint:
@@ -63,6 +66,24 @@ jobs:
           buf generate
           git add -N gen
           git diff --exit-code -- gen
+
+  sqlc:
+    name: sqlc generate drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true # modules and build cache, keyed by go.sum
+          cache-dependency-path: go.sum
+      - name: sqlc vet
+        run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@${{ env.SQLC_VERSION }} vet
+      - name: Generated code is up to date
+        run: |
+          go run github.com/sqlc-dev/sqlc/cmd/sqlc@${{ env.SQLC_VERSION }} generate
+          git add -N internal/adapters/postgres/db
+          git diff --exit-code -- internal/adapters/postgres/db
 
   test:
     name: go test (${{ matrix.os }})
@@ -116,12 +137,50 @@ jobs:
           echo "rclone=$rclone" >> "$GITHUB_OUTPUT"
           echo "restic=$restic" >> "$GITHUB_OUTPUT"
       - name: go test -tags integration
-        # Docker is available on the runner, so the MinIO and SFTP
-        # (testcontainers) tests run too.
+        # Docker is available on the runner, so the Postgres, MinIO and SFTP
+        # (testcontainers) tests run too, and so do the end-to-end tests of
+        # the real binaries (internal/e2e/system): they build both binaries,
+        # run the controller on Postgres, enroll workers with `setup` and
+        # kill and restart the processes mid-job.
         env:
           SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
           SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
         run: go test -tags integration -count=1 -timeout 20m ./...
+      - name: go test -race (link wiring and e2e, integration tag)
+        # The unit -race run covers every package without the integration
+        # tag; this adds the integration tests of the composition roots, the
+        # link transports and the in-process link e2e under the race
+        # detector. (The binary e2e builds its binaries without -race, so it
+        # is not repeated here.)
+        env:
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: >-
+          go test -race -tags integration -count=1 -timeout 15m
+          ./cmd/...
+          ./internal/e2e
+          ./internal/controller/...
+          ./internal/adapters/...
+          ./internal/worker/agent/...
+          ./internal/worker/linkcore/...
+          ./internal/worker/transport/...
+      - name: Build the worker for the service test
+        run: go build -o "$RUNNER_TEMP/syncr-worker" ./cmd/syncr-worker
+      - name: Real systemd service (install, start, stop, uninstall)
+        # Installs the worker as a system unit on this throw-away runner, so
+        # the test binary runs as root. It removes the unit again, also when
+        # it fails.
+        env:
+          SYNCR_TEST_SERVICE: "1"
+          SYNCR_TEST_WORKER: ${{ runner.temp }}/syncr-worker
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: |
+          go test -c -tags integration -o "$RUNNER_TEMP/worker.test" ./cmd/syncr-worker
+          sudo -E "$RUNNER_TEMP/worker.test" -test.run '^TestIntegrationRealService$' -test.v -test.count=1 -test.timeout 10m
+      - name: Service journal (on failure)
+        if: failure()
+        run: sudo journalctl -u syncr-worker --no-pager -n 100 || true
 
   integration-windows:
     name: integration (windows)
@@ -158,6 +217,24 @@ jobs:
           SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
           SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
         run: go test -v -tags integration -count=1 -timeout 30m ./...
+      - name: Build the worker for the service test
+        shell: pwsh
+        run: go build -o "$env:RUNNER_TEMP\syncr-worker.exe" ./cmd/syncr-worker
+      - name: Real Windows Service (install, start, stop, uninstall)
+        # The runner is an elevated administrator and throw-away, so the
+        # worker may be installed as a Windows Service; the test removes it
+        # again, also when it fails.
+        shell: pwsh
+        env:
+          SYNCR_TEST_SERVICE: "1"
+          SYNCR_TEST_WORKER: ${{ runner.temp }}\syncr-worker.exe
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: go test -v -tags integration -count=1 -timeout 15m -run '^TestIntegrationRealService$' ./cmd/syncr-worker
+      - name: Service Event Log entries (on failure)
+        if: failure()
+        shell: pwsh
+        run: Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='syncr-worker'} -MaxEvents 50 -ErrorAction SilentlyContinue | Format-List TimeCreated, LevelDisplayName, Message
 
   build:
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
@@ -204,3 +281,59 @@ jobs:
           path: bin/
           if-no-files-found: error
           retention-days: 7
+
+  docker-images:
+    name: docker images (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: syncr-controller, dockerfile: Dockerfile.controller }
+          - { image: syncr-worker, dockerfile: Dockerfile.worker }
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # git describe needs tags
+      - name: Version build args
+        id: version
+        # Same values as the build job, so the images report the same version.
+        run: |
+          echo "version=$(git describe --tags --match 'v*' --dirty 2>/dev/null || echo dev)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - name: Build ${{ matrix.image }}
+        uses: docker/build-push-action@v7
+        with:
+          # The Dockerfiles COPY from the repository root.
+          context: .
+          file: deploy/${{ matrix.dockerfile }}
+          push: false
+          load: true
+          tags: ${{ matrix.image }}:ci
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ steps.version.outputs.commit }}
+            BUILD_TIME=${{ steps.version.outputs.built }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      - name: Smoke test syncr-controller
+        if: matrix.image == 'syncr-controller'
+        # The image is distroless (no shell), so the entrypoint is overridden
+        # to call the binary directly. The health check must fail here: no
+        # server is running in the container.
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/syncr-controller syncr-controller:ci -version
+          if docker run --rm --entrypoint /usr/local/bin/syncr-controller syncr-controller:ci -healthcheck; then
+            echo "::error::-healthcheck succeeded without a running server"
+            exit 1
+          fi
+      - name: Smoke test syncr-worker
+        if: matrix.image == 'syncr-worker'
+        # The pinned rclone and restic must be runnable inside the image.
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/syncr-worker syncr-worker:ci version
+          docker run --rm --entrypoint /usr/local/bin/rclone syncr-worker:ci version
+          docker run --rm --entrypoint /usr/local/bin/restic syncr-worker:ci version

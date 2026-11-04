@@ -23,6 +23,10 @@ const _ = connect.IsAtLeastVersion1_13_0
 const (
 	// SystemServiceName is the fully-qualified name of the SystemService service.
 	SystemServiceName = "syncr.v1.SystemService"
+	// WorkerAdminServiceName is the fully-qualified name of the WorkerAdminService service.
+	WorkerAdminServiceName = "syncr.v1.WorkerAdminService"
+	// JobServiceName is the fully-qualified name of the JobService service.
+	JobServiceName = "syncr.v1.JobService"
 )
 
 // These constants are the fully-qualified names of the RPCs defined in this package. They're
@@ -35,6 +39,34 @@ const (
 const (
 	// SystemServiceGetInfoProcedure is the fully-qualified name of the SystemService's GetInfo RPC.
 	SystemServiceGetInfoProcedure = "/syncr.v1.SystemService/GetInfo"
+	// WorkerAdminServiceCreateEnrollmentTokenProcedure is the fully-qualified name of the
+	// WorkerAdminService's CreateEnrollmentToken RPC.
+	WorkerAdminServiceCreateEnrollmentTokenProcedure = "/syncr.v1.WorkerAdminService/CreateEnrollmentToken"
+	// WorkerAdminServiceRegisterPassiveWorkerProcedure is the fully-qualified name of the
+	// WorkerAdminService's RegisterPassiveWorker RPC.
+	WorkerAdminServiceRegisterPassiveWorkerProcedure = "/syncr.v1.WorkerAdminService/RegisterPassiveWorker"
+	// WorkerAdminServiceListWorkersProcedure is the fully-qualified name of the WorkerAdminService's
+	// ListWorkers RPC.
+	WorkerAdminServiceListWorkersProcedure = "/syncr.v1.WorkerAdminService/ListWorkers"
+	// WorkerAdminServiceGetWorkerProcedure is the fully-qualified name of the WorkerAdminService's
+	// GetWorker RPC.
+	WorkerAdminServiceGetWorkerProcedure = "/syncr.v1.WorkerAdminService/GetWorker"
+	// WorkerAdminServiceRenameWorkerProcedure is the fully-qualified name of the WorkerAdminService's
+	// RenameWorker RPC.
+	WorkerAdminServiceRenameWorkerProcedure = "/syncr.v1.WorkerAdminService/RenameWorker"
+	// WorkerAdminServiceRemoveWorkerProcedure is the fully-qualified name of the WorkerAdminService's
+	// RemoveWorker RPC.
+	WorkerAdminServiceRemoveWorkerProcedure = "/syncr.v1.WorkerAdminService/RemoveWorker"
+	// JobServiceRunJobProcedure is the fully-qualified name of the JobService's RunJob RPC.
+	JobServiceRunJobProcedure = "/syncr.v1.JobService/RunJob"
+	// JobServiceGetJobProcedure is the fully-qualified name of the JobService's GetJob RPC.
+	JobServiceGetJobProcedure = "/syncr.v1.JobService/GetJob"
+	// JobServiceListJobsProcedure is the fully-qualified name of the JobService's ListJobs RPC.
+	JobServiceListJobsProcedure = "/syncr.v1.JobService/ListJobs"
+	// JobServiceCancelJobProcedure is the fully-qualified name of the JobService's CancelJob RPC.
+	JobServiceCancelJobProcedure = "/syncr.v1.JobService/CancelJob"
+	// JobServiceWatchJobProcedure is the fully-qualified name of the JobService's WatchJob RPC.
+	JobServiceWatchJobProcedure = "/syncr.v1.JobService/WatchJob"
 )
 
 // SystemServiceClient is a client for the syncr.v1.SystemService service.
@@ -111,4 +143,460 @@ type UnimplementedSystemServiceHandler struct{}
 
 func (UnimplementedSystemServiceHandler) GetInfo(context.Context, *connect.Request[v1.GetInfoRequest]) (*connect.Response[v1.GetInfoResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.SystemService.GetInfo is not implemented"))
+}
+
+// WorkerAdminServiceClient is a client for the syncr.v1.WorkerAdminService service.
+type WorkerAdminServiceClient interface {
+	// CreateEnrollmentToken creates a short-lived, single-use token for
+	// `syncr-worker setup --token`. The token is returned once; the controller
+	// stores only its hash.
+	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
+	// RegisterPassiveWorker adds a passive worker from the URL, certificate
+	// fingerprint and pairing secret that `syncr-worker setup --passive`
+	// printed. The controller starts calling the worker right away.
+	RegisterPassiveWorker(context.Context, *connect.Request[v1.RegisterPassiveWorkerRequest]) (*connect.Response[v1.RegisterPassiveWorkerResponse], error)
+	// ListWorkers lists the workers that have not been removed, by name.
+	ListWorkers(context.Context, *connect.Request[v1.ListWorkersRequest]) (*connect.Response[v1.ListWorkersResponse], error)
+	// GetWorker returns one worker.
+	GetWorker(context.Context, *connect.Request[v1.GetWorkerRequest]) (*connect.Response[v1.GetWorkerResponse], error)
+	// RenameWorker changes a worker's display name.
+	RenameWorker(context.Context, *connect.Request[v1.RenameWorkerRequest]) (*connect.Response[v1.RenameWorkerResponse], error)
+	// RemoveWorker removes a worker: its credentials stop working at once, its
+	// queued jobs fail and its dispatched or running jobs become interrupted
+	// (error code WORKER_REMOVED). Job history is kept.
+	RemoveWorker(context.Context, *connect.Request[v1.RemoveWorkerRequest]) (*connect.Response[v1.RemoveWorkerResponse], error)
+}
+
+// NewWorkerAdminServiceClient constructs a client for the syncr.v1.WorkerAdminService service. By
+// default, it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses,
+// and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the
+// connect.WithGRPC() or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewWorkerAdminServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) WorkerAdminServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	workerAdminServiceMethods := v1.File_syncr_v1_api_proto.Services().ByName("WorkerAdminService").Methods()
+	return &workerAdminServiceClient{
+		createEnrollmentToken: connect.NewClient[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse](
+			httpClient,
+			baseURL+WorkerAdminServiceCreateEnrollmentTokenProcedure,
+			connect.WithSchema(workerAdminServiceMethods.ByName("CreateEnrollmentToken")),
+			connect.WithClientOptions(opts...),
+		),
+		registerPassiveWorker: connect.NewClient[v1.RegisterPassiveWorkerRequest, v1.RegisterPassiveWorkerResponse](
+			httpClient,
+			baseURL+WorkerAdminServiceRegisterPassiveWorkerProcedure,
+			connect.WithSchema(workerAdminServiceMethods.ByName("RegisterPassiveWorker")),
+			connect.WithClientOptions(opts...),
+		),
+		listWorkers: connect.NewClient[v1.ListWorkersRequest, v1.ListWorkersResponse](
+			httpClient,
+			baseURL+WorkerAdminServiceListWorkersProcedure,
+			connect.WithSchema(workerAdminServiceMethods.ByName("ListWorkers")),
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
+		),
+		getWorker: connect.NewClient[v1.GetWorkerRequest, v1.GetWorkerResponse](
+			httpClient,
+			baseURL+WorkerAdminServiceGetWorkerProcedure,
+			connect.WithSchema(workerAdminServiceMethods.ByName("GetWorker")),
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
+		),
+		renameWorker: connect.NewClient[v1.RenameWorkerRequest, v1.RenameWorkerResponse](
+			httpClient,
+			baseURL+WorkerAdminServiceRenameWorkerProcedure,
+			connect.WithSchema(workerAdminServiceMethods.ByName("RenameWorker")),
+			connect.WithIdempotency(connect.IdempotencyIdempotent),
+			connect.WithClientOptions(opts...),
+		),
+		removeWorker: connect.NewClient[v1.RemoveWorkerRequest, v1.RemoveWorkerResponse](
+			httpClient,
+			baseURL+WorkerAdminServiceRemoveWorkerProcedure,
+			connect.WithSchema(workerAdminServiceMethods.ByName("RemoveWorker")),
+			connect.WithIdempotency(connect.IdempotencyIdempotent),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// workerAdminServiceClient implements WorkerAdminServiceClient.
+type workerAdminServiceClient struct {
+	createEnrollmentToken *connect.Client[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse]
+	registerPassiveWorker *connect.Client[v1.RegisterPassiveWorkerRequest, v1.RegisterPassiveWorkerResponse]
+	listWorkers           *connect.Client[v1.ListWorkersRequest, v1.ListWorkersResponse]
+	getWorker             *connect.Client[v1.GetWorkerRequest, v1.GetWorkerResponse]
+	renameWorker          *connect.Client[v1.RenameWorkerRequest, v1.RenameWorkerResponse]
+	removeWorker          *connect.Client[v1.RemoveWorkerRequest, v1.RemoveWorkerResponse]
+}
+
+// CreateEnrollmentToken calls syncr.v1.WorkerAdminService.CreateEnrollmentToken.
+func (c *workerAdminServiceClient) CreateEnrollmentToken(ctx context.Context, req *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error) {
+	return c.createEnrollmentToken.CallUnary(ctx, req)
+}
+
+// RegisterPassiveWorker calls syncr.v1.WorkerAdminService.RegisterPassiveWorker.
+func (c *workerAdminServiceClient) RegisterPassiveWorker(ctx context.Context, req *connect.Request[v1.RegisterPassiveWorkerRequest]) (*connect.Response[v1.RegisterPassiveWorkerResponse], error) {
+	return c.registerPassiveWorker.CallUnary(ctx, req)
+}
+
+// ListWorkers calls syncr.v1.WorkerAdminService.ListWorkers.
+func (c *workerAdminServiceClient) ListWorkers(ctx context.Context, req *connect.Request[v1.ListWorkersRequest]) (*connect.Response[v1.ListWorkersResponse], error) {
+	return c.listWorkers.CallUnary(ctx, req)
+}
+
+// GetWorker calls syncr.v1.WorkerAdminService.GetWorker.
+func (c *workerAdminServiceClient) GetWorker(ctx context.Context, req *connect.Request[v1.GetWorkerRequest]) (*connect.Response[v1.GetWorkerResponse], error) {
+	return c.getWorker.CallUnary(ctx, req)
+}
+
+// RenameWorker calls syncr.v1.WorkerAdminService.RenameWorker.
+func (c *workerAdminServiceClient) RenameWorker(ctx context.Context, req *connect.Request[v1.RenameWorkerRequest]) (*connect.Response[v1.RenameWorkerResponse], error) {
+	return c.renameWorker.CallUnary(ctx, req)
+}
+
+// RemoveWorker calls syncr.v1.WorkerAdminService.RemoveWorker.
+func (c *workerAdminServiceClient) RemoveWorker(ctx context.Context, req *connect.Request[v1.RemoveWorkerRequest]) (*connect.Response[v1.RemoveWorkerResponse], error) {
+	return c.removeWorker.CallUnary(ctx, req)
+}
+
+// WorkerAdminServiceHandler is an implementation of the syncr.v1.WorkerAdminService service.
+type WorkerAdminServiceHandler interface {
+	// CreateEnrollmentToken creates a short-lived, single-use token for
+	// `syncr-worker setup --token`. The token is returned once; the controller
+	// stores only its hash.
+	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
+	// RegisterPassiveWorker adds a passive worker from the URL, certificate
+	// fingerprint and pairing secret that `syncr-worker setup --passive`
+	// printed. The controller starts calling the worker right away.
+	RegisterPassiveWorker(context.Context, *connect.Request[v1.RegisterPassiveWorkerRequest]) (*connect.Response[v1.RegisterPassiveWorkerResponse], error)
+	// ListWorkers lists the workers that have not been removed, by name.
+	ListWorkers(context.Context, *connect.Request[v1.ListWorkersRequest]) (*connect.Response[v1.ListWorkersResponse], error)
+	// GetWorker returns one worker.
+	GetWorker(context.Context, *connect.Request[v1.GetWorkerRequest]) (*connect.Response[v1.GetWorkerResponse], error)
+	// RenameWorker changes a worker's display name.
+	RenameWorker(context.Context, *connect.Request[v1.RenameWorkerRequest]) (*connect.Response[v1.RenameWorkerResponse], error)
+	// RemoveWorker removes a worker: its credentials stop working at once, its
+	// queued jobs fail and its dispatched or running jobs become interrupted
+	// (error code WORKER_REMOVED). Job history is kept.
+	RemoveWorker(context.Context, *connect.Request[v1.RemoveWorkerRequest]) (*connect.Response[v1.RemoveWorkerResponse], error)
+}
+
+// NewWorkerAdminServiceHandler builds an HTTP handler from the service implementation. It returns
+// the path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewWorkerAdminServiceHandler(svc WorkerAdminServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	workerAdminServiceMethods := v1.File_syncr_v1_api_proto.Services().ByName("WorkerAdminService").Methods()
+	workerAdminServiceCreateEnrollmentTokenHandler := connect.NewUnaryHandler(
+		WorkerAdminServiceCreateEnrollmentTokenProcedure,
+		svc.CreateEnrollmentToken,
+		connect.WithSchema(workerAdminServiceMethods.ByName("CreateEnrollmentToken")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workerAdminServiceRegisterPassiveWorkerHandler := connect.NewUnaryHandler(
+		WorkerAdminServiceRegisterPassiveWorkerProcedure,
+		svc.RegisterPassiveWorker,
+		connect.WithSchema(workerAdminServiceMethods.ByName("RegisterPassiveWorker")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workerAdminServiceListWorkersHandler := connect.NewUnaryHandler(
+		WorkerAdminServiceListWorkersProcedure,
+		svc.ListWorkers,
+		connect.WithSchema(workerAdminServiceMethods.ByName("ListWorkers")),
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
+	)
+	workerAdminServiceGetWorkerHandler := connect.NewUnaryHandler(
+		WorkerAdminServiceGetWorkerProcedure,
+		svc.GetWorker,
+		connect.WithSchema(workerAdminServiceMethods.ByName("GetWorker")),
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
+	)
+	workerAdminServiceRenameWorkerHandler := connect.NewUnaryHandler(
+		WorkerAdminServiceRenameWorkerProcedure,
+		svc.RenameWorker,
+		connect.WithSchema(workerAdminServiceMethods.ByName("RenameWorker")),
+		connect.WithIdempotency(connect.IdempotencyIdempotent),
+		connect.WithHandlerOptions(opts...),
+	)
+	workerAdminServiceRemoveWorkerHandler := connect.NewUnaryHandler(
+		WorkerAdminServiceRemoveWorkerProcedure,
+		svc.RemoveWorker,
+		connect.WithSchema(workerAdminServiceMethods.ByName("RemoveWorker")),
+		connect.WithIdempotency(connect.IdempotencyIdempotent),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/syncr.v1.WorkerAdminService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case WorkerAdminServiceCreateEnrollmentTokenProcedure:
+			workerAdminServiceCreateEnrollmentTokenHandler.ServeHTTP(w, r)
+		case WorkerAdminServiceRegisterPassiveWorkerProcedure:
+			workerAdminServiceRegisterPassiveWorkerHandler.ServeHTTP(w, r)
+		case WorkerAdminServiceListWorkersProcedure:
+			workerAdminServiceListWorkersHandler.ServeHTTP(w, r)
+		case WorkerAdminServiceGetWorkerProcedure:
+			workerAdminServiceGetWorkerHandler.ServeHTTP(w, r)
+		case WorkerAdminServiceRenameWorkerProcedure:
+			workerAdminServiceRenameWorkerHandler.ServeHTTP(w, r)
+		case WorkerAdminServiceRemoveWorkerProcedure:
+			workerAdminServiceRemoveWorkerHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedWorkerAdminServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedWorkerAdminServiceHandler struct{}
+
+func (UnimplementedWorkerAdminServiceHandler) CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.CreateEnrollmentToken is not implemented"))
+}
+
+func (UnimplementedWorkerAdminServiceHandler) RegisterPassiveWorker(context.Context, *connect.Request[v1.RegisterPassiveWorkerRequest]) (*connect.Response[v1.RegisterPassiveWorkerResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.RegisterPassiveWorker is not implemented"))
+}
+
+func (UnimplementedWorkerAdminServiceHandler) ListWorkers(context.Context, *connect.Request[v1.ListWorkersRequest]) (*connect.Response[v1.ListWorkersResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.ListWorkers is not implemented"))
+}
+
+func (UnimplementedWorkerAdminServiceHandler) GetWorker(context.Context, *connect.Request[v1.GetWorkerRequest]) (*connect.Response[v1.GetWorkerResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.GetWorker is not implemented"))
+}
+
+func (UnimplementedWorkerAdminServiceHandler) RenameWorker(context.Context, *connect.Request[v1.RenameWorkerRequest]) (*connect.Response[v1.RenameWorkerResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.RenameWorker is not implemented"))
+}
+
+func (UnimplementedWorkerAdminServiceHandler) RemoveWorker(context.Context, *connect.Request[v1.RemoveWorkerRequest]) (*connect.Response[v1.RemoveWorkerResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.RemoveWorker is not implemented"))
+}
+
+// JobServiceClient is a client for the syncr.v1.JobService service.
+type JobServiceClient interface {
+	// RunJob queues a job on a worker. The spec is validated for shape only
+	// (an operation must be set); the worker validates it fully and reports
+	// problems as a FAILED job. The spec is stored encrypted and never
+	// returned by the API.
+	RunJob(context.Context, *connect.Request[v1.RunJobRequest]) (*connect.Response[v1.RunJobResponse], error)
+	// GetJob returns one job.
+	GetJob(context.Context, *connect.Request[v1.GetJobRequest]) (*connect.Response[v1.GetJobResponse], error)
+	// ListJobs lists jobs, newest first.
+	ListJobs(context.Context, *connect.Request[v1.ListJobsRequest]) (*connect.Response[v1.ListJobsResponse], error)
+	// CancelJob cancels a job. A queued job is cancelled at once; a dispatched
+	// or running job is asked to stop and becomes CANCELLED when the worker
+	// confirms (if it finishes first, its own outcome stands). Cancelling a
+	// finished job changes nothing. Returns the job after the request.
+	CancelJob(context.Context, *connect.Request[v1.CancelJobRequest]) (*connect.Response[v1.CancelJobResponse], error)
+	// WatchJob streams a job's status and live progress. The first message is
+	// the current job; then every status change sends the job again and every
+	// live sample sends progress. The stream ends after the job reaches a
+	// terminal status (at once for a finished job). Intermediate progress
+	// samples may be skipped for slow readers; status changes never are.
+	//
+	// The stream can also end before the job finishes: with DEADLINE_EXCEEDED
+	// after the controller's maximum watch duration (api.watch_max_duration),
+	// or with UNAVAILABLE when the controller shuts down. Clients then call
+	// WatchJob again; its first message is the current job, so nothing is
+	// missed.
+	WatchJob(context.Context, *connect.Request[v1.WatchJobRequest]) (*connect.ServerStreamForClient[v1.WatchJobResponse], error)
+}
+
+// NewJobServiceClient constructs a client for the syncr.v1.JobService service. By default, it uses
+// the Connect protocol with the binary Protobuf Codec, asks for gzipped responses, and sends
+// uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the connect.WithGRPC() or
+// connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewJobServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) JobServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	jobServiceMethods := v1.File_syncr_v1_api_proto.Services().ByName("JobService").Methods()
+	return &jobServiceClient{
+		runJob: connect.NewClient[v1.RunJobRequest, v1.RunJobResponse](
+			httpClient,
+			baseURL+JobServiceRunJobProcedure,
+			connect.WithSchema(jobServiceMethods.ByName("RunJob")),
+			connect.WithClientOptions(opts...),
+		),
+		getJob: connect.NewClient[v1.GetJobRequest, v1.GetJobResponse](
+			httpClient,
+			baseURL+JobServiceGetJobProcedure,
+			connect.WithSchema(jobServiceMethods.ByName("GetJob")),
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
+		),
+		listJobs: connect.NewClient[v1.ListJobsRequest, v1.ListJobsResponse](
+			httpClient,
+			baseURL+JobServiceListJobsProcedure,
+			connect.WithSchema(jobServiceMethods.ByName("ListJobs")),
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
+		),
+		cancelJob: connect.NewClient[v1.CancelJobRequest, v1.CancelJobResponse](
+			httpClient,
+			baseURL+JobServiceCancelJobProcedure,
+			connect.WithSchema(jobServiceMethods.ByName("CancelJob")),
+			connect.WithIdempotency(connect.IdempotencyIdempotent),
+			connect.WithClientOptions(opts...),
+		),
+		watchJob: connect.NewClient[v1.WatchJobRequest, v1.WatchJobResponse](
+			httpClient,
+			baseURL+JobServiceWatchJobProcedure,
+			connect.WithSchema(jobServiceMethods.ByName("WatchJob")),
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// jobServiceClient implements JobServiceClient.
+type jobServiceClient struct {
+	runJob    *connect.Client[v1.RunJobRequest, v1.RunJobResponse]
+	getJob    *connect.Client[v1.GetJobRequest, v1.GetJobResponse]
+	listJobs  *connect.Client[v1.ListJobsRequest, v1.ListJobsResponse]
+	cancelJob *connect.Client[v1.CancelJobRequest, v1.CancelJobResponse]
+	watchJob  *connect.Client[v1.WatchJobRequest, v1.WatchJobResponse]
+}
+
+// RunJob calls syncr.v1.JobService.RunJob.
+func (c *jobServiceClient) RunJob(ctx context.Context, req *connect.Request[v1.RunJobRequest]) (*connect.Response[v1.RunJobResponse], error) {
+	return c.runJob.CallUnary(ctx, req)
+}
+
+// GetJob calls syncr.v1.JobService.GetJob.
+func (c *jobServiceClient) GetJob(ctx context.Context, req *connect.Request[v1.GetJobRequest]) (*connect.Response[v1.GetJobResponse], error) {
+	return c.getJob.CallUnary(ctx, req)
+}
+
+// ListJobs calls syncr.v1.JobService.ListJobs.
+func (c *jobServiceClient) ListJobs(ctx context.Context, req *connect.Request[v1.ListJobsRequest]) (*connect.Response[v1.ListJobsResponse], error) {
+	return c.listJobs.CallUnary(ctx, req)
+}
+
+// CancelJob calls syncr.v1.JobService.CancelJob.
+func (c *jobServiceClient) CancelJob(ctx context.Context, req *connect.Request[v1.CancelJobRequest]) (*connect.Response[v1.CancelJobResponse], error) {
+	return c.cancelJob.CallUnary(ctx, req)
+}
+
+// WatchJob calls syncr.v1.JobService.WatchJob.
+func (c *jobServiceClient) WatchJob(ctx context.Context, req *connect.Request[v1.WatchJobRequest]) (*connect.ServerStreamForClient[v1.WatchJobResponse], error) {
+	return c.watchJob.CallServerStream(ctx, req)
+}
+
+// JobServiceHandler is an implementation of the syncr.v1.JobService service.
+type JobServiceHandler interface {
+	// RunJob queues a job on a worker. The spec is validated for shape only
+	// (an operation must be set); the worker validates it fully and reports
+	// problems as a FAILED job. The spec is stored encrypted and never
+	// returned by the API.
+	RunJob(context.Context, *connect.Request[v1.RunJobRequest]) (*connect.Response[v1.RunJobResponse], error)
+	// GetJob returns one job.
+	GetJob(context.Context, *connect.Request[v1.GetJobRequest]) (*connect.Response[v1.GetJobResponse], error)
+	// ListJobs lists jobs, newest first.
+	ListJobs(context.Context, *connect.Request[v1.ListJobsRequest]) (*connect.Response[v1.ListJobsResponse], error)
+	// CancelJob cancels a job. A queued job is cancelled at once; a dispatched
+	// or running job is asked to stop and becomes CANCELLED when the worker
+	// confirms (if it finishes first, its own outcome stands). Cancelling a
+	// finished job changes nothing. Returns the job after the request.
+	CancelJob(context.Context, *connect.Request[v1.CancelJobRequest]) (*connect.Response[v1.CancelJobResponse], error)
+	// WatchJob streams a job's status and live progress. The first message is
+	// the current job; then every status change sends the job again and every
+	// live sample sends progress. The stream ends after the job reaches a
+	// terminal status (at once for a finished job). Intermediate progress
+	// samples may be skipped for slow readers; status changes never are.
+	//
+	// The stream can also end before the job finishes: with DEADLINE_EXCEEDED
+	// after the controller's maximum watch duration (api.watch_max_duration),
+	// or with UNAVAILABLE when the controller shuts down. Clients then call
+	// WatchJob again; its first message is the current job, so nothing is
+	// missed.
+	WatchJob(context.Context, *connect.Request[v1.WatchJobRequest], *connect.ServerStream[v1.WatchJobResponse]) error
+}
+
+// NewJobServiceHandler builds an HTTP handler from the service implementation. It returns the path
+// on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewJobServiceHandler(svc JobServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	jobServiceMethods := v1.File_syncr_v1_api_proto.Services().ByName("JobService").Methods()
+	jobServiceRunJobHandler := connect.NewUnaryHandler(
+		JobServiceRunJobProcedure,
+		svc.RunJob,
+		connect.WithSchema(jobServiceMethods.ByName("RunJob")),
+		connect.WithHandlerOptions(opts...),
+	)
+	jobServiceGetJobHandler := connect.NewUnaryHandler(
+		JobServiceGetJobProcedure,
+		svc.GetJob,
+		connect.WithSchema(jobServiceMethods.ByName("GetJob")),
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
+	)
+	jobServiceListJobsHandler := connect.NewUnaryHandler(
+		JobServiceListJobsProcedure,
+		svc.ListJobs,
+		connect.WithSchema(jobServiceMethods.ByName("ListJobs")),
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
+	)
+	jobServiceCancelJobHandler := connect.NewUnaryHandler(
+		JobServiceCancelJobProcedure,
+		svc.CancelJob,
+		connect.WithSchema(jobServiceMethods.ByName("CancelJob")),
+		connect.WithIdempotency(connect.IdempotencyIdempotent),
+		connect.WithHandlerOptions(opts...),
+	)
+	jobServiceWatchJobHandler := connect.NewServerStreamHandler(
+		JobServiceWatchJobProcedure,
+		svc.WatchJob,
+		connect.WithSchema(jobServiceMethods.ByName("WatchJob")),
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/syncr.v1.JobService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case JobServiceRunJobProcedure:
+			jobServiceRunJobHandler.ServeHTTP(w, r)
+		case JobServiceGetJobProcedure:
+			jobServiceGetJobHandler.ServeHTTP(w, r)
+		case JobServiceListJobsProcedure:
+			jobServiceListJobsHandler.ServeHTTP(w, r)
+		case JobServiceCancelJobProcedure:
+			jobServiceCancelJobHandler.ServeHTTP(w, r)
+		case JobServiceWatchJobProcedure:
+			jobServiceWatchJobHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedJobServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedJobServiceHandler struct{}
+
+func (UnimplementedJobServiceHandler) RunJob(context.Context, *connect.Request[v1.RunJobRequest]) (*connect.Response[v1.RunJobResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.JobService.RunJob is not implemented"))
+}
+
+func (UnimplementedJobServiceHandler) GetJob(context.Context, *connect.Request[v1.GetJobRequest]) (*connect.Response[v1.GetJobResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.JobService.GetJob is not implemented"))
+}
+
+func (UnimplementedJobServiceHandler) ListJobs(context.Context, *connect.Request[v1.ListJobsRequest]) (*connect.Response[v1.ListJobsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.JobService.ListJobs is not implemented"))
+}
+
+func (UnimplementedJobServiceHandler) CancelJob(context.Context, *connect.Request[v1.CancelJobRequest]) (*connect.Response[v1.CancelJobResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.JobService.CancelJob is not implemented"))
+}
+
+func (UnimplementedJobServiceHandler) WatchJob(context.Context, *connect.Request[v1.WatchJobRequest], *connect.ServerStream[v1.WatchJobResponse]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.JobService.WatchJob is not implemented"))
 }

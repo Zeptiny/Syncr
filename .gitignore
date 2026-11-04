@@ -25,6 +25,8 @@ npm-debug.log*
 # Local configuration and secrets (dev credentials live in deploy/, never here)
 .env
 .env.*
+# ...except templates without secrets.
+!.env.example
 *.local.yaml
 *.local.yml
 

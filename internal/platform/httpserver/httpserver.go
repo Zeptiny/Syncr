@@ -20,11 +20,25 @@ import (
 // Serve returns nil after a clean shutdown, or the error that stopped the
 // server. It always closes ln.
 func Serve(ctx context.Context, srv *http.Server, ln net.Listener, shutdownTimeout time.Duration) error {
+	return serve(ctx, srv, ln, func() error { return srv.Serve(ln) }, shutdownTimeout)
+}
+
+// ServeTLS is Serve over TLS with the PEM certificate chain and key in
+// certFile and keyFile (see http.Server.ServeTLS: srv.TLSConfig, if set, is
+// used as the base configuration, and HTTP/2 is negotiated if srv.Protocols
+// allows it). A missing or invalid certificate makes it return an error at
+// once.
+func ServeTLS(ctx context.Context, srv *http.Server, ln net.Listener, certFile, keyFile string, shutdownTimeout time.Duration) error {
+	return serve(ctx, srv, ln, func() error { return srv.ServeTLS(ln, certFile, keyFile) }, shutdownTimeout)
+}
+
+func serve(ctx context.Context, srv *http.Server, ln net.Listener, run func() error, shutdownTimeout time.Duration) error {
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.Serve(ln) }()
+	go func() { serveErr <- run() }()
 
 	select {
 	case err := <-serveErr:
+		_ = ln.Close() // ServeTLS returns without closing it if the certificate does not load
 		return fmt.Errorf("httpserver: serve: %w", err)
 	case <-ctx.Done():
 	}

@@ -25,6 +25,8 @@ const (
 	ControllerLinkServiceName = "syncr.v1.ControllerLinkService"
 	// WorkerLinkServiceName is the fully-qualified name of the WorkerLinkService service.
 	WorkerLinkServiceName = "syncr.v1.WorkerLinkService"
+	// EnrollmentServiceName is the fully-qualified name of the EnrollmentService service.
+	EnrollmentServiceName = "syncr.v1.EnrollmentService"
 )
 
 // These constants are the fully-qualified names of the RPCs defined in this package. They're
@@ -46,6 +48,9 @@ const (
 	WorkerLinkServiceCommandProcedure = "/syncr.v1.WorkerLinkService/Command"
 	// WorkerLinkServicePullProcedure is the fully-qualified name of the WorkerLinkService's Pull RPC.
 	WorkerLinkServicePullProcedure = "/syncr.v1.WorkerLinkService/Pull"
+	// EnrollmentServiceEnrollProcedure is the fully-qualified name of the EnrollmentService's Enroll
+	// RPC.
+	EnrollmentServiceEnrollProcedure = "/syncr.v1.EnrollmentService/Enroll"
 )
 
 // ControllerLinkServiceClient is a client for the syncr.v1.ControllerLinkService service.
@@ -54,10 +59,18 @@ type ControllerLinkServiceClient interface {
 	// current state. Workers call it about once a second while jobs run and as a
 	// heartbeat (~15s) when idle. Safe to retry: ingest is idempotent by
 	// (epoch, seq) and acks are idempotent by command id.
+	//
+	// The controller handles a request in this order: a new epoch is adopted
+	// (reconciling the jobs of the previous one), then acks, then events in
+	// seq order, then the state snapshot. A request carrying an epoch the
+	// controller has already replaced by a newer one is rejected with
+	// FAILED_PRECONDITION (it can only be a delayed request of a previous
+	// worker process).
 	Report(context.Context, *connect.Request[v1.ReportRequest]) (*connect.Response[v1.ReportResponse], error)
-	// Poll long-polls for pending commands. The controller holds the call open
-	// for up to PollRequest.wait and returns early as soon as commands are
-	// available. Commands are redelivered until acknowledged.
+	// Poll long-polls for pending commands. The controller first applies the
+	// request's acks (so acknowledged commands are never returned again), then
+	// holds the call open for up to PollRequest.wait and returns as soon as
+	// commands are available. Commands are redelivered until acknowledged.
 	Poll(context.Context, *connect.Request[v1.PollRequest]) (*connect.Response[v1.PollResponse], error)
 }
 
@@ -109,10 +122,18 @@ type ControllerLinkServiceHandler interface {
 	// current state. Workers call it about once a second while jobs run and as a
 	// heartbeat (~15s) when idle. Safe to retry: ingest is idempotent by
 	// (epoch, seq) and acks are idempotent by command id.
+	//
+	// The controller handles a request in this order: a new epoch is adopted
+	// (reconciling the jobs of the previous one), then acks, then events in
+	// seq order, then the state snapshot. A request carrying an epoch the
+	// controller has already replaced by a newer one is rejected with
+	// FAILED_PRECONDITION (it can only be a delayed request of a previous
+	// worker process).
 	Report(context.Context, *connect.Request[v1.ReportRequest]) (*connect.Response[v1.ReportResponse], error)
-	// Poll long-polls for pending commands. The controller holds the call open
-	// for up to PollRequest.wait and returns early as soon as commands are
-	// available. Commands are redelivered until acknowledged.
+	// Poll long-polls for pending commands. The controller first applies the
+	// request's acks (so acknowledged commands are never returned again), then
+	// holds the call open for up to PollRequest.wait and returns as soon as
+	// commands are available. Commands are redelivered until acknowledged.
 	Poll(context.Context, *connect.Request[v1.PollRequest]) (*connect.Response[v1.PollResponse], error)
 }
 
@@ -166,7 +187,8 @@ type WorkerLinkServiceClient interface {
 	Command(context.Context, *connect.Request[v1.CommandRequest]) (*connect.Response[v1.CommandResponse], error)
 	// Pull fetches outbox events after a given seq and acknowledges everything
 	// up to and including it. The controller calls it about once a second while
-	// the worker is busy and every ~15s when idle.
+	// the worker is busy and every ~15s when idle, and again at once while
+	// has_more is set.
 	Pull(context.Context, *connect.Request[v1.PullRequest]) (*connect.Response[v1.PullResponse], error)
 }
 
@@ -220,7 +242,8 @@ type WorkerLinkServiceHandler interface {
 	Command(context.Context, *connect.Request[v1.CommandRequest]) (*connect.Response[v1.CommandResponse], error)
 	// Pull fetches outbox events after a given seq and acknowledges everything
 	// up to and including it. The controller calls it about once a second while
-	// the worker is busy and every ~15s when idle.
+	// the worker is busy and every ~15s when idle, and again at once while
+	// has_more is set.
 	Pull(context.Context, *connect.Request[v1.PullRequest]) (*connect.Response[v1.PullResponse], error)
 }
 
@@ -264,4 +287,84 @@ func (UnimplementedWorkerLinkServiceHandler) Command(context.Context, *connect.R
 
 func (UnimplementedWorkerLinkServiceHandler) Pull(context.Context, *connect.Request[v1.PullRequest]) (*connect.Response[v1.PullResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerLinkService.Pull is not implemented"))
+}
+
+// EnrollmentServiceClient is a client for the syncr.v1.EnrollmentService service.
+type EnrollmentServiceClient interface {
+	// Enroll registers a new worker. Fails with UNAUTHENTICATED if the token is
+	// unknown, expired or already used (deliberately indistinguishable), and
+	// with INVALID_ARGUMENT for a malformed request. Not idempotent: a retry
+	// after a lost response fails because the token is spent; the admin then
+	// issues a new token (and may remove the orphaned worker).
+	Enroll(context.Context, *connect.Request[v1.EnrollRequest]) (*connect.Response[v1.EnrollResponse], error)
+}
+
+// NewEnrollmentServiceClient constructs a client for the syncr.v1.EnrollmentService service. By
+// default, it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses,
+// and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the
+// connect.WithGRPC() or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewEnrollmentServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) EnrollmentServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	enrollmentServiceMethods := v1.File_syncr_v1_link_proto.Services().ByName("EnrollmentService").Methods()
+	return &enrollmentServiceClient{
+		enroll: connect.NewClient[v1.EnrollRequest, v1.EnrollResponse](
+			httpClient,
+			baseURL+EnrollmentServiceEnrollProcedure,
+			connect.WithSchema(enrollmentServiceMethods.ByName("Enroll")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// enrollmentServiceClient implements EnrollmentServiceClient.
+type enrollmentServiceClient struct {
+	enroll *connect.Client[v1.EnrollRequest, v1.EnrollResponse]
+}
+
+// Enroll calls syncr.v1.EnrollmentService.Enroll.
+func (c *enrollmentServiceClient) Enroll(ctx context.Context, req *connect.Request[v1.EnrollRequest]) (*connect.Response[v1.EnrollResponse], error) {
+	return c.enroll.CallUnary(ctx, req)
+}
+
+// EnrollmentServiceHandler is an implementation of the syncr.v1.EnrollmentService service.
+type EnrollmentServiceHandler interface {
+	// Enroll registers a new worker. Fails with UNAUTHENTICATED if the token is
+	// unknown, expired or already used (deliberately indistinguishable), and
+	// with INVALID_ARGUMENT for a malformed request. Not idempotent: a retry
+	// after a lost response fails because the token is spent; the admin then
+	// issues a new token (and may remove the orphaned worker).
+	Enroll(context.Context, *connect.Request[v1.EnrollRequest]) (*connect.Response[v1.EnrollResponse], error)
+}
+
+// NewEnrollmentServiceHandler builds an HTTP handler from the service implementation. It returns
+// the path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewEnrollmentServiceHandler(svc EnrollmentServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	enrollmentServiceMethods := v1.File_syncr_v1_link_proto.Services().ByName("EnrollmentService").Methods()
+	enrollmentServiceEnrollHandler := connect.NewUnaryHandler(
+		EnrollmentServiceEnrollProcedure,
+		svc.Enroll,
+		connect.WithSchema(enrollmentServiceMethods.ByName("Enroll")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/syncr.v1.EnrollmentService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case EnrollmentServiceEnrollProcedure:
+			enrollmentServiceEnrollHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedEnrollmentServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedEnrollmentServiceHandler struct{}
+
+func (UnimplementedEnrollmentServiceHandler) Enroll(context.Context, *connect.Request[v1.EnrollRequest]) (*connect.Response[v1.EnrollResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.EnrollmentService.Enroll is not implemented"))
 }

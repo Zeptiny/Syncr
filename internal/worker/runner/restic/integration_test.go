@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -102,6 +103,9 @@ func newHarnessWith(t *testing.T, mutate func(h *harness, cfg *Config), flags ..
 		Paths:       rootPolicy{root: h.root},
 		ScratchRoot: filepath.Join(base, "scratch"),
 		CacheDir:    filepath.Join(base, "cache"),
+		// Diagnostics, such as a scratch directory that could not be
+		// removed, show up in the test output.
+		Logger: slog.New(slog.NewTextHandler(t.Output(), nil)),
 	}
 	if mutate != nil {
 		mutate(h, &cfg)

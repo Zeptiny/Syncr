@@ -2,6 +2,10 @@
 
 GO            ?= go
 BUF           ?= buf
+# sqlc runs via `go run` at a pinned version (keep in sync with SQLC_VERSION
+# in .github/workflows/ci.yml); override SQLC to use an installed binary.
+SQLC_VERSION  ?= v1.31.1
+SQLC          ?= $(GO) run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 GOLANGCI_LINT ?= golangci-lint
 
 BIN_DIR   ?= bin
@@ -35,8 +39,9 @@ help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: generate
-generate: ## Regenerate protobuf/Connect code (committed under gen/)
+generate: ## Regenerate protobuf/Connect and sqlc code (committed under gen/ and internal/adapters/postgres/db/)
 	$(BUF) generate
+	$(SQLC) generate
 	$(GO) generate ./...
 
 .PHONY: lint
