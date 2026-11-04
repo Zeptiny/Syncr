@@ -23,6 +23,60 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// WorkerMode selects which side of the link initiates calls.
+type WorkerMode int32
+
+const (
+	WorkerMode_WORKER_MODE_UNSPECIFIED WorkerMode = 0
+	// The worker calls the controller (ControllerLinkService). Works behind NAT
+	// and without open ports.
+	WorkerMode_WORKER_MODE_ACTIVE WorkerMode = 1
+	// The controller calls the worker (WorkerLinkService) over TLS with a
+	// pinned certificate.
+	WorkerMode_WORKER_MODE_PASSIVE WorkerMode = 2
+)
+
+// Enum value maps for WorkerMode.
+var (
+	WorkerMode_name = map[int32]string{
+		0: "WORKER_MODE_UNSPECIFIED",
+		1: "WORKER_MODE_ACTIVE",
+		2: "WORKER_MODE_PASSIVE",
+	}
+	WorkerMode_value = map[string]int32{
+		"WORKER_MODE_UNSPECIFIED": 0,
+		"WORKER_MODE_ACTIVE":      1,
+		"WORKER_MODE_PASSIVE":     2,
+	}
+)
+
+func (x WorkerMode) Enum() *WorkerMode {
+	p := new(WorkerMode)
+	*p = x
+	return p
+}
+
+func (x WorkerMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (WorkerMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_syncr_v1_link_proto_enumTypes[0].Descriptor()
+}
+
+func (WorkerMode) Type() protoreflect.EnumType {
+	return &file_syncr_v1_link_proto_enumTypes[0]
+}
+
+func (x WorkerMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use WorkerMode.Descriptor instead.
+func (WorkerMode) EnumDescriptor() ([]byte, []int) {
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{0}
+}
+
 // JobResultStatus is the terminal status a worker can report. "interrupted"
 // is not reported by workers; the controller derives it during reconcile.
 type JobResultStatus int32
@@ -33,7 +87,9 @@ const (
 	JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED JobResultStatus = 1
 	// The job could not be run or the tool reported a failure.
 	JobResultStatus_JOB_RESULT_STATUS_FAILED JobResultStatus = 2
-	// The job was stopped by a CancelJob command or worker shutdown.
+	// The job was stopped by a CancelJob command or worker shutdown. The
+	// controller records CANCELLED if a cancel was requested and INTERRUPTED
+	// otherwise.
 	JobResultStatus_JOB_RESULT_STATUS_CANCELLED JobResultStatus = 3
 )
 
@@ -64,11 +120,11 @@ func (x JobResultStatus) String() string {
 }
 
 func (JobResultStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_syncr_v1_link_proto_enumTypes[0].Descriptor()
+	return file_syncr_v1_link_proto_enumTypes[1].Descriptor()
 }
 
 func (JobResultStatus) Type() protoreflect.EnumType {
-	return &file_syncr_v1_link_proto_enumTypes[0]
+	return &file_syncr_v1_link_proto_enumTypes[1]
 }
 
 func (x JobResultStatus) Number() protoreflect.EnumNumber {
@@ -77,7 +133,7 @@ func (x JobResultStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use JobResultStatus.Descriptor instead.
 func (JobResultStatus) EnumDescriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{0}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{1}
 }
 
 // JobErrorCode classifies job failures.
@@ -115,6 +171,26 @@ const (
 	// The restic repository password is wrong (restic exit code 12). Retrying
 	// cannot succeed.
 	JobErrorCode_JOB_ERROR_CODE_WRONG_PASSWORD JobErrorCode = 12
+	// The job was stopped by a CancelJob command (JobResult status
+	// CANCELLED).
+	JobErrorCode_JOB_ERROR_CODE_CANCELLED JobErrorCode = 13
+	// The job was stopped because the worker is shutting down (JobResult
+	// status CANCELLED). The controller records the job as INTERRUPTED unless
+	// a cancel had been requested; it also uses this code for a CANCELLED
+	// result without a code that nobody asked for.
+	JobErrorCode_JOB_ERROR_CODE_WORKER_SHUTDOWN JobErrorCode = 14
+	// The worker did not accept the job within the controller's dispatch
+	// timeout (it was offline or unreachable). Status FAILED.
+	JobErrorCode_JOB_ERROR_CODE_DISPATCH_TIMEOUT JobErrorCode = 20
+	// The worker restarted (new epoch) while the job was running, so its
+	// outcome is unknown. Status INTERRUPTED.
+	JobErrorCode_JOB_ERROR_CODE_WORKER_RESTARTED JobErrorCode = 21
+	// The worker no longer holds the job but never reported its result.
+	// Status INTERRUPTED.
+	JobErrorCode_JOB_ERROR_CODE_WORKER_LOST JobErrorCode = 22
+	// The worker was removed before the job finished. Status FAILED (never
+	// dispatched) or INTERRUPTED.
+	JobErrorCode_JOB_ERROR_CODE_WORKER_REMOVED JobErrorCode = 23
 )
 
 // Enum value maps for JobErrorCode.
@@ -133,6 +209,12 @@ var (
 		10: "JOB_ERROR_CODE_REPOSITORY_NOT_FOUND",
 		11: "JOB_ERROR_CODE_REPOSITORY_LOCKED",
 		12: "JOB_ERROR_CODE_WRONG_PASSWORD",
+		13: "JOB_ERROR_CODE_CANCELLED",
+		14: "JOB_ERROR_CODE_WORKER_SHUTDOWN",
+		20: "JOB_ERROR_CODE_DISPATCH_TIMEOUT",
+		21: "JOB_ERROR_CODE_WORKER_RESTARTED",
+		22: "JOB_ERROR_CODE_WORKER_LOST",
+		23: "JOB_ERROR_CODE_WORKER_REMOVED",
 	}
 	JobErrorCode_value = map[string]int32{
 		"JOB_ERROR_CODE_UNSPECIFIED":          0,
@@ -148,6 +230,12 @@ var (
 		"JOB_ERROR_CODE_REPOSITORY_NOT_FOUND": 10,
 		"JOB_ERROR_CODE_REPOSITORY_LOCKED":    11,
 		"JOB_ERROR_CODE_WRONG_PASSWORD":       12,
+		"JOB_ERROR_CODE_CANCELLED":            13,
+		"JOB_ERROR_CODE_WORKER_SHUTDOWN":      14,
+		"JOB_ERROR_CODE_DISPATCH_TIMEOUT":     20,
+		"JOB_ERROR_CODE_WORKER_RESTARTED":     21,
+		"JOB_ERROR_CODE_WORKER_LOST":          22,
+		"JOB_ERROR_CODE_WORKER_REMOVED":       23,
 	}
 )
 
@@ -162,11 +250,11 @@ func (x JobErrorCode) String() string {
 }
 
 func (JobErrorCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_syncr_v1_link_proto_enumTypes[1].Descriptor()
+	return file_syncr_v1_link_proto_enumTypes[2].Descriptor()
 }
 
 func (JobErrorCode) Type() protoreflect.EnumType {
-	return &file_syncr_v1_link_proto_enumTypes[1]
+	return &file_syncr_v1_link_proto_enumTypes[2]
 }
 
 func (x JobErrorCode) Number() protoreflect.EnumNumber {
@@ -175,7 +263,7 @@ func (x JobErrorCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use JobErrorCode.Descriptor instead.
 func (JobErrorCode) EnumDescriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{1}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{2}
 }
 
 // UnionUpstreamMode restricts what a union does with an upstream.
@@ -220,11 +308,11 @@ func (x UnionUpstreamMode) String() string {
 }
 
 func (UnionUpstreamMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_syncr_v1_link_proto_enumTypes[2].Descriptor()
+	return file_syncr_v1_link_proto_enumTypes[3].Descriptor()
 }
 
 func (UnionUpstreamMode) Type() protoreflect.EnumType {
-	return &file_syncr_v1_link_proto_enumTypes[2]
+	return &file_syncr_v1_link_proto_enumTypes[3]
 }
 
 func (x UnionUpstreamMode) Number() protoreflect.EnumNumber {
@@ -233,7 +321,7 @@ func (x UnionUpstreamMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use UnionUpstreamMode.Descriptor instead.
 func (UnionUpstreamMode) EnumDescriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{2}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{3}
 }
 
 // RcloneTransferMode selects the rclone command.
@@ -276,11 +364,11 @@ func (x RcloneTransferMode) String() string {
 }
 
 func (RcloneTransferMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_syncr_v1_link_proto_enumTypes[3].Descriptor()
+	return file_syncr_v1_link_proto_enumTypes[4].Descriptor()
 }
 
 func (RcloneTransferMode) Type() protoreflect.EnumType {
-	return &file_syncr_v1_link_proto_enumTypes[3]
+	return &file_syncr_v1_link_proto_enumTypes[4]
 }
 
 func (x RcloneTransferMode) Number() protoreflect.EnumNumber {
@@ -289,7 +377,7 @@ func (x RcloneTransferMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RcloneTransferMode.Descriptor instead.
 func (RcloneTransferMode) EnumDescriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{3}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{4}
 }
 
 // FilterAction is the effect of a FilterRule.
@@ -326,11 +414,11 @@ func (x FilterAction) String() string {
 }
 
 func (FilterAction) Descriptor() protoreflect.EnumDescriptor {
-	return file_syncr_v1_link_proto_enumTypes[4].Descriptor()
+	return file_syncr_v1_link_proto_enumTypes[5].Descriptor()
 }
 
 func (FilterAction) Type() protoreflect.EnumType {
-	return &file_syncr_v1_link_proto_enumTypes[4]
+	return &file_syncr_v1_link_proto_enumTypes[5]
 }
 
 func (x FilterAction) Number() protoreflect.EnumNumber {
@@ -339,7 +427,7 @@ func (x FilterAction) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use FilterAction.Descriptor instead.
 func (FilterAction) EnumDescriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{4}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{5}
 }
 
 // ReportRequest is sent by an active worker.
@@ -348,9 +436,11 @@ type ReportRequest struct {
 	// Epoch of the sending worker process. A new epoch means the worker
 	// restarted and lost all in-memory state; the controller reconciles.
 	Epoch string `protobuf:"bytes,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
-	// Outbox events not yet acknowledged, in seq order. May be empty
-	// (heartbeat). Under backlog, progress events of the same job may have been
-	// merged into the latest one; JobResult events are never dropped.
+	// Outbox events not yet acknowledged, in seq order, starting at the oldest
+	// unacked one. May be empty (heartbeat). Under backlog, progress events of
+	// the same job may have been merged into the latest one; Hello, JobStarted
+	// and JobResult events are never dropped. Workers bound a batch by count
+	// and by encoded size (about 4 MiB) but always include at least one event.
 	Events []*Event `protobuf:"bytes,2,rep,name=events,proto3" json:"events,omitempty"`
 	// Acknowledgements for commands received through Poll.
 	Acks []*CommandAck `protobuf:"bytes,3,rep,name=acks,proto3" json:"acks,omitempty"`
@@ -472,8 +562,9 @@ type PollRequest struct {
 	// Epoch of the polling worker process.
 	Epoch string `protobuf:"bytes,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	// Maximum time the controller may hold the call open before returning an
-	// empty response. The controller caps it (about 25s) to stay below common
-	// proxy idle timeouts.
+	// empty response. Unset means the controller's maximum; zero or negative
+	// means "do not wait". The controller caps it (about 25s) to stay below
+	// common proxy idle timeouts.
 	Wait *durationpb.Duration `protobuf:"bytes,2,opt,name=wait,proto3" json:"wait,omitempty"`
 	// Acknowledgements for commands received in previous polls. Acks may also be
 	// sent with Report; the controller treats both idempotently.
@@ -690,7 +781,12 @@ type PullRequest struct {
 	// the given epoch are acknowledged and may be dropped by the worker.
 	AfterSeq int64 `protobuf:"varint,2,opt,name=after_seq,json=afterSeq,proto3" json:"after_seq,omitempty"`
 	// Upper bound on the number of events returned. Zero means a worker default.
-	MaxEvents     int32 `protobuf:"varint,3,opt,name=max_events,json=maxEvents,proto3" json:"max_events,omitempty"`
+	MaxEvents int32 `protobuf:"varint,3,opt,name=max_events,json=maxEvents,proto3" json:"max_events,omitempty"`
+	// Soft upper bound on the total encoded size of the returned events, in
+	// bytes. Zero means a worker default (about 4 MiB). The worker always
+	// returns at least one pending event, however large, so a big JobResult
+	// (e.g. a long snapshot list) cannot block the outbox.
+	MaxBytes      int32 `protobuf:"varint,4,opt,name=max_bytes,json=maxBytes,proto3" json:"max_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -742,6 +838,13 @@ func (x *PullRequest) GetAfterSeq() int64 {
 func (x *PullRequest) GetMaxEvents() int32 {
 	if x != nil {
 		return x.MaxEvents
+	}
+	return 0
+}
+
+func (x *PullRequest) GetMaxBytes() int32 {
+	if x != nil {
+		return x.MaxBytes
 	}
 	return 0
 }
@@ -819,12 +922,178 @@ func (x *PullResponse) GetState() *WorkerState {
 	return nil
 }
 
+// EnrollRequest exchanges an enrollment token for worker credentials.
+type EnrollRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Single-use token from WorkerAdminService.CreateEnrollmentToken.
+	EnrollmentToken string `protobuf:"bytes,1,opt,name=enrollment_token,json=enrollmentToken,proto3" json:"enrollment_token,omitempty"`
+	// Display name of the worker, e.g. its host name. Empty lets the
+	// controller choose one. At most 64 characters; admins can rename workers.
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// Operating system and architecture as reported by Go (GOOS, GOARCH).
+	// Informational; the worker's Hello event updates them.
+	Os   string `protobuf:"bytes,3,opt,name=os,proto3" json:"os,omitempty"`
+	Arch string `protobuf:"bytes,4,opt,name=arch,proto3" json:"arch,omitempty"`
+	// Link mode. UNSPECIFIED means ACTIVE.
+	Mode WorkerMode `protobuf:"varint,5,opt,name=mode,proto3,enum=syncr.v1.WorkerMode" json:"mode,omitempty"`
+	// PASSIVE only: the https:// base URL where the worker serves
+	// WorkerLinkService, as reachable from the controller.
+	Url string `protobuf:"bytes,6,opt,name=url,proto3" json:"url,omitempty"`
+	// PASSIVE only: SHA-256 fingerprint of the worker's TLS certificate (DER
+	// encoding), as 64 hex digits; colons and upper case are accepted. The
+	// controller pins it instead of trusting a CA.
+	CertFingerprint string `protobuf:"bytes,7,opt,name=cert_fingerprint,json=certFingerprint,proto3" json:"cert_fingerprint,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *EnrollRequest) Reset() {
+	*x = EnrollRequest{}
+	mi := &file_syncr_v1_link_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnrollRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnrollRequest) ProtoMessage() {}
+
+func (x *EnrollRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_link_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnrollRequest.ProtoReflect.Descriptor instead.
+func (*EnrollRequest) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *EnrollRequest) GetEnrollmentToken() string {
+	if x != nil {
+		return x.EnrollmentToken
+	}
+	return ""
+}
+
+func (x *EnrollRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *EnrollRequest) GetOs() string {
+	if x != nil {
+		return x.Os
+	}
+	return ""
+}
+
+func (x *EnrollRequest) GetArch() string {
+	if x != nil {
+		return x.Arch
+	}
+	return ""
+}
+
+func (x *EnrollRequest) GetMode() WorkerMode {
+	if x != nil {
+		return x.Mode
+	}
+	return WorkerMode_WORKER_MODE_UNSPECIFIED
+}
+
+func (x *EnrollRequest) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *EnrollRequest) GetCertFingerprint() string {
+	if x != nil {
+		return x.CertFingerprint
+	}
+	return ""
+}
+
+// EnrollResponse carries the new worker's credentials. The secret is shown
+// exactly once: the worker stores it in its configuration.
+type EnrollResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The worker's ID (UUID).
+	WorkerId string `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	// The worker secret. Active workers send it in every link call; the
+	// controller sends it to passive workers. The controller stores it
+	// encrypted.
+	WorkerSecret  string `protobuf:"bytes,2,opt,name=worker_secret,json=workerSecret,proto3" json:"worker_secret,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnrollResponse) Reset() {
+	*x = EnrollResponse{}
+	mi := &file_syncr_v1_link_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnrollResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnrollResponse) ProtoMessage() {}
+
+func (x *EnrollResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_link_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnrollResponse.ProtoReflect.Descriptor instead.
+func (*EnrollResponse) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *EnrollResponse) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+func (x *EnrollResponse) GetWorkerSecret() string {
+	if x != nil {
+		return x.WorkerSecret
+	}
+	return ""
+}
+
 // Event is one entry of a worker's outbox. Events are always delivered inside
 // an envelope that carries the worker epoch (ReportRequest.epoch,
 // PullResponse.epoch); seq is scoped to that epoch.
 type Event struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Strictly increasing within an epoch, starting at 1.
+	// Strictly increasing within an epoch, starting at 1 (the Hello), but not
+	// contiguous: under backlog the worker coalesces a job's Progress events,
+	// removing older ones. The controller processes the events of a request in
+	// seq order and skips every seq it has already stored, so a batch must
+	// start at the worker's oldest unacked event.
 	Seq int64 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`
 	// When the worker produced the event.
 	Time *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=time,proto3" json:"time,omitempty"`
@@ -843,7 +1112,7 @@ type Event struct {
 
 func (x *Event) Reset() {
 	*x = Event{}
-	mi := &file_syncr_v1_link_proto_msgTypes[8]
+	mi := &file_syncr_v1_link_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -855,7 +1124,7 @@ func (x *Event) String() string {
 func (*Event) ProtoMessage() {}
 
 func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[8]
+	mi := &file_syncr_v1_link_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -868,7 +1137,7 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Event.ProtoReflect.Descriptor instead.
 func (*Event) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{8}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Event) GetSeq() int64 {
@@ -986,7 +1255,7 @@ type Hello struct {
 
 func (x *Hello) Reset() {
 	*x = Hello{}
-	mi := &file_syncr_v1_link_proto_msgTypes[9]
+	mi := &file_syncr_v1_link_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -998,7 +1267,7 @@ func (x *Hello) String() string {
 func (*Hello) ProtoMessage() {}
 
 func (x *Hello) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[9]
+	mi := &file_syncr_v1_link_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1011,7 +1280,7 @@ func (x *Hello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Hello.ProtoReflect.Descriptor instead.
 func (*Hello) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{9}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Hello) GetWorkerVersion() string {
@@ -1083,7 +1352,7 @@ type ToolVersion struct {
 
 func (x *ToolVersion) Reset() {
 	*x = ToolVersion{}
-	mi := &file_syncr_v1_link_proto_msgTypes[10]
+	mi := &file_syncr_v1_link_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1095,7 +1364,7 @@ func (x *ToolVersion) String() string {
 func (*ToolVersion) ProtoMessage() {}
 
 func (x *ToolVersion) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[10]
+	mi := &file_syncr_v1_link_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1108,7 +1377,7 @@ func (x *ToolVersion) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolVersion.ProtoReflect.Descriptor instead.
 func (*ToolVersion) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{10}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ToolVersion) GetName() string {
@@ -1125,7 +1394,11 @@ func (x *ToolVersion) GetVersion() string {
 	return ""
 }
 
-// JobStarted reports that a job's process was started.
+// JobStarted reports that the worker handed a job to its runner (the job
+// left the worker's local queue). It does not guarantee that a tool process
+// started: the runner may still reject the spec (e.g. PATH_NOT_ALLOWED) and
+// report a FAILED JobResult right after. Every job that ran has exactly one
+// JobStarted, before its Progress events and its JobResult.
 type JobStarted struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Controller-assigned job UUID.
@@ -1136,7 +1409,7 @@ type JobStarted struct {
 
 func (x *JobStarted) Reset() {
 	*x = JobStarted{}
-	mi := &file_syncr_v1_link_proto_msgTypes[11]
+	mi := &file_syncr_v1_link_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1148,7 +1421,7 @@ func (x *JobStarted) String() string {
 func (*JobStarted) ProtoMessage() {}
 
 func (x *JobStarted) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[11]
+	mi := &file_syncr_v1_link_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1161,7 +1434,7 @@ func (x *JobStarted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobStarted.ProtoReflect.Descriptor instead.
 func (*JobStarted) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{11}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *JobStarted) GetJobId() string {
@@ -1185,7 +1458,7 @@ type Progress struct {
 
 func (x *Progress) Reset() {
 	*x = Progress{}
-	mi := &file_syncr_v1_link_proto_msgTypes[12]
+	mi := &file_syncr_v1_link_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1197,7 +1470,7 @@ func (x *Progress) String() string {
 func (*Progress) ProtoMessage() {}
 
 func (x *Progress) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[12]
+	mi := &file_syncr_v1_link_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1210,7 +1483,7 @@ func (x *Progress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Progress.ProtoReflect.Descriptor instead.
 func (*Progress) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{12}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Progress) GetJobId() string {
@@ -1256,7 +1529,7 @@ type JobStats struct {
 
 func (x *JobStats) Reset() {
 	*x = JobStats{}
-	mi := &file_syncr_v1_link_proto_msgTypes[13]
+	mi := &file_syncr_v1_link_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1268,7 +1541,7 @@ func (x *JobStats) String() string {
 func (*JobStats) ProtoMessage() {}
 
 func (x *JobStats) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[13]
+	mi := &file_syncr_v1_link_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1281,7 +1554,7 @@ func (x *JobStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobStats.ProtoReflect.Descriptor instead.
 func (*JobStats) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{13}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *JobStats) GetBytes() int64 {
@@ -1354,7 +1627,9 @@ type JobResult struct {
 	JobId string `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
 	// Terminal status.
 	Status JobResultStatus `protobuf:"varint,2,opt,name=status,proto3,enum=syncr.v1.JobResultStatus" json:"status,omitempty"`
-	// Failure details; unset when status is SUCCEEDED.
+	// Failure details; unset when status is SUCCEEDED. For CANCELLED, code is
+	// CANCELLED (stopped by a CancelJob command) or WORKER_SHUTDOWN (stopped
+	// because the worker is shutting down) and message gives the cause.
 	Error *JobError `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
 	// Final cumulative counters.
 	Stats *JobStats `protobuf:"bytes,4,opt,name=stats,proto3" json:"stats,omitempty"`
@@ -1378,7 +1653,7 @@ type JobResult struct {
 
 func (x *JobResult) Reset() {
 	*x = JobResult{}
-	mi := &file_syncr_v1_link_proto_msgTypes[14]
+	mi := &file_syncr_v1_link_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1390,7 +1665,7 @@ func (x *JobResult) String() string {
 func (*JobResult) ProtoMessage() {}
 
 func (x *JobResult) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[14]
+	mi := &file_syncr_v1_link_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1403,7 +1678,7 @@ func (x *JobResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobResult.ProtoReflect.Descriptor instead.
 func (*JobResult) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{14}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *JobResult) GetJobId() string {
@@ -1485,7 +1760,7 @@ type JobOutput struct {
 
 func (x *JobOutput) Reset() {
 	*x = JobOutput{}
-	mi := &file_syncr_v1_link_proto_msgTypes[15]
+	mi := &file_syncr_v1_link_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1497,7 +1772,7 @@ func (x *JobOutput) String() string {
 func (*JobOutput) ProtoMessage() {}
 
 func (x *JobOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[15]
+	mi := &file_syncr_v1_link_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1510,7 +1785,7 @@ func (x *JobOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobOutput.ProtoReflect.Descriptor instead.
 func (*JobOutput) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{15}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *JobOutput) GetOutput() isJobOutput_Output {
@@ -1582,7 +1857,7 @@ type JobError struct {
 
 func (x *JobError) Reset() {
 	*x = JobError{}
-	mi := &file_syncr_v1_link_proto_msgTypes[16]
+	mi := &file_syncr_v1_link_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1594,7 +1869,7 @@ func (x *JobError) String() string {
 func (*JobError) ProtoMessage() {}
 
 func (x *JobError) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[16]
+	mi := &file_syncr_v1_link_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1607,7 +1882,7 @@ func (x *JobError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobError.ProtoReflect.Descriptor instead.
 func (*JobError) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{16}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *JobError) GetCode() JobErrorCode {
@@ -1624,20 +1899,43 @@ func (x *JobError) GetMessage() string {
 	return ""
 }
 
-// WorkerState is a snapshot (not an event) of the jobs a worker currently
-// holds. During reconcile, jobs the controller considers active but missing
-// here become "interrupted", and jobs listed here that the controller
-// considers finished are cancelled.
+// WorkerState is a snapshot (not an event) of the jobs a worker holds,
+// consistent with the events of the envelope that carries it: it lists every
+// job the worker holds now (queued locally or running) plus every job whose
+// JobResult is still in the outbox but not among the envelope's events, and
+// never a job whose JobResult is among them. So a job missing from jobs has
+// its JobResult in the envelope or acknowledged before.
+//
+// The controller reconciles it with its own view (see
+// internal/controller/dispatch): listed jobs it considers finished or does
+// not know are cancelled; a listed job it still considers queued counts as
+// accepted; a job it considers running in this epoch but missing here
+// becomes "interrupted", provided the snapshot is current (last_seq equals
+// the highest seq the controller has stored).
 type WorkerState struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Jobs          []*ActiveJob           `protobuf:"bytes,1,rep,name=jobs,proto3" json:"jobs,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Jobs accepted by the worker that have not finished yet (see above).
+	Jobs []*ActiveJob `protobuf:"bytes,1,rep,name=jobs,proto3" json:"jobs,omitempty"`
+	// Seq of the last event this snapshot accounts for: the last event of the
+	// envelope's events or, when it carries none, the last seq the worker has
+	// assigned in its epoch. It lets the controller recognize a stale snapshot
+	// (a delayed or retried request). Zero means unknown: the controller then
+	// uses the envelope's last event and, for an envelope without events,
+	// skips the rules that need it.
+	LastSeq int64 `protobuf:"varint,2,opt,name=last_seq,json=lastSeq,proto3" json:"last_seq,omitempty"`
+	// Unacknowledged events in the worker's outbox, including the envelope's.
+	// Informational (shown to admins, logged when growing).
+	OutboxBacklog int32 `protobuf:"varint,3,opt,name=outbox_backlog,json=outboxBacklog,proto3" json:"outbox_backlog,omitempty"`
+	// True while the outbox is above its high-water mark: the worker admits no
+	// new jobs until the controller acknowledges events.
+	OutboxSaturated bool `protobuf:"varint,4,opt,name=outbox_saturated,json=outboxSaturated,proto3" json:"outbox_saturated,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *WorkerState) Reset() {
 	*x = WorkerState{}
-	mi := &file_syncr_v1_link_proto_msgTypes[17]
+	mi := &file_syncr_v1_link_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1649,7 +1947,7 @@ func (x *WorkerState) String() string {
 func (*WorkerState) ProtoMessage() {}
 
 func (x *WorkerState) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[17]
+	mi := &file_syncr_v1_link_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1662,7 +1960,7 @@ func (x *WorkerState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerState.ProtoReflect.Descriptor instead.
 func (*WorkerState) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{17}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *WorkerState) GetJobs() []*ActiveJob {
@@ -1672,12 +1970,35 @@ func (x *WorkerState) GetJobs() []*ActiveJob {
 	return nil
 }
 
-// ActiveJob is a job accepted by the worker that has not finished yet.
+func (x *WorkerState) GetLastSeq() int64 {
+	if x != nil {
+		return x.LastSeq
+	}
+	return 0
+}
+
+func (x *WorkerState) GetOutboxBacklog() int32 {
+	if x != nil {
+		return x.OutboxBacklog
+	}
+	return 0
+}
+
+func (x *WorkerState) GetOutboxSaturated() bool {
+	if x != nil {
+		return x.OutboxSaturated
+	}
+	return false
+}
+
+// ActiveJob is a job accepted by the worker that has not finished yet (or
+// whose JobResult is not in the envelope yet).
 type ActiveJob struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Controller-assigned job UUID.
 	JobId string `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
-	// When the job's process started; unset while the job waits to start.
+	// When the job was handed to its runner (see JobStarted); unset while the
+	// job waits in the worker's local queue for a free slot.
 	StartedAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1685,7 +2006,7 @@ type ActiveJob struct {
 
 func (x *ActiveJob) Reset() {
 	*x = ActiveJob{}
-	mi := &file_syncr_v1_link_proto_msgTypes[18]
+	mi := &file_syncr_v1_link_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1697,7 +2018,7 @@ func (x *ActiveJob) String() string {
 func (*ActiveJob) ProtoMessage() {}
 
 func (x *ActiveJob) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[18]
+	mi := &file_syncr_v1_link_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1710,7 +2031,7 @@ func (x *ActiveJob) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActiveJob.ProtoReflect.Descriptor instead.
 func (*ActiveJob) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{18}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ActiveJob) GetJobId() string {
@@ -1731,7 +2052,9 @@ func (x *ActiveJob) GetStartedAt() *timestamppb.Timestamp {
 // acknowledged, so handling must be idempotent.
 type Command struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Controller-assigned command UUID, used for acks.
+	// Controller-assigned command ID, echoed verbatim in CommandAck. Opaque to
+	// workers (do not parse it); at most 128 bytes. The controller derives it
+	// from the job, so a redelivered command keeps its ID.
 	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// Types that are valid to be assigned to Command:
 	//
@@ -1744,7 +2067,7 @@ type Command struct {
 
 func (x *Command) Reset() {
 	*x = Command{}
-	mi := &file_syncr_v1_link_proto_msgTypes[19]
+	mi := &file_syncr_v1_link_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1756,7 +2079,7 @@ func (x *Command) String() string {
 func (*Command) ProtoMessage() {}
 
 func (x *Command) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[19]
+	mi := &file_syncr_v1_link_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1769,7 +2092,7 @@ func (x *Command) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Command.ProtoReflect.Descriptor instead.
 func (*Command) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{19}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *Command) GetId() string {
@@ -1833,7 +2156,7 @@ type CommandAck struct {
 
 func (x *CommandAck) Reset() {
 	*x = CommandAck{}
-	mi := &file_syncr_v1_link_proto_msgTypes[20]
+	mi := &file_syncr_v1_link_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1845,7 +2168,7 @@ func (x *CommandAck) String() string {
 func (*CommandAck) ProtoMessage() {}
 
 func (x *CommandAck) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[20]
+	mi := &file_syncr_v1_link_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1858,7 +2181,7 @@ func (x *CommandAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandAck.ProtoReflect.Descriptor instead.
 func (*CommandAck) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{20}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *CommandAck) GetCommandId() string {
@@ -1882,7 +2205,7 @@ type StartJob struct {
 
 func (x *StartJob) Reset() {
 	*x = StartJob{}
-	mi := &file_syncr_v1_link_proto_msgTypes[21]
+	mi := &file_syncr_v1_link_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1894,7 +2217,7 @@ func (x *StartJob) String() string {
 func (*StartJob) ProtoMessage() {}
 
 func (x *StartJob) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[21]
+	mi := &file_syncr_v1_link_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1907,7 +2230,7 @@ func (x *StartJob) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartJob.ProtoReflect.Descriptor instead.
 func (*StartJob) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{21}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *StartJob) GetJobId() string {
@@ -1936,7 +2259,7 @@ type CancelJob struct {
 
 func (x *CancelJob) Reset() {
 	*x = CancelJob{}
-	mi := &file_syncr_v1_link_proto_msgTypes[22]
+	mi := &file_syncr_v1_link_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1948,7 +2271,7 @@ func (x *CancelJob) String() string {
 func (*CancelJob) ProtoMessage() {}
 
 func (x *CancelJob) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[22]
+	mi := &file_syncr_v1_link_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1961,7 +2284,7 @@ func (x *CancelJob) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJob.ProtoReflect.Descriptor instead.
 func (*CancelJob) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{22}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *CancelJob) GetJobId() string {
@@ -2002,7 +2325,7 @@ type JobSpec struct {
 
 func (x *JobSpec) Reset() {
 	*x = JobSpec{}
-	mi := &file_syncr_v1_link_proto_msgTypes[23]
+	mi := &file_syncr_v1_link_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2014,7 +2337,7 @@ func (x *JobSpec) String() string {
 func (*JobSpec) ProtoMessage() {}
 
 func (x *JobSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[23]
+	mi := &file_syncr_v1_link_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2027,7 +2350,7 @@ func (x *JobSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobSpec.ProtoReflect.Descriptor instead.
 func (*JobSpec) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{23}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *JobSpec) GetRemotes() []*RemoteDefinition {
@@ -2205,7 +2528,7 @@ type RemoteDefinition struct {
 
 func (x *RemoteDefinition) Reset() {
 	*x = RemoteDefinition{}
-	mi := &file_syncr_v1_link_proto_msgTypes[24]
+	mi := &file_syncr_v1_link_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2217,7 +2540,7 @@ func (x *RemoteDefinition) String() string {
 func (*RemoteDefinition) ProtoMessage() {}
 
 func (x *RemoteDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[24]
+	mi := &file_syncr_v1_link_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2230,7 +2553,7 @@ func (x *RemoteDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoteDefinition.ProtoReflect.Descriptor instead.
 func (*RemoteDefinition) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{24}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *RemoteDefinition) GetAlias() string {
@@ -2290,7 +2613,7 @@ type UnionUpstream struct {
 
 func (x *UnionUpstream) Reset() {
 	*x = UnionUpstream{}
-	mi := &file_syncr_v1_link_proto_msgTypes[25]
+	mi := &file_syncr_v1_link_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2302,7 +2625,7 @@ func (x *UnionUpstream) String() string {
 func (*UnionUpstream) ProtoMessage() {}
 
 func (x *UnionUpstream) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[25]
+	mi := &file_syncr_v1_link_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2315,7 +2638,7 @@ func (x *UnionUpstream) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnionUpstream.ProtoReflect.Descriptor instead.
 func (*UnionUpstream) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{25}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *UnionUpstream) GetLocation() *Location {
@@ -2348,7 +2671,7 @@ type Location struct {
 
 func (x *Location) Reset() {
 	*x = Location{}
-	mi := &file_syncr_v1_link_proto_msgTypes[26]
+	mi := &file_syncr_v1_link_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2360,7 +2683,7 @@ func (x *Location) String() string {
 func (*Location) ProtoMessage() {}
 
 func (x *Location) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[26]
+	mi := &file_syncr_v1_link_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2373,7 +2696,7 @@ func (x *Location) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Location.ProtoReflect.Descriptor instead.
 func (*Location) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{26}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *Location) GetRemote() string {
@@ -2407,7 +2730,7 @@ type RcloneTransfer struct {
 
 func (x *RcloneTransfer) Reset() {
 	*x = RcloneTransfer{}
-	mi := &file_syncr_v1_link_proto_msgTypes[27]
+	mi := &file_syncr_v1_link_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2419,7 +2742,7 @@ func (x *RcloneTransfer) String() string {
 func (*RcloneTransfer) ProtoMessage() {}
 
 func (x *RcloneTransfer) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[27]
+	mi := &file_syncr_v1_link_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2432,7 +2755,7 @@ func (x *RcloneTransfer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RcloneTransfer.ProtoReflect.Descriptor instead.
 func (*RcloneTransfer) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{27}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *RcloneTransfer) GetMode() RcloneTransferMode {
@@ -2507,7 +2830,7 @@ type RcloneTransferOptions struct {
 
 func (x *RcloneTransferOptions) Reset() {
 	*x = RcloneTransferOptions{}
-	mi := &file_syncr_v1_link_proto_msgTypes[28]
+	mi := &file_syncr_v1_link_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2519,7 +2842,7 @@ func (x *RcloneTransferOptions) String() string {
 func (*RcloneTransferOptions) ProtoMessage() {}
 
 func (x *RcloneTransferOptions) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[28]
+	mi := &file_syncr_v1_link_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2532,7 +2855,7 @@ func (x *RcloneTransferOptions) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RcloneTransferOptions.ProtoReflect.Descriptor instead.
 func (*RcloneTransferOptions) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{28}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *RcloneTransferOptions) GetTransfers() int32 {
@@ -2667,7 +2990,7 @@ type FilterRule struct {
 
 func (x *FilterRule) Reset() {
 	*x = FilterRule{}
-	mi := &file_syncr_v1_link_proto_msgTypes[29]
+	mi := &file_syncr_v1_link_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2679,7 +3002,7 @@ func (x *FilterRule) String() string {
 func (*FilterRule) ProtoMessage() {}
 
 func (x *FilterRule) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[29]
+	mi := &file_syncr_v1_link_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2692,7 +3015,7 @@ func (x *FilterRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FilterRule.ProtoReflect.Descriptor instead.
 func (*FilterRule) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{29}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *FilterRule) GetAction() FilterAction {
@@ -2725,7 +3048,7 @@ type ResticRepository struct {
 
 func (x *ResticRepository) Reset() {
 	*x = ResticRepository{}
-	mi := &file_syncr_v1_link_proto_msgTypes[30]
+	mi := &file_syncr_v1_link_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2737,7 +3060,7 @@ func (x *ResticRepository) String() string {
 func (*ResticRepository) ProtoMessage() {}
 
 func (x *ResticRepository) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[30]
+	mi := &file_syncr_v1_link_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2750,7 +3073,7 @@ func (x *ResticRepository) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticRepository.ProtoReflect.Descriptor instead.
 func (*ResticRepository) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{30}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ResticRepository) GetLocation() *Location {
@@ -2777,7 +3100,7 @@ type ResticInit struct {
 
 func (x *ResticInit) Reset() {
 	*x = ResticInit{}
-	mi := &file_syncr_v1_link_proto_msgTypes[31]
+	mi := &file_syncr_v1_link_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2789,7 +3112,7 @@ func (x *ResticInit) String() string {
 func (*ResticInit) ProtoMessage() {}
 
 func (x *ResticInit) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[31]
+	mi := &file_syncr_v1_link_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2802,7 +3125,7 @@ func (x *ResticInit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticInit.ProtoReflect.Descriptor instead.
 func (*ResticInit) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{31}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ResticInit) GetRepository() *ResticRepository {
@@ -2842,7 +3165,7 @@ type ResticBackup struct {
 
 func (x *ResticBackup) Reset() {
 	*x = ResticBackup{}
-	mi := &file_syncr_v1_link_proto_msgTypes[32]
+	mi := &file_syncr_v1_link_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2854,7 +3177,7 @@ func (x *ResticBackup) String() string {
 func (*ResticBackup) ProtoMessage() {}
 
 func (x *ResticBackup) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[32]
+	mi := &file_syncr_v1_link_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2867,7 +3190,7 @@ func (x *ResticBackup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticBackup.ProtoReflect.Descriptor instead.
 func (*ResticBackup) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{32}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ResticBackup) GetRepository() *ResticRepository {
@@ -2957,7 +3280,7 @@ type ResticBackupOutput struct {
 
 func (x *ResticBackupOutput) Reset() {
 	*x = ResticBackupOutput{}
-	mi := &file_syncr_v1_link_proto_msgTypes[33]
+	mi := &file_syncr_v1_link_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2969,7 +3292,7 @@ func (x *ResticBackupOutput) String() string {
 func (*ResticBackupOutput) ProtoMessage() {}
 
 func (x *ResticBackupOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[33]
+	mi := &file_syncr_v1_link_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2982,7 +3305,7 @@ func (x *ResticBackupOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticBackupOutput.ProtoReflect.Descriptor instead.
 func (*ResticBackupOutput) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{33}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ResticBackupOutput) GetSnapshotId() string {
@@ -3038,7 +3361,7 @@ type ResticRetentionPolicy struct {
 
 func (x *ResticRetentionPolicy) Reset() {
 	*x = ResticRetentionPolicy{}
-	mi := &file_syncr_v1_link_proto_msgTypes[34]
+	mi := &file_syncr_v1_link_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3050,7 +3373,7 @@ func (x *ResticRetentionPolicy) String() string {
 func (*ResticRetentionPolicy) ProtoMessage() {}
 
 func (x *ResticRetentionPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[34]
+	mi := &file_syncr_v1_link_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3063,7 +3386,7 @@ func (x *ResticRetentionPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticRetentionPolicy.ProtoReflect.Descriptor instead.
 func (*ResticRetentionPolicy) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{34}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ResticRetentionPolicy) GetKeepLast() int32 {
@@ -3135,7 +3458,7 @@ type ResticForget struct {
 
 func (x *ResticForget) Reset() {
 	*x = ResticForget{}
-	mi := &file_syncr_v1_link_proto_msgTypes[35]
+	mi := &file_syncr_v1_link_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3147,7 +3470,7 @@ func (x *ResticForget) String() string {
 func (*ResticForget) ProtoMessage() {}
 
 func (x *ResticForget) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[35]
+	mi := &file_syncr_v1_link_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3160,7 +3483,7 @@ func (x *ResticForget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticForget.ProtoReflect.Descriptor instead.
 func (*ResticForget) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{35}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ResticForget) GetRepository() *ResticRepository {
@@ -3217,7 +3540,7 @@ type ResticForgetOutput struct {
 
 func (x *ResticForgetOutput) Reset() {
 	*x = ResticForgetOutput{}
-	mi := &file_syncr_v1_link_proto_msgTypes[36]
+	mi := &file_syncr_v1_link_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3229,7 +3552,7 @@ func (x *ResticForgetOutput) String() string {
 func (*ResticForgetOutput) ProtoMessage() {}
 
 func (x *ResticForgetOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[36]
+	mi := &file_syncr_v1_link_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3242,7 +3565,7 @@ func (x *ResticForgetOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticForgetOutput.ProtoReflect.Descriptor instead.
 func (*ResticForgetOutput) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{36}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ResticForgetOutput) GetRemovedSnapshotIds() []string {
@@ -3264,7 +3587,7 @@ type ResticPrune struct {
 
 func (x *ResticPrune) Reset() {
 	*x = ResticPrune{}
-	mi := &file_syncr_v1_link_proto_msgTypes[37]
+	mi := &file_syncr_v1_link_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3276,7 +3599,7 @@ func (x *ResticPrune) String() string {
 func (*ResticPrune) ProtoMessage() {}
 
 func (x *ResticPrune) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[37]
+	mi := &file_syncr_v1_link_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3289,7 +3612,7 @@ func (x *ResticPrune) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticPrune.ProtoReflect.Descriptor instead.
 func (*ResticPrune) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{37}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ResticPrune) GetRepository() *ResticRepository {
@@ -3319,7 +3642,7 @@ type ResticCheck struct {
 
 func (x *ResticCheck) Reset() {
 	*x = ResticCheck{}
-	mi := &file_syncr_v1_link_proto_msgTypes[38]
+	mi := &file_syncr_v1_link_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3331,7 +3654,7 @@ func (x *ResticCheck) String() string {
 func (*ResticCheck) ProtoMessage() {}
 
 func (x *ResticCheck) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[38]
+	mi := &file_syncr_v1_link_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3344,7 +3667,7 @@ func (x *ResticCheck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticCheck.ProtoReflect.Descriptor instead.
 func (*ResticCheck) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{38}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ResticCheck) GetRepository() *ResticRepository {
@@ -3381,7 +3704,7 @@ type ResticRestore struct {
 
 func (x *ResticRestore) Reset() {
 	*x = ResticRestore{}
-	mi := &file_syncr_v1_link_proto_msgTypes[39]
+	mi := &file_syncr_v1_link_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3393,7 +3716,7 @@ func (x *ResticRestore) String() string {
 func (*ResticRestore) ProtoMessage() {}
 
 func (x *ResticRestore) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[39]
+	mi := &file_syncr_v1_link_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3406,7 +3729,7 @@ func (x *ResticRestore) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticRestore.ProtoReflect.Descriptor instead.
 func (*ResticRestore) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{39}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ResticRestore) GetRepository() *ResticRepository {
@@ -3465,7 +3788,7 @@ type ResticSnapshots struct {
 
 func (x *ResticSnapshots) Reset() {
 	*x = ResticSnapshots{}
-	mi := &file_syncr_v1_link_proto_msgTypes[40]
+	mi := &file_syncr_v1_link_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3477,7 +3800,7 @@ func (x *ResticSnapshots) String() string {
 func (*ResticSnapshots) ProtoMessage() {}
 
 func (x *ResticSnapshots) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[40]
+	mi := &file_syncr_v1_link_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3490,7 +3813,7 @@ func (x *ResticSnapshots) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticSnapshots.ProtoReflect.Descriptor instead.
 func (*ResticSnapshots) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{40}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *ResticSnapshots) GetRepository() *ResticRepository {
@@ -3524,7 +3847,7 @@ type ResticSnapshotsOutput struct {
 
 func (x *ResticSnapshotsOutput) Reset() {
 	*x = ResticSnapshotsOutput{}
-	mi := &file_syncr_v1_link_proto_msgTypes[41]
+	mi := &file_syncr_v1_link_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3536,7 +3859,7 @@ func (x *ResticSnapshotsOutput) String() string {
 func (*ResticSnapshotsOutput) ProtoMessage() {}
 
 func (x *ResticSnapshotsOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[41]
+	mi := &file_syncr_v1_link_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3549,7 +3872,7 @@ func (x *ResticSnapshotsOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticSnapshotsOutput.ProtoReflect.Descriptor instead.
 func (*ResticSnapshotsOutput) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{41}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *ResticSnapshotsOutput) GetSnapshots() []*ResticSnapshot {
@@ -3578,7 +3901,7 @@ type ResticSnapshot struct {
 
 func (x *ResticSnapshot) Reset() {
 	*x = ResticSnapshot{}
-	mi := &file_syncr_v1_link_proto_msgTypes[42]
+	mi := &file_syncr_v1_link_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3590,7 +3913,7 @@ func (x *ResticSnapshot) String() string {
 func (*ResticSnapshot) ProtoMessage() {}
 
 func (x *ResticSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[42]
+	mi := &file_syncr_v1_link_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3603,7 +3926,7 @@ func (x *ResticSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticSnapshot.ProtoReflect.Descriptor instead.
 func (*ResticSnapshot) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{42}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ResticSnapshot) GetId() string {
@@ -3663,17 +3986,29 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\bcommands\x18\x01 \x03(\v2\x11.syncr.v1.CommandR\bcommandsJ\x04\b\x02\x10\x10\"W\n" +
 	"\x0fCommandResponse\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\tR\x05epoch\x12(\n" +
-	"\x04acks\x18\x02 \x03(\v2\x14.syncr.v1.CommandAckR\x04acksJ\x04\b\x03\x10\x10\"e\n" +
+	"\x04acks\x18\x02 \x03(\v2\x14.syncr.v1.CommandAckR\x04acksJ\x04\b\x03\x10\x10\"\x82\x01\n" +
 	"\vPullRequest\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\tR\x05epoch\x12\x1b\n" +
 	"\tafter_seq\x18\x02 \x01(\x03R\bafterSeq\x12\x1d\n" +
 	"\n" +
-	"max_events\x18\x03 \x01(\x05R\tmaxEventsJ\x04\b\x04\x10\x10\"\x9b\x01\n" +
+	"max_events\x18\x03 \x01(\x05R\tmaxEvents\x12\x1b\n" +
+	"\tmax_bytes\x18\x04 \x01(\x05R\bmaxBytesJ\x04\b\x05\x10\x10\"\x9b\x01\n" +
 	"\fPullResponse\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\tR\x05epoch\x12'\n" +
 	"\x06events\x18\x02 \x03(\v2\x0f.syncr.v1.EventR\x06events\x12\x19\n" +
 	"\bhas_more\x18\x03 \x01(\bR\ahasMore\x12+\n" +
-	"\x05state\x18\x04 \x01(\v2\x15.syncr.v1.WorkerStateR\x05stateJ\x04\b\x05\x10\x10\"\xa4\x02\n" +
+	"\x05state\x18\x04 \x01(\v2\x15.syncr.v1.WorkerStateR\x05stateJ\x04\b\x05\x10\x10\"\xdf\x01\n" +
+	"\rEnrollRequest\x12)\n" +
+	"\x10enrollment_token\x18\x01 \x01(\tR\x0fenrollmentToken\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x0e\n" +
+	"\x02os\x18\x03 \x01(\tR\x02os\x12\x12\n" +
+	"\x04arch\x18\x04 \x01(\tR\x04arch\x12(\n" +
+	"\x04mode\x18\x05 \x01(\x0e2\x14.syncr.v1.WorkerModeR\x04mode\x12\x10\n" +
+	"\x03url\x18\x06 \x01(\tR\x03url\x12)\n" +
+	"\x10cert_fingerprint\x18\a \x01(\tR\x0fcertFingerprintJ\x04\b\b\x10\x10\"X\n" +
+	"\x0eEnrollResponse\x12\x1b\n" +
+	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12#\n" +
+	"\rworker_secret\x18\x02 \x01(\tR\fworkerSecretJ\x04\b\x03\x10\x10\"\xa4\x02\n" +
 	"\x05Event\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\x03R\x03seq\x12.\n" +
 	"\x04time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x04time\x12'\n" +
@@ -3742,9 +4077,12 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\bJobError\x12*\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x16.syncr.v1.JobErrorCodeR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessageJ\x04\b\x03\x10\n" +
-	"\"<\n" +
+	"\"\xa9\x01\n" +
 	"\vWorkerState\x12'\n" +
-	"\x04jobs\x18\x01 \x03(\v2\x13.syncr.v1.ActiveJobR\x04jobsJ\x04\b\x02\x10\n" +
+	"\x04jobs\x18\x01 \x03(\v2\x13.syncr.v1.ActiveJobR\x04jobs\x12\x19\n" +
+	"\blast_seq\x18\x02 \x01(\x03R\alastSeq\x12%\n" +
+	"\x0eoutbox_backlog\x18\x03 \x01(\x05R\routboxBacklog\x12)\n" +
+	"\x10outbox_saturated\x18\x04 \x01(\bR\x0foutboxSaturatedJ\x04\b\x05\x10\n" +
 	"\"c\n" +
 	"\tActiveJob\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x129\n" +
@@ -3934,12 +4272,17 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\x04time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x04time\x12\x12\n" +
 	"\x04host\x18\x03 \x01(\tR\x04host\x12\x14\n" +
 	"\x05paths\x18\x04 \x03(\tR\x05paths\x12\x12\n" +
-	"\x04tags\x18\x05 \x03(\tR\x04tagsJ\x04\b\x06\x10\x14*\x94\x01\n" +
+	"\x04tags\x18\x05 \x03(\tR\x04tagsJ\x04\b\x06\x10\x14*Z\n" +
+	"\n" +
+	"WorkerMode\x12\x1b\n" +
+	"\x17WORKER_MODE_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12WORKER_MODE_ACTIVE\x10\x01\x12\x17\n" +
+	"\x13WORKER_MODE_PASSIVE\x10\x02*\x94\x01\n" +
 	"\x0fJobResultStatus\x12!\n" +
 	"\x1dJOB_RESULT_STATUS_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bJOB_RESULT_STATUS_SUCCEEDED\x10\x01\x12\x1c\n" +
 	"\x18JOB_RESULT_STATUS_FAILED\x10\x02\x12\x1f\n" +
-	"\x1bJOB_RESULT_STATUS_CANCELLED\x10\x03*\xd0\x03\n" +
+	"\x1bJOB_RESULT_STATUS_CANCELLED\x10\x03*\x9f\x05\n" +
 	"\fJobErrorCode\x12\x1e\n" +
 	"\x1aJOB_ERROR_CODE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bJOB_ERROR_CODE_INVALID_SPEC\x10\x01\x12#\n" +
@@ -3954,7 +4297,13 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"#JOB_ERROR_CODE_REPOSITORY_NOT_FOUND\x10\n" +
 	"\x12$\n" +
 	" JOB_ERROR_CODE_REPOSITORY_LOCKED\x10\v\x12!\n" +
-	"\x1dJOB_ERROR_CODE_WRONG_PASSWORD\x10\f*\xa2\x01\n" +
+	"\x1dJOB_ERROR_CODE_WRONG_PASSWORD\x10\f\x12\x1c\n" +
+	"\x18JOB_ERROR_CODE_CANCELLED\x10\r\x12\"\n" +
+	"\x1eJOB_ERROR_CODE_WORKER_SHUTDOWN\x10\x0e\x12#\n" +
+	"\x1fJOB_ERROR_CODE_DISPATCH_TIMEOUT\x10\x14\x12#\n" +
+	"\x1fJOB_ERROR_CODE_WORKER_RESTARTED\x10\x15\x12\x1e\n" +
+	"\x1aJOB_ERROR_CODE_WORKER_LOST\x10\x16\x12!\n" +
+	"\x1dJOB_ERROR_CODE_WORKER_REMOVED\x10\x17*\xa2\x01\n" +
 	"\x11UnionUpstreamMode\x12#\n" +
 	"\x1fUNION_UPSTREAM_MODE_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eUNION_UPSTREAM_MODE_READ_WRITE\x10\x01\x12!\n" +
@@ -3974,7 +4323,9 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\x04Poll\x12\x15.syncr.v1.PollRequest\x1a\x16.syncr.v1.PollResponse\"\x002\x8e\x01\n" +
 	"\x11WorkerLinkService\x12@\n" +
 	"\aCommand\x12\x18.syncr.v1.CommandRequest\x1a\x19.syncr.v1.CommandResponse\"\x00\x127\n" +
-	"\x04Pull\x12\x15.syncr.v1.PullRequest\x1a\x16.syncr.v1.PullResponse\"\x00B\x8c\x01\n" +
+	"\x04Pull\x12\x15.syncr.v1.PullRequest\x1a\x16.syncr.v1.PullResponse\"\x002R\n" +
+	"\x11EnrollmentService\x12=\n" +
+	"\x06Enroll\x12\x17.syncr.v1.EnrollRequest\x1a\x18.syncr.v1.EnrollResponse\"\x00B\x8c\x01\n" +
 	"\fcom.syncr.v1B\tLinkProtoP\x01Z0github.com/Zeptiny/Syncr/gen/go/syncr/v1;syncrv1\xa2\x02\x03SXX\xaa\x02\bSyncr.V1\xca\x02\bSyncr\\V1\xe2\x02\x14Syncr\\V1\\GPBMetadata\xea\x02\tSyncr::V1b\x06proto3"
 
 var (
@@ -3989,141 +4340,147 @@ func file_syncr_v1_link_proto_rawDescGZIP() []byte {
 	return file_syncr_v1_link_proto_rawDescData
 }
 
-var file_syncr_v1_link_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_syncr_v1_link_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
+var file_syncr_v1_link_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_syncr_v1_link_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_syncr_v1_link_proto_goTypes = []any{
-	(JobResultStatus)(0),          // 0: syncr.v1.JobResultStatus
-	(JobErrorCode)(0),             // 1: syncr.v1.JobErrorCode
-	(UnionUpstreamMode)(0),        // 2: syncr.v1.UnionUpstreamMode
-	(RcloneTransferMode)(0),       // 3: syncr.v1.RcloneTransferMode
-	(FilterAction)(0),             // 4: syncr.v1.FilterAction
-	(*ReportRequest)(nil),         // 5: syncr.v1.ReportRequest
-	(*ReportResponse)(nil),        // 6: syncr.v1.ReportResponse
-	(*PollRequest)(nil),           // 7: syncr.v1.PollRequest
-	(*PollResponse)(nil),          // 8: syncr.v1.PollResponse
-	(*CommandRequest)(nil),        // 9: syncr.v1.CommandRequest
-	(*CommandResponse)(nil),       // 10: syncr.v1.CommandResponse
-	(*PullRequest)(nil),           // 11: syncr.v1.PullRequest
-	(*PullResponse)(nil),          // 12: syncr.v1.PullResponse
-	(*Event)(nil),                 // 13: syncr.v1.Event
-	(*Hello)(nil),                 // 14: syncr.v1.Hello
-	(*ToolVersion)(nil),           // 15: syncr.v1.ToolVersion
-	(*JobStarted)(nil),            // 16: syncr.v1.JobStarted
-	(*Progress)(nil),              // 17: syncr.v1.Progress
-	(*JobStats)(nil),              // 18: syncr.v1.JobStats
-	(*JobResult)(nil),             // 19: syncr.v1.JobResult
-	(*JobOutput)(nil),             // 20: syncr.v1.JobOutput
-	(*JobError)(nil),              // 21: syncr.v1.JobError
-	(*WorkerState)(nil),           // 22: syncr.v1.WorkerState
-	(*ActiveJob)(nil),             // 23: syncr.v1.ActiveJob
-	(*Command)(nil),               // 24: syncr.v1.Command
-	(*CommandAck)(nil),            // 25: syncr.v1.CommandAck
-	(*StartJob)(nil),              // 26: syncr.v1.StartJob
-	(*CancelJob)(nil),             // 27: syncr.v1.CancelJob
-	(*JobSpec)(nil),               // 28: syncr.v1.JobSpec
-	(*RemoteDefinition)(nil),      // 29: syncr.v1.RemoteDefinition
-	(*UnionUpstream)(nil),         // 30: syncr.v1.UnionUpstream
-	(*Location)(nil),              // 31: syncr.v1.Location
-	(*RcloneTransfer)(nil),        // 32: syncr.v1.RcloneTransfer
-	(*RcloneTransferOptions)(nil), // 33: syncr.v1.RcloneTransferOptions
-	(*FilterRule)(nil),            // 34: syncr.v1.FilterRule
-	(*ResticRepository)(nil),      // 35: syncr.v1.ResticRepository
-	(*ResticInit)(nil),            // 36: syncr.v1.ResticInit
-	(*ResticBackup)(nil),          // 37: syncr.v1.ResticBackup
-	(*ResticBackupOutput)(nil),    // 38: syncr.v1.ResticBackupOutput
-	(*ResticRetentionPolicy)(nil), // 39: syncr.v1.ResticRetentionPolicy
-	(*ResticForget)(nil),          // 40: syncr.v1.ResticForget
-	(*ResticForgetOutput)(nil),    // 41: syncr.v1.ResticForgetOutput
-	(*ResticPrune)(nil),           // 42: syncr.v1.ResticPrune
-	(*ResticCheck)(nil),           // 43: syncr.v1.ResticCheck
-	(*ResticRestore)(nil),         // 44: syncr.v1.ResticRestore
-	(*ResticSnapshots)(nil),       // 45: syncr.v1.ResticSnapshots
-	(*ResticSnapshotsOutput)(nil), // 46: syncr.v1.ResticSnapshotsOutput
-	(*ResticSnapshot)(nil),        // 47: syncr.v1.ResticSnapshot
-	nil,                           // 48: syncr.v1.RemoteDefinition.OptionsEntry
-	nil,                           // 49: syncr.v1.RemoteDefinition.SecretsEntry
-	(*durationpb.Duration)(nil),   // 50: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil), // 51: google.protobuf.Timestamp
+	(WorkerMode)(0),               // 0: syncr.v1.WorkerMode
+	(JobResultStatus)(0),          // 1: syncr.v1.JobResultStatus
+	(JobErrorCode)(0),             // 2: syncr.v1.JobErrorCode
+	(UnionUpstreamMode)(0),        // 3: syncr.v1.UnionUpstreamMode
+	(RcloneTransferMode)(0),       // 4: syncr.v1.RcloneTransferMode
+	(FilterAction)(0),             // 5: syncr.v1.FilterAction
+	(*ReportRequest)(nil),         // 6: syncr.v1.ReportRequest
+	(*ReportResponse)(nil),        // 7: syncr.v1.ReportResponse
+	(*PollRequest)(nil),           // 8: syncr.v1.PollRequest
+	(*PollResponse)(nil),          // 9: syncr.v1.PollResponse
+	(*CommandRequest)(nil),        // 10: syncr.v1.CommandRequest
+	(*CommandResponse)(nil),       // 11: syncr.v1.CommandResponse
+	(*PullRequest)(nil),           // 12: syncr.v1.PullRequest
+	(*PullResponse)(nil),          // 13: syncr.v1.PullResponse
+	(*EnrollRequest)(nil),         // 14: syncr.v1.EnrollRequest
+	(*EnrollResponse)(nil),        // 15: syncr.v1.EnrollResponse
+	(*Event)(nil),                 // 16: syncr.v1.Event
+	(*Hello)(nil),                 // 17: syncr.v1.Hello
+	(*ToolVersion)(nil),           // 18: syncr.v1.ToolVersion
+	(*JobStarted)(nil),            // 19: syncr.v1.JobStarted
+	(*Progress)(nil),              // 20: syncr.v1.Progress
+	(*JobStats)(nil),              // 21: syncr.v1.JobStats
+	(*JobResult)(nil),             // 22: syncr.v1.JobResult
+	(*JobOutput)(nil),             // 23: syncr.v1.JobOutput
+	(*JobError)(nil),              // 24: syncr.v1.JobError
+	(*WorkerState)(nil),           // 25: syncr.v1.WorkerState
+	(*ActiveJob)(nil),             // 26: syncr.v1.ActiveJob
+	(*Command)(nil),               // 27: syncr.v1.Command
+	(*CommandAck)(nil),            // 28: syncr.v1.CommandAck
+	(*StartJob)(nil),              // 29: syncr.v1.StartJob
+	(*CancelJob)(nil),             // 30: syncr.v1.CancelJob
+	(*JobSpec)(nil),               // 31: syncr.v1.JobSpec
+	(*RemoteDefinition)(nil),      // 32: syncr.v1.RemoteDefinition
+	(*UnionUpstream)(nil),         // 33: syncr.v1.UnionUpstream
+	(*Location)(nil),              // 34: syncr.v1.Location
+	(*RcloneTransfer)(nil),        // 35: syncr.v1.RcloneTransfer
+	(*RcloneTransferOptions)(nil), // 36: syncr.v1.RcloneTransferOptions
+	(*FilterRule)(nil),            // 37: syncr.v1.FilterRule
+	(*ResticRepository)(nil),      // 38: syncr.v1.ResticRepository
+	(*ResticInit)(nil),            // 39: syncr.v1.ResticInit
+	(*ResticBackup)(nil),          // 40: syncr.v1.ResticBackup
+	(*ResticBackupOutput)(nil),    // 41: syncr.v1.ResticBackupOutput
+	(*ResticRetentionPolicy)(nil), // 42: syncr.v1.ResticRetentionPolicy
+	(*ResticForget)(nil),          // 43: syncr.v1.ResticForget
+	(*ResticForgetOutput)(nil),    // 44: syncr.v1.ResticForgetOutput
+	(*ResticPrune)(nil),           // 45: syncr.v1.ResticPrune
+	(*ResticCheck)(nil),           // 46: syncr.v1.ResticCheck
+	(*ResticRestore)(nil),         // 47: syncr.v1.ResticRestore
+	(*ResticSnapshots)(nil),       // 48: syncr.v1.ResticSnapshots
+	(*ResticSnapshotsOutput)(nil), // 49: syncr.v1.ResticSnapshotsOutput
+	(*ResticSnapshot)(nil),        // 50: syncr.v1.ResticSnapshot
+	nil,                           // 51: syncr.v1.RemoteDefinition.OptionsEntry
+	nil,                           // 52: syncr.v1.RemoteDefinition.SecretsEntry
+	(*durationpb.Duration)(nil),   // 53: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil), // 54: google.protobuf.Timestamp
 }
 var file_syncr_v1_link_proto_depIdxs = []int32{
-	13, // 0: syncr.v1.ReportRequest.events:type_name -> syncr.v1.Event
-	25, // 1: syncr.v1.ReportRequest.acks:type_name -> syncr.v1.CommandAck
-	22, // 2: syncr.v1.ReportRequest.state:type_name -> syncr.v1.WorkerState
-	50, // 3: syncr.v1.PollRequest.wait:type_name -> google.protobuf.Duration
-	25, // 4: syncr.v1.PollRequest.acks:type_name -> syncr.v1.CommandAck
-	24, // 5: syncr.v1.PollResponse.commands:type_name -> syncr.v1.Command
-	24, // 6: syncr.v1.CommandRequest.commands:type_name -> syncr.v1.Command
-	25, // 7: syncr.v1.CommandResponse.acks:type_name -> syncr.v1.CommandAck
-	13, // 8: syncr.v1.PullResponse.events:type_name -> syncr.v1.Event
-	22, // 9: syncr.v1.PullResponse.state:type_name -> syncr.v1.WorkerState
-	51, // 10: syncr.v1.Event.time:type_name -> google.protobuf.Timestamp
-	14, // 11: syncr.v1.Event.hello:type_name -> syncr.v1.Hello
-	16, // 12: syncr.v1.Event.job_started:type_name -> syncr.v1.JobStarted
-	17, // 13: syncr.v1.Event.progress:type_name -> syncr.v1.Progress
-	19, // 14: syncr.v1.Event.job_result:type_name -> syncr.v1.JobResult
-	15, // 15: syncr.v1.Hello.tools:type_name -> syncr.v1.ToolVersion
-	18, // 16: syncr.v1.Progress.stats:type_name -> syncr.v1.JobStats
-	50, // 17: syncr.v1.JobStats.elapsed:type_name -> google.protobuf.Duration
-	0,  // 18: syncr.v1.JobResult.status:type_name -> syncr.v1.JobResultStatus
-	21, // 19: syncr.v1.JobResult.error:type_name -> syncr.v1.JobError
-	18, // 20: syncr.v1.JobResult.stats:type_name -> syncr.v1.JobStats
-	51, // 21: syncr.v1.JobResult.started_at:type_name -> google.protobuf.Timestamp
-	51, // 22: syncr.v1.JobResult.finished_at:type_name -> google.protobuf.Timestamp
-	20, // 23: syncr.v1.JobResult.output:type_name -> syncr.v1.JobOutput
-	38, // 24: syncr.v1.JobOutput.restic_backup:type_name -> syncr.v1.ResticBackupOutput
-	41, // 25: syncr.v1.JobOutput.restic_forget:type_name -> syncr.v1.ResticForgetOutput
-	46, // 26: syncr.v1.JobOutput.restic_snapshots:type_name -> syncr.v1.ResticSnapshotsOutput
-	1,  // 27: syncr.v1.JobError.code:type_name -> syncr.v1.JobErrorCode
-	23, // 28: syncr.v1.WorkerState.jobs:type_name -> syncr.v1.ActiveJob
-	51, // 29: syncr.v1.ActiveJob.started_at:type_name -> google.protobuf.Timestamp
-	26, // 30: syncr.v1.Command.start_job:type_name -> syncr.v1.StartJob
-	27, // 31: syncr.v1.Command.cancel_job:type_name -> syncr.v1.CancelJob
-	28, // 32: syncr.v1.StartJob.spec:type_name -> syncr.v1.JobSpec
-	29, // 33: syncr.v1.JobSpec.remotes:type_name -> syncr.v1.RemoteDefinition
-	32, // 34: syncr.v1.JobSpec.rclone_transfer:type_name -> syncr.v1.RcloneTransfer
-	36, // 35: syncr.v1.JobSpec.restic_init:type_name -> syncr.v1.ResticInit
-	37, // 36: syncr.v1.JobSpec.restic_backup:type_name -> syncr.v1.ResticBackup
-	40, // 37: syncr.v1.JobSpec.restic_forget:type_name -> syncr.v1.ResticForget
-	42, // 38: syncr.v1.JobSpec.restic_prune:type_name -> syncr.v1.ResticPrune
-	43, // 39: syncr.v1.JobSpec.restic_check:type_name -> syncr.v1.ResticCheck
-	44, // 40: syncr.v1.JobSpec.restic_restore:type_name -> syncr.v1.ResticRestore
-	45, // 41: syncr.v1.JobSpec.restic_snapshots:type_name -> syncr.v1.ResticSnapshots
-	48, // 42: syncr.v1.RemoteDefinition.options:type_name -> syncr.v1.RemoteDefinition.OptionsEntry
-	49, // 43: syncr.v1.RemoteDefinition.secrets:type_name -> syncr.v1.RemoteDefinition.SecretsEntry
-	30, // 44: syncr.v1.RemoteDefinition.union_upstreams:type_name -> syncr.v1.UnionUpstream
-	31, // 45: syncr.v1.UnionUpstream.location:type_name -> syncr.v1.Location
-	2,  // 46: syncr.v1.UnionUpstream.mode:type_name -> syncr.v1.UnionUpstreamMode
-	3,  // 47: syncr.v1.RcloneTransfer.mode:type_name -> syncr.v1.RcloneTransferMode
-	31, // 48: syncr.v1.RcloneTransfer.source:type_name -> syncr.v1.Location
-	31, // 49: syncr.v1.RcloneTransfer.destination:type_name -> syncr.v1.Location
-	33, // 50: syncr.v1.RcloneTransfer.options:type_name -> syncr.v1.RcloneTransferOptions
-	50, // 51: syncr.v1.RcloneTransferOptions.max_duration:type_name -> google.protobuf.Duration
-	34, // 52: syncr.v1.RcloneTransferOptions.filters:type_name -> syncr.v1.FilterRule
-	4,  // 53: syncr.v1.FilterRule.action:type_name -> syncr.v1.FilterAction
-	31, // 54: syncr.v1.ResticRepository.location:type_name -> syncr.v1.Location
-	35, // 55: syncr.v1.ResticInit.repository:type_name -> syncr.v1.ResticRepository
-	35, // 56: syncr.v1.ResticBackup.repository:type_name -> syncr.v1.ResticRepository
-	35, // 57: syncr.v1.ResticForget.repository:type_name -> syncr.v1.ResticRepository
-	39, // 58: syncr.v1.ResticForget.policy:type_name -> syncr.v1.ResticRetentionPolicy
-	35, // 59: syncr.v1.ResticPrune.repository:type_name -> syncr.v1.ResticRepository
-	35, // 60: syncr.v1.ResticCheck.repository:type_name -> syncr.v1.ResticRepository
-	35, // 61: syncr.v1.ResticRestore.repository:type_name -> syncr.v1.ResticRepository
-	35, // 62: syncr.v1.ResticSnapshots.repository:type_name -> syncr.v1.ResticRepository
-	47, // 63: syncr.v1.ResticSnapshotsOutput.snapshots:type_name -> syncr.v1.ResticSnapshot
-	51, // 64: syncr.v1.ResticSnapshot.time:type_name -> google.protobuf.Timestamp
-	5,  // 65: syncr.v1.ControllerLinkService.Report:input_type -> syncr.v1.ReportRequest
-	7,  // 66: syncr.v1.ControllerLinkService.Poll:input_type -> syncr.v1.PollRequest
-	9,  // 67: syncr.v1.WorkerLinkService.Command:input_type -> syncr.v1.CommandRequest
-	11, // 68: syncr.v1.WorkerLinkService.Pull:input_type -> syncr.v1.PullRequest
-	6,  // 69: syncr.v1.ControllerLinkService.Report:output_type -> syncr.v1.ReportResponse
-	8,  // 70: syncr.v1.ControllerLinkService.Poll:output_type -> syncr.v1.PollResponse
-	10, // 71: syncr.v1.WorkerLinkService.Command:output_type -> syncr.v1.CommandResponse
-	12, // 72: syncr.v1.WorkerLinkService.Pull:output_type -> syncr.v1.PullResponse
-	69, // [69:73] is the sub-list for method output_type
-	65, // [65:69] is the sub-list for method input_type
-	65, // [65:65] is the sub-list for extension type_name
-	65, // [65:65] is the sub-list for extension extendee
-	0,  // [0:65] is the sub-list for field type_name
+	16, // 0: syncr.v1.ReportRequest.events:type_name -> syncr.v1.Event
+	28, // 1: syncr.v1.ReportRequest.acks:type_name -> syncr.v1.CommandAck
+	25, // 2: syncr.v1.ReportRequest.state:type_name -> syncr.v1.WorkerState
+	53, // 3: syncr.v1.PollRequest.wait:type_name -> google.protobuf.Duration
+	28, // 4: syncr.v1.PollRequest.acks:type_name -> syncr.v1.CommandAck
+	27, // 5: syncr.v1.PollResponse.commands:type_name -> syncr.v1.Command
+	27, // 6: syncr.v1.CommandRequest.commands:type_name -> syncr.v1.Command
+	28, // 7: syncr.v1.CommandResponse.acks:type_name -> syncr.v1.CommandAck
+	16, // 8: syncr.v1.PullResponse.events:type_name -> syncr.v1.Event
+	25, // 9: syncr.v1.PullResponse.state:type_name -> syncr.v1.WorkerState
+	0,  // 10: syncr.v1.EnrollRequest.mode:type_name -> syncr.v1.WorkerMode
+	54, // 11: syncr.v1.Event.time:type_name -> google.protobuf.Timestamp
+	17, // 12: syncr.v1.Event.hello:type_name -> syncr.v1.Hello
+	19, // 13: syncr.v1.Event.job_started:type_name -> syncr.v1.JobStarted
+	20, // 14: syncr.v1.Event.progress:type_name -> syncr.v1.Progress
+	22, // 15: syncr.v1.Event.job_result:type_name -> syncr.v1.JobResult
+	18, // 16: syncr.v1.Hello.tools:type_name -> syncr.v1.ToolVersion
+	21, // 17: syncr.v1.Progress.stats:type_name -> syncr.v1.JobStats
+	53, // 18: syncr.v1.JobStats.elapsed:type_name -> google.protobuf.Duration
+	1,  // 19: syncr.v1.JobResult.status:type_name -> syncr.v1.JobResultStatus
+	24, // 20: syncr.v1.JobResult.error:type_name -> syncr.v1.JobError
+	21, // 21: syncr.v1.JobResult.stats:type_name -> syncr.v1.JobStats
+	54, // 22: syncr.v1.JobResult.started_at:type_name -> google.protobuf.Timestamp
+	54, // 23: syncr.v1.JobResult.finished_at:type_name -> google.protobuf.Timestamp
+	23, // 24: syncr.v1.JobResult.output:type_name -> syncr.v1.JobOutput
+	41, // 25: syncr.v1.JobOutput.restic_backup:type_name -> syncr.v1.ResticBackupOutput
+	44, // 26: syncr.v1.JobOutput.restic_forget:type_name -> syncr.v1.ResticForgetOutput
+	49, // 27: syncr.v1.JobOutput.restic_snapshots:type_name -> syncr.v1.ResticSnapshotsOutput
+	2,  // 28: syncr.v1.JobError.code:type_name -> syncr.v1.JobErrorCode
+	26, // 29: syncr.v1.WorkerState.jobs:type_name -> syncr.v1.ActiveJob
+	54, // 30: syncr.v1.ActiveJob.started_at:type_name -> google.protobuf.Timestamp
+	29, // 31: syncr.v1.Command.start_job:type_name -> syncr.v1.StartJob
+	30, // 32: syncr.v1.Command.cancel_job:type_name -> syncr.v1.CancelJob
+	31, // 33: syncr.v1.StartJob.spec:type_name -> syncr.v1.JobSpec
+	32, // 34: syncr.v1.JobSpec.remotes:type_name -> syncr.v1.RemoteDefinition
+	35, // 35: syncr.v1.JobSpec.rclone_transfer:type_name -> syncr.v1.RcloneTransfer
+	39, // 36: syncr.v1.JobSpec.restic_init:type_name -> syncr.v1.ResticInit
+	40, // 37: syncr.v1.JobSpec.restic_backup:type_name -> syncr.v1.ResticBackup
+	43, // 38: syncr.v1.JobSpec.restic_forget:type_name -> syncr.v1.ResticForget
+	45, // 39: syncr.v1.JobSpec.restic_prune:type_name -> syncr.v1.ResticPrune
+	46, // 40: syncr.v1.JobSpec.restic_check:type_name -> syncr.v1.ResticCheck
+	47, // 41: syncr.v1.JobSpec.restic_restore:type_name -> syncr.v1.ResticRestore
+	48, // 42: syncr.v1.JobSpec.restic_snapshots:type_name -> syncr.v1.ResticSnapshots
+	51, // 43: syncr.v1.RemoteDefinition.options:type_name -> syncr.v1.RemoteDefinition.OptionsEntry
+	52, // 44: syncr.v1.RemoteDefinition.secrets:type_name -> syncr.v1.RemoteDefinition.SecretsEntry
+	33, // 45: syncr.v1.RemoteDefinition.union_upstreams:type_name -> syncr.v1.UnionUpstream
+	34, // 46: syncr.v1.UnionUpstream.location:type_name -> syncr.v1.Location
+	3,  // 47: syncr.v1.UnionUpstream.mode:type_name -> syncr.v1.UnionUpstreamMode
+	4,  // 48: syncr.v1.RcloneTransfer.mode:type_name -> syncr.v1.RcloneTransferMode
+	34, // 49: syncr.v1.RcloneTransfer.source:type_name -> syncr.v1.Location
+	34, // 50: syncr.v1.RcloneTransfer.destination:type_name -> syncr.v1.Location
+	36, // 51: syncr.v1.RcloneTransfer.options:type_name -> syncr.v1.RcloneTransferOptions
+	53, // 52: syncr.v1.RcloneTransferOptions.max_duration:type_name -> google.protobuf.Duration
+	37, // 53: syncr.v1.RcloneTransferOptions.filters:type_name -> syncr.v1.FilterRule
+	5,  // 54: syncr.v1.FilterRule.action:type_name -> syncr.v1.FilterAction
+	34, // 55: syncr.v1.ResticRepository.location:type_name -> syncr.v1.Location
+	38, // 56: syncr.v1.ResticInit.repository:type_name -> syncr.v1.ResticRepository
+	38, // 57: syncr.v1.ResticBackup.repository:type_name -> syncr.v1.ResticRepository
+	38, // 58: syncr.v1.ResticForget.repository:type_name -> syncr.v1.ResticRepository
+	42, // 59: syncr.v1.ResticForget.policy:type_name -> syncr.v1.ResticRetentionPolicy
+	38, // 60: syncr.v1.ResticPrune.repository:type_name -> syncr.v1.ResticRepository
+	38, // 61: syncr.v1.ResticCheck.repository:type_name -> syncr.v1.ResticRepository
+	38, // 62: syncr.v1.ResticRestore.repository:type_name -> syncr.v1.ResticRepository
+	38, // 63: syncr.v1.ResticSnapshots.repository:type_name -> syncr.v1.ResticRepository
+	50, // 64: syncr.v1.ResticSnapshotsOutput.snapshots:type_name -> syncr.v1.ResticSnapshot
+	54, // 65: syncr.v1.ResticSnapshot.time:type_name -> google.protobuf.Timestamp
+	6,  // 66: syncr.v1.ControllerLinkService.Report:input_type -> syncr.v1.ReportRequest
+	8,  // 67: syncr.v1.ControllerLinkService.Poll:input_type -> syncr.v1.PollRequest
+	10, // 68: syncr.v1.WorkerLinkService.Command:input_type -> syncr.v1.CommandRequest
+	12, // 69: syncr.v1.WorkerLinkService.Pull:input_type -> syncr.v1.PullRequest
+	14, // 70: syncr.v1.EnrollmentService.Enroll:input_type -> syncr.v1.EnrollRequest
+	7,  // 71: syncr.v1.ControllerLinkService.Report:output_type -> syncr.v1.ReportResponse
+	9,  // 72: syncr.v1.ControllerLinkService.Poll:output_type -> syncr.v1.PollResponse
+	11, // 73: syncr.v1.WorkerLinkService.Command:output_type -> syncr.v1.CommandResponse
+	13, // 74: syncr.v1.WorkerLinkService.Pull:output_type -> syncr.v1.PullResponse
+	15, // 75: syncr.v1.EnrollmentService.Enroll:output_type -> syncr.v1.EnrollResponse
+	71, // [71:76] is the sub-list for method output_type
+	66, // [66:71] is the sub-list for method input_type
+	66, // [66:66] is the sub-list for extension type_name
+	66, // [66:66] is the sub-list for extension extendee
+	0,  // [0:66] is the sub-list for field type_name
 }
 
 func init() { file_syncr_v1_link_proto_init() }
@@ -4131,22 +4488,22 @@ func file_syncr_v1_link_proto_init() {
 	if File_syncr_v1_link_proto != nil {
 		return
 	}
-	file_syncr_v1_link_proto_msgTypes[8].OneofWrappers = []any{
+	file_syncr_v1_link_proto_msgTypes[10].OneofWrappers = []any{
 		(*Event_Hello)(nil),
 		(*Event_JobStarted)(nil),
 		(*Event_Progress)(nil),
 		(*Event_JobResult)(nil),
 	}
-	file_syncr_v1_link_proto_msgTypes[15].OneofWrappers = []any{
+	file_syncr_v1_link_proto_msgTypes[17].OneofWrappers = []any{
 		(*JobOutput_ResticBackup)(nil),
 		(*JobOutput_ResticForget)(nil),
 		(*JobOutput_ResticSnapshots)(nil),
 	}
-	file_syncr_v1_link_proto_msgTypes[19].OneofWrappers = []any{
+	file_syncr_v1_link_proto_msgTypes[21].OneofWrappers = []any{
 		(*Command_StartJob)(nil),
 		(*Command_CancelJob)(nil),
 	}
-	file_syncr_v1_link_proto_msgTypes[23].OneofWrappers = []any{
+	file_syncr_v1_link_proto_msgTypes[25].OneofWrappers = []any{
 		(*JobSpec_RcloneTransfer)(nil),
 		(*JobSpec_ResticInit)(nil),
 		(*JobSpec_ResticBackup)(nil),
@@ -4156,17 +4513,17 @@ func file_syncr_v1_link_proto_init() {
 		(*JobSpec_ResticRestore)(nil),
 		(*JobSpec_ResticSnapshots)(nil),
 	}
-	file_syncr_v1_link_proto_msgTypes[28].OneofWrappers = []any{}
-	file_syncr_v1_link_proto_msgTypes[32].OneofWrappers = []any{}
+	file_syncr_v1_link_proto_msgTypes[30].OneofWrappers = []any{}
+	file_syncr_v1_link_proto_msgTypes[34].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_syncr_v1_link_proto_rawDesc), len(file_syncr_v1_link_proto_rawDesc)),
-			NumEnums:      5,
-			NumMessages:   45,
+			NumEnums:      6,
+			NumMessages:   47,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   3,
 		},
 		GoTypes:           file_syncr_v1_link_proto_goTypes,
 		DependencyIndexes: file_syncr_v1_link_proto_depIdxs,

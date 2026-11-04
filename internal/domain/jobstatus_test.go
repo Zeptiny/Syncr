@@ -13,6 +13,7 @@ func TestJobStatusTransitions(t *testing.T) {
 		{JobQueued, JobFailed}:     true,
 		{JobQueued, JobCancelled}:  true,
 
+		{JobDispatched, JobQueued}:      true, // re-queued after a worker restart
 		{JobDispatched, JobRunning}:     true,
 		{JobDispatched, JobSucceeded}:   true,
 		{JobDispatched, JobFailed}:      true,
