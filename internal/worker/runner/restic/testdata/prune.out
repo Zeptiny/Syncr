@@ -1,0 +1,15 @@
+loading all snapshots...
+finding data that is still in use for 1 snapshots
+[0:00] 100.00%  1 / 1 snapshots
+searching used packs...
+collecting packs for deletion and repacking
+[0:00] 100.00%  4 / 4 packs processed
+
+to repack:             0 blobs / 0 B
+this removes:          0 blobs / 0 B
+to delete:             0 blobs / 0 B
+total prune:           0 blobs / 0 B
+remaining:            20 blobs / 22.891 MiB
+unused size after prune: 47 B (0.00% of remaining size)
+
+done

@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1
+#
+# Worker image: Debian slim with pinned rclone and restic copied from their
+# official images, running as non-root. Build from the repository root:
+#   docker build -f deploy/Dockerfile.worker -t syncr-worker .
+#
+# Mount the data the worker may access and list it in the worker's
+# local_roots; the container user (uid 10001) needs permission on it.
+
+ARG GO_VERSION=1.27.3
+ARG RCLONE_VERSION=1.75.2
+ARG RESTIC_VERSION=0.19.1
+
+FROM rclone/rclone:${RCLONE_VERSION} AS rclone
+FROM restic/restic:${RESTIC_VERSION} AS restic
+
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY . .
+ARG TARGETOS TARGETARCH
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_TIME=
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+      -ldflags "-s -w \
+        -X github.com/Zeptiny/Syncr/internal/platform/version.version=${VERSION} \
+        -X github.com/Zeptiny/Syncr/internal/platform/version.commit=${COMMIT} \
+        -X github.com/Zeptiny/Syncr/internal/platform/version.buildTime=${BUILD_TIME}" \
+      -o /out/syncr-worker ./cmd/syncr-worker
+
+FROM debian:trixie-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 syncr \
+    && useradd --system --uid 10001 --gid syncr --home-dir /var/lib/syncr --create-home --shell /usr/sbin/nologin syncr
+COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
+COPY --from=restic /usr/bin/restic /usr/local/bin/restic
+COPY --from=build /out/syncr-worker /usr/local/bin/syncr-worker
+USER syncr:syncr
+WORKDIR /var/lib/syncr
+ENTRYPOINT ["/usr/local/bin/syncr-worker"]
+CMD ["run"]

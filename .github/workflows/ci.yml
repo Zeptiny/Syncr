@@ -1,0 +1,206 @@
+name: CI
+
+on:
+  push:
+    branches: [v2, main]
+  pull_request:
+    branches: [v2, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOLANGCI_LINT_VERSION: v2.15.0
+  BUF_VERSION: "1.75.0"
+
+jobs:
+  lint:
+    name: golangci-lint (${{ matrix.goos }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Lint Windows-only files (build tags) as well as Unix ones.
+        goos: [linux, windows]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true # modules and build cache, keyed by go.sum
+          cache-dependency-path: go.sum
+      - uses: golangci/golangci-lint-action@v9
+        env:
+          GOOS: ${{ matrix.goos }}
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+  proto:
+    name: buf lint + generate drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true # modules and build cache, keyed by go.sum
+          cache-dependency-path: go.sum
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: ${{ env.BUF_VERSION }}
+          setup_only: true
+      - name: buf lint
+        run: buf lint
+      - name: buf format
+        run: buf format --diff --exit-code
+      - name: Generated code is up to date
+        # Plugins run via `go tool`, pinned by go.mod.
+        run: |
+          buf generate
+          git add -N gen
+          git diff --exit-code -- gen
+
+  test:
+    name: go test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true # modules and build cache, keyed by go.sum
+          cache-dependency-path: go.sum
+      - name: go vet
+        run: go vet ./...
+      - name: go vet (integration tests compile)
+        run: go vet -tags integration ./...
+      - name: go test
+        run: go test ./...
+      - name: go test -race
+        if: runner.os == 'Linux'
+        run: go test -race ./...
+      - name: go mod tidy is clean
+        if: runner.os == 'Linux'
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+  integration-linux:
+    name: integration (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Fetch the pinned rclone and restic
+        id: tools
+        run: |
+          out=$(go run ./cmd/syncr-worker tools fetch --dir "$RUNNER_TEMP/syncr-tools")
+          echo "$out"
+          # The last column of each line is the binary's path.
+          rclone=$(echo "$out" | sed -n 's/^rclone  *[^ ]*  *[^ ]*  *[^ ]*  *//p')
+          restic=$(echo "$out" | sed -n 's/^restic  *[^ ]*  *[^ ]*  *[^ ]*  *//p')
+          test -x "$rclone" && test -x "$restic"
+          echo "rclone=$rclone" >> "$GITHUB_OUTPUT"
+          echo "restic=$restic" >> "$GITHUB_OUTPUT"
+      - name: go test -tags integration
+        # Docker is available on the runner, so the MinIO and SFTP
+        # (testcontainers) tests run too.
+        env:
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: go test -tags integration -count=1 -timeout 20m ./...
+
+  integration-windows:
+    name: integration (windows)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Fetch the pinned rclone and restic
+        id: tools
+        shell: pwsh
+        run: |
+          $out = go run ./cmd/syncr-worker tools fetch --dir "$env:RUNNER_TEMP\syncr-tools"
+          if ($LASTEXITCODE -ne 0) { throw "tools fetch failed with exit code $LASTEXITCODE" }
+          $out | ForEach-Object { Write-Host $_ }
+          # Columns are separated by two or more spaces; the last is the path.
+          foreach ($tool in 'rclone', 'restic') {
+            $line = $out | Where-Object { $_ -match "^$tool\s" } | Select-Object -First 1
+            $path = ($line -split '\s{2,}')[-1].Trim()
+            if (-not (Test-Path -LiteralPath $path)) { throw "$tool binary not found at '$path'" }
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "$tool=$path" -Encoding utf8
+          }
+      - name: go test -tags integration
+        # The Windows runner only runs Windows containers, so the tests that
+        # need Linux containers (MinIO, SFTP) skip themselves with a message.
+        # Everything else runs for real: rclone local transfers, union,
+        # cancel, restic local lifecycle, local_roots, tool provisioning and
+        # the worker wiring. -v shows each skip and its reason.
+        env:
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: go test -v -tags integration -count=1 -timeout 30m ./...
+
+  build:
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # git describe needs tags
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true # modules and build cache, keyed by go.sum
+          cache-dependency-path: go.sum
+      - name: Build binaries
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          # Same flags as `make build`.
+          version=$(git describe --tags --match 'v*' --dirty 2>/dev/null || echo dev)
+          commit=$(git rev-parse HEAD)
+          built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          pkg=github.com/Zeptiny/Syncr/internal/platform/version
+          ext=""
+          if [ "$GOOS" = windows ]; then ext=.exe; fi
+          mkdir -p bin
+          for bin in syncr-controller syncr-worker; do
+            echo "building bin/$bin$ext ($GOOS/$GOARCH, $version)"
+            go build -trimpath \
+              -ldflags "-s -w -X $pkg.version=$version -X $pkg.commit=$commit -X $pkg.buildTime=$built" \
+              -o "bin/$bin$ext" "./cmd/$bin"
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: syncr-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: bin/
+          if-no-files-found: error
+          retention-days: 7

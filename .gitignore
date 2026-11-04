@@ -1,10 +1,36 @@
-.venv
-.vscode
+# Build output
+/bin/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go test and coverage artifacts
+*.test
+*.out
+# Test fixtures are always tracked, whatever their extension.
+!**/testdata/**
+*.prof
+coverage.*
+/.cache/
+
+# Node / web
+node_modules/
+/web/dist/
+/web/.vite/
+*.tsbuildinfo
+npm-debug.log*
+
+# Local configuration and secrets (dev credentials live in deploy/, never here)
 .env
-__pycache__
-db.sqlite3
-media/
-node_modules
-huey.db
-huey.db-shm
-huey.db-wal
+.env.*
+*.local.yaml
+*.local.yml
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

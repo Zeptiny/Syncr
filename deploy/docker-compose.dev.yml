@@ -1,0 +1,77 @@
+# Development dependencies for Syncr v2. DEV ONLY: the credentials below are
+# public and every port binds to 127.0.0.1.
+#
+#   docker compose -f deploy/docker-compose.dev.yml up -d --wait   (or: make dev-up)
+#   docker compose -f deploy/docker-compose.dev.yml down -v        (or: make dev-down)
+#
+# Service     Address           Credentials
+# Postgres    127.0.0.1:5432    user syncr, password syncr-dev, database syncr
+#                               (postgres://syncr:syncr-dev@127.0.0.1:5432/syncr?sslmode=disable)
+# MinIO S3    127.0.0.1:9000    access key syncr-dev, secret key syncr-dev-secret, bucket syncr-dev
+# MinIO UI    127.0.0.1:9001    same as above
+# SFTP        127.0.0.1:2222    user syncr, password syncr-dev, writable dir /upload
+#
+# MinIO no longer publishes official container images; pgsty/minio is a
+# community build of the same upstream server.
+name: syncr-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: syncr
+      POSTGRES_PASSWORD: syncr-dev
+      POSTGRES_DB: syncr
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U syncr -d syncr"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: syncr-dev
+      MINIO_ROOT_PASSWORD: syncr-dev-secret
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+    # Create the dev bucket once the server answers (idempotent).
+    post_start:
+      - command:
+          - /bin/sh
+          - -c
+          - >-
+            until mc alias set dev http://127.0.0.1:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null 2>&1;
+            do sleep 1; done;
+            mc mb --ignore-existing dev/syncr-dev
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  sftp:
+    image: atmoz/sftp:alpine
+    # user:password:uid:gid:directory
+    command: ["syncr:syncr-dev:1001:1001:upload"]
+    # No volume: atmoz/sftp only chowns the upload dir when it creates it,
+    # and dev SFTP data is disposable anyway.
+    ports:
+      - "127.0.0.1:2222:22"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 22"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  postgres-data:
+  minio-data:
