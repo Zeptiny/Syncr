@@ -19,8 +19,11 @@ Each job runs as one child process of a pinned, version-checked `rclone` or
 - **Typed options, no free-form flags.** Runners map the typed `JobSpec`
   (`link.proto`) to an allowlisted set of flags.
 - **Remotes are environment, never strings.** Each `RemoteDefinition` becomes
-  `RCLONE_CONFIG_<ALIAS>_<OPTION>` variables visible only to that child;
-  rclone runs with `--config ""` so no config file is read or written. restic
+  `RCLONE_CONFIG_<ALIAS>_<OPTION>` variables visible only to that child
+  (`internal/worker/rcloneenv`). `RCLONE_CONFIG` points at an empty config
+  file in a per-job scratch directory (with `RCLONE_CACHE_DIR` beside it and
+  `RCLONE_ASK_PASSWORD=false`), so a host `rclone.conf` is never read; being
+  environment variables, these also reach rclone when restic starts it. restic
   reuses the same remotes through `-r rclone:<alias>:<path>`, so every rclone
   backend works as a repository; repository passwords travel in
   `RESTIC_PASSWORD`.

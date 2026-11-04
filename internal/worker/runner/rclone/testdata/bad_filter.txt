@@ -1,0 +1,1 @@
+2026/11/04 04:15:08 CRITICAL: Failed to initialise global options: failed to reload "filter" options: bad glob pattern "{{[}}" (regexp "(^|/)([)$"): error parsing regexp: missing closing ]: `[)$`
