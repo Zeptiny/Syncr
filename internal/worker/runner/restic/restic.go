@@ -265,21 +265,27 @@ func (e *engine) baseEnv(spec *syncrv1.JobSpec, password string, viaRclone bool)
 
 // scratchDir creates the job's private directory under ScratchRoot and
 // returns it with a function that removes it.
+//
+// The directory is restic's working and temporary directory, and so also
+// that of the rclone process restic starts for an rclone: repository. restic
+// does not wait for that process to exit, so on Windows it can still hold the
+// directory open when the job ends (or when a job with the same ID starts):
+// proc.RemoveAll retries until it lets go.
 func (e *engine) scratchDir(jobID string) (string, func(), error) {
 	root := e.cfg.ScratchRoot
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "create scratch root: %w", err)
 	}
 	dir := filepath.Join(root, "restic-"+jobID)
-	if err := os.RemoveAll(dir); err != nil { // left over from a crashed worker
+	if err := proc.RemoveAll(dir); err != nil { // left over from a crashed worker or a lingering rclone
 		return "", nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "clear scratch directory: %w", err)
 	}
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return "", nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "create scratch directory: %w", err)
 	}
 	cleanup := func() {
-		if err := os.RemoveAll(dir); err != nil {
-			e.log.Warn("remove job scratch directory", "job_id", jobID, "error", err)
+		if err := proc.RemoveAll(dir); err != nil {
+			e.log.Warn("cannot remove job scratch directory", "job_id", jobID, "dir", dir, "error", err.Error())
 		}
 	}
 	return dir, cleanup, nil

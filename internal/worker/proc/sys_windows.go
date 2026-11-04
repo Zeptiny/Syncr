@@ -3,6 +3,7 @@
 package proc
 
 import (
+	"errors"
 	"os/exec"
 	"syscall"
 )
@@ -20,4 +21,23 @@ const createNoWindow = 0x08000000
 func configureCmd(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | createNoWindow}
 	cmd.Cancel = func() error { return cmd.Process.Kill() }
+}
+
+// transientRemoveError reports whether a failed removal may succeed if
+// retried, once other processes close their handles: these are the errors
+// such a handle causes while it is open. A directory whose file was deleted
+// while still open stays "not empty" until that handle is closed.
+func transientRemoveError(err error) bool {
+	transient := []syscall.Errno{
+		syscall.ERROR_ACCESS_DENIED,
+		32, // ERROR_SHARING_VIOLATION
+		33, // ERROR_LOCK_VIOLATION
+		syscall.ERROR_DIR_NOT_EMPTY,
+	}
+	for _, errno := range transient {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
 }

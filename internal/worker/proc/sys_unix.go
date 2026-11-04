@@ -21,3 +21,7 @@ func configureCmd(cmd *exec.Cmd) {
 		return cmd.Process.Signal(os.Interrupt)
 	}
 }
+
+// transientRemoveError reports whether a failed removal may succeed if
+// retried. Open files never block removal on Unix, so none does.
+func transientRemoveError(error) bool { return false }

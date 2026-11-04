@@ -254,8 +254,11 @@ func (r *Runner) scratchDir(jobID string) (string, error) {
 	return dir, nil
 }
 
+// removeScratch removes the job's scratch directory. On Windows a handle
+// that outlives rclone (an antivirus scan of a file it wrote) can delay this;
+// proc.RemoveAll retries until it is released.
 func (r *Runner) removeScratch(dir string) {
-	if err := os.RemoveAll(dir); err != nil {
+	if err := proc.RemoveAll(dir); err != nil {
 		r.cfg.Logger.Warn("cannot remove job scratch dir", "dir", dir, "error", err.Error())
 	}
 }
