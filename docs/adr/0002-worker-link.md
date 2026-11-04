@@ -119,6 +119,31 @@ What the controller can rely on:
   trusted). A Pull whose epoch is not the worker's ignores `after_seq` and
   starts at the oldest unacked event.
 - **Cancellation.** A CANCELLED JobResult carries `JobError` with code
-  UNSPECIFIED and the cause as message ("job cancelled by the controller" or
-  "... because the worker is shutting down"). A StartJob received while the
-  worker shuts down is acked and reported CANCELLED.
+  CANCELLED ("job cancelled by the controller") or WORKER_SHUTDOWN ("...
+  because the worker is shutting down"). A StartJob received while the
+  worker shuts down is acked and reported CANCELLED (WORKER_SHUTDOWN).
+- **Sizes.** A Report or Pull carries at most about 4 MiB of events
+  (`PullRequest.max_bytes`, capped at 8 MiB) but always at least one event.
+  A single event stays far below the 16 MiB read limits: a result's output
+  is capped at 4 MiB (a long restic snapshot list keeps the newest
+  snapshots and says so in a warning) and its error message at 4 KiB.
+- **State fields.** `WorkerState.last_seq` is the seq of the envelope's last
+  event, or the last assigned seq when the envelope has none;
+  `outbox_backlog` and `outbox_saturated` describe the whole outbox.
+
+## Transports (Milestone 2)
+
+- Controller, active workers: `internal/controller/dispatch/active` serves
+  ControllerLinkService and EnrollmentService. Authentication runs as a
+  Connect request gate (before the body is read); Enroll is rate limited per
+  client IP. Long polls end when the server's lifetime context ends, and the
+  handler extends the connection's read and write deadlines for a Poll, so
+  server-wide `ReadTimeout`/`WriteTimeout` values cannot cut a legitimate
+  long poll.
+- Controller, passive workers: `internal/controller/dispatch/passive` has the
+  pinned HTTPS client (SHA-256 of the leaf certificate's DER, no CA, no host
+  name check) and the supervisor that keeps one `PassiveLoop` per passive
+  worker.
+- Worker: `internal/worker/transport/active` runs the Report and Poll loops
+  of the linkcore contract; `internal/worker/transport/passive` serves
+  WorkerLinkService over TLS.

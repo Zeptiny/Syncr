@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/worker/agent"
@@ -322,6 +325,75 @@ func TestPullLimits(t *testing.T) {
 			t.Errorf("clampMax(%d) = %d, want %d", tt.in, got, tt.want)
 		}
 	}
+	for _, tt := range []struct{ in, want int }{{0, DefaultMaxBytes}, {-3, DefaultMaxBytes}, {10, 10}, {MaxBytes + 1, MaxBytes}} {
+		if got := clampBytes(tt.in); got != tt.want {
+			t.Errorf("clampBytes(%d) = %d, want %d", tt.in, got, tt.want)
+		}
+	}
+}
+
+// bigRunner succeeds at once with an output of about size bytes.
+type bigRunner struct{ size int }
+
+func (bigRunner) Kind() string { return "rclone_transfer" }
+
+func (r bigRunner) Run(context.Context, runner.Job, runner.EmitFunc) (runner.Result, error) {
+	var snaps []*syncrv1.ResticSnapshot
+	for i := 0; i*1024 < r.size; i++ {
+		snaps = append(snaps, &syncrv1.ResticSnapshot{Id: strings.Repeat("s", 1000)})
+	}
+	return runner.Result{Output: &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticSnapshots{
+		ResticSnapshots: &syncrv1.ResticSnapshotsOutput{Snapshots: snaps},
+	}}}, nil
+}
+
+// TestByteBudgets checks that Reports and Pulls bound their events by size,
+// always carry at least one event, and fill the WorkerState fields.
+func TestByteBudgets(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		// Three results of about 3 MiB each: a 4 MiB budget fits one at a
+		// time.
+		core, a := newCore(t, bigRunner{size: 3 << 20}, agent.Config{Outbox: outbox.Options{Epoch: "ep"}, MaxConcurrentJobs: 3})
+		defer shutdown(t, a)
+		core.HandleCommandRequest(t.Context(), &syncrv1.CommandRequest{Commands: []*syncrv1.Command{
+			startCmd("c1", "a"), startCmd("c2", "b"), startCmd("c3", "c"),
+		}})
+		synctest.Wait() // hello, 3 starts, 3 results = seqs 1..7
+
+		req := core.BuildReport(0)
+		if n := len(req.GetEvents()); n < 4 || n > 5 {
+			t.Fatalf("first report has %d events: %v", n, seqs(req.GetEvents()))
+		}
+		size := 0
+		for _, ev := range req.GetEvents() {
+			size += proto.Size(ev)
+		}
+		last := req.GetEvents()[len(req.GetEvents())-1].GetSeq()
+		st := req.GetState()
+		if size > DefaultMaxBytes || st.GetLastSeq() != last || st.GetOutboxBacklog() != 7 || st.GetOutboxSaturated() {
+			t.Errorf("report: %d bytes, state %v", size, st)
+		}
+		if listed := len(st.GetJobs()); listed != int(7-last) {
+			t.Errorf("state lists %d jobs with %d results withheld", listed, 7-last)
+		}
+
+		// A Pull with a tiny budget still returns one event.
+		r := core.HandlePull(&syncrv1.PullRequest{Epoch: "ep", AfterSeq: 4, MaxBytes: 10})
+		if !slices.Equal(seqs(r.GetEvents()), []int64{5}) || !r.GetHasMore() || r.GetState().GetLastSeq() != 5 ||
+			r.GetState().GetOutboxBacklog() != 3 || len(r.GetState().GetJobs()) != 2 {
+			t.Errorf("pull(4, 10 bytes) = seqs %v more %v state %v", seqs(r.GetEvents()), r.GetHasMore(), r.GetState())
+		}
+		// Default budget: one 3 MiB result at a time.
+		r = core.HandlePull(&syncrv1.PullRequest{Epoch: "ep", AfterSeq: 5})
+		if !slices.Equal(seqs(r.GetEvents()), []int64{6}) || !r.GetHasMore() {
+			t.Errorf("pull(5) = seqs %v more %v", seqs(r.GetEvents()), r.GetHasMore())
+		}
+		r = core.HandlePull(&syncrv1.PullRequest{Epoch: "ep", AfterSeq: 7})
+		if len(r.GetEvents()) != 0 || r.GetHasMore() || r.GetState().GetLastSeq() != 7 || r.GetState().GetOutboxBacklog() != 0 {
+			t.Errorf("pull(7) = seqs %v state %v", seqs(r.GetEvents()), r.GetState())
+		}
+	})
 }
 
 func TestFinalFlushAfterShutdown(t *testing.T) {

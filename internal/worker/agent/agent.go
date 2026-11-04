@@ -47,12 +47,21 @@
 // CANCELLED result. The transport then tries a final flush (see
 // internal/worker/linkcore).
 //
+// # Results
+//
+// A CANCELLED result carries code CANCELLED (CancelJob) or WORKER_SHUTDOWN
+// (Shutdown) with the cause as message. Result sizes are bounded so that no
+// event approaches the link's read limits: error messages to
+// MaxErrorMessageBytes, warnings by runner.LimitWarnings and the
+// kind-specific output by Config.MaxOutputBytes (truncated with a warning).
+//
 // Allowed dependencies: the standard library, the generated protobuf code,
 // internal/link, internal/worker/runner (the contract and registry, not the
 // runner implementations) and internal/worker/outbox.
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -77,6 +86,12 @@ const (
 	// DefaultProgressInterval is the default minimum time between two
 	// Progress events of one job.
 	DefaultProgressInterval = time.Second
+	// DefaultMaxOutputBytes is the default bound on the encoded JobOutput of
+	// one result (see Config.MaxOutputBytes). With it, no single event comes
+	// near the link's 16 MiB read limits.
+	DefaultMaxOutputBytes = 4 << 20
+	// MaxErrorMessageBytes bounds the error message of a result.
+	MaxErrorMessageBytes = 4096
 )
 
 // Cancellation causes, reported as the message of CANCELLED results.
@@ -137,6 +152,11 @@ type Config struct {
 	// Outbox configures the event outbox the agent creates.
 	Outbox outbox.Options
 
+	// MaxOutputBytes bounds the encoded kind-specific output of a result. A
+	// larger output is truncated (e.g. only the newest restic snapshots are
+	// listed) with a warning saying so. Zero means DefaultMaxOutputBytes.
+	MaxOutputBytes int
+
 	// Logger receives operational logs (never job specs or secrets). Nil
 	// discards them.
 	Logger *slog.Logger
@@ -172,6 +192,7 @@ type Agent struct {
 	runners          Runners
 	maxConcurrent    int
 	progressInterval time.Duration
+	maxOutputBytes   int
 	out              *outbox.Outbox
 	log              *slog.Logger
 
@@ -211,10 +232,14 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.ProgressInterval < 0 {
 		return nil, fmt.Errorf("agent: progress interval is %s", cfg.ProgressInterval)
 	}
+	if cfg.MaxOutputBytes < 0 {
+		return nil, fmt.Errorf("agent: max output bytes is %d", cfg.MaxOutputBytes)
+	}
 	a := &Agent{
 		runners:          cfg.Runners,
 		maxConcurrent:    cfg.MaxConcurrentJobs,
 		progressInterval: cfg.ProgressInterval,
+		maxOutputBytes:   cmp.Or(cfg.MaxOutputBytes, DefaultMaxOutputBytes),
 		log:              cfg.Logger,
 		active:           make(map[string]*job),
 		finished:         make(map[string]struct{}),
@@ -403,7 +428,7 @@ func (a *Agent) run(j *job) {
 		result = failedResult(j.id, syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL,
 			"internal worker error: the job runner crashed", j.startedAt, res)
 	case err == nil:
-		result = succeededResult(j.id, j.startedAt, res)
+		result = succeededResult(j.id, j.startedAt, res, a.maxOutputBytes)
 	case j.ctx.Err() != nil:
 		result = cancelledResult(j.id, context.Cause(j.ctx), j.startedAt, res)
 	default:
@@ -502,15 +527,25 @@ type Snapshot struct {
 }
 
 // Snapshot returns up to limit events with seq > afterSeq (limit <= 0: all)
-// and the matching worker state, read atomically.
-func (a *Agent) Snapshot(afterSeq int64, limit int) Snapshot {
+// whose encoded sizes sum to at most maxBytes (<= 0: unbounded; the first
+// pending event is always included, see outbox.ReadBounded), and the
+// matching worker state, read atomically. The state's last_seq is the seq of
+// the last returned event or, if none is returned, the last seq assigned in
+// the epoch; outbox_backlog and outbox_saturated describe the whole outbox.
+func (a *Agent) Snapshot(afterSeq int64, limit, maxBytes int) Snapshot {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	b := a.out.Read(afterSeq, limit)
+	b := a.out.ReadBounded(afterSeq, limit, maxBytes)
 	st := a.stateLocked()
 	for _, r := range b.Withheld {
 		st.Jobs = append(st.Jobs, &syncrv1.ActiveJob{JobId: r.GetJobId(), StartedAt: r.GetStartedAt()})
 	}
+	st.LastSeq = b.Head
+	if n := len(b.Events); n > 0 {
+		st.LastSeq = b.Events[n-1].GetSeq()
+	}
+	st.OutboxBacklog = int32(min(b.Backlog, 1<<31-1)) //nolint:gosec // clamped to the int32 range
+	st.OutboxSaturated = b.Saturated
 	return Snapshot{Epoch: a.out.Epoch(), Events: b.Events, More: b.More, State: st}
 }
 
@@ -555,27 +590,38 @@ func (a *Agent) Shutdown(ctx context.Context) error {
 // Result builders. Warnings and output are reported only for SUCCEEDED
 // results, matching the JobResult contract.
 
-func succeededResult(id string, startedAt time.Time, res runner.Result) *syncrv1.JobResult {
+func succeededResult(id string, startedAt time.Time, res runner.Result, maxOutputBytes int) *syncrv1.JobResult {
 	r := baseResult(id, syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED, startedAt, res)
-	r.Output = res.Output
-	r.Warnings = runner.LimitWarnings(res.Warnings)
+	warnings := res.Warnings
+	var truncated string
+	r.Output, truncated = limitOutput(res.Output, maxOutputBytes)
+	if truncated != "" {
+		// First, so the bound on the number of warnings never drops it.
+		warnings = append([]string{truncated}, warnings...)
+	}
+	r.Warnings = runner.LimitWarnings(warnings)
 	return r
 }
 
 func failedResult(id string, code syncrv1.JobErrorCode, msg string, startedAt time.Time, res runner.Result) *syncrv1.JobResult {
 	r := baseResult(id, syncrv1.JobResultStatus_JOB_RESULT_STATUS_FAILED, startedAt, res)
-	r.Error = &syncrv1.JobError{Code: code, Message: msg}
+	r.Error = &syncrv1.JobError{Code: code, Message: clip(msg, MaxErrorMessageBytes)}
 	return r
 }
 
-// cancelledResult reports a cancelled job. The error code is UNSPECIFIED (no
-// code describes cancellation); the message carries the cause.
+// cancelledResult reports a cancelled job. The error code is CANCELLED for a
+// CancelJob command and WORKER_SHUTDOWN for a shutdown; the message carries
+// the cause.
 func cancelledResult(id string, cause error, startedAt time.Time, res runner.Result) *syncrv1.JobResult {
 	if cause == nil {
 		cause = ErrCancelled
 	}
+	code := syncrv1.JobErrorCode_JOB_ERROR_CODE_CANCELLED
+	if errors.Is(cause, ErrShuttingDown) {
+		code = syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_SHUTDOWN
+	}
 	r := baseResult(id, syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED, startedAt, res)
-	r.Error = &syncrv1.JobError{Code: syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSPECIFIED, Message: cause.Error()}
+	r.Error = &syncrv1.JobError{Code: code, Message: clip(cause.Error(), MaxErrorMessageBytes)}
 	return r
 }
 

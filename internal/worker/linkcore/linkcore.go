@@ -45,7 +45,8 @@
 //     worker process, or a controller that never saw this epoch) it is
 //     ignored and the response starts at the oldest unacked event. The
 //     response always carries the epoch, the events after after_seq (up to
-//     max_events), has_more and the WorkerState consistent with the events.
+//     max_events and about max_bytes, but at least one), has_more and the
+//     WorkerState consistent with the events.
 //     When has_more is set the controller should Pull again at once.
 //
 // # Shutdown
@@ -81,6 +82,14 @@ const (
 	DefaultMaxEvents = 256
 	// MaxEvents caps the events per Report or Pull, bounding message size.
 	MaxEvents = 1024
+	// DefaultMaxBytes is the soft bound on the encoded size of the events of
+	// a Report, and of a Pull that does not set max_bytes. A batch always
+	// holds at least one pending event, however large; the agent bounds the
+	// size of a single event (agent.DefaultMaxOutputBytes), so a message
+	// stays well below the link's 16 MiB read limits.
+	DefaultMaxBytes = 4 << 20
+	// MaxBytes caps PullRequest.max_bytes.
+	MaxBytes = 8 << 20
 )
 
 // Agent is what the link needs from the job agent. *agent.Agent implements
@@ -90,8 +99,9 @@ type Agent interface {
 	Epoch() string
 	// HandleCommands processes commands and returns their acks.
 	HandleCommands(ctx context.Context, cmds []*syncrv1.Command) []*syncrv1.CommandAck
-	// Snapshot returns pending events after afterSeq with a consistent state.
-	Snapshot(afterSeq int64, limit int) agent.Snapshot
+	// Snapshot returns pending events after afterSeq, bounded by count and
+	// encoded size, with a consistent state.
+	Snapshot(afterSeq int64, limit, maxBytes int) agent.Snapshot
 	// AckEvents acknowledges events up to seq.
 	AckEvents(seq int64) error
 }
@@ -145,10 +155,11 @@ func (c *Core) WaitDrained(ctx context.Context) error {
 // ---------------------------------------------------------------------------
 
 // BuildReport returns the next Report request: all unacked events (at most
-// maxEvents; <= 0 means DefaultMaxEvents, capped at MaxEvents), all
-// undelivered command acks and the matching worker state.
+// maxEvents; <= 0 means DefaultMaxEvents, capped at MaxEvents; and about
+// DefaultMaxBytes, but at least one), all undelivered command acks and the
+// matching worker state.
 func (c *Core) BuildReport(maxEvents int) *syncrv1.ReportRequest {
-	snap := c.agent.Snapshot(0, clampMax(maxEvents))
+	snap := c.agent.Snapshot(0, clampMax(maxEvents), DefaultMaxBytes)
 	return &syncrv1.ReportRequest{
 		Epoch:  snap.Epoch,
 		Events: snap.Events,
@@ -283,17 +294,27 @@ func (c *Core) HandlePull(req *syncrv1.PullRequest) *syncrv1.PullResponse {
 			after = 0
 		}
 	}
-	return c.pull(after, req.GetMaxEvents())
+	return c.pull(after, req.GetMaxEvents(), req.GetMaxBytes())
 }
 
-func (c *Core) pull(after int64, maxEvents int32) *syncrv1.PullResponse {
-	snap := c.agent.Snapshot(after, clampMax(int(maxEvents)))
+func (c *Core) pull(after int64, maxEvents, maxBytes int32) *syncrv1.PullResponse {
+	snap := c.agent.Snapshot(after, clampMax(int(maxEvents)), clampBytes(int(maxBytes)))
 	return &syncrv1.PullResponse{
 		Epoch:   snap.Epoch,
 		Events:  snap.Events,
 		HasMore: snap.More,
 		State:   snap.State,
 	}
+}
+
+func clampBytes(n int) int {
+	switch {
+	case n <= 0:
+		return DefaultMaxBytes
+	case n > MaxBytes:
+		return MaxBytes
+	}
+	return n
 }
 
 func clampMax(n int) int {

@@ -3,11 +3,16 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
+	"unicode/utf8"
+
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/worker/outbox"
@@ -281,7 +286,8 @@ func TestCancelJob(t *testing.T) {
 		}
 		r := resultOf(t, a, "queued")
 		if r.GetStatus() != syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED || r.GetStartedAt() != nil ||
-			r.GetError().GetMessage() != ErrCancelled.Error() || r.GetExitCode() != -1 {
+			r.GetError().GetMessage() != ErrCancelled.Error() || r.GetExitCode() != -1 ||
+			r.GetError().GetCode() != syncrv1.JobErrorCode_JOB_ERROR_CODE_CANCELLED {
 			t.Errorf("queued result = %v", r)
 		}
 
@@ -293,7 +299,7 @@ func TestCancelJob(t *testing.T) {
 		time.Sleep(time.Minute)
 		r = resultOf(t, a, "run")
 		if r.GetStatus() != syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED || r.GetError().GetMessage() != ErrCancelled.Error() ||
-			r.GetStartedAt() == nil || !r.GetFinishedAt().AsTime().Equal(t0.Add(2*time.Second)) || r.GetStats().GetBytes() != 10 {
+			r.GetError().GetCode() != syncrv1.JobErrorCode_JOB_ERROR_CODE_CANCELLED || r.GetStartedAt() == nil || !r.GetFinishedAt().AsTime().Equal(t0.Add(2*time.Second)) || r.GetStats().GetBytes() != 10 {
 			t.Errorf("running result = %v", r)
 		}
 		if got := stateOf(a.State()); got != "next(running)" {
@@ -508,7 +514,8 @@ func TestShutdownCancelsJobs(t *testing.T) {
 		}
 		for _, job := range []string{"r1", "r2", "q1"} {
 			r := resultOf(t, a, job)
-			if r.GetStatus() != syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED || r.GetError().GetMessage() != ErrShuttingDown.Error() {
+			if r.GetStatus() != syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED || r.GetError().GetMessage() != ErrShuttingDown.Error() ||
+				r.GetError().GetCode() != syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_SHUTDOWN {
 				t.Errorf("%s result = %v", job, r)
 			}
 		}
@@ -518,7 +525,8 @@ func TestShutdownCancelsJobs(t *testing.T) {
 
 		// Later commands are acked; new jobs are reported cancelled at once.
 		handle(t, a, startCmd("c4", "late"), startCmd("c1", "r1"))
-		if r := resultOf(t, a, "late"); r.GetStatus() != syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED {
+		if r := resultOf(t, a, "late"); r.GetStatus() != syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED ||
+			r.GetError().GetCode() != syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_SHUTDOWN {
 			t.Errorf("late result = %v", r)
 		}
 		if got := describe(events(a)); strings.Count(got, "result(r1") != 1 {
@@ -607,12 +615,12 @@ func TestSnapshotIsConsistent(t *testing.T) {
 		synctest.Wait()
 		// Outbox: 1 hello, then start/progress for both jobs and short's
 		// result, in some interleaving.
-		all := a.Snapshot(0, 0)
+		all := a.Snapshot(0, 0, 0)
 		if all.Epoch != "e" || all.More || len(all.Events) != 6 {
 			t.Fatalf("snapshot = %s more=%v", describe(all.Events), all.More)
 		}
 		for limit := 1; limit <= 6; limit++ {
-			s := a.Snapshot(0, limit)
+			s := a.Snapshot(0, limit, 0)
 			included := strings.Contains(describe(s.Events), "result(short")
 			listed := strings.Contains(stateOf(s.State), "short(")
 			if included == listed {
@@ -626,5 +634,139 @@ func TestSnapshotIsConsistent(t *testing.T) {
 			}
 		}
 		close(release)
+	})
+}
+
+// TestSnapshotStateFields checks last_seq, outbox_backlog and
+// outbox_saturated.
+func TestSnapshotStateFields(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		fr := newFakeRunner(succeed)
+		a := newAgent(t, fr, Config{Outbox: outbox.Options{CoalesceAt: 3, HighWater: 3}})
+		defer shutdown(t, a)
+		handle(t, a, startCmd("c1", "a"))
+		synctest.Wait() // hello, start, progress, result = seqs 1..4
+
+		s := a.Snapshot(0, 2, 0)
+		if st := s.State; st.GetLastSeq() != 2 || st.GetOutboxBacklog() != 4 || !st.GetOutboxSaturated() {
+			t.Errorf("limited snapshot state = %v", st)
+		}
+		s = a.Snapshot(0, 0, 0)
+		if st := s.State; st.GetLastSeq() != 4 || len(st.GetJobs()) != 0 {
+			t.Errorf("full snapshot state = %v", st)
+		}
+		// No events after afterSeq: last_seq is the head.
+		if err := a.AckEvents(4); err != nil {
+			t.Fatal(err)
+		}
+		s = a.Snapshot(4, 0, 0)
+		if st := s.State; len(s.Events) != 0 || st.GetLastSeq() != 4 || st.GetOutboxBacklog() != 0 || st.GetOutboxSaturated() {
+			t.Errorf("empty snapshot state = %v", st)
+		}
+	})
+}
+
+// TestSnapshotByteBudget checks that a byte budget limits the events but
+// keeps the state consistent and always returns one event.
+func TestSnapshotByteBudget(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		fr := newFakeRunner(func(context.Context, runner.Job, runner.EmitFunc) (runner.Result, error) {
+			return runner.Result{Warnings: []string{strings.Repeat("w", 400)}}, nil
+		})
+		a := newAgent(t, fr, Config{})
+		defer shutdown(t, a)
+		handle(t, a, startCmd("c1", "a"))
+		synctest.Wait() // hello, start(a), result(a)
+		s := a.Snapshot(1, 0, 10)
+		if describe(s.Events) != "start(a)" || !s.More || stateOf(s.State) != "a(running)" || s.State.GetLastSeq() != 2 {
+			t.Errorf("snapshot = %s more=%v state=%q", describe(s.Events), s.More, stateOf(s.State))
+		}
+		s = a.Snapshot(2, 0, 10)
+		if describe(s.Events) != "result(a,SUCCEEDED)" || s.More || stateOf(s.State) != "" {
+			t.Errorf("snapshot = %s more=%v state=%q", describe(s.Events), s.More, stateOf(s.State))
+		}
+	})
+}
+
+func TestOutputIsBounded(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		var snaps []*syncrv1.ResticSnapshot
+		for i := range 1000 {
+			snaps = append(snaps, &syncrv1.ResticSnapshot{
+				Id: fmt.Sprintf("%064d", i), Time: timestamppb.New(base.Add(time.Duration(i) * time.Hour)),
+				Host: "h", Paths: []string{"/data/some/path"},
+			})
+		}
+		out := &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticSnapshots{ResticSnapshots: &syncrv1.ResticSnapshotsOutput{Snapshots: snaps}}}
+		fr := newFakeRunner(func(context.Context, runner.Job, runner.EmitFunc) (runner.Result, error) {
+			return runner.Result{Output: out, Warnings: []string{"w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8", "w9", "w10"}}, nil
+		})
+		const limit = 16 << 10
+		a := newAgent(t, fr, Config{MaxOutputBytes: limit})
+		defer shutdown(t, a)
+		handle(t, a, startCmd("c1", "a"))
+		synctest.Wait()
+		r := resultOf(t, a, "a")
+		got := r.GetOutput().GetResticSnapshots().GetSnapshots()
+		if size := proto.Size(r.GetOutput()); size > limit || len(got) == 0 || len(got) >= 1000 {
+			t.Fatalf("output: %d bytes, %d snapshots", size, len(got))
+		}
+		// The newest ones, in the original order.
+		if last := got[len(got)-1].GetId(); last != fmt.Sprintf("%064d", 999) {
+			t.Errorf("last kept snapshot = %s", last)
+		}
+		if first := got[0].GetId(); first != fmt.Sprintf("%064d", 1000-len(got)) {
+			t.Errorf("first kept snapshot = %s with %d kept", first, len(got))
+		}
+		if w := r.GetWarnings(); len(w) != runner.MaxWarnings || !strings.HasPrefix(w[0], "output truncated: listing the newest") {
+			t.Errorf("warnings = %q", w)
+		}
+		if len(out.GetResticSnapshots().GetSnapshots()) != 1000 {
+			t.Error("the runner's output was modified")
+		}
+	})
+}
+
+func TestLimitOutput(t *testing.T) {
+	t.Parallel()
+	ids := make([]string, 100)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("%064d", i)
+	}
+	forget := &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticForget{ResticForget: &syncrv1.ResticForgetOutput{RemovedSnapshotIds: ids}}}
+	got, warning := limitOutput(forget, 1000)
+	if n := len(got.GetResticForget().GetRemovedSnapshotIds()); n == 0 || n >= 100 || proto.Size(got) > 1000 || !strings.Contains(warning, "of 100 removed") {
+		t.Errorf("forget: %d ids, %d bytes, warning %q", n, proto.Size(got), warning)
+	}
+	backup := &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticBackup{ResticBackup: &syncrv1.ResticBackupOutput{SnapshotId: strings.Repeat("a", 100)}}}
+	if got, warning := limitOutput(backup, 50); got != nil || !strings.HasPrefix(warning, "output dropped") {
+		t.Errorf("backup: %v %q", got, warning)
+	}
+	if got, warning := limitOutput(backup, 1000); got != backup || warning != "" {
+		t.Errorf("small output changed: %v %q", got, warning)
+	}
+	if got, warning := limitOutput(nil, 0); got != nil || warning != "" {
+		t.Errorf("nil output: %v %q", got, warning)
+	}
+}
+
+func TestErrorMessagesAreBounded(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		fr := newFakeRunner(func(context.Context, runner.Job, runner.EmitFunc) (runner.Result, error) {
+			return runner.Result{ExitCode: 1}, errors.New(strings.Repeat("é", 10_000))
+		})
+		a := newAgent(t, fr, Config{})
+		defer shutdown(t, a)
+		handle(t, a, startCmd("c1", "a"))
+		synctest.Wait()
+		msg := resultOf(t, a, "a").GetError().GetMessage()
+		if len(msg) > MaxErrorMessageBytes || !strings.HasSuffix(msg, "...") || !utf8.ValidString(msg) {
+			t.Errorf("message of %d bytes, valid %v", len(msg), utf8.ValidString(msg))
+		}
 	})
 }

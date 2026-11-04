@@ -94,6 +94,10 @@ func New(d Deps, cfg Config) (*Service, error) {
 	}, nil
 }
 
+// MaxWait returns the cap on a long poll (Config.MaxWait). Transports use
+// it to size the time a Poll may hold its connection.
+func (s *Service) MaxWait() time.Duration { return s.cfg.MaxWait }
+
 // session is the in-memory link state of one worker. It is derived from
 // what the worker told this controller process and is rebuilt from the
 // worker's next requests after a restart, so it is never persisted. mu
