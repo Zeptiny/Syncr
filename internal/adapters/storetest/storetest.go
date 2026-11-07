@@ -1,7 +1,8 @@
 // Package storetest is the contract test suite of the controller's
 // repository ports (workers.Repository, workers.TokenRepository,
-// jobs.Repository, jobs.SampleRepository). Every store adapter runs it from
-// its tests:
+// jobs.Repository, jobs.SampleRepository, users.Repository,
+// users.SessionRepository, users.APITokenRepository, remotes.Repository).
+// Every store adapter runs it from its tests:
 //
 //	func TestContract(t *testing.T) {
 //		storetest.Run(t, func(t *testing.T) storetest.Store { return newStore(t) })
@@ -9,23 +10,32 @@
 //
 // It checks the documented semantics, above all the conditional updates the
 // use cases rely on for concurrency safety (compare-and-swap epoch,
-// monotonic cursors, single-use tokens, version-checked job updates), and
-// that returned values do not alias the store.
+// monotonic cursors, single-use tokens, version-checked updates, the first
+// user race), the referential rules (owners, union members, soft delete),
+// and that returned values do not alias the store.
+//
+// Suites of ports an adapter does not implement yet are skipped: a test
+// whose first call returns errors.ErrUnsupported skips itself.
 //
 // It is test support, not an adapter: it imports only the standard library,
-// internal/domain and the app packages whose ports it exercises.
+// internal/domain, internal/backend (for its value types) and the app
+// packages whose ports it exercises.
 package storetest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
@@ -36,6 +46,10 @@ type Store interface {
 	workers.TokenRepository
 	jobs.Repository
 	jobs.SampleRepository
+	users.Repository
+	users.SessionRepository
+	users.APITokenRepository
+	remotes.Repository
 }
 
 // Run runs the suite; open returns a new, empty store for each subtest.
@@ -59,6 +73,21 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 		{"JobLists", testJobLists},
 		{"Samples", testSamples},
 		{"NoAliasing", testNoAliasing},
+
+		{"UserCreateGetList", testUserCreateGetList},
+		{"UserUpdateVersioned", testUserUpdateVersioned},
+		{"UserFirstUserRace", testUserFirstUserRace},
+		{"UserDelete", testUserDelete},
+		{"UserDeleteOwner", testUserDeleteOwner},
+		{"Sessions", testSessions},
+		{"APITokens", testAPITokens},
+
+		{"RemoteCreateGetList", testRemoteCreateGetList},
+		{"RemoteNamesUniqueAmongLive", testRemoteNamesUniqueAmongLive},
+		{"RemoteUpdateVersioned", testRemoteUpdateVersioned},
+		{"RemoteUnionMembers", testRemoteUnionMembers},
+		{"RemoteSoftDelete", testRemoteSoftDelete},
+		{"RemoteNoAliasing", testRemoteNoAliasing},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -81,6 +110,30 @@ func id[K any](t *testing.T, parse func(string) (domain.ID[K], error), n int) do
 
 func workerID(t *testing.T, n int) domain.WorkerID { return id(t, domain.ParseWorkerID, n) }
 func jobID(t *testing.T, n int) domain.JobID       { return id(t, domain.ParseJobID, 1000+n) }
+func userID(t *testing.T, n int) domain.UserID     { return id(t, domain.ParseUserID, 2000+n) }
+func remoteID(t *testing.T, n int) domain.RemoteID { return id(t, domain.ParseRemoteID, 3000+n) }
+
+// skipIfUnsupported skips the test when the adapter does not implement the
+// port yet (its methods return errors.ErrUnsupported).
+func skipIfUnsupported(t *testing.T, err error) {
+	t.Helper()
+	if errors.Is(err, errors.ErrUnsupported) {
+		t.Skipf("m3: pending track A/B: the store does not implement this port yet (%v)", err)
+	}
+}
+
+// testDefinition is the encoded definition of test jobs (jobs store it as
+// JSON; databases may normalize its whitespace).
+const testDefinition = `{"rclone_transfer": {"mode": "RCLONE_TRANSFER_MODE_COPY"}}`
+
+// sameJSON reports whether a and b are equal JSON documents.
+func sameJSON(a, b []byte) bool {
+	var va, vb any
+	return json.Unmarshal(a, &va) == nil && json.Unmarshal(b, &vb) == nil && reflect.DeepEqual(va, vb)
+}
+
+// ownerID is the owner of test jobs; mustCreateJob creates it.
+func ownerID(t *testing.T) domain.UserID { return userID(t, 1) }
 
 func newWorker(t *testing.T, n int) workers.Worker {
 	return workers.Worker{
@@ -98,15 +151,29 @@ func mustCreateWorker(t *testing.T, s Store, w workers.Worker) {
 
 func newJob(t *testing.T, n int, w domain.WorkerID) jobs.Job {
 	return jobs.Job{
-		ID: jobID(t, n), WorkerID: w, Kind: "rclone_transfer", Status: domain.JobQueued,
-		SpecEnc: []byte("spec"), CreatedAt: t0(), QueuedAt: t0(), ExitCode: -1, Version: 1,
+		ID: jobID(t, n), WorkerID: w, OwnerID: ownerID(t), Kind: "rclone_transfer", Status: domain.JobQueued,
+		Definition: []byte(testDefinition), CreatedAt: t0(), QueuedAt: t0(), ExitCode: -1, Version: 1,
 	}
 }
 
+// mustCreateJob creates j, and its owner first if needed.
 func mustCreateJob(t *testing.T, s Store, j jobs.Job) {
 	t.Helper()
+	ensureUser(t, s, j.OwnerID)
 	if err := s.CreateJob(context.Background(), j); err != nil {
 		t.Fatalf("CreateJob: %v", err)
+	}
+}
+
+// ensureUser creates a user with id unless it exists.
+func ensureUser(t *testing.T, s Store, id domain.UserID) {
+	t.Helper()
+	u := newUser(t, 0)
+	u.ID, u.Username = id, "owner-"+id.String()[len(id.String())-6:]
+	err := s.CreateUser(context.Background(), u)
+	skipIfUnsupported(t, err)
+	if err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("CreateUser(%s): %v", id, err)
 	}
 }
 
@@ -372,7 +439,8 @@ func testJobCreateGet(t *testing.T, s Store) {
 	wantErr(t, "duplicate CreateJob", s.CreateJob(ctx, j), domain.ErrAlreadyExists)
 	wantErr(t, "CreateJob(unknown worker)", s.CreateJob(ctx, newJob(t, 2, workerID(t, 9))), domain.ErrNotFound)
 	got, err := s.GetJob(ctx, j.ID)
-	if err != nil || got.Status != domain.JobQueued || got.Version != 1 || string(got.SpecEnc) != "spec" || got.ExitCode != -1 || !got.QueuedAt.Equal(t0()) {
+	if err != nil || got.Status != domain.JobQueued || got.Version != 1 || got.OwnerID != ownerID(t) ||
+		!sameJSON(got.Definition, []byte(testDefinition)) || got.ExitCode != -1 || !got.QueuedAt.Equal(t0()) {
 		t.Errorf("GetJob = (%+v, %v)", got, err)
 	}
 	_, err = s.GetJob(ctx, jobID(t, 99))
@@ -393,7 +461,8 @@ func testJobUpdateVersioned(t *testing.T, s Store) {
 	next.Warnings, next.Output, next.ExitCode, next.Requeues = []string{"w"}, []byte{1}, 3, 2
 	next.CancelRequestedAt = t0().Add(2 * time.Second)
 	// Immutable fields are never written.
-	next.Kind, next.SpecEnc, next.CreatedAt = "other", []byte("x"), t0().Add(time.Hour)
+	next.Kind, next.Definition, next.CreatedAt = "other", []byte(`{"other": true}`), t0().Add(time.Hour)
+	next.OwnerID = userID(t, 99)
 	stored, err := s.UpdateJob(ctx, next)
 	if err != nil {
 		t.Fatal(err)
@@ -402,7 +471,7 @@ func testJobUpdateVersioned(t *testing.T, s Store) {
 		stored.Error.Code != "c" || stored.Requeues != 2 || stored.ExitCode != 3 || !stored.CancelRequestedAt.Equal(t0().Add(2*time.Second)) {
 		t.Errorf("UpdateJob returned %+v", stored)
 	}
-	if stored.Kind != "rclone_transfer" || string(stored.SpecEnc) != "spec" || !stored.CreatedAt.Equal(t0()) {
+	if stored.Kind != "rclone_transfer" || !sameJSON(stored.Definition, []byte(testDefinition)) || stored.OwnerID != ownerID(t) || !stored.CreatedAt.Equal(t0()) {
 		t.Errorf("UpdateJob wrote immutable fields: %+v", stored)
 	}
 	// Stale version: conflict, nothing written.
@@ -563,10 +632,11 @@ func testNoAliasing(t *testing.T, s Store) {
 	j.Warnings = []string{"w"}
 	mustCreateJob(t, s, j)
 	j.Warnings[0] = "mutated"
+	j.Definition[0] = 'X'
 	gj, _ := s.GetJob(ctx, j.ID)
-	gj.SpecEnc[0] = 'X'
+	gj.Definition[0] = 'X'
 	gj2, _ := s.GetJob(ctx, j.ID)
-	if gj2.Warnings[0] != "w" || string(gj2.SpecEnc) != "spec" {
+	if gj2.Warnings[0] != "w" || !sameJSON(gj2.Definition, []byte(testDefinition)) {
 		t.Error("store aliases job values")
 	}
 }

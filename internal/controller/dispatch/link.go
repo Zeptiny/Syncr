@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
@@ -348,21 +346,34 @@ func (s *Service) commands(ctx context.Context, sess *session, workerID domain.W
 	return cmds, nil
 }
 
-// startSpec decrypts and decodes a queued job's spec. A spec that cannot be
-// read (wrong master key, corruption) can never be delivered, so the job
-// fails at once; startSpec then returns nil without an error.
+// startSpec builds a queued job's spec (see SpecBuilder). A job whose spec
+// can never be built (a remote is gone, an invalid definition) fails at
+// once; startSpec then returns nil without an error. Other errors are
+// returned, so the poll fails and the next one retries.
 func (s *Service) startSpec(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, error) {
-	raw, err := s.jobs.Spec(j)
-	spec := new(syncrv1.JobSpec)
-	if err == nil {
-		err = proto.Unmarshal(raw, spec)
+	if s.specs == nil {
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, "the controller cannot build job specs yet",
+			errors.New("no spec builder is configured"))
 	}
-	if err == nil {
+	spec, err := s.specs.Build(ctx, j)
+	switch {
+	case err == nil:
 		return spec, nil
+	case errors.Is(err, domain.ErrNotFound):
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeRemoteUnavailable, "a remote of the job was deleted or is not available to its owner", err)
+	case errors.Is(err, domain.ErrInvalidArgument):
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, "the job's definition cannot be turned into a spec", err)
+	default:
+		return nil, fmt.Errorf("build the spec of job %s: %w", j.ID, err)
 	}
-	s.log.ErrorContext(ctx, "job spec is unreadable; failing the job", "job_id", j.ID.String(), "error", err.Error())
-	_, _, ferr := s.jobs.FailQueued(ctx, j.ID, time.Time{}, jobs.JobError{Code: jobs.CodeInternal, Message: "the job's stored spec cannot be read"})
-	return nil, ferr
+}
+
+// failUnbuildable fails a queued job whose spec cannot be built. The error
+// is logged, never sent anywhere: it may name internals.
+func (s *Service) failUnbuildable(ctx context.Context, j jobs.Job, code, msg string, cause error) error {
+	s.log.WarnContext(ctx, "job spec cannot be built; failing the job", "job_id", j.ID.String(), "error_code", code, "error", cause.Error())
+	_, _, err := s.jobs.FailQueued(ctx, j.ID, time.Time{}, jobs.JobError{Code: code, Message: msg})
+	return err
 }
 
 func cancelCommand(jobID string) *syncrv1.Command {

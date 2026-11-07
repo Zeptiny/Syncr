@@ -13,7 +13,7 @@ import (
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/domain"
-	"github.com/Zeptiny/Syncr/internal/link"
+	"github.com/Zeptiny/Syncr/internal/jobkind"
 )
 
 // Why a WatchJob stream was ended by the server.
@@ -23,10 +23,19 @@ var (
 )
 
 // jobHandler implements syncr.v1.JobService.
+//
+// m3: pending track C: owner scoping, remote references, search filters and
+// ListJobSamples (answered Unimplemented by the embedded handler) come with
+// track C.
 type jobHandler struct {
+	syncrv1connect.UnimplementedJobServiceHandler
+
 	jobs JobService
-	errs errorMapper
-	log  *slog.Logger
+	// kinds checks the definitions of RunJob; nil makes RunJob
+	// Unimplemented.
+	kinds *jobkind.Registry
+	errs  errorMapper
+	log   *slog.Logger
 	// base ends all watch streams when done (server shutdown).
 	base context.Context
 	// watchMax bounds a WatchJob stream; keepalive is the idle time after
@@ -57,32 +66,38 @@ func (h *jobHandler) job(ctx context.Context, j jobs.Job) (*syncrv1.Job, error) 
 	msg, err := jobToProto(j, stats)
 	if err != nil {
 		// Only the job's output is affected; the rest is still worth showing.
-		h.log.WarnContext(ctx, "job output is not decodable", "job_id", j.ID.String(), "error", err.Error())
+		h.log.WarnContext(ctx, "job definition or output is not decodable", "job_id", j.ID.String(), "error", err.Error())
 	}
 	return msg, nil
 }
 
-// RunJob validates the request shape and queues the job. The spec is
-// encoded as is and stored encrypted by the jobs service; the worker
-// validates it in depth and reports problems as a failed job.
+// RunJob checks the definition with its job kind and queues the job for
+// the caller. The definition is secret-free; the dispatcher builds the
+// worker's spec, with the remotes' credentials, when it sends the job, and
+// the worker validates it in depth and reports problems as a failed job.
 func (h *jobHandler) RunJob(ctx context.Context, req *connect.Request[syncrv1.RunJobRequest]) (*connect.Response[syncrv1.RunJobResponse], error) {
+	const procedure = syncrv1connect.JobServiceRunJobProcedure
 	workerID, err := parseWorkerID(req.Msg.GetWorkerId())
 	if err != nil {
 		return nil, err
 	}
-	spec := req.Msg.GetSpec()
-	if spec == nil {
-		return nil, invalid("spec is required")
+	if h.kinds == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("this controller has no job kinds"))
 	}
-	kind := link.KindOf(spec)
-	if kind == "" {
-		return nil, invalid("spec.operation must be set")
+	def := req.Msg.GetDefinition()
+	if def == nil {
+		return nil, invalidField("definition", "is required")
 	}
-	encoded, err := marshalSpec(spec)
+	kind, _, err := h.kinds.Check(def)
 	if err != nil {
-		return nil, h.fail(ctx, syncrv1connect.JobServiceRunJobProcedure, err)
+		return nil, h.fail(ctx, procedure, err)
 	}
-	j, err := h.jobs.Create(ctx, jobs.CreateParams{WorkerID: workerID, Kind: kind, Spec: encoded})
+	encoded, err := jobkind.Marshal(def)
+	if err != nil {
+		return nil, h.fail(ctx, procedure, err)
+	}
+	actor, _ := ActorFrom(ctx)
+	j, err := h.jobs.Create(ctx, jobs.CreateParams{WorkerID: workerID, OwnerID: actor.UserID, Kind: kind, Definition: encoded})
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, errors.New("worker not found"))

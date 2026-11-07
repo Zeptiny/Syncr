@@ -3,7 +3,6 @@ package jobs_test
 import (
 	"cmp"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"slices"
@@ -15,7 +14,6 @@ import (
 	"github.com/Zeptiny/Syncr/internal/adapters/broker"
 	"github.com/Zeptiny/Syncr/internal/adapters/idgen"
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
-	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -92,25 +90,26 @@ type env struct {
 	clock  *clock.Fake
 	rec    *recorder
 	worker domain.WorkerID
+	owner  domain.UserID
 }
+
+// testDefinition is an encoded job definition (the jobs service does not
+// interpret it).
+const testDefinition = `{"rclone_transfer":{"mode":"RCLONE_TRANSFER_MODE_COPY"}}`
 
 const epoch = "epoch-1"
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	key := secrets.Key{ID: 1, Bytes: make([]byte, secrets.KeySize)}
-	_, _ = rand.Read(key.Bytes)
-	cipher, err := secrets.NewKeyring(key)
-	if err != nil {
-		t.Fatal(err)
-	}
 	e := &env{
 		store: memstore.New(),
 		clock: clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)),
 		rec:   &recorder{Broker: broker.New()},
+		owner: domain.NewUserID(),
 	}
+	var err error
 	e.svc, err = jobs.New(jobs.Deps{
-		Jobs: e.store, Samples: e.store, Cipher: cipher, Clock: e.clock, IDs: &idgen.Sequential{},
+		Jobs: e.store, Samples: e.store, Clock: e.clock, IDs: &idgen.Sequential{},
 		Broker: e.rec, Notifier: e.rec, Waker: e.rec,
 	}, jobs.Config{})
 	if err != nil {
@@ -131,7 +130,7 @@ func (e *env) addWorker(t *testing.T) domain.WorkerID {
 
 func (e *env) create(t *testing.T) jobs.Job {
 	t.Helper()
-	j, err := e.svc.Create(context.Background(), jobs.CreateParams{WorkerID: e.worker, Kind: "rclone_transfer", Spec: []byte("spec with secrets")})
+	j, err := e.svc.Create(context.Background(), jobs.CreateParams{WorkerID: e.worker, OwnerID: e.owner, Kind: "rclone_transfer", Definition: []byte(testDefinition)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,12 +175,13 @@ func TestCreate(t *testing.T) {
 		p    jobs.CreateParams
 		want error
 	}{
-		{"zero worker", jobs.CreateParams{Kind: "k", Spec: []byte("s")}, domain.ErrInvalidID},
-		{"empty kind", jobs.CreateParams{WorkerID: e.worker, Spec: []byte("s")}, domain.ErrInvalidArgument},
-		{"bad kind", jobs.CreateParams{WorkerID: e.worker, Kind: "Rclone Transfer", Spec: []byte("s")}, domain.ErrInvalidArgument},
-		{"empty spec", jobs.CreateParams{WorkerID: e.worker, Kind: "k"}, domain.ErrInvalidArgument},
-		{"huge spec", jobs.CreateParams{WorkerID: e.worker, Kind: "k", Spec: make([]byte, 1<<20+1)}, domain.ErrInvalidArgument},
-		{"unknown worker", jobs.CreateParams{WorkerID: domain.NewWorkerID(), Kind: "k", Spec: []byte("s")}, domain.ErrNotFound},
+		{"zero worker", jobs.CreateParams{OwnerID: e.owner, Kind: "k", Definition: []byte("{}")}, domain.ErrInvalidID},
+		{"zero owner", jobs.CreateParams{WorkerID: e.worker, Kind: "k", Definition: []byte("{}")}, domain.ErrInvalidID},
+		{"empty kind", jobs.CreateParams{WorkerID: e.worker, OwnerID: e.owner, Definition: []byte("{}")}, domain.ErrInvalidArgument},
+		{"bad kind", jobs.CreateParams{WorkerID: e.worker, OwnerID: e.owner, Kind: "Rclone Transfer", Definition: []byte("{}")}, domain.ErrInvalidArgument},
+		{"empty definition", jobs.CreateParams{WorkerID: e.worker, OwnerID: e.owner, Kind: "k"}, domain.ErrInvalidArgument},
+		{"huge definition", jobs.CreateParams{WorkerID: e.worker, OwnerID: e.owner, Kind: "k", Definition: make([]byte, 1<<20+1)}, domain.ErrInvalidArgument},
+		{"unknown worker", jobs.CreateParams{WorkerID: domain.NewWorkerID(), OwnerID: e.owner, Kind: "k", Definition: []byte("{}")}, domain.ErrNotFound},
 	}
 	for _, tt := range tests {
 		if _, err := e.svc.Create(ctx, tt.p); !errors.Is(err, tt.want) {
@@ -193,11 +193,8 @@ func TestCreate(t *testing.T) {
 	if j.Status != domain.JobQueued || j.Version != 1 || j.ExitCode != -1 || !j.QueuedAt.Equal(e.clock.Now()) || j.Epoch != "" {
 		t.Errorf("created job = %+v", j)
 	}
-	if strings.Contains(string(j.SpecEnc), "secrets") {
-		t.Error("the stored spec is not encrypted")
-	}
-	if spec, err := e.svc.Spec(j); err != nil || string(spec) != "spec with secrets" {
-		t.Errorf("Spec = (%q, %v)", spec, err)
+	if j.OwnerID != e.owner || string(j.Definition) != testDefinition {
+		t.Errorf("owner %v, definition %q", j.OwnerID, j.Definition)
 	}
 	if !slices.Equal(e.rec.wakes, []domain.WorkerID{e.worker}) {
 		t.Errorf("wakes = %v, want the worker woken once", e.rec.wakes)
@@ -205,28 +202,13 @@ func TestCreate(t *testing.T) {
 	if got := e.rec.statuses(j.ID); !slices.Equal(got, []domain.JobStatus{domain.JobQueued}) {
 		t.Errorf("published = %v", got)
 	}
-	for _, u := range e.rec.updates {
-		if u.Job != nil && u.Job.SpecEnc != nil {
-			t.Error("a published job carries its encrypted spec")
-		}
-	}
 
 	// A removed worker takes no new jobs.
 	if _, err := e.store.RemoveWorker(ctx, e.worker, e.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.svc.Create(ctx, jobs.CreateParams{WorkerID: e.worker, Kind: "k", Spec: []byte("s")}); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := e.svc.Create(ctx, jobs.CreateParams{WorkerID: e.worker, OwnerID: e.owner, Kind: "k", Definition: []byte("{}")}); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("Create on a removed worker: err = %v", err)
-	}
-}
-
-func TestSpecIsBoundToItsJob(t *testing.T) {
-	t.Parallel()
-	e := newEnv(t)
-	a, b := e.create(t), e.create(t)
-	b.SpecEnc = a.SpecEnc
-	if _, err := e.svc.Spec(b); err == nil {
-		t.Error("a spec copied to another job decrypted")
 	}
 }
 

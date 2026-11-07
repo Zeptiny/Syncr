@@ -226,7 +226,7 @@ func TestListGetRenameRemoveWorkers(t *testing.T) {
 	if err != nil || len(list.Msg.GetWorkers()) != 2 {
 		t.Errorf("ListWorkers after remove = %v, %v", list, err)
 	}
-	_, err = e.jobsClient().RunJob(ctx, connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Spec: testSpec()}))
+	_, err = e.jobsClient().RunJob(ctx, connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: testDefinition()}))
 	wantCode(t, err, connect.CodeNotFound)
 }
 

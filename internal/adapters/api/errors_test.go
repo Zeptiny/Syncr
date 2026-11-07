@@ -9,6 +9,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/platform/logging"
 )
@@ -30,6 +31,9 @@ func TestErrorMapping(t *testing.T) {
 		{"invalid transition", domain.ErrInvalidTransition, connect.CodeFailedPrecondition},
 		{"conflict", domain.ErrConflict, connect.CodeAborted},
 		{"unauthenticated", domain.ErrUnauthenticated, connect.CodeUnauthenticated},
+		{"permission denied", domain.ErrPermissionDenied, connect.CodePermissionDenied},
+		{"rate limited", domain.ErrRateLimited, connect.CodeResourceExhausted},
+		{"validation", &domain.ValidationError{Fields: []domain.FieldError{{Field: "name", Message: "is required"}}}, connect.CodeInvalidArgument},
 		{"canceled", context.Canceled, connect.CodeCanceled},
 		{"deadline", context.DeadlineExceeded, connect.CodeDeadlineExceeded},
 		{"unknown", errors.New("boom"), connect.CodeInternal},
@@ -75,5 +79,68 @@ func TestMessagesAreGeneric(t *testing.T) {
 	inv := m.toConnect(context.Background(), "/p", "worker", fmt.Errorf("rename: %w: name is empty", domain.ErrInvalidArgument))
 	if !strings.Contains(inv.Error(), "name is empty") {
 		t.Errorf("validation message = %q", inv)
+	}
+}
+
+// violations returns the ValidationError detail of err.
+func violations(t *testing.T, err error) []*syncrv1.FieldViolation {
+	t.Helper()
+	var cerr *connect.Error
+	if !errors.As(err, &cerr) {
+		t.Fatalf("%v is not a Connect error", err)
+	}
+	for _, d := range cerr.Details() {
+		v, err := d.Value()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ve, ok := v.(*syncrv1.ValidationError); ok {
+			return ve.GetViolations()
+		}
+	}
+	return nil
+}
+
+func TestValidationErrorDetails(t *testing.T) {
+	t.Parallel()
+	m := errorMapper{log: logging.Discard()}
+	verr := &domain.ValidationError{Fields: []domain.FieldError{
+		{Field: "name", Message: "is required"},
+		{Field: "members[1].path", Message: "must not contain \"..\" segments"},
+	}}
+	err := m.toConnect(context.Background(), "/p", "remote", fmt.Errorf("create remote: %w", verr))
+	if connect.CodeOf(err) != connect.CodeInvalidArgument || !strings.Contains(err.Error(), "name: is required") {
+		t.Fatalf("err = %v", err)
+	}
+	got := violations(t, err)
+	if len(got) != 2 || got[0].GetField() != "name" || got[0].GetMessage() != "is required" || got[1].GetField() != "members[1].path" {
+		t.Errorf("violations = %v", got)
+	}
+	// Plain invalid-argument errors carry no detail.
+	if v := violations(t, m.toConnect(context.Background(), "/p", "x", domain.ErrInvalidArgument)); v != nil {
+		t.Errorf("plain InvalidArgument has violations %v", v)
+	}
+
+	ferr := invalidField("worker_id", "is required")
+	if connect.CodeOf(ferr) != connect.CodeInvalidArgument || !strings.Contains(ferr.Error(), "worker_id is required") {
+		t.Errorf("invalidField = %v", ferr)
+	}
+	if v := violations(t, ferr); len(v) != 1 || v[0].GetField() != "worker_id" {
+		t.Errorf("invalidField violations = %v", v)
+	}
+}
+
+func TestPreconditionMessagesReachCallers(t *testing.T) {
+	t.Parallel()
+	m := errorMapper{log: logging.Discard()}
+	err := m.toConnect(context.Background(), "/p", "remote", fmt.Errorf("delete remote: %w: it is a member of union \"Pool\"", domain.ErrFailedPrecondition))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), `union "Pool"`) {
+		t.Errorf("err = %v", err)
+	}
+	for _, sentinel := range []error{domain.ErrPermissionDenied, domain.ErrRateLimited} {
+		err := m.toConnect(context.Background(), "/p", "user", fmt.Errorf("detail only for logs: %w", sentinel))
+		if strings.Contains(err.Error(), "detail only for logs") {
+			t.Errorf("%v leaks its detail: %v", sentinel, err)
+		}
 	}
 }

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
@@ -59,7 +58,7 @@ func newEnv(t *testing.T, o envOptions) *env {
 	e := &env{t: t, clock: clock.NewFake(time.Now())}
 	hub := dispatch.NewHub()
 	e.jobs, err = jobs.New(jobs.Deps{
-		Jobs: store, Samples: store, Cipher: cipher, Clock: e.clock, IDs: ids,
+		Jobs: store, Samples: store, Clock: e.clock, IDs: ids,
 		Broker: broker.New(), Notifier: jobs.NopNotifier{}, Waker: hub,
 	}, jobs.Config{})
 	if err != nil {
@@ -71,7 +70,7 @@ func newEnv(t *testing.T, o envOptions) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.disp, err = dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Clock: e.clock, Hub: hub}, dispatch.Config{MaxWait: o.maxWait})
+	e.disp, err = dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Specs: specBuilder{}, Clock: e.clock, Hub: hub}, dispatch.Config{MaxWait: o.maxWait})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,13 +129,21 @@ func hello(seq int64) *syncrv1.Event {
 	return &syncrv1.Event{Seq: seq, Payload: &syncrv1.Event_Hello{Hello: &syncrv1.Hello{Hostname: "h"}}}
 }
 
+// specBuilder sends every job as an empty rclone transfer.
+//
+// m3: pending track C: real specs are built by job kinds from the owner's
+// resolved remotes; these transport tests only need some spec delivered.
+type specBuilder struct{}
+
+func (specBuilder) Build(context.Context, jobs.Job) (*syncrv1.JobSpec, error) {
+	return &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransfer{}}}, nil
+}
+
 func (e *env) queue(id domain.WorkerID) domain.JobID {
 	e.t.Helper()
-	raw, err := proto.Marshal(&syncrv1.JobSpec{Operation: &syncrv1.JobSpec_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransfer{}}})
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	j, err := e.jobs.Create(context.Background(), jobs.CreateParams{WorkerID: id, Kind: "rclone_transfer", Spec: raw})
+	j, err := e.jobs.Create(context.Background(), jobs.CreateParams{
+		WorkerID: id, OwnerID: domain.NewUserID(), Kind: "rclone_transfer", Definition: []byte(`{"rclone_transfer":{}}`),
+	})
 	if err != nil {
 		e.t.Fatal(err)
 	}

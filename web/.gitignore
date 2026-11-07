@@ -1,0 +1,3 @@
+# Dependencies and build output (the Go embed uses dist only with -tags webui).
+node_modules/
+dist/

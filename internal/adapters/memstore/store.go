@@ -1,13 +1,16 @@
 // Package memstore is an in-memory implementation of the controller's
 // repository ports (workers.Repository, workers.TokenRepository,
-// jobs.Repository, jobs.SampleRepository). It backs unit tests and a
+// jobs.Repository, jobs.SampleRepository, users.Repository,
+// users.SessionRepository, users.APITokenRepository, remotes.Repository).
+// It backs unit tests and a
 // development controller without Postgres (dev.memory_store); everything is
 // lost when the process exits. The live job broker is a separate adapter
 // (internal/adapters/broker), used by every controller.
 //
 // It follows the ports' contracts exactly, including the conditional
-// updates, so tests against it exercise the same concurrency rules a
-// database adapter must provide. A single mutex serializes the store, which
+// updates and the referential rules the database enforces with foreign keys
+// and unique indexes, so tests against it exercise the same rules a database
+// adapter must provide. A single mutex serializes the store, which
 // makes every method trivially atomic; values are deep-copied in and out, so
 // callers never share memory with the store.
 //
@@ -21,12 +24,15 @@ import (
 	"sync"
 
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
-// Store holds workers, enrollment tokens, jobs and samples. The zero value
-// is not usable; create it with New. Safe for concurrent use.
+// Store holds workers, enrollment tokens, jobs, samples, users, sessions,
+// API tokens and remotes. The zero value is not usable; create it with New.
+// Safe for concurrent use.
 type Store struct {
 	mu      sync.RWMutex
 	workers map[domain.WorkerID]workers.Worker
@@ -34,23 +40,37 @@ type Store struct {
 	jobs    map[domain.JobID]jobs.Job
 	// samples per job, sorted by Time.
 	samples map[domain.JobID][]jobs.Sample
+
+	users     map[domain.UserID]users.User
+	sessions  map[users.TokenHash]users.Session
+	apiTokens map[domain.APITokenID]users.APIToken
+	// remotes holds live and deleted remotes, each with its members.
+	remotes map[domain.RemoteID]remotes.Remote
 }
 
 // Compile-time checks that Store implements the ports.
 var (
-	_ workers.Repository      = (*Store)(nil)
-	_ workers.TokenRepository = (*Store)(nil)
-	_ jobs.Repository         = (*Store)(nil)
-	_ jobs.SampleRepository   = (*Store)(nil)
+	_ workers.Repository       = (*Store)(nil)
+	_ workers.TokenRepository  = (*Store)(nil)
+	_ jobs.Repository          = (*Store)(nil)
+	_ jobs.SampleRepository    = (*Store)(nil)
+	_ users.Repository         = (*Store)(nil)
+	_ users.SessionRepository  = (*Store)(nil)
+	_ users.APITokenRepository = (*Store)(nil)
+	_ remotes.Repository       = (*Store)(nil)
 )
 
 // New returns an empty Store.
 func New() *Store {
 	return &Store{
-		workers: make(map[domain.WorkerID]workers.Worker),
-		tokens:  make(map[workers.TokenHash]workers.EnrollmentToken),
-		jobs:    make(map[domain.JobID]jobs.Job),
-		samples: make(map[domain.JobID][]jobs.Sample),
+		workers:   make(map[domain.WorkerID]workers.Worker),
+		tokens:    make(map[workers.TokenHash]workers.EnrollmentToken),
+		jobs:      make(map[domain.JobID]jobs.Job),
+		samples:   make(map[domain.JobID][]jobs.Sample),
+		users:     make(map[domain.UserID]users.User),
+		sessions:  make(map[users.TokenHash]users.Session),
+		apiTokens: make(map[domain.APITokenID]users.APIToken),
+		remotes:   make(map[domain.RemoteID]remotes.Remote),
 	}
 }
 
@@ -64,7 +84,7 @@ func cloneWorker(w workers.Worker) workers.Worker {
 }
 
 func cloneJob(j jobs.Job) jobs.Job {
-	j.SpecEnc = slices.Clone(j.SpecEnc)
+	j.Definition = slices.Clone(j.Definition)
 	j.Warnings = slices.Clone(j.Warnings)
 	j.Output = slices.Clone(j.Output)
 	return j

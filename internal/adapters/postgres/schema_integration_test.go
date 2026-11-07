@@ -23,10 +23,10 @@ func newTestWorker() workers.Worker {
 	}
 }
 
-func newTestJob(w domain.WorkerID) jobs.Job {
+func newTestJob(w domain.WorkerID, owner domain.UserID) jobs.Job {
 	return jobs.Job{
-		ID: domain.NewJobID(), WorkerID: w, Kind: "rclone_transfer", Status: domain.JobQueued,
-		SpecEnc: []byte("spec"), CreatedAt: testTime(), QueuedAt: testTime(), ExitCode: -1, Version: 1,
+		ID: domain.NewJobID(), WorkerID: w, OwnerID: owner, Kind: "rclone_transfer", Status: domain.JobQueued,
+		Definition: []byte(`{"rclone_transfer": {}}`), CreatedAt: testTime(), QueuedAt: testTime(), ExitCode: -1, Version: 1,
 	}
 }
 
@@ -117,12 +117,13 @@ func TestUnfinishedJobsUsesPartialIndex(t *testing.T) {
 func TestLargeCountersRoundTrip(t *testing.T) {
 	s := newMigratedStore(t)
 	ctx := t.Context()
+	owner := seedUser(t, s)
 	w := newTestWorker()
 	if err := s.CreateWorker(ctx, w); err != nil {
 		t.Fatal(err)
 	}
 	const big = int64(1)<<62 + 12345
-	j := newTestJob(w.ID)
+	j := newTestJob(w.ID, owner)
 	j.Stats = jobs.Stats{Bytes: big, TotalBytes: big + 1, Files: 1 << 40, TotalFiles: 1 << 41, Checks: 1 << 33, Elapsed: 100 * time.Hour}
 	if err := s.CreateJob(ctx, j); err != nil {
 		t.Fatal(err)
@@ -174,6 +175,7 @@ func TestTimesRoundTrip(t *testing.T) {
 func TestInvalidValuesAreRejected(t *testing.T) {
 	s := newMigratedStore(t)
 	ctx := t.Context()
+	owner := seedUser(t, s)
 	w := newTestWorker()
 	w.Mode = "sideways"
 	if err := s.CreateWorker(ctx, w); !errors.Is(err, domain.ErrInvalidArgument) {
@@ -183,7 +185,7 @@ func TestInvalidValuesAreRejected(t *testing.T) {
 	if err := s.CreateWorker(ctx, w); err != nil {
 		t.Fatal(err)
 	}
-	j := newTestJob(w.ID)
+	j := newTestJob(w.ID, owner)
 	j.Status = "exploded"
 	if err := s.CreateJob(ctx, j); !errors.Is(err, domain.ErrInvalidArgument) {
 		t.Errorf("CreateJob(bad status) = %v, want ErrInvalidArgument", err)
@@ -200,11 +202,12 @@ func TestInvalidValuesAreRejected(t *testing.T) {
 func TestToolOutputIsSanitized(t *testing.T) {
 	s := newMigratedStore(t)
 	ctx := t.Context()
+	owner := seedUser(t, s)
 	w := newTestWorker()
 	if err := s.CreateWorker(ctx, w); err != nil {
 		t.Fatal(err)
 	}
-	j := newTestJob(w.ID)
+	j := newTestJob(w.ID, owner)
 	if err := s.CreateJob(ctx, j); err != nil {
 		t.Fatal(err)
 	}
@@ -226,13 +229,14 @@ func TestToolOutputIsSanitized(t *testing.T) {
 func TestCreateJobRacesWithRemoveWorker(t *testing.T) {
 	s := newMigratedStore(t)
 	ctx := t.Context()
+	owner := seedUser(t, s)
 	for range 20 {
 		w := newTestWorker()
 		if err := s.CreateWorker(ctx, w); err != nil {
 			t.Fatal(err)
 		}
 		errc := make(chan error, 1)
-		go func() { errc <- s.CreateJob(ctx, newTestJob(w.ID)) }()
+		go func() { errc <- s.CreateJob(ctx, newTestJob(w.ID, owner)) }()
 		if _, err := s.RemoveWorker(ctx, w.ID, testTime()); err != nil {
 			t.Fatal(err)
 		}
@@ -241,7 +245,7 @@ func TestCreateJobRacesWithRemoveWorker(t *testing.T) {
 			t.Fatalf("CreateJob: %v", cerr)
 		}
 		// Once the removal is done, creating must fail.
-		if err := s.CreateJob(ctx, newTestJob(w.ID)); !errors.Is(err, domain.ErrNotFound) {
+		if err := s.CreateJob(ctx, newTestJob(w.ID, owner)); !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("CreateJob after removal = %v, want ErrNotFound", err)
 		}
 	}

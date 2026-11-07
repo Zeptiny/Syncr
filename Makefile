@@ -39,7 +39,8 @@ help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: generate
-generate: ## Regenerate protobuf/Connect and sqlc code (committed under gen/ and internal/adapters/postgres/db/)
+generate: ## Regenerate protobuf/Connect (Go and TypeScript) and sqlc code (committed under gen/, web/src/gen/ and internal/adapters/postgres/db/)
+	npm ci --prefix web
 	$(BUF) generate
 	$(SQLC) generate
 	$(GO) generate ./...

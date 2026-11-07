@@ -2,6 +2,9 @@ module github.com/Zeptiny/Syncr
 
 go 1.27
 
+// web/node_modules holds npm packages, some of which ship Go sources.
+ignore ./web/node_modules
+
 tool (
 	connectrpc.com/connect/cmd/protoc-gen-connect-go
 	google.golang.org/protobuf/cmd/protoc-gen-go

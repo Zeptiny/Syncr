@@ -6,15 +6,20 @@ import (
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
-// Job is one run of a job spec on a worker.
+// Job is one run of a job definition on a worker.
 type Job struct {
 	ID       domain.JobID
 	WorkerID domain.WorkerID
-	// Kind is the JobSpec operation name, e.g. "rclone_transfer".
+	// OwnerID is the user who ran the job.
+	OwnerID domain.UserID
+	// Kind is the JobDefinition (and JobSpec) operation name, e.g.
+	// "rclone_transfer".
 	Kind   string
 	Status domain.JobStatus
-	// SpecEnc is the encoded JobSpec, encrypted (associated data SpecAD(ID)).
-	SpecEnc []byte
+	// Definition is the encoded job definition (protojson of
+	// syncr.v1.JobDefinition, see internal/jobkind). It contains no
+	// secrets; the dispatcher builds the worker's spec from it.
+	Definition []byte
 
 	// Epoch is the worker epoch that accepted the job; empty while queued.
 	// Dispatched and running jobs always have one.
@@ -98,6 +103,11 @@ const (
 	CodeWorkerRestarted = "worker_restarted"
 	CodeWorkerLost      = "worker_lost"
 	CodeWorkerRemoved   = "worker_removed"
+	// CodeInvalidSpec: the job's definition cannot be decoded or built.
+	CodeInvalidSpec = "invalid_spec"
+	// CodeRemoteUnavailable: a remote of the job was deleted or is no
+	// longer usable by its owner when the job was dispatched.
+	CodeRemoteUnavailable = "remote_unavailable"
 )
 
 // Outcome is a worker-reported terminal result (Finish).
@@ -118,8 +128,7 @@ type Outcome struct {
 // Progress is set.
 type Update struct {
 	JobID domain.JobID
-	// Job is the job after a stored change (status, cancel request), without
-	// its spec.
+	// Job is the job after a stored change (status, cancel request).
 	Job *Job
 	// Progress is a live sample; it may not be stored.
 	Progress *Sample
@@ -128,11 +137,14 @@ type Update struct {
 // CreateParams are the inputs of Create.
 type CreateParams struct {
 	WorkerID domain.WorkerID
-	// Kind is the JobSpec operation name (the caller derives it from the
-	// spec).
+	// OwnerID is the user who runs the job.
+	OwnerID domain.UserID
+	// Kind is the definition's operation name (the caller derives it from
+	// the definition).
 	Kind string
-	// Spec is the encoded JobSpec (protobuf wire form).
-	Spec []byte
+	// Definition is the encoded job definition (see Job.Definition), checked
+	// by the caller.
+	Definition []byte
 }
 
 // ListFilter selects jobs for List.
@@ -162,7 +174,3 @@ type Page struct {
 	// last page.
 	Next domain.JobID
 }
-
-// SpecAD is the associated data binding a job's encrypted spec to its
-// record.
-func SpecAD(id domain.JobID) []byte { return []byte("job-spec:" + id.String()) }

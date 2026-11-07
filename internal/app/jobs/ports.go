@@ -26,7 +26,8 @@ type Repository interface {
 	// (Status, Epoch, CancelRequestedAt, QueuedAt, DispatchedAt, StartedAt,
 	// FinishedAt, Requeues, Stats, Error, Warnings, ExitCode, Output), sets
 	// Version = j.Version + 1 and returns the stored job. The immutable
-	// fields (ID, WorkerID, Kind, SpecEnc, CreatedAt) are never written.
+	// fields (ID, WorkerID, OwnerID, Kind, Definition, CreatedAt) are never
+	// written.
 	// ErrConflict if the version differs (the caller re-reads and
 	// re-decides), ErrNotFound if missing. SQL: UPDATE jobs SET ...,
 	// version = version + 1 WHERE id = $1 AND version = $2 RETURNING *.
@@ -105,13 +106,6 @@ func (NopNotifier) JobFailed(context.Context, Job) error { return nil }
 // dispatcher implements it; it must not block.
 type Waker interface {
 	Wake(workerID domain.WorkerID)
-}
-
-// Cipher encrypts secrets at rest; associated data binds a ciphertext to its
-// record. internal/adapters/secrets implements it.
-type Cipher interface {
-	Encrypt(plaintext, associatedData []byte) ([]byte, error)
-	Decrypt(ciphertext, associatedData []byte) ([]byte, error)
 }
 
 // Clock tells the time.
