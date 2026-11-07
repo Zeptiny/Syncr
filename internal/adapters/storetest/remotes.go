@@ -276,6 +276,47 @@ func testRemoteUnionMembers(t *testing.T, s Store) {
 	if got, _ := s.GetRemote(ctx, union.ID); len(got.Members) != 2 {
 		t.Errorf("deleted union members = %+v", got.Members)
 	}
+	// A deleted remote cannot become a member.
+	withDeleted := newRemote(t, 13, alice, "With deleted")
+	withDeleted.Members = []remotes.Member{{RemoteID: m2.ID, Mode: backend.UnionReadWrite}, {RemoteID: m3.ID, Mode: backend.UnionReadWrite}}
+	wantErr(t, "CreateRemote(deleted member)", s.CreateRemote(ctx, withDeleted), domain.ErrNotFound)
+
+	t.Run("DeleteRace", func(t *testing.T) { testRemoteMemberDeleteRace(t, s, alice) })
+}
+
+// testRemoteMemberDeleteRace races the deletion of a remote with the
+// creation of a union that has it as a member: exactly one of them wins, so
+// a live union never has a deleted member.
+func testRemoteMemberDeleteRace(t *testing.T, s Store, owner domain.UserID) {
+	ctx := context.Background()
+	other := newRemote(t, 100, owner, "Race anchor")
+	mustCreateRemote(t, s, other)
+	for i := range 10 {
+		member := newRemote(t, 200+i, owner, fmt.Sprintf("Race member %d", i))
+		mustCreateRemote(t, s, member)
+		union := newRemote(t, 300+i, owner, fmt.Sprintf("Race union %d", i))
+		union.Members = []remotes.Member{{RemoteID: member.ID, Mode: backend.UnionReadWrite}, {RemoteID: other.ID, Mode: backend.UnionReadWrite}}
+		var createErr, deleteErr error
+		var wg sync.WaitGroup
+		wg.Go(func() { createErr = s.CreateRemote(ctx, union) })
+		wg.Go(func() { deleteErr = s.DeleteRemote(ctx, member.ID, t0()) })
+		wg.Wait()
+		switch {
+		case createErr == nil && deleteErr == nil:
+			t.Fatalf("round %d: the union was created and its member deleted", i)
+		case createErr == nil:
+			wantErr(t, "DeleteRemote(member of the new union)", deleteErr, domain.ErrFailedPrecondition)
+		case deleteErr == nil:
+			wantErr(t, "CreateRemote(with the deleted member)", createErr, domain.ErrNotFound)
+		default:
+			t.Fatalf("round %d: both failed: %v; %v", i, createErr, deleteErr)
+		}
+		if createErr == nil {
+			if err := s.DeleteRemote(ctx, union.ID, t0()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 }
 
 func testRemoteSoftDelete(t *testing.T, s Store) {

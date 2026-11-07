@@ -30,8 +30,8 @@ func compareRemotes(a, b remotes.Remote) int {
 // checkRemoteLocked enforces what the database's constraints enforce for a
 // remote r that is about to be stored (self is r's stored version, or the
 // zero Remote for a new one): the name's length, case-insensitive name
-// uniqueness among the owner's live remotes, and members that exist, are
-// not the remote itself and have a known mode.
+// uniqueness among the owner's live remotes, and members that exist and are
+// live, are not the remote itself and have a known mode.
 func (s *Store) checkRemoteLocked(r remotes.Remote) error {
 	if n := utf8.RuneCountInString(r.Name); n < 1 || n > 64 {
 		return fmt.Errorf("remote name: %w: must be 1 to 64 characters", domain.ErrInvalidArgument)
@@ -43,10 +43,10 @@ func (s *Store) checkRemoteLocked(r remotes.Remote) error {
 		}
 	}
 	for i, m := range r.Members {
-		switch _, ok := s.remotes[m.RemoteID]; {
+		switch member, ok := s.remotes[m.RemoteID]; {
 		case m.RemoteID == r.ID:
 			return fmt.Errorf("member %d: %w: a union cannot contain itself", i, domain.ErrInvalidArgument)
-		case !ok:
+		case !ok || member.Deleted():
 			return fmt.Errorf("member %d: remote %s: %w", i, m.RemoteID, domain.ErrNotFound)
 		case !m.Mode.Valid():
 			return fmt.Errorf("member %d: %w: mode %q", i, domain.ErrInvalidArgument, m.Mode)

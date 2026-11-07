@@ -16,7 +16,7 @@ type Repository interface {
 	// CreateRemote inserts r with its members (Version is stored as given,
 	// normally 1). ErrAlreadyExists if r.ID is taken or the owner has a
 	// live remote with the same name, case-insensitively; ErrNotFound if
-	// the owner or a member remote does not exist.
+	// the owner or a member remote does not exist, or a member is deleted.
 	CreateRemote(ctx context.Context, r Remote) error
 
 	// GetRemote returns a remote with its members, deleted or not.
@@ -38,7 +38,8 @@ type Repository interface {
 	// Version = r.Version + 1 and returns the stored remote. ID, OwnerID,
 	// Type, CreatedAt and DeletedAt are never written. ErrConflict if the
 	// version differs; ErrNotFound if missing or deleted, or if a member
-	// remote does not exist; ErrAlreadyExists if the new name is taken.
+	// remote does not exist or is deleted; ErrAlreadyExists if the new
+	// name is taken.
 	UpdateRemote(ctx context.Context, r Remote) (Remote, error)
 
 	// DeleteRemote soft-deletes a live remote: it sets DeletedAt to at,
