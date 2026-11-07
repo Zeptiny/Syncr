@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
@@ -27,7 +29,8 @@ func DefaultConfig() Config {
 	return Config{SampleInterval: 5 * time.Second, MaxDefinitionBytes: 1 << 20}
 }
 
-// Deps are the service's collaborators. All are required except Logger.
+// Deps are the service's collaborators. All are required except Remotes
+// and Logger.
 type Deps struct {
 	Jobs     Repository
 	Samples  SampleRepository
@@ -36,6 +39,10 @@ type Deps struct {
 	Broker   Broker
 	Notifier Notifier
 	Waker    Waker
+	// Remotes checks the remotes of new jobs. Without it, creating a job
+	// that uses a remote fails with ErrUnknownRemote (fail closed); jobs
+	// on the worker's filesystem only still work.
+	Remotes RemoteChecker
 	// Logger defaults to discarding.
 	Logger *slog.Logger
 }
@@ -50,6 +57,7 @@ type Service struct {
 	broker   Broker
 	notifier Notifier
 	waker    Waker
+	remotes  RemoteChecker
 	log      *slog.Logger
 	cfg      Config
 
@@ -79,23 +87,38 @@ func New(d Deps, cfg Config) (*Service, error) {
 	}
 	return &Service{
 		repo: d.Jobs, samples: d.Samples, clock: d.Clock, ids: d.IDs,
-		broker: d.Broker, notifier: d.Notifier, waker: d.Waker, log: log, cfg: cfg,
+		broker: d.Broker, notifier: d.Notifier, waker: d.Waker, remotes: d.Remotes, log: log, cfg: cfg,
 		lastStored: make(map[domain.JobID]time.Time),
 	}, nil
 }
 
+// Errors of Create that say which reference is missing. Both match
+// domain.ErrNotFound.
+var (
+	// ErrUnknownWorker: the worker does not exist or is removed.
+	ErrUnknownWorker = fmt.Errorf("worker %w", domain.ErrNotFound)
+	// ErrUnknownRemote: a remote of the definition is not a live remote of
+	// the actor.
+	ErrUnknownRemote = fmt.Errorf("remote %w", domain.ErrNotFound)
+)
+
 // ---------------------------------------------------------------------------
 // API use cases
 // ---------------------------------------------------------------------------
+//
+// Jobs belong to the actor who created them. An actor may see and cancel
+// their own jobs; an admin may see and cancel every job. Another user's job
+// is ErrNotFound, so its existence does not leak.
 
-// Create queues a job on a worker. ErrNotFound if the worker does not exist
-// or is removed.
-func (s *Service) Create(ctx context.Context, p CreateParams) (Job, error) {
+// Create queues a job of the actor on a worker. The definition's remotes
+// must be live remotes of the actor (ErrUnknownRemote otherwise); the
+// worker must exist and not be removed (ErrUnknownWorker otherwise).
+func (s *Service) Create(ctx context.Context, actor domain.Actor, p CreateParams) (Job, error) {
 	switch {
 	case p.WorkerID.IsZero():
 		return Job{}, fmt.Errorf("create job: %w: worker id", domain.ErrInvalidID)
-	case p.OwnerID.IsZero():
-		return Job{}, fmt.Errorf("create job: %w: owner id", domain.ErrInvalidID)
+	case actor.UserID.IsZero():
+		return Job{}, fmt.Errorf("create job: %w: the actor is not a user", domain.ErrInvalidID)
 	case !validKind(p.Kind):
 		return Job{}, fmt.Errorf("create job: %w: kind %q", domain.ErrInvalidArgument, p.Kind)
 	case len(p.Definition) == 0:
@@ -103,25 +126,46 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (Job, error) {
 	case len(p.Definition) > s.cfg.MaxDefinitionBytes:
 		return Job{}, fmt.Errorf("create job: %w: definition is %d bytes, at most %d allowed", domain.ErrInvalidArgument, len(p.Definition), s.cfg.MaxDefinitionBytes)
 	}
+	remoteIDs := sortedIDs(p.RemoteIDs)
+	for _, id := range remoteIDs {
+		if id.IsZero() {
+			return Job{}, fmt.Errorf("create job: %w: remote id", domain.ErrInvalidID)
+		}
+	}
+	var names map[domain.RemoteID]string
+	if len(remoteIDs) > 0 {
+		if s.remotes == nil {
+			return Job{}, fmt.Errorf("create job: %w: remotes are not available", ErrUnknownRemote)
+		}
+		var err error
+		if names, err = s.remotes.Usable(ctx, actor.UserID, remoteIDs); err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				return Job{}, fmt.Errorf("create job: %w: %w", ErrUnknownRemote, err)
+			}
+			return Job{}, fmt.Errorf("create job: check remotes: %w", err)
+		}
+	}
 	id := s.ids.NewJobID()
 	now := s.clock.Now()
 	j := Job{
-		ID: id, WorkerID: p.WorkerID, OwnerID: p.OwnerID, Kind: p.Kind, Status: domain.JobQueued,
-		Definition: slices.Clone(p.Definition), CreatedAt: now, QueuedAt: now, ExitCode: -1, Version: 1,
+		ID: id, WorkerID: p.WorkerID, OwnerID: actor.UserID, Kind: p.Kind, Status: domain.JobQueued,
+		Definition: slices.Clone(p.Definition), RemoteIDs: remoteIDs, SearchText: searchText(p.Kind, p.SearchTerms, remoteIDs, names),
+		CreatedAt: now, QueuedAt: now, ExitCode: -1, Version: 1,
 	}
 	if err := s.repo.CreateJob(ctx, j); err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			return Job{}, fmt.Errorf("create job: worker %s: %w", p.WorkerID, err)
+			return Job{}, fmt.Errorf("create job: %w: %w", ErrUnknownWorker, err)
 		}
 		return Job{}, fmt.Errorf("create job: %w", err)
 	}
-	s.log.InfoContext(ctx, "job queued", "job_id", id.String(), "worker_id", p.WorkerID.String(), "kind", p.Kind)
+	s.log.InfoContext(ctx, "job queued", "job_id", id.String(), "worker_id", p.WorkerID.String(),
+		"owner_id", actor.UserID.String(), "kind", p.Kind)
 	s.published(ctx, Job{}, j)
 	return j, nil
 }
 
-// Get returns a job.
-func (s *Service) Get(ctx context.Context, id domain.JobID) (Job, error) {
+// Get returns a job the actor may see.
+func (s *Service) Get(ctx context.Context, actor domain.Actor, id domain.JobID) (Job, error) {
 	if id.IsZero() {
 		return Job{}, fmt.Errorf("get job: %w", domain.ErrInvalidID)
 	}
@@ -129,10 +173,18 @@ func (s *Service) Get(ctx context.Context, id domain.JobID) (Job, error) {
 	if err != nil {
 		return Job{}, fmt.Errorf("get job %s: %w", id, err)
 	}
+	if !actor.CanView(j.OwnerID) {
+		return Job{}, fmt.Errorf("get job %s: %w", id, errForeign)
+	}
 	return j, nil
 }
 
-// LatestSample returns the latest stored progress sample of a job.
+// errForeign reports another user's job (as not found).
+var errForeign = fmt.Errorf("job of another user: %w", domain.ErrNotFound)
+
+// LatestSample returns the latest stored progress sample of a job. It does
+// not check access: call it only for a job the actor has read (Get, List,
+// Watch), e.g. to show its live counters.
 func (s *Service) LatestSample(ctx context.Context, id domain.JobID) (Sample, bool, error) {
 	smp, ok, err := s.samples.LatestJobSample(ctx, id)
 	if err != nil {
@@ -141,8 +193,12 @@ func (s *Service) LatestSample(ctx context.Context, id domain.JobID) (Sample, bo
 	return smp, ok, nil
 }
 
-// Samples returns the stored progress samples of a job, oldest first.
-func (s *Service) Samples(ctx context.Context, id domain.JobID) ([]Sample, error) {
+// Samples returns the stored progress samples of a job the actor may see,
+// oldest first.
+func (s *Service) Samples(ctx context.Context, actor domain.Actor, id domain.JobID) ([]Sample, error) {
+	if _, err := s.Get(ctx, actor, id); err != nil {
+		return nil, err
+	}
 	out, err := s.samples.ListJobSamples(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("samples of job %s: %w", id, err)
@@ -150,8 +206,10 @@ func (s *Service) Samples(ctx context.Context, id domain.JobID) ([]Sample, error
 	return out, nil
 }
 
-// List returns a page of jobs matching f, newest first.
-func (s *Service) List(ctx context.Context, f ListFilter) (Page, error) {
+// List returns a page of jobs matching f, newest first: the actor's own
+// jobs, or with f.AllUsers every user's for an admin (f.OwnerID then
+// narrows them to one user).
+func (s *Service) List(ctx context.Context, actor domain.Actor, f ListFilter) (Page, error) {
 	switch {
 	case f.Limit == 0:
 		f.Limit = DefaultPageSize
@@ -163,6 +221,25 @@ func (s *Service) List(ctx context.Context, f ListFilter) (Page, error) {
 			return Page{}, fmt.Errorf("list jobs: %w: %q", domain.ErrInvalidJobStatus, st)
 		}
 	}
+	if len(f.Kinds) > MaxKinds {
+		return Page{}, fmt.Errorf("list jobs: %w: at most %d kinds", domain.ErrInvalidArgument, MaxKinds)
+	}
+	for _, k := range f.Kinds {
+		if !validKind(k) {
+			return Page{}, fmt.Errorf("list jobs: %w: kind %q", domain.ErrInvalidArgument, k)
+		}
+	}
+	if len(f.Query) > MaxQueryLen || !utf8.ValidString(f.Query) || strings.ContainsRune(f.Query, 0) {
+		return Page{}, fmt.Errorf("list jobs: %w: the query must be valid text of at most %d bytes", domain.ErrInvalidArgument, MaxQueryLen)
+	}
+	f.Query = strings.ToLower(strings.TrimSpace(f.Query))
+	if !actor.IsAdmin() || !f.AllUsers {
+		if actor.UserID.IsZero() {
+			return Page{}, nil // nobody owns no jobs
+		}
+		f.OwnerID = actor.UserID
+	}
+	f.AllUsers = false
 	limit := f.Limit
 	f.Limit++ // one more tells whether a next page exists
 	js, err := s.repo.ListJobs(ctx, f)
@@ -178,18 +255,21 @@ func (s *Service) List(ctx context.Context, f ListFilter) (Page, error) {
 	return p, nil
 }
 
-// Cancel cancels a job: a queued job becomes cancelled at once; for a
-// dispatched or running job a cancel is requested, the worker is woken to
-// receive its CancelJob command, and the job becomes cancelled when the
-// worker confirms. Canceling a finished job, or one already asked to stop,
-// changes nothing. It returns the job after the call.
-func (s *Service) Cancel(ctx context.Context, id domain.JobID) (Job, error) {
+// Cancel cancels a job the actor may see: a queued job becomes cancelled
+// at once; for a dispatched or running job a cancel is requested, the
+// worker is woken to receive its CancelJob command, and the job becomes
+// cancelled when the worker confirms. Canceling a finished job, or one
+// already asked to stop, changes nothing. It returns the job after the
+// call.
+func (s *Service) Cancel(ctx context.Context, actor domain.Actor, id domain.JobID) (Job, error) {
 	if id.IsZero() {
 		return Job{}, fmt.Errorf("cancel job: %w", domain.ErrInvalidID)
 	}
 	now := s.clock.Now()
-	j, _, err := s.change(ctx, id, domain.WorkerID{}, func(j *Job) (bool, error) {
+	j, changed, err := s.change(ctx, id, domain.WorkerID{}, func(j *Job) (bool, error) {
 		switch {
+		case !actor.CanView(j.OwnerID):
+			return false, errForeign
 		case j.Status == domain.JobQueued:
 			return true, finish(j, domain.JobCancelled, now, JobError{Code: CodeCancelled, Message: "cancelled before it was dispatched"})
 		case j.Status.Active() && !j.CancelRequested():
@@ -201,15 +281,18 @@ func (s *Service) Cancel(ctx context.Context, id domain.JobID) (Job, error) {
 	if err != nil {
 		return Job{}, fmt.Errorf("cancel job %s: %w", id, err)
 	}
+	if changed {
+		s.log.InfoContext(ctx, "job cancel requested", "job_id", id.String(), "actor_id", actor.UserID.String(), "status", string(j.Status))
+	}
 	return j, nil
 }
 
-// Watch calls fn with the job's current state, then with every update until
-// the job reaches a terminal status (at once if it already has), ctx ends,
-// or fn returns an error, which Watch returns. Job updates are delivered in
-// version order without duplicates; Progress updates only while the job
-// runs.
-func (s *Service) Watch(ctx context.Context, id domain.JobID, fn func(Update) error) error {
+// Watch calls fn with the current state of a job the actor may see, then
+// with every update until the job reaches a terminal status (at once if it
+// already has), ctx ends, or fn returns an error, which Watch returns. Job
+// updates are delivered in version order without duplicates; Progress
+// updates only while the job runs.
+func (s *Service) Watch(ctx context.Context, actor domain.Actor, id domain.JobID, fn func(Update) error) error {
 	if id.IsZero() {
 		return fmt.Errorf("watch job: %w", domain.ErrInvalidID)
 	}
@@ -217,7 +300,7 @@ func (s *Service) Watch(ctx context.Context, id domain.JobID, fn func(Update) er
 	// subscription is lost; duplicates are filtered by version.
 	sub := s.broker.Subscribe(id)
 	defer sub.Close()
-	j, err := s.Get(ctx, id)
+	j, err := s.Get(ctx, actor, id)
 	if err != nil {
 		return err
 	}
@@ -262,6 +345,29 @@ func (s *Service) Watch(ctx context.Context, id domain.JobID, fn func(Update) er
 			return nil
 		}
 	}
+}
+
+// searchText is a job's Job.SearchText.
+func searchText(kind string, terms []string, ids []domain.RemoteID, names map[domain.RemoteID]string) string {
+	parts := make([]string, 0, 1+len(terms)+len(ids))
+	parts = append(parts, kind)
+	parts = append(parts, terms...)
+	for _, id := range ids {
+		if n := names[id]; n != "" {
+			parts = append(parts, n)
+		}
+	}
+	return strings.ToLower(strings.Join(parts, "\n"))
+}
+
+// sortedIDs returns ids sorted and without duplicates (nil if empty).
+func sortedIDs(ids []domain.RemoteID) []domain.RemoteID {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := slices.Clone(ids)
+	slices.SortFunc(out, func(a, b domain.RemoteID) int { return a.UUID().Compare(b.UUID()) })
+	return slices.Compact(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +431,7 @@ func (s *Service) published(ctx context.Context, prev, cur Job) {
 // definition is secret-free), so nothing is removed.
 func copyOf(j Job) *Job {
 	j.Definition = slices.Clone(j.Definition)
+	j.RemoteIDs = slices.Clone(j.RemoteIDs)
 	j.Warnings = slices.Clone(j.Warnings)
 	j.Output = slices.Clone(j.Output)
 	return &j

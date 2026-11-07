@@ -1,16 +1,17 @@
 package dispatch_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -20,9 +21,13 @@ import (
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
 	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
+	"github.com/Zeptiny/Syncr/internal/backend"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/jobkind"
 	"github.com/Zeptiny/Syncr/internal/platform/clock"
 )
 
@@ -96,6 +101,10 @@ type env struct {
 	workers *workers.Service
 	jobs    *jobs.Service
 	disp    *dispatch.Service
+	// remotes resolves the test remote; it survives restarts.
+	remotes *fakeRemotes
+	// logs captures every service's log lines.
+	logs *logBuffer
 }
 
 func newEnv(t *testing.T) *env {
@@ -108,35 +117,92 @@ func newEnv(t *testing.T) *env {
 	}
 	e := &env{
 		t: t, store: memstore.New(), cipher: cipher, ids: &idgen.Sequential{},
-		clock: clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)),
-		cfg:   dispatch.DefaultConfig(),
+		clock:   clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)),
+		cfg:     dispatch.DefaultConfig(),
+		remotes: newFakeRemotes(),
+		logs:    &logBuffer{},
 	}
+	e.seed()
 	e.restart()
 	return e
+}
+
+// seed stores the owner of the test jobs and the test remote (the store's
+// foreign keys need them).
+func (e *env) seed() {
+	e.t.Helper()
+	ctx := context.Background()
+	u := users.User{ID: testOwner, Username: "owner", Role: domain.RoleUser, PasswordHash: "x", Version: 1}
+	if err := e.store.CreateUser(ctx, u); err != nil {
+		e.t.Fatal(err)
+	}
+	r := remotes.Remote{ID: testRemote(), OwnerID: testOwner, Name: "Archive", Type: "s3", Version: 1}
+	if err := e.store.CreateRemote(ctx, r); err != nil {
+		e.t.Fatal(err)
+	}
 }
 
 func (e *env) restart() {
 	e.t.Helper()
 	var err error
+	log := slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	e.rec, e.hub = newRecorder(), dispatch.NewHub()
 	e.jobs, err = jobs.New(jobs.Deps{
 		Jobs: e.store, Samples: e.store, Clock: e.clock, IDs: e.ids,
-		Broker: e.rec, Notifier: e.rec, Waker: e.hub,
+		Broker: e.rec, Notifier: e.rec, Waker: e.hub, Remotes: e.remotes, Logger: log,
 	}, jobs.Config{})
 	if err != nil {
 		e.t.Fatal(err)
 	}
 	e.workers, err = workers.New(workers.Deps{
 		Workers: e.store, Tokens: e.store, Cipher: e.cipher, Clock: e.clock, IDs: e.ids,
-		Jobs: e.jobs, Random: rand.Reader,
+		Jobs: e.jobs, Random: rand.Reader, Logger: log,
 	}, workers.Config{})
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	e.disp, err = dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Specs: specBuilder{}, Clock: e.clock, Hub: e.hub}, e.cfg)
+	e.disp, err = dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Specs: e.specs(), Clock: e.clock, Hub: e.hub, Logger: log}, e.cfg)
 	if err != nil {
 		e.t.Fatal(err)
 	}
+}
+
+// specs is the real spec builder over the fake remotes and the built-in
+// job kinds.
+func (e *env) specs() *dispatch.Specs {
+	e.t.Helper()
+	specs, err := dispatch.NewSpecs(e.remotes, kinds(e.t))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return specs
+}
+
+func kinds(t *testing.T) *jobkind.Registry {
+	t.Helper()
+	k, err := jobkind.NewRegistry(jobkind.Builtin()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+// logBuffer is a goroutine-safe log sink.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *logBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *logBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // enroll enrolls an active worker through a token and returns its ID.
@@ -157,43 +223,150 @@ func (e *env) enroll(name string) domain.WorkerID {
 	return en.Worker.ID
 }
 
+// testSecret is the secret of the test remote: it must reach the worker's
+// spec and nothing else.
+const testSecret = "hunter2-secret-sentinel"
+
+// testOwner owns the test jobs and the test remote.
+var testOwner = domain.NewUserID()
+
+func testActor() domain.Actor { return domain.Actor{UserID: testOwner, Role: domain.RoleUser} }
+
+// testRemote is the owner's s3 remote, rooted at its bucket.
+func testRemote() domain.RemoteID {
+	id, err := domain.ParseRemoteID("00000000-0000-7000-8000-00000000c001")
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+func testResolved() remotes.Resolved {
+	return remotes.Resolved{ID: testRemote(), Name: "Archive", Type: "s3", Rclone: backend.Rclone{
+		Backend: "s3", Options: map[string]string{"provider": "Minio"},
+		Secrets: map[string]string{"secret_access_key": testSecret}, Root: "bucket",
+	}}
+}
+
+// testDefinition copies the worker's path to the test remote.
+func testDefinition(path string) *syncrv1.JobDefinition {
+	return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransferDefinition{
+		Mode:        syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_COPY,
+		Source:      &syncrv1.JobLocation{Path: path},
+		Destination: &syncrv1.JobLocation{RemoteId: testRemote().String()},
+	}}}
+}
+
+// testSpec is the spec the dispatcher builds from testDefinition(path).
 func testSpec(path string) *syncrv1.JobSpec {
 	return &syncrv1.JobSpec{
-		Remotes: []*syncrv1.RemoteDefinition{{Alias: "s3", BackendType: "s3", Secrets: map[string]string{"secret_access_key": "hunter2"}}},
+		Remotes: []*syncrv1.RemoteDefinition{{
+			Alias: "r1", BackendType: "s3", Options: map[string]string{"provider": "Minio"},
+			Secrets: map[string]string{"secret_access_key": testSecret},
+		}},
 		Operation: &syncrv1.JobSpec_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransfer{
 			Mode:        syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_COPY,
 			Source:      &syncrv1.Location{Path: path},
-			Destination: &syncrv1.Location{Remote: "s3", Path: "bucket"},
+			Destination: &syncrv1.Location{Remote: "r1", Path: "bucket"},
 		}},
 	}
 }
 
-// testOwner owns the test jobs.
-var testOwner = domain.NewUserID()
-
-// specBuilder is the dispatcher's SpecBuilder in these tests: a job's
-// "definition" is the protojson of the very spec to send (see run).
-//
-// m3: pending track C: real definitions are built by job kinds from the
-// owner's resolved remotes; these tests only need some spec delivered.
-type specBuilder struct{}
-
-func (specBuilder) Build(_ context.Context, j jobs.Job) (*syncrv1.JobSpec, error) {
-	spec := new(syncrv1.JobSpec)
-	if err := protojson.Unmarshal(j.Definition, spec); err != nil {
-		return nil, fmt.Errorf("%w: %w", domain.ErrInvalidArgument, err)
-	}
-	return spec, nil
+// fakeRemotes is the remotes service of the tests (jobs.RemoteChecker and
+// dispatch.Remotes): the test remote belongs to testOwner; a deleted or
+// foreign remote is not found. failures are returned by the next Resolve
+// calls, in order.
+type fakeRemotes struct {
+	mu       sync.Mutex
+	resolved map[domain.RemoteID]remotes.Resolved
+	owners   map[domain.RemoteID]domain.UserID
+	failures []error
+	resolves int
 }
 
-// run queues a job on worker w, as the API's RunJob will.
+func newFakeRemotes() *fakeRemotes {
+	r := testResolved()
+	return &fakeRemotes{
+		resolved: map[domain.RemoteID]remotes.Resolved{r.ID: r},
+		owners:   map[domain.RemoteID]domain.UserID{r.ID: testOwner},
+	}
+}
+
+// remove makes id unknown (a deleted remote).
+func (f *fakeRemotes) remove(id domain.RemoteID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.resolved, id)
+	delete(f.owners, id)
+}
+
+// failNext makes the next Resolve calls fail with errs.
+func (f *fakeRemotes) failNext(errs ...error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failures = append(f.failures, errs...)
+}
+
+func (f *fakeRemotes) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.resolves
+}
+
+func (f *fakeRemotes) Usable(_ context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[domain.RemoteID]string, len(ids))
+	for _, id := range ids {
+		if f.owners[id] != owner {
+			return nil, fmt.Errorf("remote %s: %w", id, domain.ErrNotFound)
+		}
+		out[id] = f.resolved[id].Name
+	}
+	return out, nil
+}
+
+func (f *fakeRemotes) Resolve(_ context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Resolved, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolves++
+	if len(f.failures) > 0 {
+		err := f.failures[0]
+		f.failures = f.failures[1:]
+		return nil, err
+	}
+	out := make(map[domain.RemoteID]remotes.Resolved, len(ids))
+	for _, id := range ids {
+		if f.owners[id] != owner {
+			return nil, fmt.Errorf("remote %s: %w", id, domain.ErrNotFound)
+		}
+		r := f.resolved[id]
+		r.Rclone = r.Rclone.Clone()
+		out[id] = r
+	}
+	return out, nil
+}
+
+// run queues a job on worker w through the job kinds, as the API's RunJob
+// does: testDefinition("/data") of testOwner.
 func (e *env) run(w domain.WorkerID) jobs.Job {
 	e.t.Helper()
-	raw, err := protojson.Marshal(testSpec("/data"))
+	return e.runDef(w, testDefinition("/data"))
+}
+
+func (e *env) runDef(w domain.WorkerID, def *syncrv1.JobDefinition) jobs.Job {
+	e.t.Helper()
+	kind, refs, err := kinds(e.t).Check(def)
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	j, err := e.jobs.Create(context.Background(), jobs.CreateParams{WorkerID: w, OwnerID: testOwner, Kind: "rclone_transfer", Definition: raw})
+	raw, err := jobkind.Marshal(def)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	j, err := e.jobs.Create(context.Background(), testActor(), jobs.CreateParams{
+		WorkerID: w, Kind: kind, Definition: raw, RemoteIDs: refs.RemoteIDs, SearchTerms: refs.SearchTerms,
+	})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -202,7 +375,7 @@ func (e *env) run(w domain.WorkerID) jobs.Job {
 
 func (e *env) job(id domain.JobID) jobs.Job {
 	e.t.Helper()
-	j, err := e.jobs.Get(context.Background(), id)
+	j, err := e.jobs.Get(context.Background(), testActor(), id)
 	if err != nil {
 		e.t.Fatal(err)
 	}

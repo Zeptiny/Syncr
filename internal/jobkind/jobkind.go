@@ -64,8 +64,9 @@ type Refs struct {
 	// without duplicates (union members are not included: the remotes
 	// service adds them when it resolves the remotes).
 	RemoteIDs []domain.RemoteID
-	// SearchTerms are the texts a job list search matches (mode, paths...);
-	// the jobs service adds the kind and the remote names.
+	// SearchTerms are the texts a job list search matches (the mode and the
+	// paths, as given); the jobs service adds the kind and the remote
+	// names. They contain no secrets.
 	SearchTerms []string
 }
 
@@ -83,14 +84,16 @@ type Kind interface {
 	Check(def *syncrv1.JobDefinition) (Refs, error)
 	// Build returns the worker spec of a checked definition. remotes holds
 	// every remote of Check's Refs plus the members of the unions among
-	// them. Errors wrap domain.ErrInvalidArgument (a definition that cannot
-	// be built, e.g. a path that a remote's root makes invalid).
+	// them. Errors wrap domain.ErrInvalidArgument (a definition or remote
+	// that cannot be built, e.g. a path that a remote's root makes
+	// invalid, or a nested union) or domain.ErrNotFound (a remote it needs
+	// is missing from remotes). Error messages never contain option or
+	// secret values.
 	Build(def *syncrv1.JobDefinition, remotes map[domain.RemoteID]Remote) (*syncrv1.JobSpec, error)
 }
 
-// Builtin returns the built-in kinds. (Milestone 3 track C adds the rclone
-// transfer kind.)
-func Builtin() []Kind { return nil }
+// Builtin returns the built-in kinds: the rclone transfer (Transfer).
+func Builtin() []Kind { return []Kind{Transfer{}} }
 
 // Registry is an immutable set of kinds, keyed by name. It is safe for
 // concurrent use.
@@ -140,7 +143,7 @@ func (r *Registry) Check(def *syncrv1.JobDefinition) (kind string, refs Refs, er
 }
 
 // Build builds the worker spec of def with its kind (see Kind.Build).
-// Errors wrap domain.ErrInvalidArgument.
+// Errors wrap domain.ErrInvalidArgument or domain.ErrNotFound.
 func (r *Registry) Build(def *syncrv1.JobDefinition, remotes map[domain.RemoteID]Remote) (*syncrv1.JobSpec, error) {
 	k, err := r.kindOf(def)
 	if err != nil {

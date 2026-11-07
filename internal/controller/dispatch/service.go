@@ -48,8 +48,9 @@ func DefaultConfig() Config {
 type Deps struct {
 	Jobs    Jobs
 	Workers Workers
-	// Specs builds the specs of queued jobs. If nil, every queued job fails
-	// with "invalid_spec" when it would be dispatched.
+	// Specs builds the specs of queued jobs, normally NewSpecs(remotes
+	// service, job kinds). If nil, every queued job fails with
+	// "invalid_spec" when it would be dispatched.
 	Specs SpecBuilder
 	Clock Clock
 	// Hub must be the same Hub given to the job service as its Waker.

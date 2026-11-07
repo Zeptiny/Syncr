@@ -4,13 +4,15 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
-// CreateJob implements jobs.Repository.
+// CreateJob implements jobs.Repository. Like the database's foreign keys,
+// it requires the owner and every remote to exist (deleted remotes do).
 func (s *Store) CreateJob(_ context.Context, j jobs.Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -20,7 +22,19 @@ func (s *Store) CreateJob(_ context.Context, j jobs.Job) error {
 	if w, ok := s.workers[j.WorkerID]; !ok || w.Removed() {
 		return fmt.Errorf("worker %s: %w", j.WorkerID, domain.ErrNotFound)
 	}
-	s.jobs[j.ID] = cloneJob(j)
+	if _, ok := s.users[j.OwnerID]; !ok {
+		return fmt.Errorf("owner %s of job %s: %w", j.OwnerID, j.ID, domain.ErrNotFound)
+	}
+	for _, id := range j.RemoteIDs {
+		if _, ok := s.remotes[id]; !ok {
+			return fmt.Errorf("remote %s of job %s: %w", id, j.ID, domain.ErrNotFound)
+		}
+	}
+	j = cloneJob(j)
+	// Stored like the job_remotes rows: a set, read back by ID.
+	slices.SortFunc(j.RemoteIDs, compareIDs)
+	j.RemoteIDs = slices.Compact(j.RemoteIDs)
+	s.jobs[j.ID] = j
 	return nil
 }
 
@@ -49,6 +63,7 @@ func (s *Store) UpdateJob(_ context.Context, j jobs.Job) (jobs.Job, error) {
 	next := cloneJob(j)
 	// Immutable fields keep their stored values.
 	next.WorkerID, next.OwnerID, next.Kind, next.Definition, next.CreatedAt = cur.WorkerID, cur.OwnerID, cur.Kind, cur.Definition, cur.CreatedAt
+	next.RemoteIDs, next.SearchText = cur.RemoteIDs, cur.SearchText
 	next.Version = cur.Version + 1
 	s.jobs[j.ID] = next
 	return cloneJob(next), nil
@@ -60,9 +75,7 @@ func (s *Store) ListJobs(_ context.Context, f jobs.ListFilter) ([]jobs.Job, erro
 	defer s.mu.RUnlock()
 	var out []jobs.Job
 	for _, j := range s.jobs {
-		if (f.WorkerID.IsZero() || j.WorkerID == f.WorkerID) &&
-			(len(f.Statuses) == 0 || slices.Contains(f.Statuses, j.Status)) &&
-			(f.Before.IsZero() || compareIDs(j.ID, f.Before) < 0) {
+		if matchesJob(j, f) {
 			out = append(out, j)
 		}
 	}
@@ -74,6 +87,19 @@ func (s *Store) ListJobs(_ context.Context, f jobs.ListFilter) ([]jobs.Job, erro
 		out[i] = cloneJob(out[i])
 	}
 	return out, nil
+}
+
+// matchesJob reports whether j matches every set field of f.
+func matchesJob(j jobs.Job, f jobs.ListFilter) bool {
+	return (f.OwnerID.IsZero() || j.OwnerID == f.OwnerID) &&
+		(f.WorkerID.IsZero() || j.WorkerID == f.WorkerID) &&
+		(len(f.Statuses) == 0 || slices.Contains(f.Statuses, j.Status)) &&
+		(f.RemoteID.IsZero() || slices.Contains(j.RemoteIDs, f.RemoteID)) &&
+		(len(f.Kinds) == 0 || slices.Contains(f.Kinds, j.Kind)) &&
+		(f.Query == "" || strings.Contains(j.SearchText, f.Query)) &&
+		(f.CreatedAfter.IsZero() || !j.CreatedAt.Before(f.CreatedAfter)) &&
+		(f.CreatedBefore.IsZero() || j.CreatedAt.Before(f.CreatedBefore)) &&
+		(f.Before.IsZero() || compareIDs(j.ID, f.Before) < 0)
 }
 
 // ListUnfinishedJobs implements jobs.Repository.

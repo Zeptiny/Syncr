@@ -78,10 +78,24 @@
 //
 // A queued job never has a cancel request (canceling a queued job
 // finishes it at once, and a re-queue of a job with a cancel request
-// cancels it instead), so no StartJob is ever sent after a cancel. A queued
-// job whose stored spec cannot be decrypted is failed (internal) instead of
-// sent. Command IDs are derived from the job, so redeliveries keep their
-// ID and workers deduplicate by job ID anyway.
+// cancels it instead), so no StartJob is ever sent after a cancel. Command
+// IDs are derived from the job, so redeliveries keep their ID and workers
+// deduplicate by job ID anyway.
+//
+// # Specs
+//
+// Jobs store a secret-free definition. The StartJob spec is built from it
+// on every derivation (SpecBuilder, normally Specs): the definition is
+// decoded and checked, the remotes it uses are resolved for the job's owner
+// with their credentials, and the job kind builds the spec. The spec exists
+// only in memory and on the authenticated link; it is never stored or
+// logged. A job whose spec can never be built is failed instead of sent:
+//
+//	Cause                                                  Error code
+//	a remote is deleted, missing or not the owner's        remote_unavailable
+//	the definition cannot be decoded, checked or built     invalid_spec
+//	a remote's credentials cannot be used (decryption)     internal
+//	anything else (e.g. the store is down)                 none: the call fails, the next poll retries
 //
 // # Reconcile
 //
@@ -143,6 +157,7 @@
 // worker has more events).
 //
 // Allowed dependencies: the standard library, protobuf, the generated link
-// code, internal/link, internal/domain and the internal/app services it
-// drives (through the ports in ports.go). No adapters.
+// code, internal/link, internal/domain, internal/jobkind and the
+// internal/app services it drives (through the ports in ports.go). No
+// adapters.
 package dispatch

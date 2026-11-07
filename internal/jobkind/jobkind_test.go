@@ -51,9 +51,6 @@ func transfer(remoteID, path string) *syncrv1.JobDefinition {
 
 func TestRegistry(t *testing.T) {
 	t.Parallel()
-	if len(jobkind.Builtin()) != 0 {
-		t.Fatal("Builtin() is not empty yet")
-	}
 	r, err := jobkind.NewRegistry(echoKind{"rclone_transfer"})
 	if err != nil {
 		t.Fatal(err)
@@ -82,12 +79,31 @@ func TestRegistry(t *testing.T) {
 		t.Errorf("Build = (%v, %v)", spec, err)
 	}
 
-	empty, err := jobkind.NewRegistry(jobkind.Builtin()...)
+	empty, err := jobkind.NewRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := empty.Check(transfer("", "/src")); !isValidation(err, "definition.operation") || !strings.Contains(err.Error(), "not supported") {
 		t.Errorf("Check on an empty registry = %v", err)
+	}
+}
+
+func TestBuiltin(t *testing.T) {
+	t.Parallel()
+	r, err := jobkind.NewRegistry(jobkind.Builtin()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k, ok := r.Get("rclone_transfer"); !ok || k.Name() != "rclone_transfer" {
+		t.Errorf("Get(rclone_transfer) = (%v, %v)", k, ok)
+	}
+	kind, refs, err := r.Check(transfer("", "/src"))
+	if err != nil || kind != "rclone_transfer" || len(refs.RemoteIDs) != 0 {
+		t.Errorf("Check(local to local) = (%q, %+v, %v)", kind, refs, err)
+	}
+	spec, err := r.Build(transfer("", "/src"), nil)
+	if err != nil || spec.GetRcloneTransfer().GetSource().GetPath() != "/src" || spec.GetRcloneTransfer().GetDestination().GetPath() != "/data/dst" {
+		t.Errorf("Build(local to local) = (%v, %v)", spec, err)
 	}
 }
 

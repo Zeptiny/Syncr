@@ -20,6 +20,15 @@ type Job struct {
 	// syncr.v1.JobDefinition, see internal/jobkind). It contains no
 	// secrets; the dispatcher builds the worker's spec from it.
 	Definition []byte
+	// RemoteIDs are the remotes the definition refers to directly (not the
+	// members of unions among them), without duplicates, sorted by ID. They
+	// were live remotes of the owner when the job was created and may have
+	// been deleted since.
+	RemoteIDs []domain.RemoteID
+	// SearchText is what ListFilter.Query matches: the kind, the
+	// definition's search terms (mode, paths) and the remotes' names at
+	// creation time, lower-cased, one per line.
+	SearchText string
 
 	// Epoch is the worker epoch that accepted the job; empty while queued.
 	// Dispatched and running jobs always have one.
@@ -134,25 +143,48 @@ type Update struct {
 	Progress *Sample
 }
 
-// CreateParams are the inputs of Create.
+// CreateParams are the inputs of Create. The owner is the actor.
 type CreateParams struct {
 	WorkerID domain.WorkerID
-	// OwnerID is the user who runs the job.
-	OwnerID domain.UserID
 	// Kind is the definition's operation name (the caller derives it from
 	// the definition).
 	Kind string
 	// Definition is the encoded job definition (see Job.Definition), checked
-	// by the caller.
+	// by the caller (internal/jobkind).
 	Definition []byte
+	// RemoteIDs are the remotes the definition refers to (jobkind.Refs);
+	// each must be a live remote of the actor.
+	RemoteIDs []domain.RemoteID
+	// SearchTerms are the definition's texts a search matches
+	// (jobkind.Refs); the service adds the kind and the remote names.
+	SearchTerms []string
 }
 
-// ListFilter selects jobs for List.
+// ListFilter selects jobs for List. Zero fields do not filter.
 type ListFilter struct {
-	// WorkerID keeps only this worker's jobs; zero means all.
+	// OwnerID keeps only this user's jobs. List sets it to the actor unless
+	// the actor is an admin and AllUsers is set (then zero means every
+	// user).
+	OwnerID domain.UserID
+	// AllUsers asks for every user's jobs; only admins may (List ignores it
+	// for other actors). Repositories ignore it.
+	AllUsers bool
+	// WorkerID keeps only this worker's jobs.
 	WorkerID domain.WorkerID
-	// Statuses keeps only jobs in one of these; empty means all.
+	// Statuses keeps only jobs in one of these.
 	Statuses []domain.JobStatus
+	// RemoteID keeps only jobs whose RemoteIDs contain it.
+	RemoteID domain.RemoteID
+	// Kinds keeps only jobs of one of these kinds.
+	Kinds []string
+	// Query keeps only jobs whose SearchText contains it as a plain
+	// substring (no wildcards: repositories escape LIKE patterns). List
+	// trims and lower-cases it, so matching is case-insensitive.
+	Query string
+	// CreatedAfter keeps only jobs created at or after it; CreatedBefore
+	// only jobs created before it.
+	CreatedAfter  time.Time
+	CreatedBefore time.Time
 	// Before is a keyset cursor: only jobs with ID < Before. Zero starts at
 	// the newest job.
 	Before domain.JobID
@@ -161,10 +193,14 @@ type ListFilter struct {
 	Limit int
 }
 
-// Page sizes for List.
+// Limits of List.
 const (
 	DefaultPageSize = 50
 	MaxPageSize     = 500
+	// MaxQueryLen bounds ListFilter.Query, in bytes.
+	MaxQueryLen = 256
+	// MaxKinds bounds ListFilter.Kinds.
+	MaxKinds = 32
 )
 
 // Page is one page of List.

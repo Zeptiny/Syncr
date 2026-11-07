@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/x509"
@@ -8,18 +9,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	mrand "math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
-	"google.golang.org/protobuf/encoding/protojson"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
@@ -28,11 +30,15 @@ import (
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
 	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
+	"github.com/Zeptiny/Syncr/internal/backend"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	cactive "github.com/Zeptiny/Syncr/internal/controller/dispatch/active"
 	cpassive "github.com/Zeptiny/Syncr/internal/controller/dispatch/passive"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/jobkind"
 	"github.com/Zeptiny/Syncr/internal/platform/clock"
 	"github.com/Zeptiny/Syncr/internal/worker/agent"
 	"github.com/Zeptiny/Syncr/internal/worker/linkcore"
@@ -73,6 +79,11 @@ type controller struct {
 	stop     context.CancelFunc
 	running  sync.WaitGroup
 	restarts int
+
+	// remotes is the owner's remotes service; it survives restarts.
+	remotes *fakeRemotes
+	// logs captures the controller's log lines.
+	logs *logBuffer
 }
 
 func newController(t *testing.T) *controller {
@@ -85,7 +96,9 @@ func newController(t *testing.T) *controller {
 	}
 	c := &controller{
 		t: t, store: memstore.New(), cipher: cipher, ids: &idgen.Sequential{},
-		clock: clock.NewFake(time.Now()),
+		clock:   clock.NewFake(time.Now()),
+		remotes: newFakeRemotes(),
+		logs:    &logBuffer{},
 		cfg: dispatch.Config{
 			MaxWait: 5 * time.Second,
 			Passive: dispatch.PassiveConfig{
@@ -94,6 +107,7 @@ func newController(t *testing.T) *controller {
 			},
 		},
 	}
+	c.seed()
 	c.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		(*c.handler.Load()).ServeHTTP(w, r)
 	}))
@@ -116,22 +130,27 @@ func (c *controller) start() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var err error
+	log := slog.New(slog.NewTextHandler(c.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	c.hub = dispatch.NewHub()
 	c.jobs, err = jobs.New(jobs.Deps{
 		Jobs: c.store, Samples: c.store, Clock: c.clock, IDs: c.ids,
-		Broker: broker.New(), Notifier: jobs.NopNotifier{}, Waker: c.hub,
+		Broker: broker.New(), Notifier: jobs.NopNotifier{}, Waker: c.hub, Remotes: c.remotes, Logger: log,
 	}, jobs.Config{SampleInterval: time.Millisecond})
 	if err != nil {
 		c.t.Fatal(err)
 	}
 	c.workers, err = workers.New(workers.Deps{
 		Workers: c.store, Tokens: c.store, Cipher: c.cipher, Clock: c.clock, IDs: c.ids,
-		Jobs: c.jobs, Random: rand.Reader,
+		Jobs: c.jobs, Random: rand.Reader, Logger: log,
 	}, workers.Config{})
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	c.disp, err = dispatch.New(dispatch.Deps{Jobs: c.jobs, Workers: c.workers, Specs: specBuilder{}, Clock: c.clock, Hub: c.hub}, c.cfg)
+	specs, err := dispatch.NewSpecs(c.remotes, kinds(c.t))
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	c.disp, err = dispatch.New(dispatch.Deps{Jobs: c.jobs, Workers: c.workers, Specs: specs, Clock: c.clock, Hub: c.hub, Logger: log}, c.cfg)
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -245,33 +264,156 @@ func (c *controller) enrollActive(name string) (domain.WorkerID, string) {
 	return id, resp.GetWorkerSecret()
 }
 
-// testOwner owns the test jobs.
+// testOwner owns the test jobs and remotes.
 var testOwner = domain.NewUserID()
 
-// specBuilder is the dispatcher's SpecBuilder in these tests: a job's
-// "definition" is the protojson of the very spec to send (see run).
-//
-// m3: pending track C: real definitions are built by job kinds from the
-// owner's resolved remotes; these link tests only need the spec delivered.
-type specBuilder struct{}
+func testActor() domain.Actor { return domain.Actor{UserID: testOwner, Role: domain.RoleUser} }
 
-func (specBuilder) Build(_ context.Context, j jobs.Job) (*syncrv1.JobSpec, error) {
-	spec := new(syncrv1.JobSpec)
-	if err := protojson.Unmarshal(j.Definition, spec); err != nil {
-		return nil, fmt.Errorf("%w: %w", domain.ErrInvalidArgument, err)
+// testSecret is the test remote's secret: it must reach the worker's spec
+// and nothing else.
+const testSecret = "e2e-secret-sentinel-4711"
+
+// s3Remote is the owner's s3 remote of the tests, rooted at its bucket.
+func s3Remote() domain.RemoteID { return fixedRemoteID("00000000-0000-7000-8000-00000000c001") }
+
+func fixedRemoteID(s string) domain.RemoteID {
+	id, err := domain.ParseRemoteID(s)
+	if err != nil {
+		panic(err)
 	}
-	return spec, nil
+	return id
 }
 
-// run queues a job on worker w.
-func (c *controller) run(w domain.WorkerID, spec *syncrv1.JobSpec) domain.JobID {
+// seed stores the owner and the s3 remote (the store's foreign keys need
+// them) and makes the remote resolvable.
+func (c *controller) seed() {
 	c.t.Helper()
-	raw, err := protojson.Marshal(spec)
+	ctx := context.Background()
+	if err := c.store.CreateUser(ctx, users.User{ID: testOwner, Username: "owner", Role: domain.RoleUser, PasswordHash: "x", Version: 1}); err != nil {
+		c.t.Fatal(err)
+	}
+	c.addRemote(s3Remote(), "Archive", backend.Rclone{
+		Backend: "s3", Options: map[string]string{"provider": "Minio", "endpoint": "https://minio.example"},
+		Secrets: map[string]string{"access_key_id": "AKIA-E2E", "secret_access_key": testSecret}, Root: "bucket",
+	})
+}
+
+// addRemote adds a remote of the owner to the store and the remotes
+// service.
+func (c *controller) addRemote(id domain.RemoteID, name string, rc backend.Rclone) {
+	c.t.Helper()
+	typ := rc.Backend
+	if typ == "" {
+		typ = "local"
+	}
+	if err := c.store.CreateRemote(context.Background(), remotes.Remote{ID: id, OwnerID: testOwner, Name: name, Type: typ, Version: 1}); err != nil {
+		c.t.Fatal(err)
+	}
+	c.remotes.add(remotes.Resolved{ID: id, Name: name, Type: typ, Rclone: rc})
+}
+
+func kinds(t *testing.T) *jobkind.Registry {
+	t.Helper()
+	k, err := jobkind.NewRegistry(jobkind.Builtin()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+// fakeRemotes is the remotes service of the tests (jobs.RemoteChecker and
+// dispatch.Remotes) over the owner's remotes.
+type fakeRemotes struct {
+	mu       sync.Mutex
+	resolved map[domain.RemoteID]remotes.Resolved
+}
+
+func newFakeRemotes() *fakeRemotes {
+	return &fakeRemotes{resolved: map[domain.RemoteID]remotes.Resolved{}}
+}
+
+func (f *fakeRemotes) add(r remotes.Resolved) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolved[r.ID] = r
+}
+
+func (f *fakeRemotes) remove(id domain.RemoteID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.resolved, id)
+}
+
+func (f *fakeRemotes) Usable(ctx context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]string, error) {
+	rs, err := f.Resolve(ctx, owner, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[domain.RemoteID]string, len(rs))
+	for id, r := range rs {
+		out[id] = r.Name
+	}
+	return out, nil
+}
+
+func (f *fakeRemotes) Resolve(_ context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Resolved, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[domain.RemoteID]remotes.Resolved, len(ids))
+	// Like remotes.Service.Resolve: the ids, then the members of unions.
+	ids = slices.Clone(ids)
+	for i := 0; i < len(ids); i++ {
+		id := ids[i]
+		r, ok := f.resolved[id]
+		if !ok || owner != testOwner {
+			return nil, fmt.Errorf("remote %s: %w", id, domain.ErrNotFound)
+		}
+		r.Rclone = r.Rclone.Clone()
+		r.Members = slices.Clone(r.Members)
+		out[id] = r
+		for _, m := range r.Members {
+			if _, done := out[m.RemoteID]; !done && !slices.Contains(ids, m.RemoteID) {
+				ids = append(ids, m.RemoteID)
+			}
+		}
+	}
+	return out, nil
+}
+
+// logBuffer is a goroutine-safe log sink.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *logBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *logBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// run queues a job of the owner on worker w, checked by the job kinds as
+// the API's RunJob does.
+func (c *controller) run(w domain.WorkerID, def *syncrv1.JobDefinition) domain.JobID {
+	c.t.Helper()
+	kind, refs, err := kinds(c.t).Check(def)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	raw, err := jobkind.Marshal(def)
 	if err != nil {
 		c.t.Fatal(err)
 	}
 	js, _ := c.svc()
-	j, err := js.Create(context.Background(), jobs.CreateParams{WorkerID: w, OwnerID: testOwner, Kind: "rclone_transfer", Definition: raw})
+	j, err := js.Create(context.Background(), testActor(), jobs.CreateParams{
+		WorkerID: w, Kind: kind, Definition: raw, RemoteIDs: refs.RemoteIDs, SearchTerms: refs.SearchTerms,
+	})
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -281,7 +423,7 @@ func (c *controller) run(w domain.WorkerID, spec *syncrv1.JobSpec) domain.JobID 
 func (c *controller) job(id domain.JobID) jobs.Job {
 	c.t.Helper()
 	js, _ := c.svc()
-	j, err := js.Get(context.Background(), id)
+	j, err := js.Get(context.Background(), testActor(), id)
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -291,7 +433,7 @@ func (c *controller) job(id domain.JobID) jobs.Job {
 func (c *controller) cancel(id domain.JobID) {
 	c.t.Helper()
 	js, _ := c.svc()
-	if _, err := js.Cancel(context.Background(), id); err != nil {
+	if _, err := js.Cancel(context.Background(), testActor(), id); err != nil {
 		c.t.Fatal(err)
 	}
 }
@@ -352,32 +494,46 @@ func (c *controller) wakeSupervisor() {
 // ---------------------------------------------------------------------------
 
 // fakeRunner runs jobs without tools. A job emits a progress sample, then
-// blocks until released (success) or cancelled; jobs not held succeed at
-// once. It counts runs per job.
+// succeeds at once, unless it is held (its source path is heldPath, see
+// heldDefinition): then it blocks until released (success) or cancelled.
+// Holding by the spec, not by job ID, means a job cannot start before the
+// test holds it. It counts runs and keeps the spec per job.
 type fakeRunner struct {
 	mu      sync.Mutex
 	runs    map[string]int
+	specs   map[string]*syncrv1.JobSpec
 	hold    map[string]chan struct{}
 	started chan string
 }
 
 func newFakeRunner() *fakeRunner {
-	return &fakeRunner{runs: map[string]int{}, hold: map[string]chan struct{}{}, started: make(chan string, 1000)}
+	return &fakeRunner{runs: map[string]int{}, specs: map[string]*syncrv1.JobSpec{}, hold: map[string]chan struct{}{}, started: make(chan string, 1000)}
+}
+
+// spec returns the spec the runner received for job.
+func (f *fakeRunner) spec(job domain.JobID) *syncrv1.JobSpec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.specs[job.String()]
 }
 
 func (*fakeRunner) Kind() string { return "rclone_transfer" }
 
-// holdJob makes job block until release(job).
-func (f *fakeRunner) holdJob(job domain.JobID) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.hold[job.String()] = make(chan struct{})
+// holdChan returns the release channel of job; f.mu must be held.
+func (f *fakeRunner) holdChan(job string) chan struct{} {
+	ch, ok := f.hold[job]
+	if !ok {
+		ch = make(chan struct{})
+		f.hold[job] = ch
+	}
+	return ch
 }
 
+// release lets a held job succeed.
 func (f *fakeRunner) release(job domain.JobID) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	close(f.hold[job.String()])
+	close(f.holdChan(job.String()))
 }
 
 func (f *fakeRunner) runCount(job domain.JobID) int {
@@ -405,7 +561,11 @@ func (f *fakeRunner) waitStarted(t *testing.T, job domain.JobID) {
 func (f *fakeRunner) Run(ctx context.Context, job runner.Job, emit runner.EmitFunc) (runner.Result, error) {
 	f.mu.Lock()
 	f.runs[job.ID]++
-	hold := f.hold[job.ID]
+	f.specs[job.ID] = job.Spec
+	var hold chan struct{}
+	if job.Spec.GetRcloneTransfer().GetSource().GetPath() == heldPath {
+		hold = f.holdChan(job.ID)
+	}
 	f.mu.Unlock()
 	f.started <- job.ID
 	emit(runner.Progress{Bytes: 10, Files: 1})
@@ -419,6 +579,27 @@ func (f *fakeRunner) Run(ctx context.Context, job runner.Job, emit runner.EmitFu
 	return runner.Result{Stats: runner.Progress{Bytes: 100, Files: 2}}, nil
 }
 
+// testDefinition copies the worker's /data to the s3 remote.
+func testDefinition() *syncrv1.JobDefinition {
+	return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransferDefinition{
+		Mode:        syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_COPY,
+		Source:      &syncrv1.JobLocation{Path: "/data"},
+		Destination: &syncrv1.JobLocation{RemoteId: s3Remote().String(), Path: "backup"},
+	}}}
+}
+
+// heldPath is the source path of jobs the fake runner holds.
+const heldPath = "/data/held"
+
+// heldDefinition is testDefinition for a job the fake runner holds until
+// released.
+func heldDefinition() *syncrv1.JobDefinition {
+	def := testDefinition()
+	def.GetRcloneTransfer().Source.Path = heldPath
+	return def
+}
+
+// testSpec is a spec sent by hand (not built from a definition).
 func testSpec() *syncrv1.JobSpec {
 	return &syncrv1.JobSpec{
 		Remotes: []*syncrv1.RemoteDefinition{{Alias: "s3", BackendType: "s3", Secrets: map[string]string{"secret_access_key": "hunter2"}}},

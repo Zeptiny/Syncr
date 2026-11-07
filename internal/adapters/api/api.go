@@ -177,6 +177,7 @@ func mountProtected(mux *http.ServeMux, deps Deps, logger *slog.Logger, opts []c
 		jobsPath, jobsHandler := syncrv1connect.NewJobServiceHandler(&jobHandler{
 			jobs:      deps.Jobs,
 			kinds:     deps.Kinds,
+			remotes:   deps.Remotes,
 			errs:      errs,
 			log:       logger,
 			base:      base,

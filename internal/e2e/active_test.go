@@ -32,14 +32,45 @@ func TestActiveJobSucceeds(t *testing.T) {
 	if w.Info.Version != "test" || len(w.Info.JobKinds) != 1 || w.Link.Epoch == "" {
 		t.Errorf("worker info %+v link %+v", w.Info, w.Link)
 	}
-	job := c.run(id, testSpec())
+	job := c.run(id, testDefinition())
 	j := c.waitStatus(job, domain.JobSucceeded)
 	if j.Stats.Bytes != 100 || j.Stats.Files != 2 || j.Epoch != w.Link.Epoch || rn.runCount(job) != 1 {
 		t.Errorf("job %+v, runs %d", j, rn.runCount(job))
 	}
 	js, _ := c.svc()
-	if samples, err := js.Samples(context.Background(), job); err != nil || len(samples) == 0 {
+	if samples, err := js.Samples(context.Background(), testActor(), job); err != nil || len(samples) == 0 {
 		t.Errorf("samples = %v, %v", samples, err)
+	}
+
+	// The worker got the spec built from the definition, with the remote's
+	// credentials; the controller stored and logged none of them.
+	spec := rn.spec(job)
+	tr := spec.GetRcloneTransfer()
+	if len(spec.GetRemotes()) != 1 || spec.GetRemotes()[0].GetAlias() != "r1" || spec.GetRemotes()[0].GetSecrets()["secret_access_key"] != testSecret ||
+		tr.GetSource().GetPath() != "/data" || tr.GetDestination().GetRemote() != "r1" || tr.GetDestination().GetPath() != "bucket/backup" {
+		t.Errorf("worker spec = %v", spec)
+	}
+	for what, text := range map[string]string{"logs": c.logs.String(), "definition": string(j.Definition), "job": fmt.Sprintf("%+v", j)} {
+		if strings.Contains(text, testSecret) || strings.Contains(text, "AKIA-E2E") {
+			t.Errorf("the remote's credentials are in the controller's %s", what)
+		}
+	}
+}
+
+// TestActiveRemoteDeletedBeforeDispatch: a queued job whose remote is
+// deleted before its worker connects fails with remote_unavailable and is
+// never sent.
+func TestActiveRemoteDeletedBeforeDispatch(t *testing.T) {
+	t.Parallel()
+	c := newController(t)
+	id, secret := c.enrollActive("desktop")
+	job := c.run(id, testDefinition())
+	c.remotes.remove(s3Remote())
+	rn := newFakeRunner()
+	startActive(t, rn, activeOptions(c, id, secret))
+	j := c.waitStatus(job, domain.JobFailed)
+	if j.Error.Code != jobs.CodeRemoteUnavailable || rn.runCount(job) != 0 {
+		t.Errorf("job error %+v, runs %d", j.Error, rn.runCount(job))
 	}
 }
 
@@ -51,8 +82,7 @@ func TestActiveCancelMidJob(t *testing.T) {
 	rn := newFakeRunner()
 	startActive(t, rn, activeOptions(c, id, secret))
 
-	job := c.run(id, testSpec())
-	rn.holdJob(job)
+	job := c.run(id, heldDefinition())
 	c.waitStatus(job, domain.JobRunning)
 	c.cancel(job)
 	j := c.waitStatus(job, domain.JobCancelled)
@@ -71,8 +101,7 @@ func TestActiveWorkerRestart(t *testing.T) {
 	rn := newFakeRunner()
 	first := startActive(t, rn, activeOptions(c, id, secret))
 
-	job := c.run(id, testSpec())
-	rn.holdJob(job)
+	job := c.run(id, heldDefinition())
 	c.waitStatus(job, domain.JobRunning)
 	oldEpoch := first.agent.Epoch()
 	first.kill()
@@ -94,7 +123,7 @@ func TestActiveWorkerRestart(t *testing.T) {
 	}
 
 	// The new process runs new jobs.
-	next := c.run(id, testSpec())
+	next := c.run(id, testDefinition())
 	c.waitStatus(next, domain.JobSucceeded)
 }
 
@@ -107,8 +136,7 @@ func TestActiveControllerRestart(t *testing.T) {
 	rn := newFakeRunner()
 	startActive(t, rn, activeOptions(c, id, secret))
 
-	job := c.run(id, testSpec())
-	rn.holdJob(job)
+	job := c.run(id, heldDefinition())
 	c.waitStatus(job, domain.JobRunning)
 	c.restart()
 	rn.release(job)
@@ -118,7 +146,7 @@ func TestActiveControllerRestart(t *testing.T) {
 	}
 	// A job queued after the restart reaches the worker through the new
 	// controller's long polls.
-	next := c.run(id, testSpec())
+	next := c.run(id, testDefinition())
 	c.waitStatus(next, domain.JobSucceeded)
 }
 
@@ -145,8 +173,7 @@ func TestActiveFlakyNetwork(t *testing.T) {
 			// Waves of jobs, so that many calls cross the network.
 			var ids []domain.JobID
 			for range 4 {
-				wave := []domain.JobID{c.run(id, testSpec()), c.run(id, testSpec()), c.run(id, testSpec())}
-				rn.holdJob(wave[0])
+				wave := []domain.JobID{c.run(id, heldDefinition()), c.run(id, testDefinition()), c.run(id, testDefinition())}
 				c.waitStatus(wave[0], domain.JobRunning)
 				c.cancel(wave[0])
 				for _, job := range wave[1:] {
@@ -262,7 +289,7 @@ func TestLongPollWakeup(t *testing.T) {
 
 	for range 3 {
 		start := time.Now()
-		job := c.run(id, testSpec())
+		job := c.run(id, testDefinition())
 		rn.waitStarted(t, job)
 		if took := time.Since(start); took > time.Second {
 			t.Errorf("job reached the worker after %v", took)
@@ -280,8 +307,7 @@ func TestActiveShutdownDrain(t *testing.T) {
 	rn := newFakeRunner()
 	w := startActive(t, rn, activeOptions(c, id, secret))
 
-	job := c.run(id, testSpec())
-	rn.holdJob(job)
+	job := c.run(id, heldDefinition())
 	c.waitStatus(job, domain.JobRunning)
 	if err := w.shutdown(t); err != nil {
 		t.Fatalf("drain: %v", err)

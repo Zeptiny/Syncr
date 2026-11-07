@@ -4,22 +4,29 @@ import (
 	"context"
 
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
 // JobService is the part of the jobs use cases the API calls (implemented
-// by *jobs.Service).
-//
-// m3: pending track C: the use cases gain the actor (owner scoping, admins
-// seeing every job), remote references and search; RunJob checks the
-// definition with Deps.Kinds before Create.
+// by *jobs.Service). Every use case but LatestSample takes the caller's
+// actor and scopes by it: a user's own jobs, any job for an admin, and
+// domain.ErrNotFound for another user's job.
 type JobService interface {
-	Create(ctx context.Context, p jobs.CreateParams) (jobs.Job, error)
-	Get(ctx context.Context, id domain.JobID) (jobs.Job, error)
-	List(ctx context.Context, f jobs.ListFilter) (jobs.Page, error)
-	Cancel(ctx context.Context, id domain.JobID) (jobs.Job, error)
+	Create(ctx context.Context, actor domain.Actor, p jobs.CreateParams) (jobs.Job, error)
+	Get(ctx context.Context, actor domain.Actor, id domain.JobID) (jobs.Job, error)
+	List(ctx context.Context, actor domain.Actor, f jobs.ListFilter) (jobs.Page, error)
+	Cancel(ctx context.Context, actor domain.Actor, id domain.JobID) (jobs.Job, error)
+	Watch(ctx context.Context, actor domain.Actor, id domain.JobID, fn func(jobs.Update) error) error
+	Samples(ctx context.Context, actor domain.Actor, id domain.JobID) ([]jobs.Sample, error)
+	// LatestSample is only called for jobs the actor has just read.
 	LatestSample(ctx context.Context, id domain.JobID) (jobs.Sample, bool, error)
-	Watch(ctx context.Context, id domain.JobID, fn func(jobs.Update) error) error
 }
 
 var _ JobService = (*jobs.Service)(nil)
+
+// RemoteNames looks up the display references of jobs' remotes, of any
+// owner and deleted ones included (RemoteService.Names).
+type RemoteNames interface {
+	Names(ctx context.Context, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Ref, error)
+}

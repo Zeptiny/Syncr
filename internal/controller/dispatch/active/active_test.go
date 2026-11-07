@@ -20,6 +20,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
 	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch/active"
@@ -37,6 +38,8 @@ type env struct {
 	disp    *dispatch.Service
 	srv     *httptest.Server
 	stop    context.CancelFunc
+	// owner owns the queued jobs (it exists in the store).
+	owner domain.Actor
 }
 
 type envOptions struct {
@@ -55,7 +58,10 @@ func newEnv(t *testing.T, o envOptions) *env {
 		t.Fatal(err)
 	}
 	store, ids := memstore.New(), &idgen.Sequential{}
-	e := &env{t: t, clock: clock.NewFake(time.Now())}
+	e := &env{t: t, clock: clock.NewFake(time.Now()), owner: domain.Actor{UserID: domain.NewUserID(), Role: domain.RoleUser}}
+	if err := store.CreateUser(context.Background(), users.User{ID: e.owner.UserID, Username: "owner", Role: domain.RoleUser, Version: 1}); err != nil {
+		t.Fatal(err)
+	}
 	hub := dispatch.NewHub()
 	e.jobs, err = jobs.New(jobs.Deps{
 		Jobs: store, Samples: store, Clock: e.clock, IDs: ids,
@@ -129,10 +135,9 @@ func hello(seq int64) *syncrv1.Event {
 	return &syncrv1.Event{Seq: seq, Payload: &syncrv1.Event_Hello{Hello: &syncrv1.Hello{Hostname: "h"}}}
 }
 
-// specBuilder sends every job as an empty rclone transfer.
-//
-// m3: pending track C: real specs are built by job kinds from the owner's
-// resolved remotes; these transport tests only need some spec delivered.
+// specBuilder sends every job as an empty rclone transfer: these transport
+// tests only need some spec delivered (dispatch.Specs, which builds real
+// specs from definitions, is tested in package dispatch).
 type specBuilder struct{}
 
 func (specBuilder) Build(context.Context, jobs.Job) (*syncrv1.JobSpec, error) {
@@ -141,8 +146,8 @@ func (specBuilder) Build(context.Context, jobs.Job) (*syncrv1.JobSpec, error) {
 
 func (e *env) queue(id domain.WorkerID) domain.JobID {
 	e.t.Helper()
-	j, err := e.jobs.Create(context.Background(), jobs.CreateParams{
-		WorkerID: id, OwnerID: domain.NewUserID(), Kind: "rclone_transfer", Definition: []byte(`{"rclone_transfer":{}}`),
+	j, err := e.jobs.Create(context.Background(), e.owner, jobs.CreateParams{
+		WorkerID: id, Kind: "rclone_transfer", Definition: []byte(`{"rclone_transfer":{}}`),
 	})
 	if err != nil {
 		e.t.Fatal(err)

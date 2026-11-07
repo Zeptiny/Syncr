@@ -36,7 +36,7 @@ func TestEndToEnd(t *testing.T) {
 	subscribed := make(chan struct{})
 	go func() {
 		var seen []string
-		err := e.jobs.Watch(ctx, a.ID, func(u jobs.Update) error {
+		err := e.jobs.Watch(ctx, testActor(), a.ID, func(u jobs.Update) error {
 			if len(seen) == 0 {
 				close(subscribed) // the first update comes after subscribing
 			}
@@ -74,7 +74,7 @@ func TestEndToEnd(t *testing.T) {
 	if seen := <-watched; !slices.Equal(seen, []string{"queued", "dispatched", "running", "progress 100", "succeeded"}) {
 		t.Errorf("watcher saw %v", seen)
 	}
-	if samples, _ := e.jobs.Samples(ctx, a.ID); len(samples) != 2 {
+	if samples, _ := e.jobs.Samples(ctx, testActor(), a.ID); len(samples) != 2 {
 		t.Errorf("A has %d stored samples, want 2 (progress + final)", len(samples))
 	}
 
@@ -134,7 +134,7 @@ func TestEndToEnd(t *testing.T) {
 	if cmds := w.poll(); len(cmds) != 0 {
 		t.Errorf("leftover commands: %v", cmds)
 	}
-	all, _ := e.jobs.List(ctx, jobs.ListFilter{})
+	all, _ := e.jobs.List(ctx, testActor(), jobs.ListFilter{})
 	if len(all.Jobs) != 4 {
 		t.Errorf("%d jobs", len(all.Jobs))
 	}
@@ -176,16 +176,16 @@ func TestConcurrentLinkAndAPI(t *testing.T) {
 				victim := ids[rng.IntN(len(ids))]
 				switch rng.IntN(4) {
 				case 0:
-					if _, err := e.jobs.Cancel(ctx, victim); err != nil {
+					if _, err := e.jobs.Cancel(ctx, testActor(), victim); err != nil {
 						t.Error(err)
 					}
 				case 1:
-					if _, err := e.jobs.List(ctx, jobs.ListFilter{WorkerID: wids[rng.IntN(nWorkers)]}); err != nil {
+					if _, err := e.jobs.List(ctx, testActor(), jobs.ListFilter{WorkerID: wids[rng.IntN(nWorkers)]}); err != nil {
 						t.Error(err)
 					}
 				case 2:
 					apiWG.Go(func() {
-						if err := e.jobs.Watch(ctx, victim, func(jobs.Update) error { return nil }); err != nil {
+						if err := e.jobs.Watch(ctx, testActor(), victim, func(jobs.Update) error { return nil }); err != nil {
 							t.Errorf("watch %s: %v", victim, err)
 						}
 					})
@@ -201,7 +201,7 @@ func TestConcurrentLinkAndAPI(t *testing.T) {
 		done := len(created) == nJobs
 		mu.Unlock()
 		if done {
-			page, err := e.jobs.List(ctx, jobs.ListFilter{Statuses: []domain.JobStatus{domain.JobQueued, domain.JobDispatched, domain.JobRunning}})
+			page, err := e.jobs.List(ctx, testActor(), jobs.ListFilter{Statuses: []domain.JobStatus{domain.JobQueued, domain.JobDispatched, domain.JobRunning}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -229,7 +229,7 @@ func TestConcurrentLinkAndAPI(t *testing.T) {
 		if !j.Status.Terminal() || hist[len(hist)-1] != j.Status {
 			t.Errorf("job %s ended %s, history %v", id, j.Status, hist)
 		}
-		samples, _ := e.jobs.Samples(ctx, id)
+		samples, _ := e.jobs.Samples(ctx, testActor(), id)
 		for i := 1; i < len(samples); i++ {
 			if !samples[i].Time.After(samples[i-1].Time) {
 				t.Errorf("job %s samples out of order", id)

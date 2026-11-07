@@ -11,6 +11,7 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
@@ -164,11 +165,12 @@ func progressToProto(s jobs.Sample) *syncrv1.JobProgress {
 // jobToProto converts j (it holds no secrets).
 //
 // stats is the job's counters to report, which the caller picks (see
-// jobStats): nil leaves them unset. The returned error reports a stored
-// definition or output that cannot be decoded; the job is still returned,
-// without it, so one corrupt record does not break a listing. The caller
-// logs it.
-func jobToProto(j jobs.Job, stats *jobs.Stats) (*syncrv1.Job, error) {
+// pickStats): nil leaves them unset. refs names the job's remotes: every
+// one of j.RemoteIDs becomes a reference, with the name, type and deleted
+// flag refs has for it. The returned error reports a stored definition or
+// output that cannot be decoded; the job is still returned, without it, so
+// one corrupt record does not break a listing. The caller logs it.
+func jobToProto(j jobs.Job, stats *jobs.Stats, refs map[domain.RemoteID]remotes.Ref) (*syncrv1.Job, error) {
 	out := &syncrv1.Job{
 		Id:              j.ID.String(),
 		WorkerId:        j.WorkerID.String(),
@@ -194,6 +196,10 @@ func jobToProto(j jobs.Job, stats *jobs.Stats) (*syncrv1.Job, error) {
 	}
 	if !j.OwnerID.IsZero() {
 		out.OwnerId = j.OwnerID.String()
+	}
+	for _, id := range j.RemoteIDs {
+		r := refs[id]
+		out.Remotes = append(out.Remotes, &syncrv1.JobRemoteRef{Id: id.String(), Name: r.Name, BackendType: r.Type, Deleted: r.Deleted})
 	}
 	var errs []error
 	if len(j.Definition) > 0 {

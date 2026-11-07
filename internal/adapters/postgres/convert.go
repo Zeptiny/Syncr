@@ -251,6 +251,7 @@ func jobFrom(r db.Job) (jobs.Job, error) {
 		Kind:              r.Kind,
 		Status:            domain.JobStatus(r.Status),
 		Definition:        r.Definition,
+		SearchText:        r.SearchText,
 		Epoch:             r.Epoch,
 		CancelRequestedAt: timeFrom(r.CancelRequestedAt),
 		CreatedAt:         timeFrom(r.CreatedAt),
@@ -289,6 +290,26 @@ func jobsFrom(rows []db.Job) ([]jobs.Job, error) {
 		out[i] = j
 	}
 	return out, nil
+}
+
+// remoteIDsByJob groups job_remotes rows by job, keeping their order.
+func remoteIDsByJob(rows []db.JobRemote) (map[pgtype.UUID][]domain.RemoteID, error) {
+	out := make(map[pgtype.UUID][]domain.RemoteID)
+	for _, r := range rows {
+		var id domain.RemoteID
+		if err := decodeID(&id, r.RemoteID); err != nil {
+			return nil, err
+		}
+		out[r.JobID] = append(out[r.JobID], id)
+	}
+	return out, nil
+}
+
+// likeEscape escapes the LIKE wildcards ("%", "_") and the escape
+// character (a backslash) of s with a backslash, so a pattern built from
+// it (ESCAPE with a backslash) matches s literally.
+func likeEscape(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
 func sampleFrom(r db.JobSample) (jobs.Sample, error) {

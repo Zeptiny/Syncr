@@ -138,3 +138,20 @@ func TestEmbeddedMigrationsAreSequential(t *testing.T) {
 		}
 	}
 }
+
+func TestLikeEscape(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"":             "",
+		"photos":       "photos",
+		"100%":         `100\%`,
+		"a_b":          `a\_b`,
+		`c:\data`:      `c:\\data`,
+		`\%_`:          `\\\%\_`,
+		"ünïcode 50 %": `ünïcode 50 \%`,
+	} {
+		if got := likeEscape(in); got != want {
+			t.Errorf("likeEscape(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
