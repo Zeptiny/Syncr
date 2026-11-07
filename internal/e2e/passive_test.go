@@ -55,14 +55,13 @@ func TestPassiveJobSucceeds(t *testing.T) {
 	if got.Link.Epoch != w.agent.Epoch() {
 		t.Errorf("epoch %q, worker %q", got.Link.Epoch, w.agent.Epoch())
 	}
-	job := c.run(id, testSpec())
+	job := c.run(id, testDefinition())
 	j := c.waitStatus(job, domain.JobSucceeded)
 	if j.Stats.Bytes != 100 || rn.runCount(job) != 1 {
 		t.Errorf("job %+v runs %d", j, rn.runCount(job))
 	}
 
-	held := c.run(id, testSpec())
-	rn.holdJob(held)
+	held := c.run(id, heldDefinition())
 	c.waitStatus(held, domain.JobRunning)
 	c.cancel(held)
 	if j := c.waitStatus(held, domain.JobCancelled); j.Error.Code != jobs.CodeCancelled {
@@ -84,8 +83,7 @@ func TestPassiveEnrollAndControllerRestart(t *testing.T) {
 	w := startPassiveOn(t, rn, certFile, keyFile, secret, ln)
 	c.wakeSupervisor()
 
-	job := c.run(id, testSpec())
-	rn.holdJob(job)
+	job := c.run(id, heldDefinition())
 	c.waitStatus(job, domain.JobRunning)
 	c.restart()
 	rn.release(job)
@@ -111,7 +109,7 @@ func TestPassiveWrongFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.wakeSupervisor()
-	job := c.run(reg.ID, testSpec())
+	job := c.run(reg.ID, testDefinition())
 
 	// Direct call: the handshake fails with a clear error.
 	target, err := ws.PassiveTarget(context.Background(), reg.ID)
@@ -191,8 +189,7 @@ func TestPassiveShutdownDrain(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.wakeSupervisor()
-	job := c.run(reg.ID, testSpec())
-	rn.holdJob(job)
+	job := c.run(reg.ID, heldDefinition())
 	c.waitStatus(job, domain.JobRunning)
 
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)

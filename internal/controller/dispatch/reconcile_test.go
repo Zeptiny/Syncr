@@ -55,7 +55,7 @@ func TestEpochRules(t *testing.T) {
 				w := e.newFakeWorker(wid)
 				tt.setup(e, w, j)
 				if tt.cancel {
-					if _, err := e.jobs.Cancel(context.Background(), j.ID); err != nil {
+					if _, err := e.jobs.Cancel(context.Background(), testActor(), j.ID); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -124,7 +124,7 @@ func TestSnapshotRules(t *testing.T) {
 		unknown := domain.NewJobID().String()
 		w := e.newFakeWorker(wid)
 		w.poll()
-		if _, err := e.jobs.Cancel(ctx, finished.ID); err != nil { // concurrent with the delivery
+		if _, err := e.jobs.Cancel(ctx, testActor(), finished.ID); err != nil { // concurrent with the delivery
 			t.Fatal(err)
 		}
 		if got := e.job(finished.ID); got.Status != domain.JobCancelled {
@@ -248,7 +248,7 @@ func TestCancelThroughTheLink(t *testing.T) {
 		wid := e.enroll("w")
 		j := e.run(wid)
 		w := e.newFakeWorker(wid)
-		if _, err := e.jobs.Cancel(ctx, j.ID); err != nil {
+		if _, err := e.jobs.Cancel(ctx, testActor(), j.ID); err != nil {
 			t.Fatal(err)
 		}
 		if cmds := w.poll(); len(cmds) != 0 {
@@ -272,7 +272,7 @@ func TestCancelThroughTheLink(t *testing.T) {
 				w.start(j.ID.String())
 			}
 			w.report()
-			if _, err := e.jobs.Cancel(ctx, j.ID); err != nil {
+			if _, err := e.jobs.Cancel(ctx, testActor(), j.ID); err != nil {
 				t.Fatal(err)
 			}
 			if got := e.job(j.ID); !got.CancelRequested() || got.Status.Terminal() {
@@ -301,7 +301,7 @@ func TestCancelThroughTheLink(t *testing.T) {
 		w.poll()
 		w.start(j.ID.String())
 		w.report()
-		if _, err := e.jobs.Cancel(ctx, j.ID); err != nil {
+		if _, err := e.jobs.Cancel(ctx, testActor(), j.ID); err != nil {
 			t.Fatal(err)
 		}
 		w.finish(j.ID.String(), syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED, nil)
@@ -326,7 +326,7 @@ func TestCancelThroughTheLink(t *testing.T) {
 		w.finish(j.ID.String(), syncrv1.JobResultStatus_JOB_RESULT_STATUS_FAILED, &syncrv1.JobError{Code: syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED})
 		w.report()
 		before := e.job(j.ID)
-		got, err := e.jobs.Cancel(ctx, j.ID)
+		got, err := e.jobs.Cancel(ctx, testActor(), j.ID)
 		if err != nil || got.Version != before.Version || got.Status != domain.JobFailed {
 			t.Errorf("Cancel(finished) = (%s v%d, %v)", got.Status, got.Version, err)
 		}

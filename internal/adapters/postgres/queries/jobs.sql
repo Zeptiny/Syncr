@@ -1,9 +1,10 @@
 -- name: CreateJob :execrows
 -- Inserts only if the worker exists and is not removed. FOR SHARE makes a
 -- concurrent RemoveWorker wait until this insert commits, so the removal's
--- job release cannot miss the new job.
+-- job release cannot miss the new job. The job's remotes follow in the same
+-- transaction (InsertJobRemote).
 INSERT INTO jobs (
-    id, worker_id, owner_id, kind, status, definition, epoch, cancel_requested_at,
+    id, worker_id, owner_id, kind, status, definition, search_text, epoch, cancel_requested_at,
     created_at, queued_at, dispatched_at, started_at, finished_at, requeues,
     stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks,
     stat_deletes, stat_renames, stat_errors, stat_elapsed_ns,
@@ -11,7 +12,7 @@ INSERT INTO jobs (
 )
 SELECT
     sqlc.arg(id)::uuid, sqlc.arg(worker_id)::uuid, sqlc.arg(owner_id)::uuid, sqlc.arg(kind)::text,
-    sqlc.arg(status)::text, sqlc.arg(definition)::jsonb, sqlc.arg(epoch)::text,
+    sqlc.arg(status)::text, sqlc.arg(definition)::jsonb, sqlc.arg(search_text)::text, sqlc.arg(epoch)::text,
     sqlc.narg(cancel_requested_at)::timestamptz,
     sqlc.arg(created_at)::timestamptz, sqlc.arg(queued_at)::timestamptz,
     sqlc.narg(dispatched_at)::timestamptz, sqlc.narg(started_at)::timestamptz,
@@ -24,6 +25,18 @@ SELECT
 WHERE EXISTS (
     SELECT 1 FROM workers WHERE workers.id = sqlc.arg(worker_id)::uuid AND workers.removed_at IS NULL FOR SHARE
 );
+
+-- name: InsertJobRemote :exec
+-- A remote a job's definition refers to. A missing remote (or job) violates
+-- a foreign key.
+INSERT INTO job_remotes (job_id, remote_id) VALUES (sqlc.arg(job_id), sqlc.arg(remote_id))
+ON CONFLICT DO NOTHING;
+
+-- name: GetJobRemoteIDs :many
+-- The remotes of the jobs, by job then remote ID.
+SELECT job_id, remote_id FROM job_remotes
+WHERE job_id = ANY (sqlc.arg(job_ids)::uuid[])
+ORDER BY job_id, remote_id;
 
 -- name: GetJob :one
 SELECT * FROM jobs WHERE id = sqlc.arg(id);
@@ -63,10 +76,23 @@ WHERE id = sqlc.arg(id) AND version = sqlc.arg(expected_version)
 RETURNING *;
 
 -- name: ListJobs :many
--- A NULL row_limit means no limit.
+-- Every NULL or empty filter matches all jobs; a NULL row_limit means no
+-- limit. query is a LIKE pattern body the caller escaped with backslashes,
+-- so it matches as a plain substring of search_text (a pg_trgm index is
+-- deferred). The owner filter matches jobs_owner_idx, the remote filter
+-- job_remotes_remote_idx.
 SELECT * FROM jobs
-WHERE (sqlc.narg(worker_id)::uuid IS NULL OR worker_id = sqlc.narg(worker_id)::uuid)
+WHERE (sqlc.narg(owner_id)::uuid IS NULL OR owner_id = sqlc.narg(owner_id)::uuid)
+  AND (sqlc.narg(worker_id)::uuid IS NULL OR worker_id = sqlc.narg(worker_id)::uuid)
   AND (cardinality(sqlc.arg(statuses)::text[]) = 0 OR status = ANY (sqlc.arg(statuses)::text[]))
+  AND (cardinality(sqlc.arg(kinds)::text[]) = 0 OR kind = ANY (sqlc.arg(kinds)::text[]))
+  AND (sqlc.narg(remote_id)::uuid IS NULL OR EXISTS (
+      SELECT 1 FROM job_remotes
+      WHERE job_remotes.job_id = jobs.id AND job_remotes.remote_id = sqlc.narg(remote_id)::uuid
+  ))
+  AND (sqlc.narg(query)::text IS NULL OR search_text LIKE '%' || sqlc.narg(query)::text || '%' ESCAPE '\')
+  AND (sqlc.narg(created_after)::timestamptz IS NULL OR created_at >= sqlc.narg(created_after)::timestamptz)
+  AND (sqlc.narg(created_before)::timestamptz IS NULL OR created_at < sqlc.narg(created_before)::timestamptz)
   AND (sqlc.narg(before)::uuid IS NULL OR id < sqlc.narg(before)::uuid)
 ORDER BY id DESC
 LIMIT sqlc.narg(row_limit)::bigint;

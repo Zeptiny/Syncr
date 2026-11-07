@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
@@ -102,16 +104,152 @@ func TestUnreadableSpecFailsTheJob(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	wid := e.enroll("w")
-	j, err := e.jobs.Create(ctx, jobs.CreateParams{WorkerID: wid, OwnerID: testOwner, Kind: "rclone_transfer", Definition: []byte{0xff, 0xff, 0xff}})
-	if err != nil {
-		t.Fatal(err)
+	for name, p := range map[string]jobs.CreateParams{
+		"not JSON":          {Kind: "rclone_transfer", Definition: []byte{0xff, 0xff, 0xff}},
+		"unknown field":     {Kind: "rclone_transfer", Definition: []byte(`{"rclone_transfer":{"spec":{}}}`)},
+		"rejected by Check": {Kind: "rclone_transfer", Definition: []byte(`{"rclone_transfer":{"mode":"RCLONE_TRANSFER_MODE_COPY"}}`)},
+		"unknown kind":      {Kind: "restic_backup", Definition: []byte(`{}`)},
+		"another kind":      {Kind: "restic_backup", Definition: []byte(`{"rclone_transfer":{"mode":"RCLONE_TRANSFER_MODE_COPY","source":{"path":"/a"},"destination":{"path":"/b"}}}`)},
+	} {
+		p.WorkerID = wid
+		j, err := e.jobs.Create(ctx, testActor(), p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cmds, err := e.disp.Commands(ctx, wid, "ep"); err != nil || len(cmds) != 0 {
+			t.Errorf("%s: Commands = (%v, %v)", name, cmds, err)
+		}
+		if got := e.job(j.ID); got.Status != domain.JobFailed || got.Error.Code != jobs.CodeInvalidSpec {
+			t.Errorf("%s: job = %s %+v", name, got.Status, got.Error)
+		}
 	}
-	if cmds, err := e.disp.Commands(ctx, wid, "ep"); err != nil || len(cmds) != 0 {
-		t.Errorf("Commands = (%v, %v)", cmds, err)
+}
+
+// TestSpecFromDefinition: the StartJob spec is built from the stored
+// definition with the owner's resolved remotes at every derivation; the
+// secret travels in the spec only, never in the job, its updates or logs.
+func TestSpecFromDefinition(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	wid := e.enroll("w")
+	j := e.run(wid)
+	if !slices.Equal(j.RemoteIDs, []domain.RemoteID{testRemote()}) || !strings.Contains(j.SearchText, "archive") {
+		t.Errorf("job remotes %v, search text %q", j.RemoteIDs, j.SearchText)
 	}
-	if got := e.job(j.ID); got.Status != domain.JobFailed || got.Error.Code != jobs.CodeInvalidSpec {
-		t.Errorf("job = %s %+v", got.Status, got.Error)
+	for range 2 { // rebuilt (and resolved) for every derivation
+		cmds, err := e.disp.Commands(ctx, wid, "ep")
+		if err != nil || len(cmds) != 1 || !proto.Equal(cmds[0].GetStartJob().GetSpec(), testSpec("/data")) {
+			t.Fatalf("Commands = (%v, %v)", cmds, err)
+		}
 	}
+	if n := e.remotes.calls(); n != 2 {
+		t.Errorf("Resolve called %d times, want once per derivation", n)
+	}
+
+	// A job on the worker's filesystem only resolves nothing.
+	local := e.runDef(wid, &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransferDefinition{
+		Mode: syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_SYNC, Source: &syncrv1.JobLocation{Path: "/data/a/"}, Destination: &syncrv1.JobLocation{Path: `D:\b`},
+	}}})
+	cmds, err := e.disp.Commands(ctx, wid, "ep")
+	if err != nil || len(cmds) != 2 || e.remotes.calls() != 3 {
+		t.Fatalf("Commands = (%v, %v), %d resolves", cmds, err, e.remotes.calls())
+	}
+	want := &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransfer{
+		Mode: syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_SYNC, Source: &syncrv1.Location{Path: "/data/a"}, Destination: &syncrv1.Location{Path: `D:\b`},
+	}}}
+	if cmds[1].GetStartJob().GetJobId() != local.ID.String() || !proto.Equal(cmds[1].GetStartJob().GetSpec(), want) {
+		t.Errorf("local job command = %v", cmds[1])
+	}
+
+	// The secret is nowhere but in the commands.
+	stored := e.job(j.ID)
+	for what, text := range map[string]string{
+		"definition":  string(stored.Definition),
+		"search text": stored.SearchText,
+		"logs":        e.logs.String(),
+		"job":         fmt.Sprintf("%+v", stored),
+	} {
+		if strings.Contains(text, testSecret) {
+			t.Errorf("the remote's secret is in the %s", what)
+		}
+	}
+	e.rec.mu.Lock()
+	defer e.rec.mu.Unlock()
+	if len(e.rec.history[j.ID]) == 0 {
+		t.Error("no job update was published")
+	}
+}
+
+// TestSpecResolveErrors: at dispatch time a deleted or foreign remote
+// fails the queued job (remote_unavailable), unusable credentials fail it
+// (internal), and a transient error fails only the call: the next poll
+// sends the job.
+func TestSpecResolveErrors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	t.Run("deleted remote", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t)
+		wid := e.enroll("w")
+		j := e.run(wid)
+		e.remotes.remove(testRemote())
+		if cmds, err := e.disp.Commands(ctx, wid, "ep"); err != nil || len(cmds) != 0 {
+			t.Errorf("Commands = (%v, %v)", cmds, err)
+		}
+		if got := e.job(j.ID); got.Status != domain.JobFailed || got.Error.Code != jobs.CodeRemoteUnavailable || strings.Contains(got.Error.Message, testRemote().String()) {
+			t.Errorf("job = %s %+v", got.Status, got.Error)
+		}
+	})
+	t.Run("foreign remote", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t)
+		wid := e.enroll("w")
+		j := e.run(wid)
+		// The remote changed hands (as far as the resolver can tell).
+		e.remotes.mu.Lock()
+		e.remotes.owners[testRemote()] = domain.NewUserID()
+		e.remotes.mu.Unlock()
+		if _, err := e.disp.Commands(ctx, wid, "ep"); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.job(j.ID); got.Status != domain.JobFailed || got.Error.Code != jobs.CodeRemoteUnavailable {
+			t.Errorf("job = %s %+v", got.Status, got.Error)
+		}
+	})
+	t.Run("undecryptable credentials", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t)
+		wid := e.enroll("w")
+		j := e.run(wid)
+		e.remotes.failNext(fmt.Errorf("decrypt the secrets of remote %s: %w", testRemote(), domain.ErrFailedPrecondition))
+		if _, err := e.disp.Commands(ctx, wid, "ep"); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.job(j.ID); got.Status != domain.JobFailed || got.Error.Code != jobs.CodeInternal {
+			t.Errorf("job = %s %+v", got.Status, got.Error)
+		}
+	})
+	t.Run("transient error", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t)
+		wid := e.enroll("w")
+		w := e.newFakeWorker(wid)
+		w.report()
+		j := e.run(wid)
+		e.remotes.failNext(errors.New("connection refused"))
+		_, err := w.disp().Poll(ctx, wid, &syncrv1.PollRequest{Epoch: w.epoch, Wait: durationpb.New(0)})
+		if err == nil || e.job(j.ID).Status != domain.JobQueued {
+			t.Fatalf("first poll = %v, job %s: want an error and the job still queued", err, e.job(j.ID).Status)
+		}
+		cmds := w.poll()
+		if len(cmds) != 1 || cmds[0].GetStartJob().GetJobId() != j.ID.String() || !proto.Equal(cmds[0].GetStartJob().GetSpec(), testSpec("/data")) {
+			t.Errorf("second poll = %v", cmds)
+		}
+		if strings.Contains(e.logs.String(), testSecret) {
+			t.Error("the remote's secret is in the logs")
+		}
+	})
 }
 
 // specBuilderFunc adapts a function to dispatch.SpecBuilder.
@@ -135,6 +273,9 @@ func TestSpecBuildErrors(t *testing.T) {
 		{"remote gone", specBuilderFunc(func(context.Context, jobs.Job) (*syncrv1.JobSpec, error) {
 			return nil, fmt.Errorf("resolve: %w", domain.ErrNotFound)
 		}), jobs.CodeRemoteUnavailable},
+		{"unusable credentials", specBuilderFunc(func(context.Context, jobs.Job) (*syncrv1.JobSpec, error) {
+			return nil, fmt.Errorf("decrypt: %w", domain.ErrFailedPrecondition)
+		}), jobs.CodeInternal},
 		{"invalid definition", specBuilderFunc(func(context.Context, jobs.Job) (*syncrv1.JobSpec, error) {
 			return nil, fmt.Errorf("build: %w", domain.ErrInvalidArgument)
 		}), jobs.CodeInvalidSpec},
@@ -297,7 +438,7 @@ func TestJobResultMapping(t *testing.T) {
 			w.start(j.ID.String())
 			w.report()
 			if tt.cancel {
-				if _, err := e.jobs.Cancel(context.Background(), j.ID); err != nil {
+				if _, err := e.jobs.Cancel(context.Background(), testActor(), j.ID); err != nil {
 					t.Fatal(err)
 				}
 			}

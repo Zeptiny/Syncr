@@ -7,24 +7,50 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/Zeptiny/Syncr/internal/adapters/postgres/db"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
-// CreateJob implements jobs.Repository. The insert is guarded by a
-// WHERE EXISTS on the worker in the same statement, so a missing or removed
-// worker inserts nothing and reports ErrNotFound.
+// CreateJob implements jobs.Repository. The job and its remotes are
+// inserted in one transaction. The job insert is guarded by a WHERE EXISTS
+// on the worker in the same statement, so a missing or removed worker
+// inserts nothing and reports ErrNotFound; a missing owner or remote
+// violates a foreign key (ErrNotFound) and rolls everything back.
 func (s *Store) CreateJob(ctx context.Context, j jobs.Job) error {
 	op := fmt.Sprintf("create job %s", j.ID)
-	n, err := s.q.CreateJob(ctx, db.CreateJobParams{
+	// Errors are mapped once, below: pgx errors keep their SQLSTATE through
+	// the wrapping.
+	err := pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		q := s.q.WithTx(tx)
+		n, err := q.CreateJob(ctx, createJobParams(j))
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return fmt.Errorf("worker %s: %w", j.WorkerID, domain.ErrNotFound)
+		}
+		for _, id := range j.RemoteIDs {
+			if err := q.InsertJobRemote(ctx, db.InsertJobRemoteParams{JobID: pgID(j.ID), RemoteID: pgID(id)}); err != nil {
+				return fmt.Errorf("remote %s: %w", id, err)
+			}
+		}
+		return nil
+	})
+	return mapErr(op, err)
+}
+
+func createJobParams(j jobs.Job) db.CreateJobParams {
+	return db.CreateJobParams{
 		ID:                pgID(j.ID),
 		WorkerID:          pgID(j.WorkerID),
 		OwnerID:           pgID(j.OwnerID),
 		Kind:              j.Kind,
 		Status:            string(j.Status),
 		Definition:        j.Definition,
+		SearchText:        cleanText(j.SearchText),
 		Epoch:             j.Epoch,
 		CancelRequestedAt: pgOptTime(j.CancelRequestedAt),
 		CreatedAt:         pgTime(j.CreatedAt),
@@ -48,23 +74,52 @@ func (s *Store) CreateJob(ctx context.Context, j jobs.Job) error {
 		ExitCode:          int32(j.ExitCode), //nolint:gosec // G115: a process exit code
 		Output:            j.Output,
 		Version:           j.Version,
-	})
+	}
+}
+
+// jobsWithRemotes converts rows and fills in their RemoteIDs with one
+// query. The remote rows never change after the job's insert, so reading
+// them in a separate statement is consistent.
+func (s *Store) jobsWithRemotes(ctx context.Context, op string, rows []db.Job) ([]jobs.Job, error) {
+	out, err := jobsFrom(rows)
+	if err != nil || len(out) == 0 {
+		return out, err
+	}
+	ids := make([]pgtype.UUID, len(rows))
+	for i, r := range rows {
+		ids[i] = r.ID
+	}
+	refs, err := s.q.GetJobRemoteIDs(ctx, ids)
 	if err != nil {
-		return mapErr(op, err)
+		return nil, mapErr(op+": remotes", err)
 	}
-	if n == 0 {
-		return fmt.Errorf("%s: worker %s: %w", op, j.WorkerID, domain.ErrNotFound)
+	byJob, err := remoteIDsByJob(refs)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	for i := range out {
+		out[i].RemoteIDs = byJob[pgID(out[i].ID)]
+	}
+	return out, nil
+}
+
+// jobWithRemotes is jobsWithRemotes for one row.
+func (s *Store) jobWithRemotes(ctx context.Context, op string, row db.Job) (jobs.Job, error) {
+	out, err := s.jobsWithRemotes(ctx, op, []db.Job{row})
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	return out[0], nil
 }
 
 // GetJob implements jobs.Repository.
 func (s *Store) GetJob(ctx context.Context, id domain.JobID) (jobs.Job, error) {
+	op := fmt.Sprintf("get job %s", id)
 	row, err := s.q.GetJob(ctx, pgID(id))
 	if err != nil {
-		return jobs.Job{}, mapErr(fmt.Sprintf("get job %s", id), err)
+		return jobs.Job{}, mapErr(op, err)
 	}
-	return jobFrom(row)
+	return s.jobWithRemotes(ctx, op, row)
 }
 
 // UpdateJob implements jobs.Repository: UPDATE jobs SET ..., version =
@@ -112,35 +167,48 @@ func (s *Store) UpdateJob(ctx context.Context, j jobs.Job) (jobs.Job, error) {
 	if err != nil {
 		return jobs.Job{}, mapErr(op, err)
 	}
-	return jobFrom(row)
+	return s.jobWithRemotes(ctx, op, row)
 }
 
 // ListJobs implements jobs.Repository. Zero-valued filter fields are passed
-// as NULL, which the query treats as "no filter".
+// as NULL (or an empty array), which the query treats as "no filter". The
+// query text is escaped for LIKE, so it matches as a plain substring.
 func (s *Store) ListJobs(ctx context.Context, f jobs.ListFilter) ([]jobs.Job, error) {
 	statuses := make([]string, len(f.Statuses))
 	for i, st := range f.Statuses {
 		statuses[i] = string(st)
 	}
+	var query *string
+	if f.Query != "" {
+		q := likeEscape(cleanText(f.Query))
+		query = &q
+	}
 	rows, err := s.q.ListJobs(ctx, db.ListJobsParams{
-		WorkerID: pgOptID(f.WorkerID),
-		Statuses: statuses,
-		Before:   pgOptID(f.Before),
-		RowLimit: limitArg(f.Limit),
+		OwnerID:       pgOptID(f.OwnerID),
+		WorkerID:      pgOptID(f.WorkerID),
+		Statuses:      statuses,
+		Kinds:         textArray(f.Kinds),
+		RemoteID:      pgOptID(f.RemoteID),
+		Query:         query,
+		CreatedAfter:  pgOptTime(f.CreatedAfter),
+		CreatedBefore: pgOptTime(f.CreatedBefore),
+		Before:        pgOptID(f.Before),
+		RowLimit:      limitArg(f.Limit),
 	})
 	if err != nil {
 		return nil, mapErr("list jobs", err)
 	}
-	return jobsFrom(rows)
+	return s.jobsWithRemotes(ctx, "list jobs", rows)
 }
 
 // ListUnfinishedJobs implements jobs.Repository.
 func (s *Store) ListUnfinishedJobs(ctx context.Context, workerID domain.WorkerID) ([]jobs.Job, error) {
+	op := fmt.Sprintf("list unfinished jobs of worker %s", workerID)
 	rows, err := s.q.ListUnfinishedJobs(ctx, pgID(workerID))
 	if err != nil {
-		return nil, mapErr(fmt.Sprintf("list unfinished jobs of worker %s", workerID), err)
+		return nil, mapErr(op, err)
 	}
-	return jobsFrom(rows)
+	return s.jobsWithRemotes(ctx, op, rows)
 }
 
 // ListQueuedJobs implements jobs.Repository.
@@ -149,5 +217,5 @@ func (s *Store) ListQueuedJobs(ctx context.Context, before time.Time, limit int)
 	if err != nil {
 		return nil, mapErr("list queued jobs", err)
 	}
-	return jobsFrom(rows)
+	return s.jobsWithRemotes(ctx, "list queued jobs", rows)
 }

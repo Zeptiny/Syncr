@@ -24,6 +24,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
 	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
@@ -44,11 +45,12 @@ const (
 	testActorHeader = "X-Test-Actor"
 )
 
-// The test users (they need not exist in the store: testAuth trusts the
-// header).
+// The test users. testAuth trusts the header; newEnv also stores them, as
+// jobs need an existing owner.
 var (
 	testAdmin = domain.Actor{UserID: mustUserID("00000000-0000-7000-8000-00000000a001"), Role: domain.RoleAdmin}
 	testUser  = domain.Actor{UserID: mustUserID("00000000-0000-7000-8000-00000000a002"), Role: domain.RoleUser}
+	testOther = domain.Actor{UserID: mustUserID("00000000-0000-7000-8000-00000000a003"), Role: domain.RoleUser}
 )
 
 func mustUserID(s string) domain.UserID {
@@ -97,30 +99,6 @@ func actorHeader(a domain.Actor, method string) string {
 	return string(a.Role) + " " + a.UserID.String() + " " + method
 }
 
-// testKind is the "rclone_transfer" job kind of the test servers: it
-// accepts a transfer with a source and a destination path.
-//
-// m3: pending track C: the real kinds (jobkind.Builtin) arrive with track C.
-type testKind struct{}
-
-func (testKind) Name() string { return "rclone_transfer" }
-
-func (testKind) Check(def *syncrv1.JobDefinition) (jobkind.Refs, error) {
-	tr := def.GetRcloneTransfer()
-	var v domain.Validation
-	if tr.GetSource().GetPath() == "" {
-		v.Add("definition.rclone_transfer.source.path", "is required")
-	}
-	if tr.GetDestination().GetPath() == "" {
-		v.Add("definition.rclone_transfer.destination.path", "is required")
-	}
-	return jobkind.Refs{}, v.Err()
-}
-
-func (testKind) Build(*syncrv1.JobDefinition, map[domain.RemoteID]jobkind.Remote) (*syncrv1.JobSpec, error) {
-	return nil, errors.New("testKind does not build specs")
-}
-
 // logBuffer is a goroutine-safe log sink.
 type logBuffer struct {
 	mu  sync.Mutex
@@ -150,6 +128,9 @@ type testEnv struct {
 	jsvc   *jobs.Service
 	logs   *logBuffer
 	worker domain.WorkerID // an active worker created by newEnv
+	// remotes are the remotes jobs may use (jobs.RemoteChecker and the
+	// Names of Deps.Remotes).
+	remotes *fakeJobRemotes
 }
 
 // newEnv starts a server authenticating with testAuth. mutate may adjust
@@ -184,16 +165,24 @@ func newEnvServer(t *testing.T, configure func(*http.Server), mutate ...func(*De
 		t.Fatal(err)
 	}
 	e := &testEnv{
-		t:      t,
-		store:  memstore.New(),
-		broker: broker.New(),
-		clock:  clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)),
-		logs:   &logBuffer{},
+		t:       t,
+		store:   memstore.New(),
+		broker:  broker.New(),
+		clock:   clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)),
+		logs:    &logBuffer{},
+		remotes: newFakeJobRemotes(),
+	}
+	for _, a := range []domain.Actor{testAdmin, testUser, testOther} {
+		u := users.User{ID: a.UserID, Username: "user-" + a.UserID.String()[32:], Role: a.Role, PasswordHash: "x", Version: 1}
+		if err := e.store.CreateUser(context.Background(), u); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ids := &idgen.Sequential{}
 	e.jsvc, err = jobs.New(jobs.Deps{
 		Jobs: e.store, Samples: e.store, Clock: e.clock, IDs: ids,
-		Broker: e.broker, Notifier: jobs.NopNotifier{}, Waker: nopWaker{},
+		Broker: e.broker, Notifier: jobs.NopNotifier{}, Waker: nopWaker{}, Remotes: e.remotes,
+		Logger: newTestLogger(e.logs),
 	}, jobs.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +194,7 @@ func newEnvServer(t *testing.T, configure func(*http.Server), mutate ...func(*De
 	if err != nil {
 		t.Fatal(err)
 	}
-	kinds, err := jobkind.NewRegistry(testKind{})
+	kinds, err := jobkind.NewRegistry(jobkind.Builtin()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +204,7 @@ func newEnvServer(t *testing.T, configure func(*http.Server), mutate ...func(*De
 		Workers: e.wsvc,
 		Jobs:    e.jsvc,
 		Kinds:   kinds,
+		Remotes: e.remotes,
 	}
 	for _, m := range mutate {
 		m(&deps)
@@ -293,12 +283,13 @@ func (e *testEnv) jobsClient() syncrv1connect.JobServiceClient {
 	return e.jobsFor(testAdmin)
 }
 
-// testDefinition is a valid rclone transfer definition.
+// testDefinition is a valid rclone transfer definition on the worker's
+// filesystem (no remotes, so any user may run it).
 func testDefinition() *syncrv1.JobDefinition {
 	return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransferDefinition{
 		Mode:        syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_COPY,
-		Source:      &syncrv1.JobLocation{RemoteId: "00000000-0000-7000-8000-00000000b001", Path: "bucket/prefix"},
-		Destination: &syncrv1.JobLocation{Path: "/data"},
+		Source:      &syncrv1.JobLocation{Path: "/data/src"},
+		Destination: &syncrv1.JobLocation{Path: "/data/dst"},
 	}}}
 }
 

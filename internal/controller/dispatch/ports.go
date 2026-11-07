@@ -6,6 +6,7 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
@@ -28,19 +29,28 @@ type Jobs interface {
 // SpecBuilder builds the worker spec of a queued job from its stored
 // definition, resolving the credentials of the remotes it uses. It is
 // called for every queued job on every poll until the worker accepts it, so
-// the spec (which contains secrets) is never stored.
+// the spec (which contains secrets) is never stored. Specs (spec.go) is the
+// implementation over the remotes service and the job kinds.
 //
 // Errors that fail the job instead of being retried: domain.ErrNotFound (a
 // remote was deleted or is not the owner's) fails it with
 // "remote_unavailable", domain.ErrInvalidArgument (the definition cannot be
-// decoded or built) with "invalid_spec". Any other error is returned to the
-// worker's call and retried on its next poll.
-//
-// Interim seam (Milestone 3 contracts): track C replaces it with the
-// remotes service (Resolve) and the job kinds (internal/jobkind), or
-// implements it with them.
+// decoded or built) with "invalid_spec", domain.ErrFailedPrecondition (a
+// remote's stored credentials cannot be used, e.g. they no longer decrypt)
+// with "internal". Any other error is returned to the worker's call and
+// retried on its next poll.
 type SpecBuilder interface {
 	Build(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, error)
+}
+
+// Remotes resolves a job's remotes with their credentials
+// (*remotes.Service).
+type Remotes interface {
+	// Resolve returns ids and the members of the unions among them,
+	// decrypted and mapped to rclone remotes, keyed by ID. ErrNotFound if
+	// any is missing, deleted or not owner's; ErrFailedPrecondition if a
+	// remote's stored secrets cannot be decrypted.
+	Resolve(ctx context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Resolved, error)
 }
 
 // Workers is the part of the worker service (*workers.Service) the

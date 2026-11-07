@@ -76,7 +76,7 @@ func TestWaitCommands(t *testing.T) {
 			ch := waitAsync(t.Context(), e, wid, w.epoch, 20*time.Second)
 			time.Sleep(3 * time.Second)
 			synctest.Wait()
-			if _, err := e.jobs.Cancel(t.Context(), j.ID); err != nil {
+			if _, err := e.jobs.Cancel(t.Context(), testActor(), j.ID); err != nil {
 				t.Fatal(err)
 			}
 			r := <-ch

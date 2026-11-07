@@ -347,9 +347,10 @@ func (s *Service) commands(ctx context.Context, sess *session, workerID domain.W
 }
 
 // startSpec builds a queued job's spec (see SpecBuilder). A job whose spec
-// can never be built (a remote is gone, an invalid definition) fails at
-// once; startSpec then returns nil without an error. Other errors are
-// returned, so the poll fails and the next one retries.
+// can never be built (a remote is gone, an invalid definition, unusable
+// credentials) fails at once; startSpec then returns nil without an error.
+// Other errors are returned, so the poll fails and the next one retries.
+// The spec is only ever sent, never logged.
 func (s *Service) startSpec(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, error) {
 	if s.specs == nil {
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, "the controller cannot build job specs yet",
@@ -363,6 +364,8 @@ func (s *Service) startSpec(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, 
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeRemoteUnavailable, "a remote of the job was deleted or is not available to its owner", err)
 	case errors.Is(err, domain.ErrInvalidArgument):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, "the job's definition cannot be turned into a spec", err)
+	case errors.Is(err, domain.ErrFailedPrecondition):
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeInternal, "the credentials of a remote of the job cannot be used", err)
 	default:
 		return nil, fmt.Errorf("build the spec of job %s: %w", j.ID, err)
 	}

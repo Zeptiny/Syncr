@@ -85,6 +85,7 @@ func cloneWorker(w workers.Worker) workers.Worker {
 
 func cloneJob(j jobs.Job) jobs.Job {
 	j.Definition = slices.Clone(j.Definition)
+	j.RemoteIDs = slices.Clone(j.RemoteIDs)
 	j.Warnings = slices.Clone(j.Warnings)
 	j.Output = slices.Clone(j.Output)
 	return j

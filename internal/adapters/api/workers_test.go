@@ -273,3 +273,133 @@ func TestWorkerStatusFollowsTheClock(t *testing.T) {
 		t.Errorf("last_seen unset: %v, %v", resp, err)
 	}
 }
+
+func TestCreateEnrollmentTokenInstallCommands(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	create := func(e *testEnv, controllerURL string) (*syncrv1.CreateEnrollmentTokenResponse, error) {
+		t.Helper()
+		resp, err := e.workersClient().CreateEnrollmentToken(ctx, connect.NewRequest(&syncrv1.CreateEnrollmentTokenRequest{ControllerUrl: controllerURL}))
+		if err != nil {
+			return nil, err
+		}
+		return resp.Msg, nil
+	}
+
+	// Without a public URL the browser's origin is used.
+	e := newEnv(t)
+	msg, err := create(e, "https://syncr.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(msg.GetInstallCommands()); n != 4 {
+		t.Fatalf("%d install commands, want 4", n)
+	}
+	for _, c := range msg.GetInstallCommands() {
+		if !strings.Contains(c.GetCommand(), "--controller 'https://syncr.example.com' --token '"+msg.GetToken()+"'") {
+			t.Errorf("%s: %s", c.GetTitle(), c.GetCommand())
+		}
+	}
+	if msg, err := create(e, ""); err != nil || len(msg.GetInstallCommands()) != 0 || msg.GetToken() == "" {
+		t.Errorf("without a URL: %v (%v), want a token and no commands", msg, err)
+	}
+	// An unusable origin is refused before a token is made.
+	for _, bad := range []string{"http://syncr.lan:8080", "https://x.example.com/'; rm -rf ~", "not a url"} {
+		_, err := create(e, bad)
+		wantCode(t, err, connect.CodeInvalidArgument)
+		if v := violations(t, err); len(v) != 1 || v[0].GetField() != "controller_url" {
+			t.Errorf("%q: violations %v", bad, v)
+		}
+	}
+
+	// The public URL wins over the request's.
+	pub := newEnv(t, func(d *Deps) {
+		d.Install = InstallConfig{PublicURL: "https://public.example.com", DownloadBaseURL: "https://mirror.example.com/r"}
+	})
+	msg, err = create(pub, "http://localhost:9999")
+	if err != nil || len(msg.GetInstallCommands()) != 4 {
+		t.Fatalf("public URL: %v (%v)", msg, err)
+	}
+	if c := msg.GetInstallCommands()[0].GetCommand(); !strings.Contains(c, "'https://public.example.com'") || !strings.Contains(c, "https://mirror.example.com/r/syncr-worker_linux_") || strings.Contains(c, "localhost") {
+		t.Errorf("public URL command = %s", c)
+	}
+	if msg, err := create(pub, "garbage"); err != nil || len(msg.GetInstallCommands()) != 4 {
+		t.Errorf("the request's URL is ignored with a public URL: %v (%v)", msg, err)
+	}
+
+	// A misconfigured public URL still yields a token, without commands.
+	broken := newEnv(t, func(d *Deps) { d.Install = InstallConfig{PublicURL: "http://syncr.lan"} })
+	msg, err = create(broken, "https://syncr.example.com")
+	if err != nil || msg.GetToken() == "" || len(msg.GetInstallCommands()) != 0 {
+		t.Errorf("broken public URL: %v (%v)", msg, err)
+	}
+	if !strings.Contains(broken.logs.String(), "public_url") {
+		t.Errorf("no warning logged: %s", broken.logs.String())
+	}
+	if strings.Contains(broken.logs.String(), msg.GetToken()) {
+		t.Error("the token is in the logs")
+	}
+}
+
+func TestGetPassiveInstallCommands(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	resp, err := e.workersClient().GetPassiveInstallCommands(t.Context(), connect.NewRequest(&syncrv1.GetPassiveInstallCommandsRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(resp.Msg.GetCommands()); n != 4 {
+		t.Fatalf("%d commands, want 4", n)
+	}
+	for _, c := range resp.Msg.GetCommands() {
+		if !strings.Contains(c.GetCommand(), "setup ") || !strings.Contains(c.GetCommand(), "--passive") {
+			t.Errorf("%s: %s", c.GetTitle(), c.GetCommand())
+		}
+	}
+	bad := newEnv(t, func(d *Deps) { d.Install = InstallConfig{DownloadBaseURL: "ftp://mirror"} })
+	_, err = bad.workersClient().GetPassiveInstallCommands(t.Context(), connect.NewRequest(&syncrv1.GetPassiveInstallCommandsRequest{}))
+	wantCode(t, err, connect.CodeInternal)
+}
+
+// TestWorkersPageAccess: every user may list and inspect workers (the
+// workers page); enrolling, registering and managing them is for admins.
+func TestWorkersPageAccess(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := t.Context()
+	u := e.workersFor(testUser)
+	list, err := u.ListWorkers(ctx, connect.NewRequest(&syncrv1.ListWorkersRequest{}))
+	if err != nil || len(list.Msg.GetWorkers()) != 1 {
+		t.Errorf("user ListWorkers = %v (%v)", list, err)
+	}
+	if _, err := u.GetWorker(ctx, connect.NewRequest(&syncrv1.GetWorkerRequest{WorkerId: e.worker.String()})); err != nil {
+		t.Errorf("user GetWorker: %v", err)
+	}
+	_, err = u.CreateEnrollmentToken(ctx, connect.NewRequest(&syncrv1.CreateEnrollmentTokenRequest{}))
+	wantCode(t, err, connect.CodePermissionDenied)
+	_, err = u.GetPassiveInstallCommands(ctx, connect.NewRequest(&syncrv1.GetPassiveInstallCommandsRequest{}))
+	wantCode(t, err, connect.CodePermissionDenied)
+	_, err = u.RemoveWorker(ctx, connect.NewRequest(&syncrv1.RemoveWorkerRequest{WorkerId: e.worker.String()}))
+	wantCode(t, err, connect.CodePermissionDenied)
+
+	// A worker's job history is ListJobs{worker_id}: a user sees their own
+	// jobs on it, an admin everyone's with all_users.
+	mine, err := e.runAs(testUser, testDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.runJob() // the admin's
+	for _, tt := range []struct {
+		actor domain.Actor
+		all   bool
+		want  int
+	}{{testUser, false, 1}, {testOther, false, 0}, {testAdmin, false, 1}, {testAdmin, true, 2}} {
+		resp, err := e.jobsFor(tt.actor).ListJobs(ctx, connect.NewRequest(&syncrv1.ListJobsRequest{WorkerId: e.worker.String(), AllUsers: tt.all}))
+		if err != nil || len(resp.Msg.GetJobs()) != tt.want {
+			t.Errorf("%s (all %v): %d jobs (%v), want %d", tt.actor.Role, tt.all, len(resp.Msg.GetJobs()), err, tt.want)
+		}
+		if tt.actor == testUser && resp.Msg.GetJobs()[0].GetId() != mine.GetId() {
+			t.Errorf("user history = %v", resp.Msg.GetJobs())
+		}
+	}
+}

@@ -9,6 +9,7 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
@@ -121,8 +122,11 @@ func TestJobToProto(t *testing.T) {
 		Requeues: 2, Error: jobs.JobError{Code: "wrong_password", Message: "nope"}, Warnings: []string{"a", "b"},
 		ExitCode: 12, Output: out, Version: 7,
 	}
+	named, unnamed := domain.NewRemoteID(), domain.NewRemoteID()
+	j.RemoteIDs = []domain.RemoteID{named, unnamed}
+	refs := map[domain.RemoteID]remotes.Ref{named: {ID: named, Name: "Photos", Type: "local", Deleted: true}}
 	stats := &jobs.Stats{Bytes: 1, TotalBytes: 2, Files: 3, TotalFiles: 4, Checks: 5, Deletes: 6, Renames: 7, Errors: 8, Elapsed: time.Minute}
-	got, err := jobToProto(j, stats)
+	got, err := jobToProto(j, stats, refs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,6 +140,8 @@ func TestJobToProto(t *testing.T) {
 		Error:    &syncrv1.JobError{Code: syncrv1.JobErrorCode_JOB_ERROR_CODE_WRONG_PASSWORD, Message: "nope"},
 		Warnings: []string{"a", "b"}, ExitCode: &exit,
 		Output: &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticForget{ResticForget: &syncrv1.ResticForgetOutput{}}},
+		// Every remote is referenced; unknown ones without a name.
+		Remotes: []*syncrv1.JobRemoteRef{{Id: named.String(), Name: "Photos", BackendType: "local", Deleted: true}, {Id: unnamed.String()}},
 	}
 	if !proto.Equal(got, want) {
 		t.Errorf("jobToProto =\n%v\nwant\n%v", got, want)
@@ -146,7 +152,7 @@ func TestJobToProtoEdges(t *testing.T) {
 	t.Parallel()
 	base := jobs.Job{ID: domain.NewJobID(), WorkerID: domain.NewWorkerID(), Kind: "k", Status: domain.JobQueued, ExitCode: -1, CreatedAt: convT0}
 
-	got, err := jobToProto(base, nil)
+	got, err := jobToProto(base, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,14 +163,14 @@ func TestJobToProtoEdges(t *testing.T) {
 
 	// An unknown error code keeps its message and maps to UNSPECIFIED.
 	base.Error = jobs.JobError{Code: "made_up", Message: "m"}
-	if got, _ := jobToProto(base, nil); got.GetError().GetCode() != syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSPECIFIED || got.GetError().GetMessage() != "m" {
+	if got, _ := jobToProto(base, nil, nil); got.GetError().GetCode() != syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSPECIFIED || got.GetError().GetMessage() != "m" {
 		t.Errorf("error = %v", got.GetError())
 	}
 	// Controller-set codes map too.
 	for _, code := range []string{jobs.CodeCancelled, jobs.CodeWorkerShutdown, jobs.CodeDispatchTimeout, jobs.CodeWorkerRestarted, jobs.CodeWorkerLost,
 		jobs.CodeWorkerRemoved, jobs.CodeInternal, jobs.CodeInvalidSpec, jobs.CodeRemoteUnavailable} {
 		base.Error = jobs.JobError{Code: code}
-		if got, _ := jobToProto(base, nil); got.GetError().GetCode() == syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSPECIFIED {
+		if got, _ := jobToProto(base, nil, nil); got.GetError().GetCode() == syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSPECIFIED {
 			t.Errorf("code %q has no wire code", code)
 		}
 	}
@@ -172,23 +178,23 @@ func TestJobToProtoEdges(t *testing.T) {
 	// Exit code 0 of a finished job is set (not confused with unset); the
 	// exit code of an unfinished job is not reported.
 	base.Status, base.ExitCode = domain.JobSucceeded, 0
-	if got, _ := jobToProto(base, nil); got.ExitCode == nil || got.GetExitCode() != 0 {
+	if got, _ := jobToProto(base, nil, nil); got.ExitCode == nil || got.GetExitCode() != 0 {
 		t.Errorf("exit code = %v", got.ExitCode)
 	}
 	base.Status = domain.JobRunning
-	if got, _ := jobToProto(base, nil); got.ExitCode != nil {
+	if got, _ := jobToProto(base, nil, nil); got.ExitCode != nil {
 		t.Errorf("exit code of a running job = %v", got.ExitCode)
 	}
 
 	// A corrupt output is reported but the job is still returned.
 	base.Output = []byte{0xff, 0xff, 0xff}
-	got, err = jobToProto(base, nil)
+	got, err = jobToProto(base, nil, nil)
 	if err == nil || got == nil || got.GetOutput() != nil || got.GetId() != base.ID.String() {
 		t.Errorf("corrupt output: %v, %v", got, err)
 	}
 	// So is a corrupt definition.
 	base.Output, base.Definition = nil, []byte("{not json")
-	got, err = jobToProto(base, nil)
+	got, err = jobToProto(base, nil, nil)
 	if err == nil || got == nil || got.GetDefinition() != nil || got.GetId() != base.ID.String() {
 		t.Errorf("corrupt definition: %v, %v", got, err)
 	}
