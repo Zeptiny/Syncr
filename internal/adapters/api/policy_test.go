@@ -231,7 +231,7 @@ func TestGuardChecksRoleAndMethod(t *testing.T) {
 	_, err = syncrv1connect.NewUserServiceClient(as(testUser, "session"), e.srv.URL).ListUsers(t.Context(), connect.NewRequest(&syncrv1.ListUsersRequest{}))
 	wantCode(t, err, connect.CodePermissionDenied)
 	_, err = syncrv1connect.NewUserServiceClient(as(testAdmin, "session"), e.srv.URL).ListUsers(t.Context(), connect.NewRequest(&syncrv1.ListUsersRequest{}))
-	wantCode(t, err, connect.CodeUnimplemented) // past the guard (m3: pending track A)
+	wantPastGuard(t, err)
 
 	// API tokens cannot mint tokens, whatever the role; sessions can.
 	for _, a := range []domain.Actor{testUser, testAdmin} {
@@ -239,13 +239,23 @@ func TestGuardChecksRoleAndMethod(t *testing.T) {
 		wantCode(t, err, connect.CodePermissionDenied)
 	}
 	_, err = syncrv1connect.NewAuthServiceClient(as(testUser, "session"), e.srv.URL).CreateAPIToken(t.Context(), connect.NewRequest(&syncrv1.CreateAPITokenRequest{Name: "x"}))
-	wantCode(t, err, connect.CodeUnimplemented) // past the guard (m3: pending track A)
+	wantPastGuard(t, err)
 	_, err = syncrv1connect.NewAuthServiceClient(as(testUser, "token"), e.srv.URL).GetSession(t.Context(), connect.NewRequest(&syncrv1.GetSessionRequest{}))
-	wantCode(t, err, connect.CodeUnimplemented) // tokens may call user procedures
+	wantPastGuard(t, err) // tokens may call user procedures
 
 	// Denials are logged without credentials.
 	if logs := e.logs.String(); !strings.Contains(logs, "api call denied") || strings.Contains(logs, testActorHeader) {
 		t.Errorf("logs = %q", logs)
+	}
+}
+
+// wantPastGuard asserts that a call got past the guard: the stand-in use
+// cases of withEveryService have no behavior, so the handler fails, but not
+// with the guard's codes.
+func wantPastGuard(t *testing.T, err error) {
+	t.Helper()
+	if code := connect.CodeOf(err); code == connect.CodeUnauthenticated || code == connect.CodePermissionDenied {
+		t.Errorf("call refused by the guard: %v", err)
 	}
 }
 

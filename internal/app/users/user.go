@@ -99,8 +99,13 @@ func (t APIToken) Expired(now time.Time) bool {
 // IssuedSession is a new session as the API hands it to the browser. Token
 // is the raw session token: it goes only into the cookie.
 type IssuedSession struct {
-	Token     string
+	Token string
+	// ExpiresAt is the session's absolute end.
 	ExpiresAt time.Time
+	// MaxAge is the session's remaining lifetime at issue (ExpiresAt minus
+	// the service clock's now): the cookie's Max-Age. It does not depend on
+	// the API server's clock.
+	MaxAge time.Duration
 }
 
 // SetupParams are the inputs of CompleteSetup.
