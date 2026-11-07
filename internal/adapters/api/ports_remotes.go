@@ -8,10 +8,8 @@ import (
 )
 
 // RemoteService is the part of the remotes use cases the API calls,
-// implemented by *remotes.Service (Milestone 3 track B, which adds the
-// compile-time check `var _ RemoteService = (*remotes.Service)(nil)`). See
-// internal/app/remotes for the semantics. Backend descriptors come from
-// Deps.Backends.
+// implemented by *remotes.Service. See internal/app/remotes for the
+// semantics. Backend descriptors come from Deps.Backends.
 type RemoteService interface {
 	Create(ctx context.Context, actor domain.Actor, in remotes.Input) (remotes.Remote, error)
 	Get(ctx context.Context, actor domain.Actor, id domain.RemoteID) (remotes.Remote, error)
@@ -24,3 +22,5 @@ type RemoteService interface {
 	// Names returns display references of any remotes (jobs' remotes).
 	Names(ctx context.Context, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Ref, error)
 }
+
+var _ RemoteService = (*remotes.Service)(nil)
