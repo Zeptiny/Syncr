@@ -191,6 +191,9 @@ const (
 	// The worker was removed before the job finished. Status FAILED (never
 	// dispatched) or INTERRUPTED.
 	JobErrorCode_JOB_ERROR_CODE_WORKER_REMOVED JobErrorCode = 23
+	// A remote the job references was deleted, or can no longer be used by
+	// the job's owner, before the job was dispatched. Status FAILED.
+	JobErrorCode_JOB_ERROR_CODE_REMOTE_UNAVAILABLE JobErrorCode = 24
 )
 
 // Enum value maps for JobErrorCode.
@@ -215,6 +218,7 @@ var (
 		21: "JOB_ERROR_CODE_WORKER_RESTARTED",
 		22: "JOB_ERROR_CODE_WORKER_LOST",
 		23: "JOB_ERROR_CODE_WORKER_REMOVED",
+		24: "JOB_ERROR_CODE_REMOTE_UNAVAILABLE",
 	}
 	JobErrorCode_value = map[string]int32{
 		"JOB_ERROR_CODE_UNSPECIFIED":          0,
@@ -236,6 +240,7 @@ var (
 		"JOB_ERROR_CODE_WORKER_RESTARTED":     21,
 		"JOB_ERROR_CODE_WORKER_LOST":          22,
 		"JOB_ERROR_CODE_WORKER_REMOVED":       23,
+		"JOB_ERROR_CODE_REMOTE_UNAVAILABLE":   24,
 	}
 )
 
@@ -4282,7 +4287,7 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\x1dJOB_RESULT_STATUS_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bJOB_RESULT_STATUS_SUCCEEDED\x10\x01\x12\x1c\n" +
 	"\x18JOB_RESULT_STATUS_FAILED\x10\x02\x12\x1f\n" +
-	"\x1bJOB_RESULT_STATUS_CANCELLED\x10\x03*\x9f\x05\n" +
+	"\x1bJOB_RESULT_STATUS_CANCELLED\x10\x03*\xc6\x05\n" +
 	"\fJobErrorCode\x12\x1e\n" +
 	"\x1aJOB_ERROR_CODE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bJOB_ERROR_CODE_INVALID_SPEC\x10\x01\x12#\n" +
@@ -4303,7 +4308,8 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\x1fJOB_ERROR_CODE_DISPATCH_TIMEOUT\x10\x14\x12#\n" +
 	"\x1fJOB_ERROR_CODE_WORKER_RESTARTED\x10\x15\x12\x1e\n" +
 	"\x1aJOB_ERROR_CODE_WORKER_LOST\x10\x16\x12!\n" +
-	"\x1dJOB_ERROR_CODE_WORKER_REMOVED\x10\x17*\xa2\x01\n" +
+	"\x1dJOB_ERROR_CODE_WORKER_REMOVED\x10\x17\x12%\n" +
+	"!JOB_ERROR_CODE_REMOTE_UNAVAILABLE\x10\x18*\xa2\x01\n" +
 	"\x11UnionUpstreamMode\x12#\n" +
 	"\x1fUNION_UPSTREAM_MODE_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eUNION_UPSTREAM_MODE_READ_WRITE\x10\x01\x12!\n" +

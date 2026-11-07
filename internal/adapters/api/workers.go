@@ -13,8 +13,15 @@ import (
 )
 
 // workerAdminHandler implements syncr.v1.WorkerAdminService.
+//
+// m3: pending track C: GetPassiveInstallCommands and the install commands
+// of CreateEnrollmentToken (install.go) come with track C; until then the
+// embedded handler answers GetPassiveInstallCommands with Unimplemented.
 type workerAdminHandler struct {
+	syncrv1connect.UnimplementedWorkerAdminServiceHandler
+
 	workers WorkerService
+	install InstallConfig
 	errs    errorMapper
 }
 

@@ -250,7 +250,7 @@ func jobFrom(r db.Job) (jobs.Job, error) {
 	j := jobs.Job{
 		Kind:              r.Kind,
 		Status:            domain.JobStatus(r.Status),
-		SpecEnc:           r.SpecEnc,
+		Definition:        r.Definition,
 		Epoch:             r.Epoch,
 		CancelRequestedAt: timeFrom(r.CancelRequestedAt),
 		CreatedAt:         timeFrom(r.CreatedAt),
@@ -271,6 +271,9 @@ func jobFrom(r db.Job) (jobs.Job, error) {
 		return jobs.Job{}, err
 	}
 	if err := decodeID(&j.WorkerID, r.WorkerID); err != nil {
+		return jobs.Job{}, err
+	}
+	if err := decodeID(&j.OwnerID, r.OwnerID); err != nil {
 		return jobs.Job{}, err
 	}
 	return j, nil

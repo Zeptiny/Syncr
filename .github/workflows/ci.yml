@@ -52,6 +52,12 @@ jobs:
           go-version-file: go.mod
           cache: true # modules and build cache, keyed by go.sum
           cache-dependency-path: go.sum
+      # protoc-gen-es (TypeScript) is pinned in web/package.json.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - uses: bufbuild/buf-action@v1
         with:
           version: ${{ env.BUF_VERSION }}
@@ -61,11 +67,13 @@ jobs:
       - name: buf format
         run: buf format --diff --exit-code
       - name: Generated code is up to date
-        # Plugins run via `go tool`, pinned by go.mod.
+        # Go plugins run via `go tool`, pinned by go.mod; the TypeScript
+        # plugin from web/node_modules.
         run: |
+          npm ci --prefix web
           buf generate
-          git add -N gen
-          git diff --exit-code -- gen
+          git add -N gen web/src/gen
+          git diff --exit-code -- gen web/src/gen
 
   sqlc:
     name: sqlc generate drift

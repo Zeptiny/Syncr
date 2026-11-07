@@ -1,0 +1,293 @@
+syntax = "proto3";
+
+package syncr.v1;
+
+import "google/protobuf/timestamp.proto";
+import "syncr/v1/link.proto";
+
+// Storage backends and the remotes users configure with them.
+//
+// A backend type (s3, sftp, local, union, ...) is described by a descriptor:
+// its fields, their kinds and which are secret. The web UI renders remote
+// forms from the descriptors, so a new backend type needs no UI change.
+
+// BackendService serves the backend descriptors. Any authenticated user may
+// call it; the data is static for a controller build.
+service BackendService {
+  // ListBackends returns every backend type, by label.
+  rpc ListBackends(ListBackendsRequest) returns (ListBackendsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+// ListBackendsRequest is empty.
+message ListBackendsRequest {}
+
+// ListBackendsResponse lists the backend types.
+message ListBackendsResponse {
+  repeated Backend backends = 1;
+}
+
+// Backend describes a backend type.
+message Backend {
+  // Stable identifier, e.g. "s3"; Remote.backend_type refers to it.
+  string id = 1;
+
+  // Display name, e.g. "Amazon S3 and compatible".
+  string label = 2;
+
+  // One sentence for the type picker.
+  string description = 3;
+
+  // The configuration fields, in form order.
+  repeated BackendField fields = 4;
+
+  // What remotes of this type can be used for.
+  BackendCapabilities capabilities = 5;
+
+  reserved 6 to 15;
+}
+
+// BackendField describes one configuration field of a backend type.
+message BackendField {
+  // Key in RemoteInput.options (or secrets, for a secret field).
+  string name = 1;
+
+  // Form label.
+  string label = 2;
+
+  // Help text shown below the field; may be empty.
+  string help = 3;
+
+  // Placeholder of the input; may be empty.
+  string placeholder = 4;
+
+  // Value type and input widget.
+  FieldKind kind = 5;
+
+  // The field must have a non-empty value.
+  bool required = 6;
+
+  // The value is a secret: it goes in RemoteInput.secrets and is never
+  // returned (Remote.secrets_set only lists the keys that are set).
+  bool secret = 7;
+
+  // Collapsed under "Advanced" in the form.
+  bool advanced = 8;
+
+  // Value used when the field is left empty; empty if none. Never set for
+  // secret fields.
+  string default_value = 9;
+
+  // The allowed values of an ENUM field.
+  repeated FieldChoice choices = 10;
+
+  reserved 11 to 19;
+}
+
+// FieldKind is the value type of a backend field.
+enum FieldKind {
+  FIELD_KIND_UNSPECIFIED = 0;
+  // Single-line text.
+  FIELD_KIND_STRING = 1;
+  // Multi-line text (e.g. a PEM key).
+  FIELD_KIND_TEXT = 2;
+  // Integer, as decimal text.
+  FIELD_KIND_INT = 3;
+  // "true" or "false".
+  FIELD_KIND_BOOL = 4;
+  // One of BackendField.choices.
+  FIELD_KIND_ENUM = 5;
+  // The members of a union remote (RemoteInput.members, not an option).
+  FIELD_KIND_MEMBERS = 6;
+}
+
+// FieldChoice is one allowed value of an ENUM field.
+message FieldChoice {
+  // The stored value.
+  string value = 1;
+
+  // Display name.
+  string label = 2;
+}
+
+// BackendCapabilities say what remotes of a backend type can be used for.
+message BackendCapabilities {
+  // Paths are on the worker's local filesystem (inside its local_roots).
+  bool local = 1;
+
+  // The type combines other remotes (its members).
+  bool union = 2;
+
+  // Remotes of the type may be members of a union.
+  bool union_member = 3;
+
+  // Remotes of the type may hold restic repositories.
+  bool restic_repository = 4;
+
+  reserved 5 to 15;
+}
+
+// RemoteService manages the caller's remotes: configured storage locations
+// with their credentials. Remotes are private to their owner, admins
+// included: another user's remote is NOT_FOUND.
+//
+// Secret values are write-only: they are stored encrypted and never
+// returned. Invalid input fails with INVALID_ARGUMENT carrying a
+// ValidationError detail (field names like "name", "options.endpoint",
+// "secrets.pass", "members[1].path").
+service RemoteService {
+  // ListRemotes lists the caller's remotes, by name.
+  rpc ListRemotes(ListRemotesRequest) returns (ListRemotesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // GetRemote returns one of the caller's remotes.
+  rpc GetRemote(GetRemoteRequest) returns (GetRemoteResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // CreateRemote creates a remote. ALREADY_EXISTS if the caller has a remote
+  // with the same name (case-insensitive).
+  rpc CreateRemote(CreateRemoteRequest) returns (CreateRemoteResponse) {}
+
+  // UpdateRemote changes a remote. The backend type cannot change. Options
+  // and members are replaced as a whole; secrets are merged (see
+  // RemoteInput). ABORTED if the remote changed since version was read.
+  rpc UpdateRemote(UpdateRemoteRequest) returns (UpdateRemoteResponse) {}
+
+  // DeleteRemote deletes a remote. Job history keeps referring to it by
+  // name. FAILED_PRECONDITION while it is a member of a union remote.
+  // Queued jobs that use it fail with REMOTE_UNAVAILABLE.
+  rpc DeleteRemote(DeleteRemoteRequest) returns (DeleteRemoteResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+}
+
+// Remote is a configured remote. Secret values are never returned.
+message Remote {
+  // Remote ID (UUID).
+  string id = 1;
+
+  // Display name, 1 to 64 characters; unique per owner (case-insensitive).
+  string name = 2;
+
+  // Backend type ID (Backend.id).
+  string backend_type = 3;
+
+  // Non-secret option values, keyed by field name.
+  map<string, string> options = 4;
+
+  // Names of the secret fields that have a value.
+  repeated string secrets_set = 5;
+
+  // Members of a union remote, in order; empty for other types.
+  repeated UnionMember members = 6;
+
+  // IDs of the caller's union remotes that have this remote as a member.
+  repeated string used_by_unions = 7;
+
+  // When the remote was created and last changed.
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+
+  // Optimistic concurrency token for UpdateRemote.
+  int64 version = 10;
+
+  reserved 11 to 19;
+}
+
+// RemoteInput is the configuration of a remote to create or update.
+message RemoteInput {
+  // Display name, 1 to 64 characters.
+  string name = 1;
+
+  // Backend type ID; on update it must equal the remote's type.
+  string backend_type = 2;
+
+  // Non-secret option values, keyed by field name. On update they replace
+  // the stored options as a whole.
+  map<string, string> options = 3;
+
+  // Secret values, keyed by field name. On update, a non-empty value
+  // replaces the stored secret and an absent or empty one keeps it.
+  map<string, string> secrets = 4;
+
+  // On update: secret fields to clear (only fields that are not required).
+  repeated string clear_secrets = 5;
+
+  // Members of a union remote, in order: at least two of the caller's
+  // remotes whose type has union_member, none of them a union.
+  repeated UnionMember members = 6;
+
+  reserved 7 to 15;
+}
+
+// UnionMember is one member of a union remote.
+message UnionMember {
+  // The member remote (one of the caller's).
+  string remote_id = 1;
+
+  // Path on the member remote; empty means its root.
+  string path = 2;
+
+  // How the union may use the member.
+  UnionUpstreamMode mode = 3;
+
+  reserved 4 to 9;
+}
+
+// ListRemotesRequest filters the remote list.
+message ListRemotesRequest {
+  // Only remotes of this backend type; empty means all.
+  string backend_type = 1;
+}
+
+// ListRemotesResponse lists remotes by name.
+message ListRemotesResponse {
+  repeated Remote remotes = 1;
+}
+
+// GetRemoteRequest names a remote.
+message GetRemoteRequest {
+  string remote_id = 1;
+}
+
+// GetRemoteResponse returns the remote.
+message GetRemoteResponse {
+  Remote remote = 1;
+}
+
+// CreateRemoteRequest describes the new remote.
+message CreateRemoteRequest {
+  RemoteInput input = 1;
+}
+
+// CreateRemoteResponse returns the new remote.
+message CreateRemoteResponse {
+  Remote remote = 1;
+}
+
+// UpdateRemoteRequest changes a remote.
+message UpdateRemoteRequest {
+  string remote_id = 1;
+
+  // The version the caller read (Remote.version).
+  int64 version = 2;
+
+  // The new configuration.
+  RemoteInput input = 3;
+}
+
+// UpdateRemoteResponse returns the updated remote.
+message UpdateRemoteResponse {
+  Remote remote = 1;
+}
+
+// DeleteRemoteRequest names the remote to delete.
+message DeleteRemoteRequest {
+  string remote_id = 1;
+}
+
+// DeleteRemoteResponse is empty.
+message DeleteRemoteResponse {}

@@ -5,16 +5,17 @@ import (
 	"context"
 	crand "crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
-	"google.golang.org/protobuf/proto"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
@@ -25,20 +26,100 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/jobkind"
 	"github.com/Zeptiny/Syncr/internal/platform/clock"
 	"github.com/Zeptiny/Syncr/internal/platform/redact"
 )
 
 const (
-	// adminToken is the admin token of the test servers (a test value).
+	// adminToken is the provisional admin token of AdminTokenAuth tests (a
+	// test value).
 	adminToken = "test-admin-token-0123456789-abcdefghij"
-	// specSecret is planted in test job specs; it must never be returned.
-	specSecret = "SPEC-SECRET-VALUE-9f3a1c"
 	// pairingSecret is a valid pairing secret (32+ printable characters).
 	pairingSecret = "pairing-secret-0123456789-abcdefghij"
 	testFP        = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	testEpoch     = "epoch-1"
+
+	// testActorHeader is read by testAuth.
+	testActorHeader = "X-Test-Actor"
 )
+
+// The test users (they need not exist in the store: testAuth trusts the
+// header).
+var (
+	testAdmin = domain.Actor{UserID: mustUserID("00000000-0000-7000-8000-00000000a001"), Role: domain.RoleAdmin}
+	testUser  = domain.Actor{UserID: mustUserID("00000000-0000-7000-8000-00000000a002"), Role: domain.RoleUser}
+)
+
+func mustUserID(s string) domain.UserID {
+	id, err := domain.ParseUserID(s)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+// testAuth is the Authenticator of the test servers: it trusts the
+// X-Test-Actor header, "<role> <user id> [session|token]" (session by
+// default; see actorHeader). It stands in for the session authenticator, so
+// the API tests do not depend on the real authentication.
+type testAuth struct{}
+
+func (testAuth) Authenticate(ctx context.Context, h http.Header, _ connect.Spec) (context.Context, error) {
+	fields := strings.Fields(h.Get(testActorHeader))
+	if len(fields) < 2 || len(fields) > 3 {
+		return ctx, fmt.Errorf("%w: no valid %s header", domain.ErrUnauthenticated, testActorHeader)
+	}
+	role, err := domain.ParseRole(fields[0])
+	if err != nil {
+		return ctx, fmt.Errorf("%w: %w", domain.ErrUnauthenticated, err)
+	}
+	id, err := domain.ParseUserID(fields[1])
+	if err != nil {
+		return ctx, fmt.Errorf("%w: %w", domain.ErrUnauthenticated, err)
+	}
+	method := AuthSession
+	if len(fields) == 3 {
+		switch fields[2] {
+		case "session":
+		case "token":
+			method = AuthToken
+		default:
+			return ctx, fmt.Errorf("%w: unknown method %q", domain.ErrUnauthenticated, fields[2])
+		}
+	}
+	return WithCaller(ctx, Caller{Actor: domain.Actor{UserID: id, Role: role}, Method: method}), nil
+}
+
+// actorHeader is the X-Test-Actor value of a, authenticating with method
+// ("session" or "token").
+func actorHeader(a domain.Actor, method string) string {
+	return string(a.Role) + " " + a.UserID.String() + " " + method
+}
+
+// testKind is the "rclone_transfer" job kind of the test servers: it
+// accepts a transfer with a source and a destination path.
+//
+// m3: pending track C: the real kinds (jobkind.Builtin) arrive with track C.
+type testKind struct{}
+
+func (testKind) Name() string { return "rclone_transfer" }
+
+func (testKind) Check(def *syncrv1.JobDefinition) (jobkind.Refs, error) {
+	tr := def.GetRcloneTransfer()
+	var v domain.Validation
+	if tr.GetSource().GetPath() == "" {
+		v.Add("definition.rclone_transfer.source.path", "is required")
+	}
+	if tr.GetDestination().GetPath() == "" {
+		v.Add("definition.rclone_transfer.destination.path", "is required")
+	}
+	return jobkind.Refs{}, v.Err()
+}
+
+func (testKind) Build(*syncrv1.JobDefinition, map[domain.RemoteID]jobkind.Remote) (*syncrv1.JobSpec, error) {
+	return nil, errors.New("testKind does not build specs")
+}
 
 // logBuffer is a goroutine-safe log sink.
 type logBuffer struct {
@@ -71,11 +152,23 @@ type testEnv struct {
 	worker domain.WorkerID // an active worker created by newEnv
 }
 
-// newEnv starts a server. mutate may adjust the Deps before the handler is
-// built (e.g. to drop the authenticator).
+// newEnv starts a server authenticating with testAuth. mutate may adjust
+// the Deps before the handler is built (e.g. withAdminToken, or to drop a
+// service).
 func newEnv(t *testing.T, mutate ...func(*Deps)) *testEnv {
 	t.Helper()
 	return newEnvServer(t, nil, mutate...)
+}
+
+// withAdminToken makes the server authenticate with the provisional
+// AdminTokenAuth (token adminToken) instead of testAuth.
+func withAdminToken(t *testing.T) func(*Deps) {
+	t.Helper()
+	auth, err := NewAdminTokenAuth(redact.Secret(adminToken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func(d *Deps) { d.Auth = auth }
 }
 
 // newEnvServer is newEnv with a hook that configures the http.Server before
@@ -99,7 +192,7 @@ func newEnvServer(t *testing.T, configure func(*http.Server), mutate ...func(*De
 	}
 	ids := &idgen.Sequential{}
 	e.jsvc, err = jobs.New(jobs.Deps{
-		Jobs: e.store, Samples: e.store, Cipher: cipher, Clock: e.clock, IDs: ids,
+		Jobs: e.store, Samples: e.store, Clock: e.clock, IDs: ids,
 		Broker: e.broker, Notifier: jobs.NopNotifier{}, Waker: nopWaker{},
 	}, jobs.Config{})
 	if err != nil {
@@ -112,15 +205,16 @@ func newEnvServer(t *testing.T, configure func(*http.Server), mutate ...func(*De
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := NewAdminTokenAuth(redact.Secret(adminToken))
+	kinds, err := jobkind.NewRegistry(testKind{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	deps := Deps{
 		Logger:  newTestLogger(e.logs),
-		Auth:    auth,
+		Auth:    testAuth{},
 		Workers: e.wsvc,
 		Jobs:    e.jsvc,
+		Kinds:   kinds,
 	}
 	for _, m := range mutate {
 		m(&deps)
@@ -150,61 +244,68 @@ func (e *testEnv) addWorker() domain.WorkerID {
 	return id
 }
 
-// bearer adds an Authorization header to every request.
-type bearer struct {
-	base  http.RoundTripper
-	value string
+// headerTransport adds a request header to every request.
+type headerTransport struct {
+	base       http.RoundTripper
+	key, value string
 }
 
-func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
-	if b.value != "" {
+func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if h.value != "" {
 		r = r.Clone(r.Context())
-		r.Header.Set("Authorization", b.value)
+		r.Header.Set(h.key, h.value)
 	}
-	return b.base.RoundTrip(r)
+	return h.base.RoundTrip(r)
 }
 
-func (e *testEnv) httpClient(authorization string) *http.Client {
-	return &http.Client{Transport: bearer{base: e.srv.Client().Transport, value: authorization}}
+// clientWith returns an HTTP client sending header key: value on every
+// request ("" sends none).
+func (e *testEnv) clientWith(key, value string) *http.Client {
+	return &http.Client{Transport: headerTransport{base: e.srv.Client().Transport, key: key, value: value}}
 }
 
 // workersAs and jobsAs return clients sending the given Authorization header
-// value ("" sends none).
+// value ("" sends none), for the authenticator tests.
 func (e *testEnv) workersAs(authorization string) syncrv1connect.WorkerAdminServiceClient {
-	return syncrv1connect.NewWorkerAdminServiceClient(e.httpClient(authorization), e.srv.URL)
+	return syncrv1connect.NewWorkerAdminServiceClient(e.clientWith("Authorization", authorization), e.srv.URL)
 }
 
 func (e *testEnv) jobsAs(authorization string) syncrv1connect.JobServiceClient {
-	return syncrv1connect.NewJobServiceClient(e.httpClient(authorization), e.srv.URL)
+	return syncrv1connect.NewJobServiceClient(e.clientWith("Authorization", authorization), e.srv.URL)
 }
 
+// workersFor and jobsFor return clients acting as a (testAuth), with a
+// session.
+func (e *testEnv) workersFor(a domain.Actor) syncrv1connect.WorkerAdminServiceClient {
+	return syncrv1connect.NewWorkerAdminServiceClient(e.clientWith(testActorHeader, actorHeader(a, "session")), e.srv.URL)
+}
+
+func (e *testEnv) jobsFor(a domain.Actor) syncrv1connect.JobServiceClient {
+	return syncrv1connect.NewJobServiceClient(e.clientWith(testActorHeader, actorHeader(a, "session")), e.srv.URL)
+}
+
+// workersClient and jobsClient act as the test admin.
 func (e *testEnv) workersClient() syncrv1connect.WorkerAdminServiceClient {
-	return e.workersAs("Bearer " + adminToken)
+	return e.workersFor(testAdmin)
 }
 
 func (e *testEnv) jobsClient() syncrv1connect.JobServiceClient {
-	return e.jobsAs("Bearer " + adminToken)
+	return e.jobsFor(testAdmin)
 }
 
-// testSpec is a valid rclone transfer spec carrying specSecret.
-func testSpec() *syncrv1.JobSpec {
-	return &syncrv1.JobSpec{
-		Remotes: []*syncrv1.RemoteDefinition{{
-			Alias: "s3", BackendType: "s3",
-			Secrets: map[string]string{"secret_access_key": specSecret},
-		}},
-		Operation: &syncrv1.JobSpec_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransfer{
-			Mode:        syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_COPY,
-			Source:      &syncrv1.Location{Remote: "s3", Path: "bucket/prefix"},
-			Destination: &syncrv1.Location{Path: "/data"},
-		}},
-	}
+// testDefinition is a valid rclone transfer definition.
+func testDefinition() *syncrv1.JobDefinition {
+	return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransferDefinition{
+		Mode:        syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_COPY,
+		Source:      &syncrv1.JobLocation{RemoteId: "00000000-0000-7000-8000-00000000b001", Path: "bucket/prefix"},
+		Destination: &syncrv1.JobLocation{Path: "/data"},
+	}}}
 }
 
-// runJob queues a job through the API.
+// runJob queues a job through the API, as the test admin.
 func (e *testEnv) runJob() *syncrv1.Job {
 	e.t.Helper()
-	resp, err := e.jobsClient().RunJob(e.t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Spec: testSpec()}))
+	resp, err := e.jobsClient().RunJob(e.t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: testDefinition()}))
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -241,18 +342,6 @@ func wantCode(t *testing.T, err error, want connect.Code) {
 	}
 	if got := codeOf(t, err); got != want {
 		t.Fatalf("code = %v (%v), want %v", got, err, want)
-	}
-}
-
-// noSpecLeak fails if the marshaled message contains the planted secret.
-func noSpecLeak(t *testing.T, msg proto.Message) {
-	t.Helper()
-	b, err := proto.Marshal(msg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(b, []byte(specSecret)) {
-		t.Errorf("%T leaks the job spec", msg)
 	}
 }
 

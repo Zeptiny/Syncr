@@ -1,5 +1,5 @@
-// Package jobs owns the job lifecycle: creating jobs (Milestone 2: an
-// explicit worker and a complete, encrypted spec), reading and listing them,
+// Package jobs owns the job lifecycle: creating jobs (an explicit worker and
+// a secret-free job definition, owned by a user), reading and listing them,
 // canceling them, live progress, and every status change the dispatcher
 // derives from the worker link.
 //
@@ -19,13 +19,13 @@
 // (a duplicate event, a lost race, a job already finished) changes nothing
 // and reports changed == false without an error.
 //
-// # Secrets
+// # Definitions
 //
-// The JobSpec contains remote credentials. It reaches this package already
-// encoded (the protobuf wire form; this package does not interpret it) and
-// is stored encrypted with the Cipher, bound to its record by the associated
-// data "job-spec:<job id>". Only the dispatcher reads it back (Spec), to send
-// it to the worker.
+// A job stores its definition (see internal/jobkind) already encoded; this
+// package does not interpret it. It contains no secrets: the dispatcher
+// builds the worker's JobSpec, with the remotes' credentials, when it sends
+// the job (Milestone 3 track C completes owner scoping, remote references
+// and search).
 //
 // # Progress
 //

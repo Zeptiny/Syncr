@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/jobkind"
 	"github.com/Zeptiny/Syncr/internal/link"
 )
 
@@ -159,12 +161,13 @@ func progressToProto(s jobs.Sample) *syncrv1.JobProgress {
 	return &syncrv1.JobProgress{Time: ts(s.Time), Stats: statsToProto(s.Stats)}
 }
 
-// jobToProto converts j. The encrypted spec is never part of the result.
+// jobToProto converts j (it holds no secrets).
 //
 // stats is the job's counters to report, which the caller picks (see
 // jobStats): nil leaves them unset. The returned error reports a stored
-// output that cannot be decoded; the job is still returned, without its
-// output, so one corrupt record does not break a listing. The caller logs it.
+// definition or output that cannot be decoded; the job is still returned,
+// without it, so one corrupt record does not break a listing. The caller
+// logs it.
 func jobToProto(j jobs.Job, stats *jobs.Stats) (*syncrv1.Job, error) {
 	out := &syncrv1.Job{
 		Id:              j.ID.String(),
@@ -189,15 +192,27 @@ func jobToProto(j jobs.Job, stats *jobs.Stats) (*syncrv1.Job, error) {
 		code := int32(min(j.ExitCode, 1<<31-1))
 		out.ExitCode = &code
 	}
-	if len(j.Output) == 0 {
-		return out, nil
+	if !j.OwnerID.IsZero() {
+		out.OwnerId = j.OwnerID.String()
 	}
-	var output syncrv1.JobOutput
-	if err := proto.Unmarshal(j.Output, &output); err != nil {
-		return out, fmt.Errorf("decode output of job %s: %w", j.ID, err)
+	var errs []error
+	if len(j.Definition) > 0 {
+		def, err := jobkind.Unmarshal(j.Definition)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("decode definition of job %s: %w", j.ID, err))
+		} else {
+			out.Definition = def
+		}
 	}
-	out.Output = &output
-	return out, nil
+	if len(j.Output) > 0 {
+		var output syncrv1.JobOutput
+		if err := proto.Unmarshal(j.Output, &output); err != nil {
+			errs = append(errs, fmt.Errorf("decode output of job %s: %w", j.ID, err))
+		} else {
+			out.Output = &output
+		}
+	}
+	return out, errors.Join(errs...)
 }
 
 // pickStats chooses the counters to report for j, and whether the latest
@@ -215,18 +230,4 @@ func pickStats(j jobs.Job) (final *jobs.Stats, needSample bool) {
 	default:
 		return nil, j.Status == domain.JobRunning
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Specs
-// ---------------------------------------------------------------------------
-
-// marshalSpec encodes a validated JobSpec in the wire form the jobs service
-// stores (deterministically, so equal specs encode equally).
-func marshalSpec(spec *syncrv1.JobSpec) ([]byte, error) {
-	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(spec)
-	if err != nil {
-		return nil, fmt.Errorf("encode job spec: %w", err)
-	}
-	return b, nil
 }

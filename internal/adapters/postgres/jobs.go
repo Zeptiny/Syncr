@@ -21,9 +21,10 @@ func (s *Store) CreateJob(ctx context.Context, j jobs.Job) error {
 	n, err := s.q.CreateJob(ctx, db.CreateJobParams{
 		ID:                pgID(j.ID),
 		WorkerID:          pgID(j.WorkerID),
+		OwnerID:           pgID(j.OwnerID),
 		Kind:              j.Kind,
 		Status:            string(j.Status),
-		SpecEnc:           j.SpecEnc,
+		Definition:        j.Definition,
 		Epoch:             j.Epoch,
 		CancelRequestedAt: pgOptTime(j.CancelRequestedAt),
 		CreatedAt:         pgTime(j.CreatedAt),

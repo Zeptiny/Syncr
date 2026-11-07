@@ -11,12 +11,13 @@ import (
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/jobkind"
 )
 
 func TestRunJob(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	resp, err := e.jobsClient().RunJob(t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Spec: testSpec()}))
+	resp, err := e.jobsFor(testUser).RunJob(t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: testDefinition()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,36 +28,37 @@ func TestRunJob(t *testing.T) {
 		j.GetFinishedAt() != nil || j.GetStats() != nil || j.GetError() != nil || j.GetOutput() != nil || j.ExitCode != nil {
 		t.Errorf("job = %v", j)
 	}
-	noSpecLeak(t, resp.Msg)
-
-	// The spec was stored (encrypted) exactly as sent.
+	// The caller owns the job, and the definition comes back as sent.
+	if j.GetOwnerId() != testUser.UserID.String() || !proto.Equal(j.GetDefinition(), testDefinition()) {
+		t.Errorf("owner %q, definition %v", j.GetOwnerId(), j.GetDefinition())
+	}
 	stored, err := e.jsvc.Get(t.Context(), e.jobID(j))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(stored.SpecEnc), specSecret) {
-		t.Error("the spec is stored in plain text")
-	}
-	raw, err := e.jsvc.Spec(stored)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var spec syncrv1.JobSpec
-	if err := proto.Unmarshal(raw, &spec); err != nil || !proto.Equal(&spec, testSpec()) {
-		t.Errorf("stored spec = %v, %v", &spec, err)
+	if stored.OwnerID != testUser.UserID || stored.Kind != "rclone_transfer" {
+		t.Errorf("stored job = %+v", stored)
 	}
 }
 
-func TestRunJobKinds(t *testing.T) {
+func TestRunJobWithoutKinds(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t)
-	spec := &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_ResticSnapshots{ResticSnapshots: &syncrv1.ResticSnapshots{}}}
-	resp, err := e.jobsClient().RunJob(t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Spec: spec}))
+	req := &syncrv1.RunJobRequest{Definition: testDefinition()}
+	e := newEnv(t, func(d *Deps) { d.Kinds = nil })
+	req.WorkerId = e.worker.String()
+	_, err := e.jobsClient().RunJob(t.Context(), connect.NewRequest(req))
+	wantCode(t, err, connect.CodeUnimplemented)
+
+	empty, err := jobkind.NewRegistry(jobkind.Builtin()...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Msg.GetJob().GetKind() != "restic_snapshots" {
-		t.Errorf("kind = %q", resp.Msg.GetJob().GetKind())
+	e = newEnv(t, func(d *Deps) { d.Kinds = empty })
+	req.WorkerId = e.worker.String()
+	_, err = e.jobsClient().RunJob(t.Context(), connect.NewRequest(req))
+	wantCode(t, err, connect.CodeInvalidArgument)
+	if !strings.Contains(err.Error(), "not supported") {
+		t.Errorf("err = %v", err)
 	}
 }
 
@@ -66,18 +68,21 @@ func TestRunJobErrors(t *testing.T) {
 	c := e.jobsClient()
 	missing := domain.NewWorkerID().String()
 
+	noSource := testDefinition()
+	noSource.GetRcloneTransfer().Source.Path = ""
 	tests := []struct {
-		name string
-		req  *syncrv1.RunJobRequest
-		want connect.Code
-		msg  string
+		name  string
+		req   *syncrv1.RunJobRequest
+		want  connect.Code
+		msg   string
+		field string // the ValidationError field, if any
 	}{
-		{"no worker", &syncrv1.RunJobRequest{Spec: testSpec()}, connect.CodeInvalidArgument, "worker_id"},
-		{"bad worker", &syncrv1.RunJobRequest{WorkerId: "nope", Spec: testSpec()}, connect.CodeInvalidArgument, "worker_id"},
-		{"nil spec", &syncrv1.RunJobRequest{WorkerId: e.worker.String()}, connect.CodeInvalidArgument, "spec is required"},
-		{"no operation", &syncrv1.RunJobRequest{WorkerId: e.worker.String(), Spec: &syncrv1.JobSpec{}}, connect.CodeInvalidArgument, "operation"},
-		{"remotes only", &syncrv1.RunJobRequest{WorkerId: e.worker.String(), Spec: &syncrv1.JobSpec{Remotes: testSpec().Remotes}}, connect.CodeInvalidArgument, "operation"},
-		{"unknown worker", &syncrv1.RunJobRequest{WorkerId: missing, Spec: testSpec()}, connect.CodeNotFound, "worker not found"},
+		{"no worker", &syncrv1.RunJobRequest{Definition: testDefinition()}, connect.CodeInvalidArgument, "worker_id", ""},
+		{"bad worker", &syncrv1.RunJobRequest{WorkerId: "nope", Definition: testDefinition()}, connect.CodeInvalidArgument, "worker_id", ""},
+		{"nil definition", &syncrv1.RunJobRequest{WorkerId: e.worker.String()}, connect.CodeInvalidArgument, "definition is required", "definition"},
+		{"no operation", &syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: &syncrv1.JobDefinition{}}, connect.CodeInvalidArgument, "operation", "definition.operation"},
+		{"rejected by the kind", &syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: noSource}, connect.CodeInvalidArgument, "source.path", "definition.rclone_transfer.source.path"},
+		{"unknown worker", &syncrv1.RunJobRequest{WorkerId: missing, Definition: testDefinition()}, connect.CodeNotFound, "worker not found", ""},
 	}
 	for _, tt := range tests {
 		_, err := c.RunJob(t.Context(), connect.NewRequest(tt.req))
@@ -88,8 +93,10 @@ func TestRunJobErrors(t *testing.T) {
 		if !strings.Contains(err.Error(), tt.msg) {
 			t.Errorf("%s: message %q lacks %q", tt.name, err, tt.msg)
 		}
-		if strings.Contains(err.Error(), specSecret) {
-			t.Errorf("%s: the error leaks the spec", tt.name)
+		if tt.field != "" {
+			if v := violations(t, err); len(v) != 1 || v[0].GetField() != tt.field {
+				t.Errorf("%s: violations = %v, want one on %s", tt.name, v, tt.field)
+			}
 		}
 	}
 }
@@ -97,9 +104,9 @@ func TestRunJobErrors(t *testing.T) {
 func TestRequestSizeLimit(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	spec := testSpec()
-	spec.Remotes[0].Secrets["big"] = strings.Repeat("x", 2<<20)
-	_, err := e.jobsClient().RunJob(t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Spec: spec}))
+	def := testDefinition()
+	def.GetRcloneTransfer().Source.Path = strings.Repeat("x", 2<<20)
+	_, err := e.jobsClient().RunJob(t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: def}))
 	wantCode(t, err, connect.CodeResourceExhausted)
 }
 
@@ -116,7 +123,6 @@ func TestGetJob(t *testing.T) {
 	if !proto.Equal(resp.Msg.GetJob(), queued) {
 		t.Errorf("GetJob = %v, want %v", resp.Msg.GetJob(), queued)
 	}
-	noSpecLeak(t, resp.Msg)
 
 	for id, want := range map[string]connect.Code{
 		"":                                     connect.CodeInvalidArgument,
@@ -151,7 +157,6 @@ func TestJobStatsAndOutput(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		noSpecLeak(t, resp.Msg)
 		return resp.Msg.GetJob()
 	}
 
@@ -243,7 +248,6 @@ func TestCancelJob(t *testing.T) {
 	if got.GetStatus() != syncrv1.JobStatus_JOB_STATUS_CANCELLED || got.GetError().GetCode() != syncrv1.JobErrorCode_JOB_ERROR_CODE_CANCELLED || got.GetFinishedAt() == nil {
 		t.Errorf("cancelled queued job = %v", got)
 	}
-	noSpecLeak(t, resp.Msg)
 	// Canceling again changes nothing.
 	again, err := c.CancelJob(ctx, connect.NewRequest(&syncrv1.CancelJobRequest{JobId: q.GetId()}))
 	if err != nil || !proto.Equal(again.Msg.GetJob(), got) {
@@ -293,7 +297,6 @@ func TestListJobsPagination(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		noSpecLeak(t, resp.Msg)
 		pages++
 		if n := len(resp.Msg.GetJobs()); n > 5 || n == 0 {
 			t.Fatalf("page %d has %d jobs", pages, n)
@@ -360,7 +363,7 @@ func TestListJobsFilters(t *testing.T) {
 
 	a, b := e.runJob(), e.runJob()
 	e.startRunning(b)
-	resp, err := c.RunJob(ctx, connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: other.String(), Spec: testSpec()}))
+	resp, err := c.RunJob(ctx, connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: other.String(), Definition: testDefinition()}))
 	if err != nil {
 		t.Fatal(err)
 	}

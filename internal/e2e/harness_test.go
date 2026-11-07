@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
@@ -118,7 +118,7 @@ func (c *controller) start() {
 	var err error
 	c.hub = dispatch.NewHub()
 	c.jobs, err = jobs.New(jobs.Deps{
-		Jobs: c.store, Samples: c.store, Cipher: c.cipher, Clock: c.clock, IDs: c.ids,
+		Jobs: c.store, Samples: c.store, Clock: c.clock, IDs: c.ids,
 		Broker: broker.New(), Notifier: jobs.NopNotifier{}, Waker: c.hub,
 	}, jobs.Config{SampleInterval: time.Millisecond})
 	if err != nil {
@@ -131,7 +131,7 @@ func (c *controller) start() {
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	c.disp, err = dispatch.New(dispatch.Deps{Jobs: c.jobs, Workers: c.workers, Clock: c.clock, Hub: c.hub}, c.cfg)
+	c.disp, err = dispatch.New(dispatch.Deps{Jobs: c.jobs, Workers: c.workers, Specs: specBuilder{}, Clock: c.clock, Hub: c.hub}, c.cfg)
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -245,15 +245,33 @@ func (c *controller) enrollActive(name string) (domain.WorkerID, string) {
 	return id, resp.GetWorkerSecret()
 }
 
+// testOwner owns the test jobs.
+var testOwner = domain.NewUserID()
+
+// specBuilder is the dispatcher's SpecBuilder in these tests: a job's
+// "definition" is the protojson of the very spec to send (see run).
+//
+// m3: pending track C: real definitions are built by job kinds from the
+// owner's resolved remotes; these link tests only need the spec delivered.
+type specBuilder struct{}
+
+func (specBuilder) Build(_ context.Context, j jobs.Job) (*syncrv1.JobSpec, error) {
+	spec := new(syncrv1.JobSpec)
+	if err := protojson.Unmarshal(j.Definition, spec); err != nil {
+		return nil, fmt.Errorf("%w: %w", domain.ErrInvalidArgument, err)
+	}
+	return spec, nil
+}
+
 // run queues a job on worker w.
 func (c *controller) run(w domain.WorkerID, spec *syncrv1.JobSpec) domain.JobID {
 	c.t.Helper()
-	raw, err := proto.Marshal(spec)
+	raw, err := protojson.Marshal(spec)
 	if err != nil {
 		c.t.Fatal(err)
 	}
 	js, _ := c.svc()
-	j, err := js.Create(context.Background(), jobs.CreateParams{WorkerID: w, Kind: "rclone_transfer", Spec: raw})
+	j, err := js.Create(context.Background(), jobs.CreateParams{WorkerID: w, OwnerID: testOwner, Kind: "rclone_transfer", Definition: raw})
 	if err != nil {
 		c.t.Fatal(err)
 	}

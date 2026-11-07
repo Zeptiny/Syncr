@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -120,7 +120,7 @@ func (e *env) restart() {
 	var err error
 	e.rec, e.hub = newRecorder(), dispatch.NewHub()
 	e.jobs, err = jobs.New(jobs.Deps{
-		Jobs: e.store, Samples: e.store, Cipher: e.cipher, Clock: e.clock, IDs: e.ids,
+		Jobs: e.store, Samples: e.store, Clock: e.clock, IDs: e.ids,
 		Broker: e.rec, Notifier: e.rec, Waker: e.hub,
 	}, jobs.Config{})
 	if err != nil {
@@ -133,7 +133,7 @@ func (e *env) restart() {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	e.disp, err = dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Clock: e.clock, Hub: e.hub}, e.cfg)
+	e.disp, err = dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Specs: specBuilder{}, Clock: e.clock, Hub: e.hub}, e.cfg)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -168,14 +168,32 @@ func testSpec(path string) *syncrv1.JobSpec {
 	}
 }
 
+// testOwner owns the test jobs.
+var testOwner = domain.NewUserID()
+
+// specBuilder is the dispatcher's SpecBuilder in these tests: a job's
+// "definition" is the protojson of the very spec to send (see run).
+//
+// m3: pending track C: real definitions are built by job kinds from the
+// owner's resolved remotes; these tests only need some spec delivered.
+type specBuilder struct{}
+
+func (specBuilder) Build(_ context.Context, j jobs.Job) (*syncrv1.JobSpec, error) {
+	spec := new(syncrv1.JobSpec)
+	if err := protojson.Unmarshal(j.Definition, spec); err != nil {
+		return nil, fmt.Errorf("%w: %w", domain.ErrInvalidArgument, err)
+	}
+	return spec, nil
+}
+
 // run queues a job on worker w, as the API's RunJob will.
 func (e *env) run(w domain.WorkerID) jobs.Job {
 	e.t.Helper()
-	raw, err := proto.Marshal(testSpec("/data"))
+	raw, err := protojson.Marshal(testSpec("/data"))
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	j, err := e.jobs.Create(context.Background(), jobs.CreateParams{WorkerID: w, Kind: "rclone_transfer", Spec: raw})
+	j, err := e.jobs.Create(context.Background(), jobs.CreateParams{WorkerID: w, OwnerID: testOwner, Kind: "rclone_transfer", Definition: raw})
 	if err != nil {
 		e.t.Fatal(err)
 	}

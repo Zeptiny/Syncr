@@ -3,6 +3,7 @@ package dispatch_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -19,7 +20,7 @@ func TestControllerErrorCodesExistOnTheWire(t *testing.T) {
 	t.Parallel()
 	for _, code := range []string{
 		jobs.CodeInternal, jobs.CodeCancelled, jobs.CodeWorkerShutdown, jobs.CodeDispatchTimeout,
-		jobs.CodeWorkerRestarted, jobs.CodeWorkerLost, jobs.CodeWorkerRemoved,
+		jobs.CodeWorkerRestarted, jobs.CodeWorkerLost, jobs.CodeWorkerRemoved, jobs.CodeInvalidSpec, jobs.CodeRemoteUnavailable,
 	} {
 		if link.ParseErrorCode(code) == syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSPECIFIED {
 			t.Errorf("jobs code %q has no JobErrorCode", code)
@@ -101,15 +102,71 @@ func TestUnreadableSpecFailsTheJob(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	wid := e.enroll("w")
-	j, err := e.jobs.Create(ctx, jobs.CreateParams{WorkerID: wid, Kind: "rclone_transfer", Spec: []byte{0xff, 0xff, 0xff}})
+	j, err := e.jobs.Create(ctx, jobs.CreateParams{WorkerID: wid, OwnerID: testOwner, Kind: "rclone_transfer", Definition: []byte{0xff, 0xff, 0xff}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmds, err := e.disp.Commands(ctx, wid, "ep"); err != nil || len(cmds) != 0 {
 		t.Errorf("Commands = (%v, %v)", cmds, err)
 	}
-	if got := e.job(j.ID); got.Status != domain.JobFailed || got.Error.Code != jobs.CodeInternal {
+	if got := e.job(j.ID); got.Status != domain.JobFailed || got.Error.Code != jobs.CodeInvalidSpec {
 		t.Errorf("job = %s %+v", got.Status, got.Error)
+	}
+}
+
+// specBuilderFunc adapts a function to dispatch.SpecBuilder.
+type specBuilderFunc func(context.Context, jobs.Job) (*syncrv1.JobSpec, error)
+
+func (f specBuilderFunc) Build(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, error) {
+	return f(ctx, j)
+}
+
+// TestSpecBuildErrors: a job whose remote is gone fails with
+// remote_unavailable, an unbuildable one with invalid_spec, one without a
+// spec builder with invalid_spec; any other error is retried.
+func TestSpecBuildErrors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tests := []struct {
+		name     string
+		specs    dispatch.SpecBuilder
+		wantCode string // "" means the job stays queued and Commands fails
+	}{
+		{"remote gone", specBuilderFunc(func(context.Context, jobs.Job) (*syncrv1.JobSpec, error) {
+			return nil, fmt.Errorf("resolve: %w", domain.ErrNotFound)
+		}), jobs.CodeRemoteUnavailable},
+		{"invalid definition", specBuilderFunc(func(context.Context, jobs.Job) (*syncrv1.JobSpec, error) {
+			return nil, fmt.Errorf("build: %w", domain.ErrInvalidArgument)
+		}), jobs.CodeInvalidSpec},
+		{"no builder", nil, jobs.CodeInvalidSpec},
+		{"database down", specBuilderFunc(func(context.Context, jobs.Job) (*syncrv1.JobSpec, error) {
+			return nil, errors.New("connection refused")
+		}), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			wid := e.enroll("w")
+			j := e.run(wid)
+			disp, err := dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Specs: tt.specs, Clock: e.clock, Hub: e.hub}, e.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmds, err := disp.Commands(ctx, wid, "ep")
+			if tt.wantCode == "" {
+				if err == nil || e.job(j.ID).Status != domain.JobQueued {
+					t.Errorf("Commands = (%v, %v), job %s: want an error and the job still queued", cmds, err, e.job(j.ID).Status)
+				}
+				return
+			}
+			if err != nil || len(cmds) != 0 {
+				t.Errorf("Commands = (%v, %v)", cmds, err)
+			}
+			if got := e.job(j.ID); got.Status != domain.JobFailed || got.Error.Code != tt.wantCode {
+				t.Errorf("job = %s %+v, want failed with %s", got.Status, got.Error, tt.wantCode)
+			}
+		})
 	}
 }
 

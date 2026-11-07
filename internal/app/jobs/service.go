@@ -18,20 +18,19 @@ type Config struct {
 	// SampleInterval is the minimum time between two stored progress
 	// samples of a job (worker clock). Live updates are not limited.
 	SampleInterval time.Duration
-	// MaxSpecBytes bounds an encoded job spec.
-	MaxSpecBytes int
+	// MaxDefinitionBytes bounds an encoded job definition.
+	MaxDefinitionBytes int
 }
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
-	return Config{SampleInterval: 5 * time.Second, MaxSpecBytes: 1 << 20}
+	return Config{SampleInterval: 5 * time.Second, MaxDefinitionBytes: 1 << 20}
 }
 
 // Deps are the service's collaborators. All are required except Logger.
 type Deps struct {
 	Jobs     Repository
 	Samples  SampleRepository
-	Cipher   Cipher
 	Clock    Clock
 	IDs      IDGenerator
 	Broker   Broker
@@ -46,7 +45,6 @@ type Deps struct {
 type Service struct {
 	repo     Repository
 	samples  SampleRepository
-	cipher   Cipher
 	clock    Clock
 	ids      IDGenerator
 	broker   Broker
@@ -65,14 +63,14 @@ const maxAttempts = 8
 
 // New returns a Service.
 func New(d Deps, cfg Config) (*Service, error) {
-	if d.Jobs == nil || d.Samples == nil || d.Cipher == nil || d.Clock == nil || d.IDs == nil ||
+	if d.Jobs == nil || d.Samples == nil || d.Clock == nil || d.IDs == nil ||
 		d.Broker == nil || d.Notifier == nil || d.Waker == nil {
 		return nil, errors.New("jobs: missing dependency")
 	}
 	def := DefaultConfig()
 	cfg.SampleInterval = cmp.Or(cfg.SampleInterval, def.SampleInterval)
-	cfg.MaxSpecBytes = cmp.Or(cfg.MaxSpecBytes, def.MaxSpecBytes)
-	if cfg.SampleInterval < 0 || cfg.MaxSpecBytes < 0 {
+	cfg.MaxDefinitionBytes = cmp.Or(cfg.MaxDefinitionBytes, def.MaxDefinitionBytes)
+	if cfg.SampleInterval < 0 || cfg.MaxDefinitionBytes < 0 {
 		return nil, fmt.Errorf("jobs: invalid config %+v", cfg)
 	}
 	log := d.Logger
@@ -80,7 +78,7 @@ func New(d Deps, cfg Config) (*Service, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Service{
-		repo: d.Jobs, samples: d.Samples, cipher: d.Cipher, clock: d.Clock, ids: d.IDs,
+		repo: d.Jobs, samples: d.Samples, clock: d.Clock, ids: d.IDs,
 		broker: d.Broker, notifier: d.Notifier, waker: d.Waker, log: log, cfg: cfg,
 		lastStored: make(map[domain.JobID]time.Time),
 	}, nil
@@ -90,28 +88,26 @@ func New(d Deps, cfg Config) (*Service, error) {
 // API use cases
 // ---------------------------------------------------------------------------
 
-// Create queues a job on a worker. The spec is encrypted before it is
-// stored. ErrNotFound if the worker does not exist or is removed.
+// Create queues a job on a worker. ErrNotFound if the worker does not exist
+// or is removed.
 func (s *Service) Create(ctx context.Context, p CreateParams) (Job, error) {
 	switch {
 	case p.WorkerID.IsZero():
 		return Job{}, fmt.Errorf("create job: %w: worker id", domain.ErrInvalidID)
+	case p.OwnerID.IsZero():
+		return Job{}, fmt.Errorf("create job: %w: owner id", domain.ErrInvalidID)
 	case !validKind(p.Kind):
 		return Job{}, fmt.Errorf("create job: %w: kind %q", domain.ErrInvalidArgument, p.Kind)
-	case len(p.Spec) == 0:
-		return Job{}, fmt.Errorf("create job: %w: empty spec", domain.ErrInvalidArgument)
-	case len(p.Spec) > s.cfg.MaxSpecBytes:
-		return Job{}, fmt.Errorf("create job: %w: spec is %d bytes, at most %d allowed", domain.ErrInvalidArgument, len(p.Spec), s.cfg.MaxSpecBytes)
+	case len(p.Definition) == 0:
+		return Job{}, fmt.Errorf("create job: %w: empty definition", domain.ErrInvalidArgument)
+	case len(p.Definition) > s.cfg.MaxDefinitionBytes:
+		return Job{}, fmt.Errorf("create job: %w: definition is %d bytes, at most %d allowed", domain.ErrInvalidArgument, len(p.Definition), s.cfg.MaxDefinitionBytes)
 	}
 	id := s.ids.NewJobID()
-	enc, err := s.cipher.Encrypt(p.Spec, SpecAD(id))
-	if err != nil {
-		return Job{}, fmt.Errorf("create job: encrypt spec: %w", err)
-	}
 	now := s.clock.Now()
 	j := Job{
-		ID: id, WorkerID: p.WorkerID, Kind: p.Kind, Status: domain.JobQueued, SpecEnc: enc,
-		CreatedAt: now, QueuedAt: now, ExitCode: -1, Version: 1,
+		ID: id, WorkerID: p.WorkerID, OwnerID: p.OwnerID, Kind: p.Kind, Status: domain.JobQueued,
+		Definition: slices.Clone(p.Definition), CreatedAt: now, QueuedAt: now, ExitCode: -1, Version: 1,
 	}
 	if err := s.repo.CreateJob(ctx, j); err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
@@ -225,7 +221,7 @@ func (s *Service) Watch(ctx context.Context, id domain.JobID, fn func(Update) er
 	if err != nil {
 		return err
 	}
-	if err := fn(Update{JobID: id, Job: strip(j)}); err != nil {
+	if err := fn(Update{JobID: id, Job: copyOf(j)}); err != nil {
 		return err
 	}
 	if j.Status.Terminal() {
@@ -307,7 +303,7 @@ func (s *Service) change(ctx context.Context, id domain.JobID, workerID domain.W
 // published runs the side effects of a stored change from prev (zero for a
 // new job) to cur.
 func (s *Service) published(ctx context.Context, prev, cur Job) {
-	s.broker.Publish(Update{JobID: cur.ID, Job: strip(cur)})
+	s.broker.Publish(Update{JobID: cur.ID, Job: copyOf(cur)})
 	if cur.Status == domain.JobQueued && prev.Status != domain.JobQueued ||
 		cur.CancelRequested() && !prev.CancelRequested() && !cur.Status.Terminal() {
 		s.waker.Wake(cur.WorkerID)
@@ -319,15 +315,18 @@ func (s *Service) published(ctx context.Context, prev, cur Job) {
 	s.log.InfoContext(ctx, "job finished", "job_id", cur.ID.String(), "worker_id", cur.WorkerID.String(),
 		"status", string(cur.Status), "error_code", cur.Error.Code)
 	if cur.Status == domain.JobFailed || cur.Status == domain.JobInterrupted {
-		if err := s.notifier.JobFailed(ctx, *strip(cur)); err != nil {
+		if err := s.notifier.JobFailed(ctx, *copyOf(cur)); err != nil {
 			s.log.WarnContext(ctx, "job failure notification failed", "job_id", cur.ID.String(), "error", err.Error())
 		}
 	}
 }
 
-// strip returns a copy of j without its encrypted spec, for publishing.
-func strip(j Job) *Job {
-	j.SpecEnc = nil
+// copyOf returns a copy of j for publishing. Jobs hold no secrets (the
+// definition is secret-free), so nothing is removed.
+func copyOf(j Job) *Job {
+	j.Definition = slices.Clone(j.Definition)
+	j.Warnings = slices.Clone(j.Warnings)
+	j.Output = slices.Clone(j.Output)
 	return &j
 }
 

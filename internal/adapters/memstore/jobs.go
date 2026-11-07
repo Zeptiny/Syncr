@@ -48,7 +48,7 @@ func (s *Store) UpdateJob(_ context.Context, j jobs.Job) (jobs.Job, error) {
 	}
 	next := cloneJob(j)
 	// Immutable fields keep their stored values.
-	next.WorkerID, next.Kind, next.SpecEnc, next.CreatedAt = cur.WorkerID, cur.Kind, cur.SpecEnc, cur.CreatedAt
+	next.WorkerID, next.OwnerID, next.Kind, next.Definition, next.CreatedAt = cur.WorkerID, cur.OwnerID, cur.Kind, cur.Definition, cur.CreatedAt
 	next.Version = cur.Version + 1
 	s.jobs[j.ID] = next
 	return cloneJob(next), nil

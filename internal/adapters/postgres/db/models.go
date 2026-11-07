@@ -8,6 +8,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type ApiToken struct {
+	ID         pgtype.UUID
+	UserID     pgtype.UUID
+	Name       string
+	Prefix     string
+	Hash       []byte
+	CreatedAt  pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	LastUsedAt pgtype.Timestamptz
+}
+
 type EnrollmentToken struct {
 	Hash      []byte
 	CreatedAt pgtype.Timestamptz
@@ -21,7 +32,6 @@ type Job struct {
 	WorkerID          pgtype.UUID
 	Kind              string
 	Status            string
-	SpecEnc           []byte
 	Epoch             string
 	CancelRequestedAt pgtype.Timestamptz
 	CreatedAt         pgtype.Timestamptz
@@ -45,6 +55,14 @@ type Job struct {
 	ExitCode          int32
 	Output            []byte
 	Version           int64
+	OwnerID           pgtype.UUID
+	Definition        []byte
+	SearchText        string
+}
+
+type JobRemote struct {
+	JobID    pgtype.UUID
+	RemoteID pgtype.UUID
 }
 
 type JobSample struct {
@@ -59,6 +77,53 @@ type JobSample struct {
 	Renames    int64
 	Errors     int64
 	ElapsedNs  int64
+}
+
+type Remote struct {
+	ID          pgtype.UUID
+	OwnerID     pgtype.UUID
+	Name        string
+	BackendType string
+	Options     []byte
+	SecretsEnc  []byte
+	SecretKeys  []string
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	DeletedAt   pgtype.Timestamptz
+	Version     int64
+}
+
+type Session struct {
+	IDHash        []byte
+	UserID        pgtype.UUID
+	CreatedAt     pgtype.Timestamptz
+	LastSeenAt    pgtype.Timestamptz
+	IdleExpiresAt pgtype.Timestamptz
+	ExpiresAt     pgtype.Timestamptz
+	UserAgent     string
+	ClientIp      string
+}
+
+type UnionMember struct {
+	UnionRemoteID  pgtype.UUID
+	Ord            int32
+	MemberRemoteID pgtype.UUID
+	Path           string
+	Mode           string
+}
+
+type User struct {
+	ID                pgtype.UUID
+	Username          string
+	DisplayName       string
+	Role              string
+	PasswordHash      string
+	DisabledAt        pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	PasswordChangedAt pgtype.Timestamptz
+	LastLoginAt       pgtype.Timestamptz
+	Version           int64
 }
 
 type Worker struct {

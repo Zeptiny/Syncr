@@ -35,7 +35,6 @@ func (w *watcher) next() *syncrv1.WatchJobResponse {
 	if !w.stream.Receive() {
 		w.t.Fatalf("stream ended: %v", w.stream.Err())
 	}
-	noSpecLeak(w.t, w.stream.Msg())
 	return w.stream.Msg()
 }
 

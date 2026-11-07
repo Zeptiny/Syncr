@@ -16,7 +16,6 @@ import (
 type Jobs interface {
 	Unfinished(ctx context.Context, workerID domain.WorkerID) ([]jobs.Job, error)
 	QueuedBefore(ctx context.Context, before time.Time, limit int) ([]jobs.Job, error)
-	Spec(j jobs.Job) ([]byte, error)
 	MarkDispatched(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string) (jobs.Job, bool, error)
 	MarkRunning(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, startedAt time.Time) (jobs.Job, bool, error)
 	RecordProgress(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, smp jobs.Sample) (bool, error)
@@ -24,6 +23,24 @@ type Jobs interface {
 	Requeue(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string) (jobs.Job, bool, error)
 	Interrupt(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, e jobs.JobError) (jobs.Job, bool, error)
 	FailQueued(ctx context.Context, id domain.JobID, queuedBefore time.Time, e jobs.JobError) (jobs.Job, bool, error)
+}
+
+// SpecBuilder builds the worker spec of a queued job from its stored
+// definition, resolving the credentials of the remotes it uses. It is
+// called for every queued job on every poll until the worker accepts it, so
+// the spec (which contains secrets) is never stored.
+//
+// Errors that fail the job instead of being retried: domain.ErrNotFound (a
+// remote was deleted or is not the owner's) fails it with
+// "remote_unavailable", domain.ErrInvalidArgument (the definition cannot be
+// decoded or built) with "invalid_spec". Any other error is returned to the
+// worker's call and retried on its next poll.
+//
+// Interim seam (Milestone 3 contracts): track C replaces it with the
+// remotes service (Resolve) and the job kinds (internal/jobkind), or
+// implements it with them.
+type SpecBuilder interface {
+	Build(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, error)
 }
 
 // Workers is the part of the worker service (*workers.Service) the

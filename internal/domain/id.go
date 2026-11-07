@@ -24,6 +24,7 @@ type (
 	resticRepoKind struct{}
 	scheduleKind   struct{}
 	jobKind        struct{}
+	apiTokenKind   struct{}
 )
 
 // Entity IDs.
@@ -40,6 +41,8 @@ type (
 	ScheduleID = ID[scheduleKind]
 	// JobID identifies a job run.
 	JobID = ID[jobKind]
+	// APITokenID identifies a user's personal API token.
+	APITokenID = ID[apiTokenKind]
 )
 
 // NewUserID returns a new random UserID.
@@ -60,6 +63,9 @@ func NewScheduleID() ScheduleID { return newID[scheduleKind]() }
 // NewJobID returns a new random JobID.
 func NewJobID() JobID { return newID[jobKind]() }
 
+// NewAPITokenID returns a new random APITokenID.
+func NewAPITokenID() APITokenID { return newID[apiTokenKind]() }
+
 // ParseUserID parses a UserID from its canonical string form.
 func ParseUserID(s string) (UserID, error) { return parseID[userKind](s) }
 
@@ -77,6 +83,9 @@ func ParseScheduleID(s string) (ScheduleID, error) { return parseID[scheduleKind
 
 // ParseJobID parses a JobID from its canonical string form.
 func ParseJobID(s string) (JobID, error) { return parseID[jobKind](s) }
+
+// ParseAPITokenID parses an APITokenID from its canonical string form.
+func ParseAPITokenID(s string) (APITokenID, error) { return parseID[apiTokenKind](s) }
 
 func newID[K any]() ID[K] { return ID[K]{uuid: uuid.NewV7()} }
 

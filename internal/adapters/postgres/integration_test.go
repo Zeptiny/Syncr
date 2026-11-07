@@ -19,6 +19,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/Zeptiny/Syncr/internal/adapters/storetest"
+	"github.com/Zeptiny/Syncr/internal/app/users"
+	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/platform/redact"
 )
 
@@ -201,5 +203,43 @@ func newMigratedStore(t *testing.T) *Store {
 }
 
 func TestContract(t *testing.T) {
-	storetest.Run(t, func(t *testing.T) storetest.Store { return newMigratedStore(t) })
+	storetest.Run(t, func(t *testing.T) storetest.Store { return contractStore{newMigratedStore(t)} })
+}
+
+// contractStore is the store as the contract suite runs it.
+//
+// m3: pending track A: the users port is a stub (users.go) until track A
+// implements it, but jobs need an owner row. Until then CreateUser inserts
+// the row directly, so the job suites keep running on Postgres (the users
+// and remotes suites skip themselves on errors.ErrUnsupported). Track A
+// removes this type once Store.CreateUser exists.
+type contractStore struct{ *Store }
+
+func (s contractStore) CreateUser(ctx context.Context, u users.User) error {
+	return insertUser(ctx, s.Store, u)
+}
+
+// insertUser inserts a user row with plain SQL (test fixture).
+func insertUser(ctx context.Context, s *Store, u users.User) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO users (id, username, display_name, role, password_hash,
+		disabled_at, created_at, updated_at, password_changed_at, last_login_at, version)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		pgID(u.ID), u.Username, u.DisplayName, string(u.Role), u.PasswordHash, pgOptTime(u.DisabledAt),
+		pgTime(u.CreatedAt), pgTime(u.UpdatedAt), pgTime(u.PasswordChangedAt), pgOptTime(u.LastLoginAt), u.Version)
+	return mapErr("insert user", err)
+}
+
+// seedUser inserts a user (e.g. to own test jobs) and returns its ID.
+func seedUser(t *testing.T, s *Store) domain.UserID {
+	t.Helper()
+	id := domain.NewUserID()
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	u := users.User{
+		ID: id, Username: "u" + id.String()[len(id.String())-12:], Role: domain.RoleUser, PasswordHash: "x",
+		CreatedAt: now, UpdatedAt: now, PasswordChangedAt: now, Version: 1,
+	}
+	if err := insertUser(t.Context(), s, u); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

@@ -1,6 +1,7 @@
 // Package idgen mints entity IDs for the controller's use cases: UUIDv7 for
 // production, Sequential for tests and fixtures. Both satisfy the
-// IDGenerator ports of internal/app/... (NewWorkerID, NewJobID).
+// IDGenerator ports of internal/app/... (NewWorkerID, NewJobID, NewUserID,
+// NewAPITokenID, NewRemoteID).
 //
 // Allowed dependencies: the standard library and internal/domain.
 package idgen
@@ -22,6 +23,15 @@ func (UUIDv7) NewWorkerID() domain.WorkerID { return domain.NewWorkerID() }
 // NewJobID returns a new random JobID.
 func (UUIDv7) NewJobID() domain.JobID { return domain.NewJobID() }
 
+// NewUserID returns a new random UserID.
+func (UUIDv7) NewUserID() domain.UserID { return domain.NewUserID() }
+
+// NewAPITokenID returns a new random APITokenID.
+func (UUIDv7) NewAPITokenID() domain.APITokenID { return domain.NewAPITokenID() }
+
+// NewRemoteID returns a new random RemoteID.
+func (UUIDv7) NewRemoteID() domain.RemoteID { return domain.NewRemoteID() }
+
 // Sequential mints predictable, strictly increasing IDs of the form
 // 00000000-0000-7000-8000-00000000000n, sharing one counter across entity
 // kinds. The zero value starts at 1. Safe for concurrent use.
@@ -34,6 +44,15 @@ func (s *Sequential) NewWorkerID() domain.WorkerID { return mint(domain.ParseWor
 
 // NewJobID returns the next JobID.
 func (s *Sequential) NewJobID() domain.JobID { return mint(domain.ParseJobID, s.next()) }
+
+// NewUserID returns the next UserID.
+func (s *Sequential) NewUserID() domain.UserID { return mint(domain.ParseUserID, s.next()) }
+
+// NewAPITokenID returns the next APITokenID.
+func (s *Sequential) NewAPITokenID() domain.APITokenID { return mint(domain.ParseAPITokenID, s.next()) }
+
+// NewRemoteID returns the next RemoteID.
+func (s *Sequential) NewRemoteID() domain.RemoteID { return mint(domain.ParseRemoteID, s.next()) }
 
 func (s *Sequential) next() string {
 	return fmt.Sprintf("00000000-0000-7000-8000-%012x", s.n.Add(1))

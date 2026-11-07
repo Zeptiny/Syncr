@@ -22,6 +22,8 @@ import (
 	"github.com/Zeptiny/Syncr/internal/adapters/postgres"
 	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	controllerconfig "github.com/Zeptiny/Syncr/internal/controller/config"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
@@ -41,6 +43,10 @@ type store interface {
 	workers.TokenRepository
 	jobs.Repository
 	jobs.SampleRepository
+	users.Repository
+	users.SessionRepository
+	users.APITokenRepository
+	remotes.Repository
 }
 
 // openStore opens and migrates the configured store. close releases it.
@@ -109,7 +115,7 @@ func newServices(st store, cipher *secrets.Keyring, log *slog.Logger) (*services
 	clk := clock.System{}
 	ids := idgen.UUIDv7{}
 	js, err := jobs.New(jobs.Deps{
-		Jobs: st, Samples: st, Cipher: cipher, Clock: clk, IDs: ids,
+		Jobs: st, Samples: st, Clock: clk, IDs: ids,
 		Broker: broker.New(), Notifier: jobs.NopNotifier{}, Waker: hub,
 		Logger: log.With("component", "jobs"),
 	}, jobs.Config{})
@@ -124,6 +130,8 @@ func newServices(st store, cipher *secrets.Keyring, log *slog.Logger) (*services
 	if err != nil {
 		return nil, fmt.Errorf("workers service: %w", err)
 	}
+	// m3: pending integration: Specs (remotes.Resolve + job kinds) is wired
+	// by the integration pass; until then queued jobs fail with invalid_spec.
 	disp, err := dispatch.New(dispatch.Deps{
 		Jobs: js, Workers: ws, Clock: clk, Hub: hub,
 		Logger: log.With("component", "dispatch"),
@@ -150,6 +158,10 @@ func newHandler(lifetime context.Context, cfg controllerconfig.Config, svc *serv
 		}
 		auth = a
 	}
+	// m3: pending integration: Identity, Users, Remotes, Backends, Kinds, UI,
+	// Cookies and Install are wired (and SessionAuth replaces the admin
+	// token) by the integration pass. Until then those services stay
+	// unmounted, and RunJob is Unimplemented (no Kinds).
 	apiHandler := api.NewHandler(api.Deps{
 		BuildInfo:        info,
 		Logger:           log.With("component", "api"),

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,9 +17,9 @@ import (
 	"github.com/Zeptiny/Syncr/internal/platform/redact"
 )
 
-// protectedCalls performs every RPC of the protected services with a valid
-// request shape, returning the call's error. Streams report the error of
-// their first Receive.
+// protectedCalls performs every RPC of the worker and job services with a
+// valid request shape, returning the call's error. Streams report the error
+// of their first Receive.
 func protectedCalls(e *testEnv, authorization string) map[string]func(ctx context.Context) error {
 	w, j := e.workersAs(authorization), e.jobsAs(authorization)
 	id := e.worker.String()
@@ -50,7 +51,7 @@ func protectedCalls(e *testEnv, authorization string) map[string]func(ctx contex
 			return err
 		},
 		"RunJob": func(ctx context.Context) error {
-			_, err := j.RunJob(ctx, connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: id, Spec: testSpec()}))
+			_, err := j.RunJob(ctx, connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: id, Definition: testDefinition()}))
 			return err
 		},
 		"GetJob": func(ctx context.Context) error {
@@ -80,7 +81,7 @@ func protectedCalls(e *testEnv, authorization string) map[string]func(ctx contex
 
 func TestAuthRejectsBadCredentials(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t)
+	e := newEnv(t, withAdminToken(t))
 	for name, header := range map[string]string{
 		"missing":        "",
 		"wrong token":    "Bearer " + strings.Repeat("x", len(adminToken)),
@@ -101,13 +102,15 @@ func TestAuthRejectsBadCredentials(t *testing.T) {
 
 func TestAuthAcceptsAdminToken(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t)
+	e := newEnv(t, withAdminToken(t))
 	for _, header := range []string{"Bearer " + adminToken, "bearer " + adminToken} {
 		for rpc, call := range protectedCalls(e, header) {
-			// Valid credentials get past authentication: the call either
-			// works or fails for its own reasons (unknown IDs here).
-			if code := codeOf(t, call(t.Context())); code == connect.CodeUnauthenticated {
-				t.Errorf("%s with %q: Unauthenticated", rpc, header[:6])
+			// Valid credentials get past authentication and the policy (the
+			// token acts as an admin): the call either works or fails for
+			// its own reasons (unknown IDs here; RunJob because the token
+			// is no user that could own a job).
+			if code := codeOf(t, call(t.Context())); code == connect.CodeUnauthenticated || code == connect.CodePermissionDenied {
+				t.Errorf("%s with %q: %v", rpc, header[:6], code)
 			}
 		}
 	}
@@ -115,7 +118,7 @@ func TestAuthAcceptsAdminToken(t *testing.T) {
 
 func TestAuthFailureDetails(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t)
+	e := newEnv(t, withAdminToken(t))
 	const wrong = "wrong-token-that-must-not-be-logged-0000"
 	_, err := e.workersAs("Bearer "+wrong).ListWorkers(t.Context(), connect.NewRequest(&syncrv1.ListWorkersRequest{}))
 	wantCode(t, err, connect.CodeUnauthenticated)
@@ -166,18 +169,28 @@ func TestPublicEndpointsNeedNoToken(t *testing.T) {
 
 func TestProtectedServicesNotMountedWithoutAuth(t *testing.T) {
 	t.Parallel()
-	tests := map[string]func(*Deps){
-		"no authenticator": func(d *Deps) { d.Auth = nil },
-		"no workers":       func(d *Deps) { d.Workers = nil },
-		"no jobs":          func(d *Deps) { d.Jobs = nil },
+	workerRPCs := []string{"CreateEnrollmentToken", "RegisterPassiveWorker", "ListWorkers", "GetWorker", "RenameWorker", "RemoveWorker"}
+	jobRPCs := []string{"RunJob", "GetJob", "ListJobs", "CancelJob", "WatchJob"}
+	tests := map[string]struct {
+		mutate    func(*Deps)
+		unmounted []string
+	}{
+		"no authenticator": {func(d *Deps) { d.Auth = nil }, append(slices.Clone(workerRPCs), jobRPCs...)},
+		"no workers":       {func(d *Deps) { d.Workers = nil }, workerRPCs},
+		"no jobs":          {func(d *Deps) { d.Jobs = nil }, jobRPCs},
 	}
-	for name, mutate := range tests {
+	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			e := newEnv(t, mutate)
+			e := newEnv(t, withAdminToken(t), tt.mutate)
 			// Even the right token gets nothing: the services do not exist.
-			for _, call := range protectedCalls(e, "Bearer "+adminToken) {
-				wantCode(t, call(t.Context()), connect.CodeUnimplemented)
+			for rpc, call := range protectedCalls(e, "Bearer "+adminToken) {
+				err := call(t.Context())
+				if slices.Contains(tt.unmounted, rpc) {
+					wantCode(t, err, connect.CodeUnimplemented)
+				} else if codeOf(t, err) == connect.CodeUnimplemented && rpc != "RunJob" {
+					t.Errorf("%s is not served", rpc)
+				}
 			}
 			if !strings.Contains(e.logs.String(), "disabled") {
 				t.Errorf("no warning logged: %q", e.logs.String())
@@ -249,11 +262,15 @@ func TestAdminTokenAuthenticate(t *testing.T) {
 	}
 }
 
-// fakeAuth is a stand-in for the Milestone 3 session authenticator.
+// fakeAuth is an authenticator whose decision is fn's: nil accepts the
+// call as the test admin.
 type fakeAuth struct{ fn func(h http.Header) error }
 
 func (f fakeAuth) Authenticate(ctx context.Context, h http.Header, _ connect.Spec) (context.Context, error) {
-	return ctx, f.fn(h)
+	if err := f.fn(h); err != nil {
+		return ctx, err
+	}
+	return WithCaller(ctx, Caller{Actor: testAdmin, Method: AuthSession}), nil
 }
 
 func TestAuthenticatorSeam(t *testing.T) {
@@ -294,4 +311,25 @@ func headerInterceptor(key, value string) connect.Interceptor {
 			return next(ctx, req)
 		}
 	})
+}
+
+func TestAdminTokenActsAsAdminWithoutAccount(t *testing.T) {
+	t.Parallel()
+	auth, err := NewAdminTokenAuth(adminToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := http.Header{}
+	h.Set("Authorization", "Bearer "+adminToken)
+	ctx, err := auth.Authenticate(context.Background(), h, connect.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, ok := CallerFrom(ctx)
+	if !ok || !c.Actor.IsAdmin() || !c.Actor.UserID.IsZero() || c.Method != AuthToken {
+		t.Errorf("caller = %+v (%v), want an admin without a user ID, by token", c, ok)
+	}
+	if a, ok := ActorFrom(context.Background()); ok || a != (domain.Actor{}) {
+		t.Errorf("ActorFrom(empty context) = (%+v, %v)", a, ok)
+	}
 }
