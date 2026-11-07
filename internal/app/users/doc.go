@@ -17,13 +17,16 @@
 //
 // # Service (Milestone 3, track A)
 //
-// The Service is constructed as New(Deps, Config). Its methods:
+// The Service is constructed as New(Deps, Config); Deps.Limiters holds the
+// rate limiters of the credential checks. NewSetupCode returns a random
+// setup code. Its methods:
 //
 //	// SetupRequired reports whether no user exists yet.
 //	SetupRequired(ctx) (bool, error)
-//	// ArmSetup sets the one-time setup code (held only as a hash); the
-//	// composition root calls it at start while no user exists.
-//	ArmSetup(code string)
+//	// ArmSetup sets the one-time setup code (held only as a hash; at least
+//	// MinSetupCodeLen characters); the composition root calls it at start
+//	// while no user exists.
+//	ArmSetup(code string) error
 //	// CompleteSetup checks the code (constant time, rate limited) and
 //	// creates the first admin with Repository.CreateFirstUser, then starts
 //	// a session. ErrFailedPrecondition once a user exists.
@@ -66,8 +69,8 @@
 //	ResetPassword(ctx, actor domain.Actor, id domain.UserID, password string) (User, error)
 //	Delete(ctx, actor domain.Actor, id domain.UserID) error
 //
-//	// PurgeExpired deletes expired sessions; the composition root calls it
-//	// periodically.
+//	// PurgeExpired deletes expired sessions (and any left of disabled
+//	// users); the composition root calls it periodically.
 //	PurgeExpired(ctx) (int, error)
 //
 // Usernames are lower case and match ^[a-z0-9][a-z0-9._-]{0,63}$ (the

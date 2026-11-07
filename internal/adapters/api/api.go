@@ -93,6 +93,10 @@ type Deps struct {
 	UI fs.FS
 	// Cookies configures the session cookie.
 	Cookies CookieConfig
+	// ClientIP derives the client address of Login and CompleteSetup
+	// calls, for their rate limits and the session record
+	// (clientip.Resolver.ClientIP). Nil uses the TCP peer's address.
+	ClientIP ClientIPFunc
 	// Install configures the worker install commands.
 	Install InstallConfig
 
@@ -140,7 +144,7 @@ func NewHandler(deps Deps) http.Handler {
 	if deps.UI != nil {
 		mux.Handle("/", newSPAHandler(deps.UI, logger))
 	}
-	return http.NewCrossOriginProtection().Handler(mux)
+	return http.NewCrossOriginProtection().Handler(withTLSState(mux))
 }
 
 // mountProtected adds the services that need an authenticated caller for
@@ -152,8 +156,8 @@ func mountProtected(mux *http.ServeMux, deps Deps, logger *slog.Logger, opts []c
 	}
 
 	if deps.Identity != nil {
-		mux.Handle(syncrv1connect.NewSetupServiceHandler(&setupHandler{identity: deps.Identity, cookies: deps.Cookies, errs: errs}, opts...))
-		mux.Handle(syncrv1connect.NewAuthServiceHandler(&authHandler{identity: deps.Identity, cookies: deps.Cookies, errs: errs}, opts...))
+		mux.Handle(syncrv1connect.NewSetupServiceHandler(&setupHandler{identity: deps.Identity, cookies: deps.Cookies, clientIP: deps.ClientIP, errs: errs}, opts...))
+		mux.Handle(syncrv1connect.NewAuthServiceHandler(&authHandler{identity: deps.Identity, cookies: deps.Cookies, clientIP: deps.ClientIP, errs: errs}, opts...))
 	} else {
 		disabled(syncrv1connect.SetupServiceName)
 		disabled(syncrv1connect.AuthServiceName)

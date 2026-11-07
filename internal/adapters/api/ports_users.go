@@ -8,27 +8,33 @@ import (
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
-// The users use cases the API calls are implemented by *users.Service
-// (Milestone 3 track A), which adds the compile-time checks:
-//
-//	var (
-//		_ IdentityService  = (*users.Service)(nil)
-//		_ UserAdminService = (*users.Service)(nil)
-//	)
+// The users use cases the API calls are implemented by *users.Service.
+var (
+	_ CredentialVerifier = (*users.Service)(nil)
+	_ IdentityService    = (*users.Service)(nil)
+	_ UserAdminService   = (*users.Service)(nil)
+)
 
-// IdentityService is the part of the users use cases behind SetupService,
-// AuthService and the session authenticator. See internal/app/users for the
-// semantics.
-type IdentityService interface {
-	SetupRequired(ctx context.Context) (bool, error)
-	CompleteSetup(ctx context.Context, p users.SetupParams) (users.User, users.IssuedSession, error)
-	Login(ctx context.Context, p users.LoginParams) (users.User, users.IssuedSession, error)
-	Logout(ctx context.Context, sessionToken string) error
+// CredentialVerifier resolves raw credentials to actors: what SessionAuth
+// needs of the users use cases. See internal/app/users for the semantics;
+// failures wrap domain.ErrUnauthenticated.
+type CredentialVerifier interface {
 	// AuthenticateSession resolves a raw session token (the cookie value).
 	AuthenticateSession(ctx context.Context, token string) (domain.Actor, users.Session, error)
 	// AuthenticateAPIToken resolves a raw personal API token (a bearer
 	// token); the token is returned for its expiry.
 	AuthenticateAPIToken(ctx context.Context, token string) (domain.Actor, users.APIToken, error)
+}
+
+// IdentityService is the part of the users use cases behind SetupService,
+// AuthService and the session authenticator. See internal/app/users for the
+// semantics.
+type IdentityService interface {
+	CredentialVerifier
+	SetupRequired(ctx context.Context) (bool, error)
+	CompleteSetup(ctx context.Context, p users.SetupParams) (users.User, users.IssuedSession, error)
+	Login(ctx context.Context, p users.LoginParams) (users.User, users.IssuedSession, error)
+	Logout(ctx context.Context, sessionToken string) error
 	Me(ctx context.Context, actor domain.Actor) (users.User, error)
 	ChangePassword(ctx context.Context, actor domain.Actor, sessionToken, current, next string) error
 	CreateAPIToken(ctx context.Context, actor domain.Actor, name string, ttl time.Duration) (users.APIToken, string, error)
