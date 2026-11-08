@@ -109,7 +109,10 @@ const shots = [
       await p.goto(`${base}/remotes/new?type=s3`);
       await settle(p);
       await p.getByLabel("Name").first().fill("Wasabi archive");
+      await p.getByLabel("Provider").click();
+      await p.getByRole("option", { name: "Wasabi" }).click();
       await p.getByLabel("Access key ID").fill("WSB4K2Q9EXAMPLE");
+      await p.getByLabel("Region").fill("eu-central-1");
       await p.getByLabel("Endpoint").fill("https://s3.eu-central-1.wasabisys.com");
       await p.getByRole("button", { name: /Advanced options/ }).click();
       await settle(p, 300);
@@ -132,7 +135,21 @@ const shots = [
     async (p) => (await p.goto(`${base}/workers/new?tab=passive`), settle(p)),
   ],
   ["12-users", async (p) => (await p.goto(`${base}/users`), settle(p))],
-  ["13-settings-tokens", async (p) => (await p.goto(`${base}/settings`), settle(p))],
+  [
+    "13-settings-tokens",
+    async (p) => {
+      await p.goto(`${base}/settings`);
+      await settle(p);
+      // The dev seed has no API tokens: create one so the list is not empty.
+      if (await p.getByText("No API tokens").isVisible()) {
+        await p.getByRole("button", { name: "Create token" }).click();
+        await p.locator("#tok-name").fill("Home Assistant");
+        await p.getByRole("dialog").getByRole("button", { name: "Create token" }).click();
+        await p.getByRole("button", { name: "I've copied it" }).click();
+        await settle(p);
+      }
+    },
+  ],
 ];
 
 async function main() {
