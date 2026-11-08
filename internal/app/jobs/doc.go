@@ -1,5 +1,5 @@
-// Package jobs owns the job lifecycle: creating jobs (Milestone 2: an
-// explicit worker and a complete, encrypted spec), reading and listing them,
+// Package jobs owns the job lifecycle: creating jobs (an explicit worker and
+// a secret-free job definition, owned by a user), reading and listing them,
 // canceling them, live progress, and every status change the dispatcher
 // derives from the worker link.
 //
@@ -19,13 +19,24 @@
 // (a duplicate event, a lost race, a job already finished) changes nothing
 // and reports changed == false without an error.
 //
-// # Secrets
+// # Ownership
 //
-// The JobSpec contains remote credentials. It reaches this package already
-// encoded (the protobuf wire form; this package does not interpret it) and
-// is stored encrypted with the Cipher, bound to its record by the associated
-// data "job-spec:<job id>". Only the dispatcher reads it back (Spec), to send
-// it to the worker.
+// A job belongs to the actor who created it. The API use cases (Create,
+// Get, List, Cancel, Watch, Samples) take the actor: a user sees and
+// cancels only their own jobs, an admin any job (List returns the admin's
+// own jobs unless ListFilter.AllUsers is set). Another user's job is
+// domain.ErrNotFound, so its existence does not leak.
+//
+// # Definitions
+//
+// A job stores its definition (see internal/jobkind) already encoded and
+// checked by the caller; this package does not interpret it. It contains
+// no secrets: the dispatcher builds the worker's JobSpec, with the remotes'
+// credentials, when it sends the job. Create checks that the remotes the
+// definition refers to are live remotes of the actor (RemoteChecker), keeps
+// their IDs (Job.RemoteIDs, for ListFilter.RemoteID and display) and builds
+// the job's search text from the kind, the definition's search terms and
+// the remotes' names (ListFilter.Query).
 //
 // # Progress
 //

@@ -42,6 +42,9 @@ const (
 	// WorkerAdminServiceCreateEnrollmentTokenProcedure is the fully-qualified name of the
 	// WorkerAdminService's CreateEnrollmentToken RPC.
 	WorkerAdminServiceCreateEnrollmentTokenProcedure = "/syncr.v1.WorkerAdminService/CreateEnrollmentToken"
+	// WorkerAdminServiceGetPassiveInstallCommandsProcedure is the fully-qualified name of the
+	// WorkerAdminService's GetPassiveInstallCommands RPC.
+	WorkerAdminServiceGetPassiveInstallCommandsProcedure = "/syncr.v1.WorkerAdminService/GetPassiveInstallCommands"
 	// WorkerAdminServiceRegisterPassiveWorkerProcedure is the fully-qualified name of the
 	// WorkerAdminService's RegisterPassiveWorker RPC.
 	WorkerAdminServiceRegisterPassiveWorkerProcedure = "/syncr.v1.WorkerAdminService/RegisterPassiveWorker"
@@ -67,6 +70,9 @@ const (
 	JobServiceCancelJobProcedure = "/syncr.v1.JobService/CancelJob"
 	// JobServiceWatchJobProcedure is the fully-qualified name of the JobService's WatchJob RPC.
 	JobServiceWatchJobProcedure = "/syncr.v1.JobService/WatchJob"
+	// JobServiceListJobSamplesProcedure is the fully-qualified name of the JobService's ListJobSamples
+	// RPC.
+	JobServiceListJobSamplesProcedure = "/syncr.v1.JobService/ListJobSamples"
 )
 
 // SystemServiceClient is a client for the syncr.v1.SystemService service.
@@ -148,9 +154,13 @@ func (UnimplementedSystemServiceHandler) GetInfo(context.Context, *connect.Reque
 // WorkerAdminServiceClient is a client for the syncr.v1.WorkerAdminService service.
 type WorkerAdminServiceClient interface {
 	// CreateEnrollmentToken creates a short-lived, single-use token for
-	// `syncr-worker setup --token`. The token is returned once; the controller
-	// stores only its hash.
+	// `syncr-worker setup --token`, with ready-to-copy install commands. The
+	// token is returned once; the controller stores only its hash.
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
+	// GetPassiveInstallCommands returns the commands that install a passive
+	// worker (`syncr-worker setup --passive`), which then prints the URL,
+	// fingerprint and pairing secret for RegisterPassiveWorker.
+	GetPassiveInstallCommands(context.Context, *connect.Request[v1.GetPassiveInstallCommandsRequest]) (*connect.Response[v1.GetPassiveInstallCommandsResponse], error)
 	// RegisterPassiveWorker adds a passive worker from the URL, certificate
 	// fingerprint and pairing secret that `syncr-worker setup --passive`
 	// printed. The controller starts calling the worker right away.
@@ -182,6 +192,13 @@ func NewWorkerAdminServiceClient(httpClient connect.HTTPClient, baseURL string, 
 			httpClient,
 			baseURL+WorkerAdminServiceCreateEnrollmentTokenProcedure,
 			connect.WithSchema(workerAdminServiceMethods.ByName("CreateEnrollmentToken")),
+			connect.WithClientOptions(opts...),
+		),
+		getPassiveInstallCommands: connect.NewClient[v1.GetPassiveInstallCommandsRequest, v1.GetPassiveInstallCommandsResponse](
+			httpClient,
+			baseURL+WorkerAdminServiceGetPassiveInstallCommandsProcedure,
+			connect.WithSchema(workerAdminServiceMethods.ByName("GetPassiveInstallCommands")),
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 			connect.WithClientOptions(opts...),
 		),
 		registerPassiveWorker: connect.NewClient[v1.RegisterPassiveWorkerRequest, v1.RegisterPassiveWorkerResponse](
@@ -223,17 +240,23 @@ func NewWorkerAdminServiceClient(httpClient connect.HTTPClient, baseURL string, 
 
 // workerAdminServiceClient implements WorkerAdminServiceClient.
 type workerAdminServiceClient struct {
-	createEnrollmentToken *connect.Client[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse]
-	registerPassiveWorker *connect.Client[v1.RegisterPassiveWorkerRequest, v1.RegisterPassiveWorkerResponse]
-	listWorkers           *connect.Client[v1.ListWorkersRequest, v1.ListWorkersResponse]
-	getWorker             *connect.Client[v1.GetWorkerRequest, v1.GetWorkerResponse]
-	renameWorker          *connect.Client[v1.RenameWorkerRequest, v1.RenameWorkerResponse]
-	removeWorker          *connect.Client[v1.RemoveWorkerRequest, v1.RemoveWorkerResponse]
+	createEnrollmentToken     *connect.Client[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse]
+	getPassiveInstallCommands *connect.Client[v1.GetPassiveInstallCommandsRequest, v1.GetPassiveInstallCommandsResponse]
+	registerPassiveWorker     *connect.Client[v1.RegisterPassiveWorkerRequest, v1.RegisterPassiveWorkerResponse]
+	listWorkers               *connect.Client[v1.ListWorkersRequest, v1.ListWorkersResponse]
+	getWorker                 *connect.Client[v1.GetWorkerRequest, v1.GetWorkerResponse]
+	renameWorker              *connect.Client[v1.RenameWorkerRequest, v1.RenameWorkerResponse]
+	removeWorker              *connect.Client[v1.RemoveWorkerRequest, v1.RemoveWorkerResponse]
 }
 
 // CreateEnrollmentToken calls syncr.v1.WorkerAdminService.CreateEnrollmentToken.
 func (c *workerAdminServiceClient) CreateEnrollmentToken(ctx context.Context, req *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error) {
 	return c.createEnrollmentToken.CallUnary(ctx, req)
+}
+
+// GetPassiveInstallCommands calls syncr.v1.WorkerAdminService.GetPassiveInstallCommands.
+func (c *workerAdminServiceClient) GetPassiveInstallCommands(ctx context.Context, req *connect.Request[v1.GetPassiveInstallCommandsRequest]) (*connect.Response[v1.GetPassiveInstallCommandsResponse], error) {
+	return c.getPassiveInstallCommands.CallUnary(ctx, req)
 }
 
 // RegisterPassiveWorker calls syncr.v1.WorkerAdminService.RegisterPassiveWorker.
@@ -264,9 +287,13 @@ func (c *workerAdminServiceClient) RemoveWorker(ctx context.Context, req *connec
 // WorkerAdminServiceHandler is an implementation of the syncr.v1.WorkerAdminService service.
 type WorkerAdminServiceHandler interface {
 	// CreateEnrollmentToken creates a short-lived, single-use token for
-	// `syncr-worker setup --token`. The token is returned once; the controller
-	// stores only its hash.
+	// `syncr-worker setup --token`, with ready-to-copy install commands. The
+	// token is returned once; the controller stores only its hash.
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
+	// GetPassiveInstallCommands returns the commands that install a passive
+	// worker (`syncr-worker setup --passive`), which then prints the URL,
+	// fingerprint and pairing secret for RegisterPassiveWorker.
+	GetPassiveInstallCommands(context.Context, *connect.Request[v1.GetPassiveInstallCommandsRequest]) (*connect.Response[v1.GetPassiveInstallCommandsResponse], error)
 	// RegisterPassiveWorker adds a passive worker from the URL, certificate
 	// fingerprint and pairing secret that `syncr-worker setup --passive`
 	// printed. The controller starts calling the worker right away.
@@ -294,6 +321,13 @@ func NewWorkerAdminServiceHandler(svc WorkerAdminServiceHandler, opts ...connect
 		WorkerAdminServiceCreateEnrollmentTokenProcedure,
 		svc.CreateEnrollmentToken,
 		connect.WithSchema(workerAdminServiceMethods.ByName("CreateEnrollmentToken")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workerAdminServiceGetPassiveInstallCommandsHandler := connect.NewUnaryHandler(
+		WorkerAdminServiceGetPassiveInstallCommandsProcedure,
+		svc.GetPassiveInstallCommands,
+		connect.WithSchema(workerAdminServiceMethods.ByName("GetPassiveInstallCommands")),
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 		connect.WithHandlerOptions(opts...),
 	)
 	workerAdminServiceRegisterPassiveWorkerHandler := connect.NewUnaryHandler(
@@ -334,6 +368,8 @@ func NewWorkerAdminServiceHandler(svc WorkerAdminServiceHandler, opts ...connect
 		switch r.URL.Path {
 		case WorkerAdminServiceCreateEnrollmentTokenProcedure:
 			workerAdminServiceCreateEnrollmentTokenHandler.ServeHTTP(w, r)
+		case WorkerAdminServiceGetPassiveInstallCommandsProcedure:
+			workerAdminServiceGetPassiveInstallCommandsHandler.ServeHTTP(w, r)
 		case WorkerAdminServiceRegisterPassiveWorkerProcedure:
 			workerAdminServiceRegisterPassiveWorkerHandler.ServeHTTP(w, r)
 		case WorkerAdminServiceListWorkersProcedure:
@@ -355,6 +391,10 @@ type UnimplementedWorkerAdminServiceHandler struct{}
 
 func (UnimplementedWorkerAdminServiceHandler) CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.CreateEnrollmentToken is not implemented"))
+}
+
+func (UnimplementedWorkerAdminServiceHandler) GetPassiveInstallCommands(context.Context, *connect.Request[v1.GetPassiveInstallCommandsRequest]) (*connect.Response[v1.GetPassiveInstallCommandsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.GetPassiveInstallCommands is not implemented"))
 }
 
 func (UnimplementedWorkerAdminServiceHandler) RegisterPassiveWorker(context.Context, *connect.Request[v1.RegisterPassiveWorkerRequest]) (*connect.Response[v1.RegisterPassiveWorkerResponse], error) {
@@ -379,10 +419,12 @@ func (UnimplementedWorkerAdminServiceHandler) RemoveWorker(context.Context, *con
 
 // JobServiceClient is a client for the syncr.v1.JobService service.
 type JobServiceClient interface {
-	// RunJob queues a job on a worker. The spec is validated for shape only
-	// (an operation must be set); the worker validates it fully and reports
-	// problems as a FAILED job. The spec is stored encrypted and never
-	// returned by the API.
+	// RunJob queues a job on a worker. The definition refers to the caller's
+	// remotes by ID and carries no secrets; it is checked for shape and path
+	// syntax (INVALID_ARGUMENT with a ValidationError detail) and its remotes
+	// must be the caller's live remotes (NOT_FOUND otherwise). The controller
+	// resolves the remotes' credentials only when it hands the job to the
+	// worker, which validates it fully and reports problems as a FAILED job.
 	RunJob(context.Context, *connect.Request[v1.RunJobRequest]) (*connect.Response[v1.RunJobResponse], error)
 	// GetJob returns one job.
 	GetJob(context.Context, *connect.Request[v1.GetJobRequest]) (*connect.Response[v1.GetJobResponse], error)
@@ -405,6 +447,9 @@ type JobServiceClient interface {
 	// WatchJob again; its first message is the current job, so nothing is
 	// missed.
 	WatchJob(context.Context, *connect.Request[v1.WatchJobRequest]) (*connect.ServerStreamForClient[v1.WatchJobResponse], error)
+	// ListJobSamples returns the stored progress samples of a job (one about
+	// every five seconds while it ran), oldest first, for charts.
+	ListJobSamples(context.Context, *connect.Request[v1.ListJobSamplesRequest]) (*connect.Response[v1.ListJobSamplesResponse], error)
 }
 
 // NewJobServiceClient constructs a client for the syncr.v1.JobService service. By default, it uses
@@ -452,16 +497,24 @@ func NewJobServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...
 			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 			connect.WithClientOptions(opts...),
 		),
+		listJobSamples: connect.NewClient[v1.ListJobSamplesRequest, v1.ListJobSamplesResponse](
+			httpClient,
+			baseURL+JobServiceListJobSamplesProcedure,
+			connect.WithSchema(jobServiceMethods.ByName("ListJobSamples")),
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // jobServiceClient implements JobServiceClient.
 type jobServiceClient struct {
-	runJob    *connect.Client[v1.RunJobRequest, v1.RunJobResponse]
-	getJob    *connect.Client[v1.GetJobRequest, v1.GetJobResponse]
-	listJobs  *connect.Client[v1.ListJobsRequest, v1.ListJobsResponse]
-	cancelJob *connect.Client[v1.CancelJobRequest, v1.CancelJobResponse]
-	watchJob  *connect.Client[v1.WatchJobRequest, v1.WatchJobResponse]
+	runJob         *connect.Client[v1.RunJobRequest, v1.RunJobResponse]
+	getJob         *connect.Client[v1.GetJobRequest, v1.GetJobResponse]
+	listJobs       *connect.Client[v1.ListJobsRequest, v1.ListJobsResponse]
+	cancelJob      *connect.Client[v1.CancelJobRequest, v1.CancelJobResponse]
+	watchJob       *connect.Client[v1.WatchJobRequest, v1.WatchJobResponse]
+	listJobSamples *connect.Client[v1.ListJobSamplesRequest, v1.ListJobSamplesResponse]
 }
 
 // RunJob calls syncr.v1.JobService.RunJob.
@@ -489,12 +542,19 @@ func (c *jobServiceClient) WatchJob(ctx context.Context, req *connect.Request[v1
 	return c.watchJob.CallServerStream(ctx, req)
 }
 
+// ListJobSamples calls syncr.v1.JobService.ListJobSamples.
+func (c *jobServiceClient) ListJobSamples(ctx context.Context, req *connect.Request[v1.ListJobSamplesRequest]) (*connect.Response[v1.ListJobSamplesResponse], error) {
+	return c.listJobSamples.CallUnary(ctx, req)
+}
+
 // JobServiceHandler is an implementation of the syncr.v1.JobService service.
 type JobServiceHandler interface {
-	// RunJob queues a job on a worker. The spec is validated for shape only
-	// (an operation must be set); the worker validates it fully and reports
-	// problems as a FAILED job. The spec is stored encrypted and never
-	// returned by the API.
+	// RunJob queues a job on a worker. The definition refers to the caller's
+	// remotes by ID and carries no secrets; it is checked for shape and path
+	// syntax (INVALID_ARGUMENT with a ValidationError detail) and its remotes
+	// must be the caller's live remotes (NOT_FOUND otherwise). The controller
+	// resolves the remotes' credentials only when it hands the job to the
+	// worker, which validates it fully and reports problems as a FAILED job.
 	RunJob(context.Context, *connect.Request[v1.RunJobRequest]) (*connect.Response[v1.RunJobResponse], error)
 	// GetJob returns one job.
 	GetJob(context.Context, *connect.Request[v1.GetJobRequest]) (*connect.Response[v1.GetJobResponse], error)
@@ -517,6 +577,9 @@ type JobServiceHandler interface {
 	// WatchJob again; its first message is the current job, so nothing is
 	// missed.
 	WatchJob(context.Context, *connect.Request[v1.WatchJobRequest], *connect.ServerStream[v1.WatchJobResponse]) error
+	// ListJobSamples returns the stored progress samples of a job (one about
+	// every five seconds while it ran), oldest first, for charts.
+	ListJobSamples(context.Context, *connect.Request[v1.ListJobSamplesRequest]) (*connect.Response[v1.ListJobSamplesResponse], error)
 }
 
 // NewJobServiceHandler builds an HTTP handler from the service implementation. It returns the path
@@ -560,6 +623,13 @@ func NewJobServiceHandler(svc JobServiceHandler, opts ...connect.HandlerOption) 
 		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 		connect.WithHandlerOptions(opts...),
 	)
+	jobServiceListJobSamplesHandler := connect.NewUnaryHandler(
+		JobServiceListJobSamplesProcedure,
+		svc.ListJobSamples,
+		connect.WithSchema(jobServiceMethods.ByName("ListJobSamples")),
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/syncr.v1.JobService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case JobServiceRunJobProcedure:
@@ -572,6 +642,8 @@ func NewJobServiceHandler(svc JobServiceHandler, opts ...connect.HandlerOption) 
 			jobServiceCancelJobHandler.ServeHTTP(w, r)
 		case JobServiceWatchJobProcedure:
 			jobServiceWatchJobHandler.ServeHTTP(w, r)
+		case JobServiceListJobSamplesProcedure:
+			jobServiceListJobSamplesHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -599,4 +671,8 @@ func (UnimplementedJobServiceHandler) CancelJob(context.Context, *connect.Reques
 
 func (UnimplementedJobServiceHandler) WatchJob(context.Context, *connect.Request[v1.WatchJobRequest], *connect.ServerStream[v1.WatchJobResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.JobService.WatchJob is not implemented"))
+}
+
+func (UnimplementedJobServiceHandler) ListJobSamples(context.Context, *connect.Request[v1.ListJobSamplesRequest]) (*connect.Response[v1.ListJobSamplesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.JobService.ListJobSamples is not implemented"))
 }

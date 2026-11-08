@@ -1,7 +1,8 @@
 // Package postgres is the PostgreSQL implementation of the controller's
 // repository ports (workers.Repository, workers.TokenRepository,
-// jobs.Repository, jobs.SampleRepository), built on pgx/v5, sqlc-generated
-// queries (package db) and goose migrations.
+// jobs.Repository, jobs.SampleRepository, users.Repository,
+// users.SessionRepository, users.APITokenRepository, remotes.Repository),
+// built on pgx/v5, sqlc-generated queries (package db) and goose migrations.
 //
 // Concurrency safety lives in the statements, not in application locks: every
 // conditional update is a single UPDATE ... WHERE <condition> RETURNING ...

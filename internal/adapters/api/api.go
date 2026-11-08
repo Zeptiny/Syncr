@@ -1,13 +1,22 @@
 // Package api is the controller's inbound HTTP adapter: it serves the
-// Connect API (proto/syncr/v1/api.proto) and health endpoints, translating
-// between wire messages and application services. Later milestones add the
-// embedded web UI here.
+// Connect API (proto/syncr/v1/*.proto, except the worker link), the
+// embedded web UI and the health endpoint, translating between wire
+// messages and application services.
 //
-// SystemService and /healthz are public. WorkerAdminService and JobService
-// are protected by an Authenticator (Deps.Auth); until users and sessions
-// arrive in Milestone 3 that is AdminTokenAuth, a shared bearer token from
-// the controller's api.admin_token. Without an authenticator the protected
-// services are not served at all.
+// # Access control
+//
+// Every API service runs behind one interceptor (policy.go): it looks up the
+// procedure in the policy table (public, user, user with a session, admin;
+// a procedure without an entry is denied), authenticates non-public calls
+// with Deps.Auth, which puts the Caller into the context, and checks the
+// caller's role and authentication method. Handlers read the actor with
+// ActorFrom and pass it to the use cases, which scope objects by it (a
+// user's own remotes and jobs). The whole handler is wrapped in
+// http.CrossOriginProtection, so browsers cannot send cross-origin
+// state-changing requests.
+//
+// Without an authenticator only the public SystemService, /healthz and the
+// web UI are served (fail closed) and a warning is logged.
 //
 // WatchJob streams extend their connection's read and write deadlines (to
 // Deps.WatchMaxDuration plus a grace period), so the composition root may set
@@ -15,9 +24,10 @@
 // streams short.
 //
 // Allowed dependencies: the standard library, connect, the generated
-// protobuf code, internal/domain, internal/app/... services and
-// internal/platform packages. It must not import other adapters; the
-// composition root (cmd/syncr-controller) wires them together.
+// protobuf code, internal/domain, internal/app/... services,
+// internal/backend, internal/jobkind and internal/platform packages. It must
+// not import other adapters; the composition root (cmd/syncr-controller)
+// wires them together.
 package api
 
 import (
@@ -25,21 +35,22 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
-	"slices"
 	"time"
 
 	"connectrpc.com/connect"
 
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
+	"github.com/Zeptiny/Syncr/internal/backend"
+	"github.com/Zeptiny/Syncr/internal/jobkind"
 	"github.com/Zeptiny/Syncr/internal/platform/version"
 )
 
-// maxRequestBytes caps the size of a decoded API request message. A RunJob
-// request carries a whole JobSpec (remotes with credentials, filters), which
-// the jobs service itself limits to 1 MiB encoded; the cap leaves no room for
-// more than a little envelope.
+// maxRequestBytes caps the size of a decoded API request message. The
+// largest requests (a job definition with filters, a remote with a PEM key)
+// are far below it.
 const maxRequestBytes = 1 << 20
 
 // Defaults for the zero fields of Deps.
@@ -49,7 +60,8 @@ const (
 	defaultWatchKeepalive   = 30 * time.Second
 )
 
-// Deps are the collaborators of the API handler.
+// Deps are the collaborators of the API handler. A nil service leaves the
+// API services built on it unmounted (their calls fail with Unimplemented).
 type Deps struct {
 	// BuildInfo is reported by SystemService.GetInfo.
 	BuildInfo version.Info
@@ -57,24 +69,43 @@ type Deps struct {
 	// to discarding.
 	Logger *slog.Logger
 
-	// Auth protects WorkerAdminService and JobService. If nil, those
-	// services are not mounted at all (fail closed) and a warning is logged:
-	// there is no unauthenticated mode. Milestone 2 passes an AdminTokenAuth
-	// (when api.admin_token is configured); Milestone 3 a session
-	// authenticator.
+	// Auth authenticates the calls of non-public procedures. If nil, no
+	// service but SystemService is mounted (fail closed) and a warning is
+	// logged: there is no unauthenticated mode.
 	Auth Authenticator
-	// Workers and Jobs are the use cases behind the protected services. A
-	// nil one leaves its service unmounted.
+
+	// Identity serves SetupService and AuthService (*users.Service).
+	Identity IdentityService
+	// Users serves UserService (*users.Service).
+	Users UserAdminService
+	// Workers serves WorkerAdminService (*workers.Service).
 	Workers WorkerService
-	Jobs    JobService
+	// Jobs serves JobService (*jobs.Service), with Kinds checking the job
+	// definitions of RunJob (without Kinds, RunJob is Unimplemented).
+	Jobs  JobService
+	Kinds *jobkind.Registry
+	// Remotes serves RemoteService (*remotes.Service).
+	Remotes RemoteService
+	// Backends serves BackendService: the backend type descriptors.
+	Backends *backend.Registry
+
+	// UI is the web UI's files (index.html at the root); nil serves no UI.
+	UI fs.FS
+	// Cookies configures the session cookie.
+	Cookies CookieConfig
+	// ClientIP derives the client address of Login and CompleteSetup
+	// calls, for their rate limits and the session record
+	// (clientip.Resolver.ClientIP). Nil uses the TCP peer's address.
+	ClientIP ClientIPFunc
+	// Install configures the worker install commands.
+	Install InstallConfig
 
 	// BaseContext ends open WatchJob streams when it is done (the
 	// composition root cancels it when shutdown starts, before
 	// http.Server.Shutdown, which would otherwise wait for the streams).
 	// Defaults to context.Background().
 	BaseContext context.Context //nolint:containedctx // a lifetime signal, not a request context
-	// RequestTimeout bounds each unary call of the protected services
-	// (default 30s).
+	// RequestTimeout bounds each unary call (default 30s).
 	RequestTimeout time.Duration
 	// WatchMaxDuration bounds a WatchJob stream (default 1h).
 	WatchMaxDuration time.Duration
@@ -84,62 +115,93 @@ type Deps struct {
 }
 
 // NewHandler returns the controller's HTTP handler: the Connect services
-// under their /syncr.v1.<Service>/ paths and GET /healthz.
-//
-// SystemService and /healthz are public. WorkerAdminService and JobService
-// are mounted only when Deps.Auth, Deps.Workers and Deps.Jobs are set, and
-// then every call must pass Deps.Auth.
+// under their /syncr.v1.<Service>/ paths, GET /healthz and, with Deps.UI,
+// the web UI for every other path. See the package documentation for access
+// control.
 func NewHandler(deps Deps) http.Handler {
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	// The guard runs first, so unauthenticated calls cost nothing.
 	opts := []connect.HandlerOption{
 		connect.WithRecover(recoverHandler(logger)),
 		connect.WithReadMaxBytes(maxRequestBytes),
+		connect.WithInterceptors(
+			newGuard(deps.Auth, logger),
+			unaryTimeout(cmp.Or(deps.RequestTimeout, defaultRequestTimeout)),
+		),
 	}
 
 	mux := http.NewServeMux()
 	mux.Handle(syncrv1connect.NewSystemServiceHandler(NewSystemService(deps.BuildInfo), opts...))
 	mux.HandleFunc("GET /healthz", healthz)
-
-	switch {
-	case deps.Auth == nil:
-		logger.Warn("worker and job APIs are disabled: no admin token is configured (set api.admin_token or SYNCR_ADMIN_TOKEN)")
-	case deps.Workers == nil || deps.Jobs == nil:
-		logger.Warn("worker and job APIs are disabled: the services are not wired")
-	default:
+	if deps.Auth == nil {
+		logger.Warn("protected APIs are disabled: no authenticator is configured")
+	} else {
 		mountProtected(mux, deps, logger, opts)
 	}
-	return mux
+	if deps.UI != nil {
+		mux.Handle("/", newSPAHandler(deps.UI, logger))
+	}
+	return http.NewCrossOriginProtection().Handler(withTLSState(mux))
 }
 
-// mountProtected adds WorkerAdminService and JobService behind the
-// authenticator and the unary timeout.
+// mountProtected adds the services that need an authenticated caller for
+// some or all of their procedures, each when its use cases are wired.
 func mountProtected(mux *http.ServeMux, deps Deps, logger *slog.Logger, opts []connect.HandlerOption) {
-	base := deps.BaseContext
-	if base == nil {
-		base = context.Background()
-	}
-	timeout := cmp.Or(deps.RequestTimeout, defaultRequestTimeout)
-	// The authenticator runs first, so unauthenticated calls cost nothing.
-	protected := append(slices.Clone(opts), connect.WithInterceptors(
-		&authInterceptor{auth: deps.Auth, log: logger},
-		unaryTimeout(timeout),
-	))
 	errs := errorMapper{log: logger}
+	disabled := func(service string) {
+		logger.Info("api service disabled: its use cases are not wired", "service", service)
+	}
 
-	mux.Handle(syncrv1connect.NewWorkerAdminServiceHandler(&workerAdminHandler{workers: deps.Workers, errs: errs}, protected...))
-	watchMax := cmp.Or(deps.WatchMaxDuration, defaultWatchMaxDuration)
-	jobsPath, jobsHandler := syncrv1connect.NewJobServiceHandler(&jobHandler{
-		jobs:      deps.Jobs,
-		errs:      errs,
-		log:       logger,
-		base:      base,
-		watchMax:  watchMax,
-		keepalive: cmp.Or(deps.WatchKeepalive, defaultWatchKeepalive),
-	}, protected...)
-	mux.Handle(jobsPath, extendWatchDeadlines(jobsHandler, watchMax+watchDeadlineGrace, logger))
+	if deps.Identity != nil {
+		mux.Handle(syncrv1connect.NewSetupServiceHandler(&setupHandler{identity: deps.Identity, cookies: deps.Cookies, clientIP: deps.ClientIP, errs: errs}, opts...))
+		mux.Handle(syncrv1connect.NewAuthServiceHandler(&authHandler{identity: deps.Identity, cookies: deps.Cookies, clientIP: deps.ClientIP, errs: errs}, opts...))
+	} else {
+		disabled(syncrv1connect.SetupServiceName)
+		disabled(syncrv1connect.AuthServiceName)
+	}
+	if deps.Users != nil {
+		mux.Handle(syncrv1connect.NewUserServiceHandler(&userHandler{users: deps.Users, errs: errs}, opts...))
+	} else {
+		disabled(syncrv1connect.UserServiceName)
+	}
+	if deps.Workers != nil {
+		mux.Handle(syncrv1connect.NewWorkerAdminServiceHandler(&workerAdminHandler{workers: deps.Workers, install: deps.Install, errs: errs}, opts...))
+	} else {
+		disabled(syncrv1connect.WorkerAdminServiceName)
+	}
+	if deps.Jobs != nil {
+		base := deps.BaseContext
+		if base == nil {
+			base = context.Background()
+		}
+		watchMax := cmp.Or(deps.WatchMaxDuration, defaultWatchMaxDuration)
+		jobsPath, jobsHandler := syncrv1connect.NewJobServiceHandler(&jobHandler{
+			jobs:      deps.Jobs,
+			kinds:     deps.Kinds,
+			remotes:   deps.Remotes,
+			errs:      errs,
+			log:       logger,
+			base:      base,
+			watchMax:  watchMax,
+			keepalive: cmp.Or(deps.WatchKeepalive, defaultWatchKeepalive),
+		}, opts...)
+		mux.Handle(jobsPath, extendWatchDeadlines(jobsHandler, watchMax+watchDeadlineGrace, logger))
+	} else {
+		disabled(syncrv1connect.JobServiceName)
+	}
+	if deps.Backends != nil {
+		mux.Handle(syncrv1connect.NewBackendServiceHandler(&backendHandler{backends: deps.Backends}, opts...))
+	} else {
+		disabled(syncrv1connect.BackendServiceName)
+	}
+	if deps.Remotes != nil {
+		mux.Handle(syncrv1connect.NewRemoteServiceHandler(&remoteHandler{remotes: deps.Remotes, backends: deps.Backends, errs: errs}, opts...))
+	} else {
+		disabled(syncrv1connect.RemoteServiceName)
+	}
 }
 
 // watchDeadlineGrace is added to the watch duration limit for the

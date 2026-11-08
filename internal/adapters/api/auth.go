@@ -2,125 +2,150 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 
 	"connectrpc.com/connect"
 
+	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/platform/redact"
 )
 
-// MinAdminTokenLen is the shortest admin token NewAdminTokenAuth accepts.
-const MinAdminTokenLen = 32
-
-// Authenticator decides whether a call to a protected service may proceed.
-// It is the seam Milestone 3 uses to replace the provisional admin token
-// with users and sessions: a session authenticator would read the session
-// cookie or token from header, look the user up and return a context
-// carrying the identity.
+// Authenticator identifies the caller of a non-public procedure (see
+// policy.go). SessionAuth is the controller's: the session cookie with its
+// CSRF header, or a personal API token.
 type Authenticator interface {
 	// Authenticate checks the credentials in header, the request headers of
-	// a call to spec. On success it returns the context for the handler
-	// (possibly carrying the caller's identity). A failure must wrap
-	// domain.ErrUnauthenticated (it is reported as Unauthenticated); any
-	// other error is reported as Internal.
+	// a call to spec. On success it returns the context for the handler,
+	// which must carry the Caller (WithCaller); the policy interceptor then
+	// checks the caller's role and method against the procedure. A failure
+	// must wrap domain.ErrUnauthenticated (it is reported as
+	// Unauthenticated); any other error is reported as Internal.
 	Authenticate(ctx context.Context, header http.Header, spec connect.Spec) (context.Context, error)
 }
 
-// AdminTokenAuth is the provisional Authenticator of Milestone 2: one shared
-// secret sent as "Authorization: Bearer <token>". It keeps only a hash of
-// the token.
-type AdminTokenAuth struct {
-	sum [sha256.Size]byte
+// CSRFHeader must accompany every call that authenticates with the session
+// cookie, and Login and CompleteSetup, with the value "1". The web UI's
+// transport adds it to every call. CORS is never enabled, so another
+// origin cannot send it (a custom header needs a preflight, which fails);
+// bearer-token calls need none, as they carry no ambient credential.
+const CSRFHeader = "X-Syncr-CSRF"
+
+// SessionAuth is the controller's Authenticator. A call authenticates with
+// either
+//
+//   - "Authorization: Bearer syncr_pat_..." (a personal API token; if it is
+//     wrong the call fails, whatever cookie comes with it), or
+//   - the session cookie (CookieConfig.Name for the request's Secure mode;
+//     the other name is ignored), together with CSRFHeader: a cookie
+//     without the header is not a credential, and more than one cookie of
+//     the name is refused (cookie tossing).
+//
+// Authorization headers that are not personal API tokens (a reverse
+// proxy's basic auth, another bearer format) are ignored. It puts a Caller
+// into the context: AuthToken with the token's expiry, or AuthSession with
+// the session's absolute expiry and raw token (for Logout and
+// ChangePassword). Every failure wraps domain.ErrUnauthenticated and says
+// why for the log, never with the credential.
+type SessionAuth struct {
+	creds   CredentialVerifier
+	cookies CookieConfig
 }
 
-var _ Authenticator = (*AdminTokenAuth)(nil)
+var _ Authenticator = (*SessionAuth)(nil)
 
-// NewAdminTokenAuth returns an authenticator accepting token. The token must
-// be at least MinAdminTokenLen characters. Errors never contain the token.
-// Callers pass no authenticator at all (not an empty token) when the admin
-// token is not configured; see Deps.Auth.
-func NewAdminTokenAuth(token redact.Secret) (*AdminTokenAuth, error) {
-	if token.IsZero() {
-		return nil, errors.New("admin token is empty")
+// NewSessionAuth returns the authenticator over creds (*users.Service). The
+// cookie configuration must be the one of Deps.Cookies, so it reads the
+// cookie that Login sets.
+func NewSessionAuth(creds CredentialVerifier, cookies CookieConfig) (*SessionAuth, error) {
+	if creds == nil {
+		return nil, errors.New("session auth: no credential verifier")
 	}
-	if len(token.Reveal()) < MinAdminTokenLen {
-		return nil, fmt.Errorf("admin token is shorter than %d characters", MinAdminTokenLen)
+	if err := cookies.Validate(); err != nil {
+		return nil, fmt.Errorf("session auth: %w", err)
 	}
-	return &AdminTokenAuth{sum: sha256.Sum256([]byte(token.Reveal()))}, nil
+	return &SessionAuth{creds: creds, cookies: cookies}, nil
 }
 
-// Authenticate implements Authenticator. The comparison is constant time
-// (over SHA-256 digests, so the token's length does not leak either).
-func (a *AdminTokenAuth) Authenticate(ctx context.Context, header http.Header, _ connect.Spec) (context.Context, error) {
-	scheme, token, ok := strings.Cut(strings.TrimSpace(header.Get("Authorization")), " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") {
-		return ctx, fmt.Errorf("%w: missing bearer token", domain.ErrUnauthenticated)
+// Authenticate implements Authenticator.
+func (a *SessionAuth) Authenticate(ctx context.Context, header http.Header, _ connect.Spec) (context.Context, error) {
+	values := header.Values("Authorization")
+	tokens := 0
+	for _, v := range values {
+		if _, ok := personalToken(v); ok {
+			tokens++
+		}
 	}
-	got := sha256.Sum256([]byte(strings.TrimSpace(token)))
-	if subtle.ConstantTimeCompare(got[:], a.sum[:]) != 1 {
-		return ctx, fmt.Errorf("%w: wrong bearer token", domain.ErrUnauthenticated)
-	}
-	return ctx, nil
-}
-
-// authInterceptor applies an Authenticator to every call (unary and
-// streaming) of the services it is attached to.
-type authInterceptor struct {
-	auth Authenticator
-	log  *slog.Logger
-}
-
-var _ connect.Interceptor = (*authInterceptor)(nil)
-
-func (i *authInterceptor) check(ctx context.Context, header http.Header, spec connect.Spec, peer string) (context.Context, error) {
-	ctx, err := i.auth.Authenticate(ctx, header, spec)
 	switch {
-	case err == nil:
-		return ctx, nil
-	case errors.Is(err, domain.ErrUnauthenticated):
-		// The reason is logged, never returned: callers learn nothing about
-		// what was wrong.
-		i.log.WarnContext(ctx, "api authentication failed", "procedure", spec.Procedure, "peer", peer, "reason", err.Error())
-		cerr := connect.NewError(connect.CodeUnauthenticated, errors.New("missing or invalid credentials"))
-		cerr.Meta().Set("WWW-Authenticate", `Bearer realm="syncr"`)
-		return ctx, cerr
-	default:
-		i.log.ErrorContext(ctx, "api authentication errored", "procedure", spec.Procedure, "error", err.Error())
-		return ctx, connect.NewError(connect.CodeInternal, errors.New("internal error"))
+	case tokens > 1 || (tokens == 1 && len(values) > 1):
+		return ctx, fmt.Errorf("%w: several Authorization headers", domain.ErrUnauthenticated)
+	case tokens == 1:
+		token, _ := personalToken(values[0])
+		return a.bearer(ctx, token)
 	}
+	return a.session(ctx, header, len(values) > 0)
 }
 
-// WrapUnary implements connect.Interceptor.
-func (i *authInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
-	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		ctx, err := i.check(ctx, req.Header(), req.Spec(), req.Peer().Addr)
-		if err != nil {
-			return nil, err
-		}
-		return next(ctx, req)
+// personalToken returns the personal API token of an Authorization header
+// value ("Bearer syncr_pat_...", the scheme in any case).
+func personalToken(value string) (string, bool) {
+	scheme, token, ok := strings.Cut(strings.TrimSpace(value), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		return "", false
 	}
+	token = strings.TrimSpace(token)
+	return token, strings.HasPrefix(token, users.APITokenPrefix)
 }
 
-// WrapStreamingClient implements connect.Interceptor; clients are not
-// affected.
-func (i *authInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
-	return next
+func (a *SessionAuth) bearer(ctx context.Context, token string) (context.Context, error) {
+	actor, tok, err := a.creds.AuthenticateAPIToken(ctx, token)
+	if err != nil {
+		return ctx, err
+	}
+	return WithCaller(ctx, Caller{Actor: actor, Method: AuthToken, ExpiresAt: tok.ExpiresAt}), nil
 }
 
-// WrapStreamingHandler implements connect.Interceptor.
-func (i *authInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
-		ctx, err := i.check(ctx, conn.RequestHeader(), conn.Spec(), conn.Peer().Addr)
-		if err != nil {
-			return err
-		}
-		return next(ctx, conn)
+// session authenticates with the cookie; foreignAuth tells that an
+// Authorization header other than a personal API token was ignored.
+func (a *SessionAuth) session(ctx context.Context, header http.Header, foreignAuth bool) (context.Context, error) {
+	name := a.cookies.Name(a.cookies.SecureFor(requestTLS(ctx)))
+	cookies := (&http.Request{Header: header}).CookiesNamed(name)
+	switch {
+	case len(cookies) == 0 && foreignAuth:
+		return ctx, fmt.Errorf("%w: no credentials (the Authorization header is not a personal API token)", domain.ErrUnauthenticated)
+	case len(cookies) == 0:
+		return ctx, fmt.Errorf("%w: no credentials", domain.ErrUnauthenticated)
+	case len(cookies) > 1:
+		return ctx, fmt.Errorf("%w: %d session cookies", domain.ErrUnauthenticated, len(cookies))
+	case header.Get(CSRFHeader) != "1":
+		return ctx, fmt.Errorf("%w: session cookie without the %s header", domain.ErrUnauthenticated, CSRFHeader)
 	}
+	token := cookies[0].Value
+	actor, sess, err := a.creds.AuthenticateSession(ctx, token)
+	if err != nil {
+		return ctx, err
+	}
+	return WithCaller(ctx, Caller{Actor: actor, Method: AuthSession, ExpiresAt: sess.ExpiresAt, SessionToken: redact.Secret(token)}), nil
+}
+
+// tlsKey is the context key of the request's TLS state.
+type tlsKey struct{}
+
+// withTLSState records in each request's context whether it came over TLS,
+// for the session cookie's Secure mode (CookieSecureAuto): Connect
+// handlers and authenticators see the headers, not the connection.
+func withTLSState(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), tlsKey{}, r.TLS != nil)))
+	})
+}
+
+// requestTLS reports whether the request of ctx came over TLS (false if
+// unknown).
+func requestTLS(ctx context.Context) bool {
+	v, _ := ctx.Value(tlsKey{}).(bool)
+	return v
 }

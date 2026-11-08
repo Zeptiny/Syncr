@@ -35,7 +35,6 @@ func (w *watcher) next() *syncrv1.WatchJobResponse {
 	if !w.stream.Receive() {
 		w.t.Fatalf("stream ended: %v", w.stream.Err())
 	}
-	noSpecLeak(w.t, w.stream.Msg())
 	return w.stream.Msg()
 }
 
@@ -86,7 +85,7 @@ func TestWatchJobLifecycle(t *testing.T) {
 	}
 
 	// A cancel request is a status-less change of the job: it is sent again.
-	if _, err := e.jsvc.Cancel(ctx, id); err != nil {
+	if _, err := e.jsvc.Cancel(ctx, testAdmin, id); err != nil {
 		t.Fatal(err)
 	}
 	if got := w.nextJob(syncrv1.JobStatus_JOB_STATUS_RUNNING); !got.GetCancelRequested() || got.GetStats().GetBytes() != 42 {
@@ -129,7 +128,7 @@ func TestWatchFinishedJobEndsAtOnce(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	j := e.runJob()
-	if _, err := e.jsvc.Cancel(t.Context(), e.jobID(j)); err != nil {
+	if _, err := e.jsvc.Cancel(t.Context(), testAdmin, e.jobID(j)); err != nil {
 		t.Fatal(err)
 	}
 	w := e.watch(t.Context(), j.GetId())

@@ -1,26 +1,38 @@
 # syntax=docker/dockerfile:1
 #
-# Controller image: static binary on distroless, running as non-root.
-# Build from the repository root:
+# Controller image: static binary with the embedded web UI on distroless,
+# running as non-root. Build from the repository root:
 #   docker build -f deploy/Dockerfile.controller -t syncr-controller .
 #
 # Configure it with SYNCR_* variables (see README.md): at least
-# SYNCR_DATABASE_URL, SYNCR_SECRETS_KEY and SYNCR_ADMIN_TOKEN.
-# deploy/docker-compose.yml runs it with Postgres.
+# SYNCR_DATABASE_URL and SYNCR_SECRETS_KEY, and SYNCR_PUBLIC_URL behind a
+# reverse proxy. deploy/docker-compose.yml runs it with Postgres.
 
 ARG GO_VERSION=1.27.3
+# Keep in sync with web/.nvmrc and node-version in .github/workflows/ci.yml.
+ARG NODE_VERSION=26
+
+# The web UI (web/dist), platform independent.
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+COPY web/ ./
+RUN npm run build
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
+# Embedded with -tags webui.
+COPY --from=web /web/dist ./web/dist
 ARG TARGETOS TARGETARCH
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_TIME=
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -tags webui \
       -ldflags "-s -w \
         -X github.com/Zeptiny/Syncr/internal/platform/version.version=${VERSION} \
         -X github.com/Zeptiny/Syncr/internal/platform/version.commit=${COMMIT} \

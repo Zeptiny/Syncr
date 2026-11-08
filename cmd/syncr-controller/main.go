@@ -1,6 +1,7 @@
 // Command syncr-controller runs the Syncr controller: the API, the worker
 // link (enrollment, active workers' Report/Poll, the passive supervisor),
-// job dispatch and (from later milestones) the web UI and scheduling.
+// job dispatch, users and remotes, and the embedded web UI (scheduling
+// arrives in a later milestone).
 //
 // This package is the composition root: it is the only place that reads the
 // process environment, builds adapters and wires them together (wire.go;

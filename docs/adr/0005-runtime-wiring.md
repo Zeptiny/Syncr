@@ -24,7 +24,7 @@ This record fixes those rules.
 ```
                          ┌──────────────── one http.Server (h2c; HTTPS with http.tls_cert_file) ───────────────┐
  admin / UI ───────────► │ api.NewHandler: SystemService, /healthz,                                             │
-  (Bearer admin token)   │   WorkerAdminService, JobService ──► wakingWorkers ──┐   (WatchJob: api BaseContext) │
+  (session or API token) │   WorkerAdminService, JobService ──► wakingWorkers ──┐   (WatchJob: api BaseContext) │
  active workers ───────► │ active.Server: ControllerLinkService (Report, Poll),  │   (Poll: active Lifetime)    │
                          │   EnrollmentService (rate limit: peer IP or          │                               │
                          │   http.client_ip_header from http.trusted_proxies)    │                               │
@@ -71,6 +71,28 @@ This record fixes those rules.
   left, skipping trusted hops. Without a proxy, `http.tls_cert_file` and
   `http.tls_key_file` make the controller serve HTTPS itself (the files are
   re-read when they change).
+- **Users, remotes and jobs (Milestone 3).** `users.Service` gets the
+  argon2id hasher (`internal/adapters/password`) and three
+  `platform/ratelimit` limiters (login per client IP, per username, setup
+  attempts globally); `api.NewSessionAuth` over it is the API's
+  authenticator (session cookie with `X-Syncr-CSRF`, or a personal API
+  token). `remotes.Service` uses `backend.NewRegistry(builtin.Types()...)` and
+  the keyring; it is the jobs service's `RemoteChecker` and, through
+  `dispatch.NewSpecs(remotes, jobkind registry)`, resolves a queued job's
+  remotes with their credentials whenever the dispatcher builds its
+  `StartJob` (the spec is never stored or logged). The API also gets the
+  web UI (`web.FS()`, embedded with `-tags webui`), the cookie settings
+  (`auth.cookie_secure`, `http.public_url`), the install-command settings
+  (`http.public_url`, `workers.download_base_url`, validated at start) and
+  the client IP resolver of the rate limits.
+- **First run.** While no user exists the controller arms a one-time setup
+  code (`auth.setup_code`, or a random one per start) and logs it at WARN as
+  `setup_code`. It warns when session cookies would not be Secure, and about
+  the removed `api.admin_token`. `dev.seed` (only with `dev.memory_store`)
+  fills the store with demo data (`internal/devseed`) before that check.
+- **Background loops.** Besides the passive supervisor and the
+  dispatch-timeout sweeper: the hourly session purge
+  (`users.Service.PurgeExpired`) and, with `dev.seed`, the demo animation.
 
 **Controller shutdown** (SIGINT/SIGTERM), each step logged:
 
@@ -79,9 +101,9 @@ This record fixes those rules.
    (pending Polls answer at once, empty), so step 2 does not wait for them.
 2. `http.Server.Shutdown` with `http.shutdown_timeout`: in-flight Reports and
    API calls finish.
-3. The passive supervisor (and its loops) and the dispatch-timeout sweeper
-   stop. They outlive the HTTP server so nothing they start races a closed
-   store.
+3. The background loops stop: the passive supervisor (and its loops), the
+   dispatch-timeout sweeper, the session purge and the demo animation. They
+   outlive the HTTP server so nothing they start races a closed store.
 4. The store is closed.
 
 ### Worker (`cmd/syncr-worker/link.go`)

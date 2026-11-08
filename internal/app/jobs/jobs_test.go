@@ -3,7 +3,6 @@ package jobs_test
 import (
 	"cmp"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"slices"
@@ -15,8 +14,9 @@ import (
 	"github.com/Zeptiny/Syncr/internal/adapters/broker"
 	"github.com/Zeptiny/Syncr/internal/adapters/idgen"
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
-	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/platform/clock"
@@ -87,37 +87,93 @@ func (r *recorder) progressCount(id domain.JobID) int {
 }
 
 type env struct {
-	svc    *jobs.Service
-	store  *memstore.Store
-	clock  *clock.Fake
-	rec    *recorder
-	worker domain.WorkerID
+	svc     *jobs.Service
+	store   *memstore.Store
+	clock   *clock.Fake
+	rec     *recorder
+	remotes *fakeRemotes
+	worker  domain.WorkerID
+	owner   domain.Actor
 }
+
+// testDefinition is an encoded job definition (the jobs service does not
+// interpret it).
+const testDefinition = `{"rclone_transfer":{"mode":"RCLONE_TRANSFER_MODE_COPY"}}`
 
 const epoch = "epoch-1"
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	key := secrets.Key{ID: 1, Bytes: make([]byte, secrets.KeySize)}
-	_, _ = rand.Read(key.Bytes)
-	cipher, err := secrets.NewKeyring(key)
-	if err != nil {
-		t.Fatal(err)
-	}
 	e := &env{
-		store: memstore.New(),
-		clock: clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)),
-		rec:   &recorder{Broker: broker.New()},
+		store:   memstore.New(),
+		clock:   clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)),
+		rec:     &recorder{Broker: broker.New()},
+		remotes: &fakeRemotes{},
 	}
+	e.remotes.store = e.store
+	var err error
 	e.svc, err = jobs.New(jobs.Deps{
-		Jobs: e.store, Samples: e.store, Cipher: cipher, Clock: e.clock, IDs: &idgen.Sequential{},
-		Broker: e.rec, Notifier: e.rec, Waker: e.rec,
+		Jobs: e.store, Samples: e.store, Clock: e.clock, IDs: &idgen.Sequential{},
+		Broker: e.rec, Notifier: e.rec, Waker: e.rec, Remotes: e.remotes,
 	}, jobs.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.owner = e.addUser(t, domain.RoleUser)
 	e.worker = e.addWorker(t)
 	return e
+}
+
+// addUser stores a user (jobs need an existing owner) and returns it as
+// an actor.
+func (e *env) addUser(t *testing.T, role domain.Role) domain.Actor {
+	t.Helper()
+	id := domain.NewUserID()
+	u := users.User{ID: id, Username: "u" + id.String()[24:], Role: role, PasswordHash: "x", Version: 1}
+	if err := e.store.CreateUser(context.Background(), u); err != nil {
+		t.Fatal(err)
+	}
+	return domain.Actor{UserID: id, Role: role}
+}
+
+// addRemote stores a remote of owner (named name) and returns its ID.
+func (e *env) addRemote(t *testing.T, owner domain.Actor, name string) domain.RemoteID {
+	t.Helper()
+	id := domain.NewRemoteID()
+	r := remotes.Remote{ID: id, OwnerID: owner.UserID, Name: name, Type: "s3", Version: 1}
+	if err := e.store.CreateRemote(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// fakeRemotes is the jobs.RemoteChecker of the tests: the store's live
+// remotes of the owner are usable (the rule of remotes.Service.Usable);
+// err, if set, is returned instead.
+type fakeRemotes struct {
+	store *memstore.Store
+	mu    sync.Mutex
+	calls int
+	err   error
+}
+
+func (f *fakeRemotes) Usable(ctx context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]string, error) {
+	f.mu.Lock()
+	f.calls++
+	err := f.err
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[domain.RemoteID]string, len(ids))
+	for _, id := range ids {
+		r, err := f.store.GetRemote(ctx, id)
+		if err != nil || r.OwnerID != owner || r.Deleted() {
+			return nil, fmt.Errorf("remote %s: %w", id, domain.ErrNotFound)
+		}
+		out[id] = r.Name
+	}
+	return out, nil
 }
 
 func (e *env) addWorker(t *testing.T) domain.WorkerID {
@@ -131,7 +187,18 @@ func (e *env) addWorker(t *testing.T) domain.WorkerID {
 
 func (e *env) create(t *testing.T) jobs.Job {
 	t.Helper()
-	j, err := e.svc.Create(context.Background(), jobs.CreateParams{WorkerID: e.worker, Kind: "rclone_transfer", Spec: []byte("spec with secrets")})
+	return e.createAs(t, e.owner, jobs.CreateParams{})
+}
+
+// createAs creates a job of actor; p's zero fields get the defaults.
+func (e *env) createAs(t *testing.T, actor domain.Actor, p jobs.CreateParams) jobs.Job {
+	t.Helper()
+	p.WorkerID = cmp.Or(p.WorkerID, e.worker)
+	p.Kind = cmp.Or(p.Kind, "rclone_transfer")
+	if p.Definition == nil {
+		p.Definition = []byte(testDefinition)
+	}
+	j, err := e.svc.Create(context.Background(), actor, p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +222,7 @@ func (e *env) at(t *testing.T, st domain.JobStatus) jobs.Job {
 	case domain.JobSucceeded, domain.JobFailed:
 		j, _, err = e.svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: st})
 	case domain.JobCancelled:
-		j, err = e.svc.Cancel(ctx, j.ID)
+		j, err = e.svc.Cancel(ctx, e.owner, j.ID)
 	case domain.JobInterrupted:
 		if _, _, err = e.svc.MarkDispatched(ctx, e.worker, j.ID, epoch); err == nil {
 			j, _, err = e.svc.Interrupt(ctx, e.worker, j.ID, epoch, jobs.JobError{Code: jobs.CodeWorkerLost})
@@ -172,19 +239,23 @@ func TestCreate(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	tests := []struct {
-		name string
-		p    jobs.CreateParams
-		want error
+		name  string
+		actor domain.Actor
+		p     jobs.CreateParams
+		want  error
 	}{
-		{"zero worker", jobs.CreateParams{Kind: "k", Spec: []byte("s")}, domain.ErrInvalidID},
-		{"empty kind", jobs.CreateParams{WorkerID: e.worker, Spec: []byte("s")}, domain.ErrInvalidArgument},
-		{"bad kind", jobs.CreateParams{WorkerID: e.worker, Kind: "Rclone Transfer", Spec: []byte("s")}, domain.ErrInvalidArgument},
-		{"empty spec", jobs.CreateParams{WorkerID: e.worker, Kind: "k"}, domain.ErrInvalidArgument},
-		{"huge spec", jobs.CreateParams{WorkerID: e.worker, Kind: "k", Spec: make([]byte, 1<<20+1)}, domain.ErrInvalidArgument},
-		{"unknown worker", jobs.CreateParams{WorkerID: domain.NewWorkerID(), Kind: "k", Spec: []byte("s")}, domain.ErrNotFound},
+		{"zero worker", e.owner, jobs.CreateParams{Kind: "k", Definition: []byte("{}")}, domain.ErrInvalidID},
+		{"zero actor", domain.Actor{Role: domain.RoleAdmin}, jobs.CreateParams{WorkerID: e.worker, Kind: "k", Definition: []byte("{}")}, domain.ErrInvalidID},
+		{"empty kind", e.owner, jobs.CreateParams{WorkerID: e.worker, Definition: []byte("{}")}, domain.ErrInvalidArgument},
+		{"bad kind", e.owner, jobs.CreateParams{WorkerID: e.worker, Kind: "Rclone Transfer", Definition: []byte("{}")}, domain.ErrInvalidArgument},
+		{"empty definition", e.owner, jobs.CreateParams{WorkerID: e.worker, Kind: "k"}, domain.ErrInvalidArgument},
+		{"huge definition", e.owner, jobs.CreateParams{WorkerID: e.worker, Kind: "k", Definition: make([]byte, 1<<20+1)}, domain.ErrInvalidArgument},
+		{"zero remote id", e.owner, jobs.CreateParams{WorkerID: e.worker, Kind: "k", Definition: []byte("{}"), RemoteIDs: []domain.RemoteID{{}}}, domain.ErrInvalidID},
+		{"unknown worker", e.owner, jobs.CreateParams{WorkerID: domain.NewWorkerID(), Kind: "k", Definition: []byte("{}")}, jobs.ErrUnknownWorker},
+		{"unknown owner", domain.Actor{UserID: domain.NewUserID(), Role: domain.RoleUser}, jobs.CreateParams{WorkerID: e.worker, Kind: "k", Definition: []byte("{}")}, domain.ErrNotFound},
 	}
 	for _, tt := range tests {
-		if _, err := e.svc.Create(ctx, tt.p); !errors.Is(err, tt.want) {
+		if _, err := e.svc.Create(ctx, tt.actor, tt.p); !errors.Is(err, tt.want) {
 			t.Errorf("%s: err = %v, want %v", tt.name, err, tt.want)
 		}
 	}
@@ -193,11 +264,11 @@ func TestCreate(t *testing.T) {
 	if j.Status != domain.JobQueued || j.Version != 1 || j.ExitCode != -1 || !j.QueuedAt.Equal(e.clock.Now()) || j.Epoch != "" {
 		t.Errorf("created job = %+v", j)
 	}
-	if strings.Contains(string(j.SpecEnc), "secrets") {
-		t.Error("the stored spec is not encrypted")
+	if j.OwnerID != e.owner.UserID || string(j.Definition) != testDefinition || j.RemoteIDs != nil || j.SearchText != "rclone_transfer" {
+		t.Errorf("owner %v, definition %q, remotes %v, search text %q", j.OwnerID, j.Definition, j.RemoteIDs, j.SearchText)
 	}
-	if spec, err := e.svc.Spec(j); err != nil || string(spec) != "spec with secrets" {
-		t.Errorf("Spec = (%q, %v)", spec, err)
+	if e.remotes.calls != 0 {
+		t.Errorf("a job without remotes checked %d remotes", e.remotes.calls)
 	}
 	if !slices.Equal(e.rec.wakes, []domain.WorkerID{e.worker}) {
 		t.Errorf("wakes = %v, want the worker woken once", e.rec.wakes)
@@ -205,28 +276,13 @@ func TestCreate(t *testing.T) {
 	if got := e.rec.statuses(j.ID); !slices.Equal(got, []domain.JobStatus{domain.JobQueued}) {
 		t.Errorf("published = %v", got)
 	}
-	for _, u := range e.rec.updates {
-		if u.Job != nil && u.Job.SpecEnc != nil {
-			t.Error("a published job carries its encrypted spec")
-		}
-	}
 
 	// A removed worker takes no new jobs.
 	if _, err := e.store.RemoveWorker(ctx, e.worker, e.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.svc.Create(ctx, jobs.CreateParams{WorkerID: e.worker, Kind: "k", Spec: []byte("s")}); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := e.svc.Create(ctx, e.owner, jobs.CreateParams{WorkerID: e.worker, Kind: "k", Definition: []byte("{}")}); !errors.Is(err, jobs.ErrUnknownWorker) {
 		t.Errorf("Create on a removed worker: err = %v", err)
-	}
-}
-
-func TestSpecIsBoundToItsJob(t *testing.T) {
-	t.Parallel()
-	e := newEnv(t)
-	a, b := e.create(t), e.create(t)
-	b.SpecEnc = a.SpecEnc
-	if _, err := e.svc.Spec(b); err == nil {
-		t.Error("a spec copied to another job decrypted")
 	}
 }
 
@@ -253,7 +309,7 @@ func TestCancelAtEveryState(t *testing.T) {
 			e := newEnv(t)
 			j := e.at(t, tt.from)
 			wakes := len(e.rec.wakes)
-			got, err := e.svc.Cancel(ctx, j.ID)
+			got, err := e.svc.Cancel(ctx, e.owner, j.ID)
 			if err != nil || got.Status != tt.wantStatus || got.CancelRequested() != tt.wantRequested {
 				t.Fatalf("Cancel = (%s, requested %v, %v), want (%s, %v)", got.Status, got.CancelRequested(), err, tt.wantStatus, tt.wantRequested)
 			}
@@ -264,7 +320,7 @@ func TestCancelAtEveryState(t *testing.T) {
 				t.Errorf("error = %+v", got.Error)
 			}
 			// A second cancel changes nothing.
-			again, err := e.svc.Cancel(ctx, j.ID)
+			again, err := e.svc.Cancel(ctx, e.owner, j.ID)
 			if err != nil || again.Version != got.Version {
 				t.Errorf("second Cancel changed the job: v%d -> v%d (%v)", got.Version, again.Version, err)
 			}
@@ -273,7 +329,7 @@ func TestCancelAtEveryState(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t)
-		if _, err := e.svc.Cancel(context.Background(), domain.NewJobID()); !errors.Is(err, domain.ErrNotFound) {
+		if _, err := e.svc.Cancel(context.Background(), e.owner, domain.NewJobID()); !errors.Is(err, domain.ErrNotFound) {
 			t.Errorf("err = %v", err)
 		}
 	})
@@ -309,7 +365,7 @@ func TestCancelRequestThenWorkerOutcome(t *testing.T) {
 	for _, tt := range tests {
 		e := newEnv(t)
 		j := e.at(t, tt.from)
-		if _, err := e.svc.Cancel(ctx, j.ID); err != nil {
+		if _, err := e.svc.Cancel(ctx, e.owner, j.ID); err != nil {
 			t.Fatal(err)
 		}
 		got, err := tt.then(e, j)
@@ -466,7 +522,7 @@ func TestProgressIsRateLimitedBeforeStorage(t *testing.T) {
 			t.Fatalf("RecordProgress(%ds) = (%v, %v)", sec, ok, err)
 		}
 	}
-	stored, _ := e.svc.Samples(ctx, j.ID)
+	stored, _ := e.svc.Samples(ctx, e.owner, j.ID)
 	var secs []int
 	for _, s := range stored {
 		secs = append(secs, int(s.Time.Sub(t0)/time.Second))
@@ -507,7 +563,9 @@ func TestWatch(t *testing.T) {
 
 	updates := make(chan jobs.Update, 32)
 	done := make(chan error, 1)
-	go func() { done <- e.svc.Watch(ctx, j.ID, func(u jobs.Update) error { updates <- u; return nil }) }()
+	go func() {
+		done <- e.svc.Watch(ctx, e.owner, j.ID, func(u jobs.Update) error { updates <- u; return nil })
+	}()
 	next := func() jobs.Update {
 		t.Helper()
 		select {
@@ -551,14 +609,14 @@ func TestWatch(t *testing.T) {
 	// A finished job yields one update; a running one starts with its
 	// latest stored sample.
 	calls := 0
-	if err := e.svc.Watch(ctx, j.ID, func(jobs.Update) error { calls++; return nil }); err != nil || calls != 1 {
+	if err := e.svc.Watch(ctx, e.owner, j.ID, func(jobs.Update) error { calls++; return nil }); err != nil || calls != 1 {
 		t.Errorf("Watch(finished) = %v after %d calls", err, calls)
 	}
 	r := e.at(t, domain.JobRunning)
 	_, _ = e.svc.RecordProgress(ctx, e.worker, r.ID, epoch, jobs.Sample{Time: e.clock.Now(), Stats: jobs.Stats{Bytes: 7}})
 	stop := errors.New("stop")
 	var seen []jobs.Update
-	err := e.svc.Watch(ctx, r.ID, func(u jobs.Update) error {
+	err := e.svc.Watch(ctx, e.owner, r.ID, func(u jobs.Update) error {
 		seen = append(seen, u)
 		if len(seen) == 2 {
 			return stop
@@ -568,12 +626,12 @@ func TestWatch(t *testing.T) {
 	if !errors.Is(err, stop) || seen[1].Progress == nil || seen[1].Progress.Stats.Bytes != 7 {
 		t.Errorf("Watch(running) = %v, updates %+v", err, seen)
 	}
-	if err := e.svc.Watch(ctx, domain.NewJobID(), func(jobs.Update) error { return nil }); !errors.Is(err, domain.ErrNotFound) {
+	if err := e.svc.Watch(ctx, e.owner, domain.NewJobID(), func(jobs.Update) error { return nil }); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("Watch(missing) = %v", err)
 	}
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := e.svc.Watch(cctx, r.ID, func(jobs.Update) error { return nil }); !errors.Is(err, context.Canceled) {
+	if err := e.svc.Watch(cctx, e.owner, r.ID, func(jobs.Update) error { return nil }); !errors.Is(err, context.Canceled) {
 		t.Errorf("Watch(cancelled ctx) = %v", err)
 	}
 }
@@ -587,22 +645,26 @@ func TestList(t *testing.T) {
 		ids = append(ids, e.create(t).ID)
 	}
 	slices.Reverse(ids) // newest first
-	p1, err := e.svc.List(ctx, jobs.ListFilter{Limit: 2})
+	p1, err := e.svc.List(ctx, e.owner, jobs.ListFilter{Limit: 2})
 	if err != nil || len(p1.Jobs) != 2 || p1.Jobs[0].ID != ids[0] || p1.Next != ids[1] {
 		t.Fatalf("page 1 = %+v (%v)", p1, err)
 	}
-	p2, _ := e.svc.List(ctx, jobs.ListFilter{Limit: 2, Before: p1.Next})
-	p3, _ := e.svc.List(ctx, jobs.ListFilter{Limit: 2, Before: p2.Next})
+	p2, _ := e.svc.List(ctx, e.owner, jobs.ListFilter{Limit: 2, Before: p1.Next})
+	p3, _ := e.svc.List(ctx, e.owner, jobs.ListFilter{Limit: 2, Before: p2.Next})
 	if len(p2.Jobs) != 2 || p2.Jobs[0].ID != ids[2] || len(p3.Jobs) != 1 || !p3.Next.IsZero() {
 		t.Errorf("pages 2/3 = %+v / %+v", p2, p3)
 	}
-	all, _ := e.svc.List(ctx, jobs.ListFilter{})
+	all, _ := e.svc.List(ctx, e.owner, jobs.ListFilter{})
 	if len(all.Jobs) != 5 || !all.Next.IsZero() {
 		t.Errorf("default page = %d jobs, next %v", len(all.Jobs), all.Next)
 	}
-	for _, f := range []jobs.ListFilter{{Limit: -1}, {Limit: 501}, {Statuses: []domain.JobStatus{"done"}}} {
-		if _, err := e.svc.List(ctx, f); err == nil {
-			t.Errorf("List(%+v) succeeded", f)
+	for _, f := range []jobs.ListFilter{
+		{Limit: -1}, {Limit: 501}, {Statuses: []domain.JobStatus{"done"}},
+		{Kinds: []string{"Rclone Transfer"}}, {Kinds: slices.Repeat([]string{"k"}, jobs.MaxKinds+1)},
+		{Query: strings.Repeat("x", jobs.MaxQueryLen+1)}, {Query: "bad \xff"}, {Query: "nul \x00"},
+	} {
+		if _, err := e.svc.List(ctx, e.owner, f); !errors.Is(err, domain.ErrInvalidArgument) && !errors.Is(err, domain.ErrInvalidJobStatus) {
+			t.Errorf("List(%+v) = %v", f, err)
 		}
 	}
 }
@@ -631,7 +693,7 @@ func TestFailQueuedAndRelease(t *testing.T) {
 		queued.ID: domain.JobFailed, dispatched.ID: domain.JobInterrupted, running.ID: domain.JobInterrupted, done.ID: domain.JobSucceeded,
 	}
 	for id, st := range want {
-		j, _ := e.svc.Get(ctx, id)
+		j, _ := e.svc.Get(ctx, e.owner, id)
 		if j.Status != st || (id != done.ID && j.Error.Code != jobs.CodeWorkerRemoved) {
 			t.Errorf("job %s: %s %q, want %s worker_removed", id, j.Status, j.Error.Code, st)
 		}
@@ -651,14 +713,14 @@ func TestConcurrentChanges(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	for _, id := range all {
-		wg.Go(func() { _, _ = e.svc.Cancel(ctx, id) })
+		wg.Go(func() { _, _ = e.svc.Cancel(ctx, e.owner, id) })
 		wg.Go(func() {
 			_, _, _ = e.svc.MarkDispatched(ctx, e.worker, id, epoch)
 			_, _, _ = e.svc.MarkRunning(ctx, e.worker, id, epoch, time.Time{})
 			_, _ = e.svc.RecordProgress(ctx, e.worker, id, epoch, jobs.Sample{Time: e.clock.Now()})
 			_, _, _ = e.svc.Finish(ctx, e.worker, id, epoch, jobs.Outcome{Status: domain.JobCancelled})
 		})
-		wg.Go(func() { _, _ = e.svc.Get(ctx, id) })
+		wg.Go(func() { _, _ = e.svc.Get(ctx, e.owner, id) })
 	}
 	wg.Wait()
 	for _, id := range all {
@@ -668,7 +730,7 @@ func TestConcurrentChanges(t *testing.T) {
 				t.Errorf("job %s published %v: %s -> %s is not a transition", id, seq, seq[i-1], seq[i])
 			}
 		}
-		j, _ := e.svc.Get(ctx, id)
+		j, _ := e.svc.Get(ctx, e.owner, id)
 		if !j.Status.Terminal() {
 			t.Errorf("job %s ended %s", id, j.Status)
 		}

@@ -113,21 +113,26 @@ linters:
           allow:
             - $gostd
 
-        # Use cases depend only on the domain and on ports they declare.
+        # Use cases depend only on the domain, the backend registry's core API
+        # and on ports they declare. Allow entries are prefix matches: "$"
+        # admits internal/backend itself but not its built-in descriptors.
         app:
           list-mode: strict
           files: ["**/internal/app/**", "!$test"]
           allow:
             - $gostd
             - github.com/Zeptiny/Syncr/internal/domain
+            - github.com/Zeptiny/Syncr/internal/backend$
         # Use-case tests (external test packages) wire the services with the
-        # in-memory adapters and fakes; nothing else.
+        # in-memory adapters, the built-in backends and fakes; nothing else.
         app-tests:
           list-mode: strict
           files: ["**/internal/app/**/*_test.go"]
           allow:
             - $gostd
             - github.com/Zeptiny/Syncr/internal/domain
+            - github.com/Zeptiny/Syncr/internal/backend$
+            - github.com/Zeptiny/Syncr/internal/backend/builtin
             - github.com/Zeptiny/Syncr/internal/app
             - github.com/Zeptiny/Syncr/internal/adapters/memstore
             - github.com/Zeptiny/Syncr/internal/adapters/broker
@@ -267,19 +272,58 @@ linters:
               desc: adapters must not import each other; wire them in cmd/
             - pkg: github.com/Zeptiny/Syncr/internal/app
               desc: the ID generator only mints domain IDs
+        # The password hasher is argon2id and nothing else; it satisfies
+        # users.PasswordHasher structurally.
+        adapter-password:
+          list-mode: strict
+          files: ["**/internal/adapters/password/**"]
+          allow:
+            - $gostd
+            - golang.org/x/crypto/argon2
+            - github.com/Zeptiny/Syncr/internal/adapters/password
 
-        # Backend descriptors are pure data + mapping.
+        # Backend descriptors are pure data + mapping, consumed by use cases:
+        # the core API, the built-in descriptors and the contract suite use
+        # only the standard library, the domain and each other.
         backend:
+          list-mode: strict
           files: ["**/internal/backend/**"]
+          allow:
+            - $gostd
+            - github.com/Zeptiny/Syncr/internal/domain
+            - github.com/Zeptiny/Syncr/internal/backend
+
+        # Job kinds turn secret-free definitions into worker specs: protobuf,
+        # the domain and the backend core API; no I/O, no use cases.
+        jobkind:
+          list-mode: strict
+          files: ["**/internal/jobkind/**"]
+          allow:
+            - $gostd
+            - github.com/Zeptiny/Syncr/gen
+            - google.golang.org/protobuf
+            - github.com/Zeptiny/Syncr/internal/domain
+            - github.com/Zeptiny/Syncr/internal/backend$
+            - github.com/Zeptiny/Syncr/internal/jobkind
+
+        # The web UI's Go package only embeds the built SPA.
+        web:
+          list-mode: strict
+          files: ["**/web/*.go"]
+          allow:
+            - $gostd
+
+        # The development seed writes through services and ports in-process,
+        # over the in-memory store only.
+        devseed:
+          files: ["**/internal/devseed/**"]
           deny:
-            - pkg: github.com/Zeptiny/Syncr/internal/app
-              desc: backends are an extension point consumed by use cases
-            - pkg: github.com/Zeptiny/Syncr/internal/adapters
-              desc: backends must not depend on adapters
+            - pkg: github.com/Zeptiny/Syncr/internal/adapters/postgres
+              desc: the seed only runs with dev.memory_store
             - pkg: github.com/Zeptiny/Syncr/internal/controller
-              desc: backends must not depend on controller internals
+              desc: the seed uses the use cases, not controller internals
             - pkg: github.com/Zeptiny/Syncr/internal/worker
-              desc: backends must not depend on worker internals
+              desc: controller code must not import worker code
 
         # Controller and worker never import each other.
         controller:
@@ -390,6 +434,8 @@ linters:
             - github.com/Zeptiny/Syncr/internal/domain
             - github.com/Zeptiny/Syncr/internal/app/workers
             - github.com/Zeptiny/Syncr/internal/controller/dispatch
+            # The keyed token bucket of the enrollment rate limit.
+            - github.com/Zeptiny/Syncr/internal/platform/ratelimit
 
         # End-to-end tests of the worker link wire both sides in one process
         # with the in-memory adapters; they hold no production code.

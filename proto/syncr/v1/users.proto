@@ -1,0 +1,164 @@
+syntax = "proto3";
+
+package syncr.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// User accounts. Syncr is self-hosted for trusted users: there is no public
+// sign-up; an admin creates every account except the first, which the setup
+// wizard creates (SetupService in auth.proto).
+
+// UserService manages user accounts. Admin only: other callers get
+// PERMISSION_DENIED.
+//
+// The service refuses to disable, demote or delete the last active admin
+// (FAILED_PRECONDITION). A user who owns remotes or jobs cannot be deleted
+// (FAILED_PRECONDITION); disable the account instead.
+service UserService {
+  // ListUsers lists every user, by username.
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // GetUser returns one user.
+  rpc GetUser(GetUserRequest) returns (GetUserResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // CreateUser creates an account. ALREADY_EXISTS if the username is taken.
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse) {}
+
+  // UpdateUser changes a user's display name, role or disabled state.
+  // ABORTED if the user changed since version was read. Disabling a user or
+  // changing their role ends their sessions.
+  rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse) {}
+
+  // ResetPassword sets a new password for a user and ends their sessions.
+  rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse) {}
+
+  // DeleteUser deletes a user who owns nothing, with their sessions and API
+  // tokens.
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+}
+
+// User is a user account. The password hash is never returned.
+message User {
+  // User ID (UUID).
+  string id = 1;
+
+  // Login name: lower case, 1 to 64 characters of a-z, 0-9, ".", "_" and
+  // "-", starting with a letter or digit. Unique.
+  string username = 2;
+
+  // Name to display; may be empty.
+  string display_name = 3;
+
+  // What the user may do.
+  UserRole role = 4;
+
+  // Whether the account is disabled (it cannot log in or use API tokens).
+  bool disabled = 5;
+
+  // When the account was created.
+  google.protobuf.Timestamp created_at = 6;
+
+  // Last successful login; unset if never.
+  google.protobuf.Timestamp last_login_at = 7;
+
+  // Optimistic concurrency token for UpdateUser.
+  int64 version = 8;
+
+  reserved 9 to 19;
+}
+
+// UserRole is what a user may do.
+enum UserRole {
+  USER_ROLE_UNSPECIFIED = 0;
+  // Manages users and workers, and may view and cancel every user's jobs.
+  USER_ROLE_ADMIN = 1;
+  // Manages their own remotes and jobs, and may use every worker.
+  USER_ROLE_USER = 2;
+}
+
+// ListUsersRequest is empty; reserved for future filters.
+message ListUsersRequest {}
+
+// ListUsersResponse lists users by username.
+message ListUsersResponse {
+  repeated User users = 1;
+}
+
+// GetUserRequest names a user.
+message GetUserRequest {
+  string user_id = 1;
+}
+
+// GetUserResponse returns the user.
+message GetUserResponse {
+  User user = 1;
+}
+
+// CreateUserRequest describes the new account.
+message CreateUserRequest {
+  // Login name (see User.username). Upper case is not accepted.
+  string username = 1;
+
+  // Name to display; may be empty.
+  string display_name = 2;
+
+  // Initial password: 12 to 256 characters.
+  string password = 3;
+
+  // Role; UNSPECIFIED is rejected.
+  UserRole role = 4;
+}
+
+// CreateUserResponse returns the new user.
+message CreateUserResponse {
+  User user = 1;
+}
+
+// UpdateUserRequest changes a user. Unset fields keep their value.
+message UpdateUserRequest {
+  string user_id = 1;
+
+  // The version the caller read (User.version).
+  int64 version = 2;
+
+  // New display name.
+  optional string display_name = 3;
+
+  // New role; UNSPECIFIED keeps the current one.
+  UserRole role = 4;
+
+  // Disable (true) or re-enable (false) the account.
+  optional bool disabled = 5;
+}
+
+// UpdateUserResponse returns the updated user.
+message UpdateUserResponse {
+  User user = 1;
+}
+
+// ResetPasswordRequest sets a user's password.
+message ResetPasswordRequest {
+  string user_id = 1;
+
+  // The new password: 12 to 256 characters.
+  string new_password = 2;
+}
+
+// ResetPasswordResponse returns the updated user.
+message ResetPasswordResponse {
+  User user = 1;
+}
+
+// DeleteUserRequest names the user to delete.
+message DeleteUserRequest {
+  string user_id = 1;
+}
+
+// DeleteUserResponse is empty.
+message DeleteUserResponse {}

@@ -1,22 +1,30 @@
 package api
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/jobkind"
 )
 
 func TestRunJob(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	resp, err := e.jobsClient().RunJob(t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Spec: testSpec()}))
+	resp, err := e.jobsFor(testUser).RunJob(t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: testDefinition()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,36 +35,37 @@ func TestRunJob(t *testing.T) {
 		j.GetFinishedAt() != nil || j.GetStats() != nil || j.GetError() != nil || j.GetOutput() != nil || j.ExitCode != nil {
 		t.Errorf("job = %v", j)
 	}
-	noSpecLeak(t, resp.Msg)
-
-	// The spec was stored (encrypted) exactly as sent.
-	stored, err := e.jsvc.Get(t.Context(), e.jobID(j))
+	// The caller owns the job, and the definition comes back as sent.
+	if j.GetOwnerId() != testUser.UserID.String() || !proto.Equal(j.GetDefinition(), testDefinition()) {
+		t.Errorf("owner %q, definition %v", j.GetOwnerId(), j.GetDefinition())
+	}
+	stored, err := e.jsvc.Get(t.Context(), testUser, e.jobID(j))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(stored.SpecEnc), specSecret) {
-		t.Error("the spec is stored in plain text")
-	}
-	raw, err := e.jsvc.Spec(stored)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var spec syncrv1.JobSpec
-	if err := proto.Unmarshal(raw, &spec); err != nil || !proto.Equal(&spec, testSpec()) {
-		t.Errorf("stored spec = %v, %v", &spec, err)
+	if stored.OwnerID != testUser.UserID || stored.Kind != "rclone_transfer" {
+		t.Errorf("stored job = %+v", stored)
 	}
 }
 
-func TestRunJobKinds(t *testing.T) {
+func TestRunJobWithoutKinds(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t)
-	spec := &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_ResticSnapshots{ResticSnapshots: &syncrv1.ResticSnapshots{}}}
-	resp, err := e.jobsClient().RunJob(t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Spec: spec}))
+	req := &syncrv1.RunJobRequest{Definition: testDefinition()}
+	e := newEnv(t, func(d *Deps) { d.Kinds = nil })
+	req.WorkerId = e.worker.String()
+	_, err := e.jobsClient().RunJob(t.Context(), connect.NewRequest(req))
+	wantCode(t, err, connect.CodeUnimplemented)
+
+	empty, err := jobkind.NewRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Msg.GetJob().GetKind() != "restic_snapshots" {
-		t.Errorf("kind = %q", resp.Msg.GetJob().GetKind())
+	e = newEnv(t, func(d *Deps) { d.Kinds = empty })
+	req.WorkerId = e.worker.String()
+	_, err = e.jobsClient().RunJob(t.Context(), connect.NewRequest(req))
+	wantCode(t, err, connect.CodeInvalidArgument)
+	if !strings.Contains(err.Error(), "not supported") {
+		t.Errorf("err = %v", err)
 	}
 }
 
@@ -66,18 +75,21 @@ func TestRunJobErrors(t *testing.T) {
 	c := e.jobsClient()
 	missing := domain.NewWorkerID().String()
 
+	noSource := testDefinition()
+	noSource.GetRcloneTransfer().Source.Path = ""
 	tests := []struct {
-		name string
-		req  *syncrv1.RunJobRequest
-		want connect.Code
-		msg  string
+		name  string
+		req   *syncrv1.RunJobRequest
+		want  connect.Code
+		msg   string
+		field string // the ValidationError field, if any
 	}{
-		{"no worker", &syncrv1.RunJobRequest{Spec: testSpec()}, connect.CodeInvalidArgument, "worker_id"},
-		{"bad worker", &syncrv1.RunJobRequest{WorkerId: "nope", Spec: testSpec()}, connect.CodeInvalidArgument, "worker_id"},
-		{"nil spec", &syncrv1.RunJobRequest{WorkerId: e.worker.String()}, connect.CodeInvalidArgument, "spec is required"},
-		{"no operation", &syncrv1.RunJobRequest{WorkerId: e.worker.String(), Spec: &syncrv1.JobSpec{}}, connect.CodeInvalidArgument, "operation"},
-		{"remotes only", &syncrv1.RunJobRequest{WorkerId: e.worker.String(), Spec: &syncrv1.JobSpec{Remotes: testSpec().Remotes}}, connect.CodeInvalidArgument, "operation"},
-		{"unknown worker", &syncrv1.RunJobRequest{WorkerId: missing, Spec: testSpec()}, connect.CodeNotFound, "worker not found"},
+		{"no worker", &syncrv1.RunJobRequest{Definition: testDefinition()}, connect.CodeInvalidArgument, "worker_id", ""},
+		{"bad worker", &syncrv1.RunJobRequest{WorkerId: "nope", Definition: testDefinition()}, connect.CodeInvalidArgument, "worker_id", ""},
+		{"nil definition", &syncrv1.RunJobRequest{WorkerId: e.worker.String()}, connect.CodeInvalidArgument, "definition is required", "definition"},
+		{"no operation", &syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: &syncrv1.JobDefinition{}}, connect.CodeInvalidArgument, "operation", "definition.operation"},
+		{"rejected by the kind", &syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: noSource}, connect.CodeInvalidArgument, "source.path", "definition.rclone_transfer.source.path"},
+		{"unknown worker", &syncrv1.RunJobRequest{WorkerId: missing, Definition: testDefinition()}, connect.CodeNotFound, "worker not found", ""},
 	}
 	for _, tt := range tests {
 		_, err := c.RunJob(t.Context(), connect.NewRequest(tt.req))
@@ -88,8 +100,10 @@ func TestRunJobErrors(t *testing.T) {
 		if !strings.Contains(err.Error(), tt.msg) {
 			t.Errorf("%s: message %q lacks %q", tt.name, err, tt.msg)
 		}
-		if strings.Contains(err.Error(), specSecret) {
-			t.Errorf("%s: the error leaks the spec", tt.name)
+		if tt.field != "" {
+			if v := violations(t, err); len(v) != 1 || v[0].GetField() != tt.field {
+				t.Errorf("%s: violations = %v, want one on %s", tt.name, v, tt.field)
+			}
 		}
 	}
 }
@@ -97,9 +111,9 @@ func TestRunJobErrors(t *testing.T) {
 func TestRequestSizeLimit(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	spec := testSpec()
-	spec.Remotes[0].Secrets["big"] = strings.Repeat("x", 2<<20)
-	_, err := e.jobsClient().RunJob(t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Spec: spec}))
+	def := testDefinition()
+	def.GetRcloneTransfer().Source.Path = strings.Repeat("x", 2<<20)
+	_, err := e.jobsClient().RunJob(t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: def}))
 	wantCode(t, err, connect.CodeResourceExhausted)
 }
 
@@ -116,7 +130,6 @@ func TestGetJob(t *testing.T) {
 	if !proto.Equal(resp.Msg.GetJob(), queued) {
 		t.Errorf("GetJob = %v, want %v", resp.Msg.GetJob(), queued)
 	}
-	noSpecLeak(t, resp.Msg)
 
 	for id, want := range map[string]connect.Code{
 		"":                                     connect.CodeInvalidArgument,
@@ -151,7 +164,6 @@ func TestJobStatsAndOutput(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		noSpecLeak(t, resp.Msg)
 		return resp.Msg.GetJob()
 	}
 
@@ -243,7 +255,6 @@ func TestCancelJob(t *testing.T) {
 	if got.GetStatus() != syncrv1.JobStatus_JOB_STATUS_CANCELLED || got.GetError().GetCode() != syncrv1.JobErrorCode_JOB_ERROR_CODE_CANCELLED || got.GetFinishedAt() == nil {
 		t.Errorf("cancelled queued job = %v", got)
 	}
-	noSpecLeak(t, resp.Msg)
 	// Canceling again changes nothing.
 	again, err := c.CancelJob(ctx, connect.NewRequest(&syncrv1.CancelJobRequest{JobId: q.GetId()}))
 	if err != nil || !proto.Equal(again.Msg.GetJob(), got) {
@@ -293,7 +304,6 @@ func TestListJobsPagination(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		noSpecLeak(t, resp.Msg)
 		pages++
 		if n := len(resp.Msg.GetJobs()); n > 5 || n == 0 {
 			t.Fatalf("page %d has %d jobs", pages, n)
@@ -360,7 +370,7 @@ func TestListJobsFilters(t *testing.T) {
 
 	a, b := e.runJob(), e.runJob()
 	e.startRunning(b)
-	resp, err := c.RunJob(ctx, connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: other.String(), Spec: testSpec()}))
+	resp, err := c.RunJob(ctx, connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: other.String(), Definition: testDefinition()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,6 +408,338 @@ func TestListJobsFilters(t *testing.T) {
 		_, err := c.ListJobs(ctx, connect.NewRequest(req))
 		if err == nil || codeOf(t, err) != connect.CodeInvalidArgument {
 			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}
+
+// fakeJobRemotes stands in for the remotes service of the job tests: the
+// jobs service's RemoteChecker (live remotes of the owner are usable) and
+// the Names of Deps.Remotes. The other RemoteService methods are not
+// served (the embedded nil interface panics, which the handler recovers).
+type fakeJobRemotes struct {
+	RemoteService
+
+	mu    sync.Mutex
+	refs  map[domain.RemoteID]remotes.Ref
+	owner map[domain.RemoteID]domain.UserID
+	// namesErr, if set, fails Names.
+	namesErr error
+}
+
+func newFakeJobRemotes() *fakeJobRemotes {
+	return &fakeJobRemotes{refs: map[domain.RemoteID]remotes.Ref{}, owner: map[domain.RemoteID]domain.UserID{}}
+}
+
+// add creates a live remote of owner and returns its ID.
+func (f *fakeJobRemotes) add(owner domain.Actor, name, typ string) domain.RemoteID {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := domain.NewRemoteID()
+	f.refs[id] = remotes.Ref{ID: id, Name: name, Type: typ}
+	f.owner[id] = owner.UserID
+	return id
+}
+
+// remove deletes a remote (soft: it keeps its name).
+func (f *fakeJobRemotes) remove(id domain.RemoteID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.refs[id]
+	r.Deleted = true
+	f.refs[id] = r
+}
+
+func (f *fakeJobRemotes) Usable(_ context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[domain.RemoteID]string{}
+	for _, id := range ids {
+		r, ok := f.refs[id]
+		if !ok || r.Deleted || f.owner[id] != owner {
+			return nil, fmt.Errorf("remote %s: %w", id, domain.ErrNotFound)
+		}
+		out[id] = r.Name
+	}
+	return out, nil
+}
+
+func (f *fakeJobRemotes) Names(_ context.Context, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Ref, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.namesErr != nil {
+		return nil, f.namesErr
+	}
+	out := map[domain.RemoteID]remotes.Ref{}
+	for _, id := range ids {
+		if r, ok := f.refs[id]; ok {
+			out[id] = r
+		}
+	}
+	return out, nil
+}
+
+// storeRemote makes id exist in the store too (the jobs' foreign keys).
+func (e *testEnv) storeRemote(owner domain.Actor, id domain.RemoteID) {
+	e.t.Helper()
+	r := remotes.Remote{ID: id, OwnerID: owner.UserID, Name: "r-" + id.String()[30:], Type: "s3", Version: 1}
+	if err := e.store.CreateRemote(e.t.Context(), r); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// addRemote adds a remote of owner to the fake service and the store.
+func (e *testEnv) addRemote(owner domain.Actor, name, typ string) domain.RemoteID {
+	e.t.Helper()
+	id := e.remotes.add(owner, name, typ)
+	e.storeRemote(owner, id)
+	return id
+}
+
+// remoteDefinition syncs path on remote src to the worker's /restore.
+func remoteDefinition(src domain.RemoteID, path string) *syncrv1.JobDefinition {
+	return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransferDefinition{
+		Mode:        syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_SYNC,
+		Source:      &syncrv1.JobLocation{RemoteId: src.String(), Path: path},
+		Destination: &syncrv1.JobLocation{Path: "/restore"},
+	}}}
+}
+
+func (e *testEnv) runAs(a domain.Actor, def *syncrv1.JobDefinition) (*syncrv1.Job, error) {
+	e.t.Helper()
+	resp, err := e.jobsFor(a).RunJob(e.t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: def}))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg.GetJob(), nil
+}
+
+func TestRunJobWithRemotes(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	photos := e.addRemote(testUser, "Photos", "sftp")
+	admins := e.addRemote(testAdmin, "Admin's", "s3")
+
+	j, err := e.runAs(testUser, remoteDefinition(photos, "2026"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []*syncrv1.JobRemoteRef{{Id: photos.String(), Name: "Photos", BackendType: "sftp"}}
+	if len(j.GetRemotes()) != 1 || !proto.Equal(j.GetRemotes()[0], want[0]) {
+		t.Errorf("remotes = %v, want %v", j.GetRemotes(), want)
+	}
+	stored, err := e.jsvc.Get(t.Context(), testUser, e.jobID(j))
+	if err != nil || !slices.Equal(stored.RemoteIDs, []domain.RemoteID{photos}) || !strings.Contains(stored.SearchText, "photos") || !strings.Contains(stored.SearchText, "2026") {
+		t.Errorf("stored job = remotes %v, text %q (%v)", stored.RemoteIDs, stored.SearchText, err)
+	}
+
+	// A deleted remote keeps its name in the job's references.
+	e.remotes.remove(photos)
+	got, err := e.jobsFor(testUser).GetJob(t.Context(), connect.NewRequest(&syncrv1.GetJobRequest{JobId: j.GetId()}))
+	if err != nil || len(got.Msg.GetJob().GetRemotes()) != 1 || !got.Msg.GetJob().GetRemotes()[0].GetDeleted() || got.Msg.GetJob().GetRemotes()[0].GetName() != "Photos" {
+		t.Errorf("GetJob after the remote was deleted = %v (%v)", got, err)
+	}
+
+	// Remotes must be the caller's live remotes, admins included.
+	for name, tt := range map[string]struct {
+		actor domain.Actor
+		def   *syncrv1.JobDefinition
+	}{
+		"deleted remote":        {testUser, remoteDefinition(photos, "")},
+		"another user's remote": {testUser, remoteDefinition(admins, "")},
+		"an admin, a user's":    {testAdmin, remoteDefinition(photos, "")},
+		"unknown remote":        {testUser, remoteDefinition(domain.NewRemoteID(), "")},
+	} {
+		_, err := e.runAs(tt.actor, tt.def)
+		wantCode(t, err, connect.CodeNotFound)
+		if !strings.Contains(err.Error(), "remote not found") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+
+	// A failing lookup of the names fails the call, without details.
+	e.remotes.namesErr = errors.New("db exploded: password=hunter2")
+	_, err = e.jobsFor(testUser).GetJob(t.Context(), connect.NewRequest(&syncrv1.GetJobRequest{JobId: j.GetId()}))
+	wantCode(t, err, connect.CodeInternal)
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("internal error leaks: %v", err)
+	}
+}
+
+// TestJobOwnerScoping: user B gets NotFound for user A's job on every
+// procedure (get, cancel, watch, samples) and does not see it in lists;
+// the admin views and cancels it, and lists it with all_users only.
+func TestJobOwnerScoping(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := t.Context()
+	aJob, err := e.runAs(testUser, testDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminJob := e.runJob()
+	e.startRunning(aJob)
+	if _, err := e.jsvc.RecordProgress(ctx, e.worker, e.jobID(aJob), testEpoch, jobs.Sample{Time: e.clock.Now(), Stats: jobs.Stats{Bytes: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	id := aJob.GetId()
+
+	b := e.jobsFor(testOther)
+	_, err = b.GetJob(ctx, connect.NewRequest(&syncrv1.GetJobRequest{JobId: id}))
+	wantCode(t, err, connect.CodeNotFound)
+	_, err = b.CancelJob(ctx, connect.NewRequest(&syncrv1.CancelJobRequest{JobId: id}))
+	wantCode(t, err, connect.CodeNotFound)
+	_, err = b.ListJobSamples(ctx, connect.NewRequest(&syncrv1.ListJobSamplesRequest{JobId: id}))
+	wantCode(t, err, connect.CodeNotFound)
+	stream, err := b.WatchJob(ctx, connect.NewRequest(&syncrv1.WatchJobRequest{JobId: id}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stream.Receive() {
+		t.Errorf("user B received %v", stream.Msg())
+	}
+	wantCode(t, stream.Err(), connect.CodeNotFound)
+	_ = stream.Close()
+	if stored, _ := e.jsvc.Get(ctx, testUser, e.jobID(aJob)); stored.CancelRequested() {
+		t.Error("user B's cancel reached the job")
+	}
+
+	list := func(a domain.Actor, all bool) []string {
+		t.Helper()
+		resp, err := e.jobsFor(a).ListJobs(ctx, connect.NewRequest(&syncrv1.ListJobsRequest{AllUsers: all}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, j := range resp.Msg.GetJobs() {
+			ids = append(ids, j.GetId())
+		}
+		return ids
+	}
+	same := func(what string, got []string, want ...string) {
+		t.Helper()
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: %v, want %v", what, got, want)
+		}
+	}
+	same("user B", list(testOther, false))
+	same("user B, all users", list(testOther, true))
+	same("user A", list(testUser, false), id)
+	same("admin", list(testAdmin, false), adminJob.GetId())
+	same("admin, all users", list(testAdmin, true), adminJob.GetId(), id)
+
+	// The admin sees and cancels user A's job.
+	a := e.jobsFor(testAdmin)
+	got, err := a.GetJob(ctx, connect.NewRequest(&syncrv1.GetJobRequest{JobId: id}))
+	if err != nil || got.Msg.GetJob().GetOwnerId() != testUser.UserID.String() {
+		t.Errorf("admin GetJob = %v (%v)", got, err)
+	}
+	if smp, err := a.ListJobSamples(ctx, connect.NewRequest(&syncrv1.ListJobSamplesRequest{JobId: id})); err != nil || len(smp.Msg.GetSamples()) != 1 {
+		t.Errorf("admin ListJobSamples = %v (%v)", smp, err)
+	}
+	cancelled, err := a.CancelJob(ctx, connect.NewRequest(&syncrv1.CancelJobRequest{JobId: id}))
+	if err != nil || !cancelled.Msg.GetJob().GetCancelRequested() {
+		t.Errorf("admin CancelJob = %v (%v)", cancelled, err)
+	}
+}
+
+func TestListJobSamples(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := t.Context()
+	j := e.runJob()
+	c := e.jobsClient()
+	resp, err := c.ListJobSamples(ctx, connect.NewRequest(&syncrv1.ListJobSamplesRequest{JobId: j.GetId()}))
+	if err != nil || len(resp.Msg.GetSamples()) != 0 {
+		t.Fatalf("samples of a queued job = %v (%v)", resp, err)
+	}
+	e.startRunning(j)
+	t0 := e.clock.Now()
+	for i := range 4 { // one stored per 5 s
+		smp := jobs.Sample{Time: t0.Add(time.Duration(i) * 3 * time.Second), Stats: jobs.Stats{Bytes: int64(i) * 100, Elapsed: time.Duration(i) * time.Second}}
+		if _, err := e.jsvc.RecordProgress(ctx, e.worker, e.jobID(j), testEpoch, smp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp, err = c.ListJobSamples(ctx, connect.NewRequest(&syncrv1.ListJobSamplesRequest{JobId: j.GetId()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, s := range resp.Msg.GetSamples() {
+		got = append(got, fmt.Sprintf("%s:%d", s.GetTime().AsTime().Sub(t0), s.GetStats().GetBytes()))
+	}
+	if want := []string{"0s:0", "6s:200"}; !slices.Equal(got, want) {
+		t.Errorf("samples = %v, want %v", got, want)
+	}
+	for id, want := range map[string]connect.Code{"": connect.CodeInvalidArgument, "x": connect.CodeInvalidArgument, domain.NewJobID().String(): connect.CodeNotFound} {
+		_, err := c.ListJobSamples(ctx, connect.NewRequest(&syncrv1.ListJobSamplesRequest{JobId: id}))
+		wantCode(t, err, want)
+	}
+}
+
+func TestListJobsSearchFilters(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := t.Context()
+	photos, archive := e.addRemote(testUser, "Holiday Photos", "sftp"), e.addRemote(testUser, "Archive_2026", "b2")
+	run := func(def *syncrv1.JobDefinition) *syncrv1.Job {
+		t.Helper()
+		e.clock.Advance(time.Minute)
+		j, err := e.runAs(testUser, def)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return j
+	}
+	j1 := run(remoteDefinition(photos, "albums/greece"))
+	j2 := run(remoteDefinition(archive, "tax"))
+	j3 := run(testDefinition())
+	c := e.jobsFor(testUser)
+	list := func(req *syncrv1.ListJobsRequest) []string {
+		t.Helper()
+		resp, err := c.ListJobs(ctx, connect.NewRequest(req))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, j := range resp.Msg.GetJobs() {
+			ids = append(ids, j.GetId())
+		}
+		return ids
+	}
+	ts := func(j *syncrv1.Job) *timestamppb.Timestamp { return j.GetCreatedAt() }
+	tests := []struct {
+		name string
+		req  *syncrv1.ListJobsRequest
+		want []string
+	}{
+		{"remote", &syncrv1.ListJobsRequest{RemoteId: photos.String()}, []string{j1.GetId()}},
+		{"kinds", &syncrv1.ListJobsRequest{Kinds: []string{"rclone_transfer"}}, []string{j3.GetId(), j2.GetId(), j1.GetId()}},
+		{"other kind", &syncrv1.ListJobsRequest{Kinds: []string{"restic_backup"}}, nil},
+		{"query on a remote name", &syncrv1.ListJobsRequest{Query: "HOLIDAY"}, []string{j1.GetId()}},
+		{"query on a path", &syncrv1.ListJobsRequest{Query: "greece"}, []string{j1.GetId()}},
+		{"query on the mode", &syncrv1.ListJobsRequest{Query: "copy"}, []string{j3.GetId()}},
+		{"query with an underscore", &syncrv1.ListJobsRequest{Query: "archive_"}, []string{j2.GetId()}},
+		{"query with a percent", &syncrv1.ListJobsRequest{Query: "%"}, nil},
+		{"created after", &syncrv1.ListJobsRequest{CreatedAfter: ts(j2)}, []string{j3.GetId(), j2.GetId()}},
+		{"created before", &syncrv1.ListJobsRequest{CreatedBefore: ts(j2)}, []string{j1.GetId()}},
+		{"combined", &syncrv1.ListJobsRequest{RemoteId: archive.String(), Query: "tax", CreatedAfter: ts(j1), WorkerId: e.worker.String()}, []string{j2.GetId()}},
+	}
+	for _, tt := range tests {
+		if got := list(tt.req); !slices.Equal(got, tt.want) {
+			t.Errorf("%s: %v, want %v", tt.name, got, tt.want)
+		}
+	}
+	for name, req := range map[string]*syncrv1.ListJobsRequest{
+		"bad remote id":     {RemoteId: "photos"},
+		"bad kind":          {Kinds: []string{"Rclone Transfer"}},
+		"long query":        {Query: strings.Repeat("q", 300)},
+		"bad created_after": {CreatedAfter: &timestamppb.Timestamp{Seconds: 1 << 62}},
+	} {
+		_, err := c.ListJobs(ctx, connect.NewRequest(req))
+		wantCode(t, err, connect.CodeInvalidArgument)
+		if name == "bad remote id" && len(violations(t, err)) != 1 {
+			t.Errorf("%s: no field violation", name)
 		}
 	}
 }

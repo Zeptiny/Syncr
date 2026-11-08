@@ -9,9 +9,37 @@ import "syncr/v1/link.proto";
 // Controller API used by the web UI and tooling. Served over Connect (JSON or
 // binary), gRPC and gRPC-Web on the controller's HTTP address.
 //
-// Errors use the standard codes: NOT_FOUND for unknown IDs, INVALID_ARGUMENT
-// for malformed requests, FAILED_PRECONDITION when the object's state forbids
-// the call.
+// Authentication is described in auth.proto. SystemService, SetupService and
+// AuthService.Login are public; every other call needs a session or an API
+// token.
+//
+// Errors use the standard codes:
+//   - UNAUTHENTICATED: missing, expired or invalid credentials;
+//   - PERMISSION_DENIED: the caller's role does not allow the call;
+//   - NOT_FOUND: unknown IDs, and objects the caller may not see (another
+//     user's remote or job);
+//   - INVALID_ARGUMENT: malformed requests; validation failures carry a
+//     ValidationError detail that names the offending fields;
+//   - ALREADY_EXISTS: a name or other unique value is taken;
+//   - FAILED_PRECONDITION: the object's state forbids the call;
+//   - ABORTED: the object changed since the version the caller read;
+//   - RESOURCE_EXHAUSTED: too many attempts (logins, setup codes).
+
+// ValidationError is attached as an error detail to INVALID_ARGUMENT errors
+// caused by invalid input, so forms can show messages next to their fields.
+message ValidationError {
+  repeated FieldViolation violations = 1;
+}
+
+// FieldViolation is one invalid input field.
+message FieldViolation {
+  // Path of the field in the request's input, e.g. "name",
+  // "options.endpoint", "secrets.pass", "members[1].path".
+  string field = 1;
+
+  // What is wrong, for display.
+  string message = 2;
+}
 
 // SystemService exposes information about the controller itself.
 service SystemService {
@@ -43,15 +71,21 @@ message GetInfoResponse {
 
 // WorkerAdminService enrolls, registers and manages workers.
 //
-// PROVISIONAL (Milestone 2): protected by the controller's shared admin token
-// ("Authorization: Bearer <api.admin_token>"; without one configured the
-// service is not served). Milestone 3 adds users and sessions, restricts this
-// service to admins and may change these messages.
+// Workers are shared: every user may list and inspect them (ListWorkers,
+// GetWorker) and run jobs on any of them; the other calls are admin only
+// (PERMISSION_DENIED otherwise).
 service WorkerAdminService {
   // CreateEnrollmentToken creates a short-lived, single-use token for
-  // `syncr-worker setup --token`. The token is returned once; the controller
-  // stores only its hash.
+  // `syncr-worker setup --token`, with ready-to-copy install commands. The
+  // token is returned once; the controller stores only its hash.
   rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateEnrollmentTokenResponse) {}
+
+  // GetPassiveInstallCommands returns the commands that install a passive
+  // worker (`syncr-worker setup --passive`), which then prints the URL,
+  // fingerprint and pairing secret for RegisterPassiveWorker.
+  rpc GetPassiveInstallCommands(GetPassiveInstallCommandsRequest) returns (GetPassiveInstallCommandsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
 
   // RegisterPassiveWorker adds a passive worker from the URL, certificate
   // fingerprint and pairing secret that `syncr-worker setup --passive`
@@ -154,6 +188,12 @@ message CreateEnrollmentTokenRequest {
   // How long the token stays valid. Unset means the controller default (1h);
   // the controller rejects values below one minute or above seven days.
   google.protobuf.Duration ttl = 1;
+
+  // The controller URL workers should use, as the browser sees it (its
+  // origin). Used in the install commands only when the controller has no
+  // configured public URL (http.public_url); it must be https or a loopback
+  // http URL. Empty means the configured public URL.
+  string controller_url = 2;
 }
 
 // CreateEnrollmentTokenResponse carries the token, shown only once.
@@ -163,6 +203,60 @@ message CreateEnrollmentTokenResponse {
 
   // When the token stops being accepted.
   google.protobuf.Timestamp expires_at = 2;
+
+  // Commands that download, install and enroll a worker with this token,
+  // per platform and scope. Empty if the controller URL is unknown.
+  repeated InstallCommand install_commands = 3;
+}
+
+// GetPassiveInstallCommandsRequest is empty.
+message GetPassiveInstallCommandsRequest {}
+
+// GetPassiveInstallCommandsResponse lists the passive install commands.
+message GetPassiveInstallCommandsResponse {
+  repeated InstallCommand commands = 1;
+}
+
+// InstallCommand is a shell command to copy onto a worker machine.
+message InstallCommand {
+  // Operating system the command is for.
+  InstallPlatform platform = 1;
+
+  // Whether it installs a system service or a per-user one.
+  InstallScope scope = 2;
+
+  // The shell to paste it into: "sh" or "powershell".
+  string shell = 3;
+
+  // Short title, e.g. "Linux (system service)".
+  string title = 4;
+
+  // The command. It may span several lines.
+  string command = 5;
+
+  // Extra advice to show with the command (e.g. "run in an elevated
+  // PowerShell"); may be empty.
+  string note = 6;
+
+  reserved 7 to 15;
+}
+
+// InstallPlatform is a worker operating system.
+enum InstallPlatform {
+  INSTALL_PLATFORM_UNSPECIFIED = 0;
+  INSTALL_PLATFORM_LINUX = 1;
+  INSTALL_PLATFORM_WINDOWS = 2;
+}
+
+// InstallScope is how a worker is installed.
+enum InstallScope {
+  INSTALL_SCOPE_UNSPECIFIED = 0;
+  // A system service (systemd unit, Windows Service); needs root or an
+  // elevated shell.
+  INSTALL_SCOPE_SYSTEM = 1;
+  // A per-user service (systemd user unit, Scheduled Task) for desktops
+  // without admin rights.
+  INSTALL_SCOPE_USER = 2;
 }
 
 // RegisterPassiveWorkerRequest describes a passive worker.
@@ -233,16 +327,16 @@ message RemoveWorkerResponse {}
 
 // JobService runs and observes jobs.
 //
-// PROVISIONAL (Milestone 2): protected by the shared admin token like
-// WorkerAdminService, and RunJob takes an explicit worker and a complete
-// JobSpec with inline remote credentials.
-// Milestone 3 replaces it with jobs built from stored remotes and kinds,
-// owned by users; these messages may change.
+// Jobs belong to the user who ran them. A user sees only their own jobs;
+// an admin may view and cancel every job (ListJobs.all_users). Another
+// user's job is NOT_FOUND.
 service JobService {
-  // RunJob queues a job on a worker. The spec is validated for shape only
-  // (an operation must be set); the worker validates it fully and reports
-  // problems as a FAILED job. The spec is stored encrypted and never
-  // returned by the API.
+  // RunJob queues a job on a worker. The definition refers to the caller's
+  // remotes by ID and carries no secrets; it is checked for shape and path
+  // syntax (INVALID_ARGUMENT with a ValidationError detail) and its remotes
+  // must be the caller's live remotes (NOT_FOUND otherwise). The controller
+  // resolves the remotes' credentials only when it hands the job to the
+  // worker, which validates it fully and reports problems as a FAILED job.
   rpc RunJob(RunJobRequest) returns (RunJobResponse) {}
 
   // GetJob returns one job.
@@ -277,10 +371,15 @@ service JobService {
   rpc WatchJob(WatchJobRequest) returns (stream WatchJobResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
+
+  // ListJobSamples returns the stored progress samples of a job (one about
+  // every five seconds while it ran), oldest first, for charts.
+  rpc ListJobSamples(ListJobSamplesRequest) returns (ListJobSamplesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
 }
 
-// Job is one run of a JobSpec on a worker. The spec itself is never
-// returned: it contains secrets.
+// Job is one run of a job definition on a worker.
 message Job {
   // Job ID (UUID).
   string id = 1;
@@ -329,7 +428,80 @@ message Job {
   // Kind-specific output of a successful job, if the kind has any.
   JobOutput output = 15;
 
-  reserved 16 to 29;
+  // ID of the user who ran the job.
+  string owner_id = 16;
+
+  // What the job runs (never contains secrets).
+  JobDefinition definition = 17;
+
+  // The remotes the definition refers to, for display (they may since have
+  // been deleted).
+  repeated JobRemoteRef remotes = 18;
+
+  reserved 19 to 29;
+}
+
+// JobRemoteRef names a remote a job refers to.
+message JobRemoteRef {
+  // Remote ID (UUID).
+  string id = 1;
+
+  // The remote's name.
+  string name = 2;
+
+  // The remote's backend type ID.
+  string backend_type = 3;
+
+  // Whether the remote has been deleted since.
+  bool deleted = 4;
+
+  reserved 5 to 9;
+}
+
+// JobDefinition is what a job runs, as the API accepts and returns it: the
+// operation with locations on the owner's remotes, referred to by ID. It
+// contains no secrets; the controller builds the worker's JobSpec from it,
+// with the remotes' credentials, when it dispatches the job. Field names of
+// the oneof are the job kinds (the JobSpec operation names).
+message JobDefinition {
+  oneof operation {
+    RcloneTransferDefinition rclone_transfer = 10;
+  }
+
+  // Restic operations (Milestone 5).
+  reserved 20 to 29;
+}
+
+// RcloneTransferDefinition copies, syncs or moves files between two
+// locations (see RcloneTransfer).
+message RcloneTransferDefinition {
+  // Transfer mode.
+  RcloneTransferMode mode = 1;
+
+  // Where files are read from.
+  JobLocation source = 2;
+
+  // Where files are written to.
+  JobLocation destination = 3;
+
+  // Typed allowlist of rclone flags. Unset fields use rclone defaults.
+  RcloneTransferOptions options = 4;
+
+  reserved 5 to 9;
+}
+
+// JobLocation is a path on one of the owner's remotes, or on the worker's
+// local filesystem.
+message JobLocation {
+  // Remote ID. Empty means the worker's local filesystem: path must then be
+  // absolute and inside the worker's local_roots.
+  string remote_id = 1;
+
+  // Path within the remote (relative to its root), or an absolute local
+  // path.
+  string path = 2;
+
+  reserved 3 to 9;
 }
 
 // JobStatus is the lifecycle status of a job (see internal/domain).
@@ -356,8 +528,12 @@ message RunJobRequest {
   // The worker to run the job on.
   string worker_id = 1;
 
-  // What to run, including inline remote credentials (provisional).
-  JobSpec spec = 2;
+  // Milestone 2 took a complete JobSpec with inline credentials.
+  reserved 2;
+  reserved "spec";
+
+  // What to run.
+  JobDefinition definition = 3;
 }
 
 // RunJobResponse returns the queued job.
@@ -388,6 +564,25 @@ message ListJobsRequest {
 
   // next_page_token of the previous response; empty for the first page.
   string page_token = 4;
+
+  // Only jobs that use this remote; empty means any.
+  string remote_id = 5;
+
+  // Only jobs of these kinds (e.g. "rclone_transfer"); empty means all.
+  repeated string kinds = 6;
+
+  // Only jobs whose kind, mode, paths or remote names contain this text
+  // (case-insensitive); empty means all.
+  string query = 7;
+
+  // Only jobs created at or after created_after and before created_before;
+  // unset means no bound.
+  google.protobuf.Timestamp created_after = 8;
+  google.protobuf.Timestamp created_before = 9;
+
+  // Admins only: list every user's jobs instead of their own. Ignored for
+  // other users.
+  bool all_users = 10;
 }
 
 // ListJobsResponse is one page of jobs, newest first.
@@ -421,6 +616,16 @@ message WatchJobResponse {
     // A live progress sample of the running job.
     JobProgress progress = 2;
   }
+}
+
+// ListJobSamplesRequest names a job.
+message ListJobSamplesRequest {
+  string job_id = 1;
+}
+
+// ListJobSamplesResponse lists the job's stored samples, oldest first.
+message ListJobSamplesResponse {
+  repeated JobProgress samples = 1;
 }
 
 // JobProgress is a live progress sample. Rates are derived by clients from

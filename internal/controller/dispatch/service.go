@@ -43,11 +43,16 @@ func DefaultConfig() Config {
 	}
 }
 
-// Deps are the dispatcher's collaborators. All are required except Logger.
+// Deps are the dispatcher's collaborators. All are required except Specs and
+// Logger.
 type Deps struct {
 	Jobs    Jobs
 	Workers Workers
-	Clock   Clock
+	// Specs builds the specs of queued jobs, normally NewSpecs(remotes
+	// service, job kinds). If nil, every queued job fails with
+	// "invalid_spec" when it would be dispatched.
+	Specs SpecBuilder
+	Clock Clock
 	// Hub must be the same Hub given to the job service as its Waker.
 	Hub *Hub
 	// Logger defaults to discarding.
@@ -61,6 +66,7 @@ type Deps struct {
 type Service struct {
 	jobs    Jobs
 	workers Workers
+	specs   SpecBuilder
 	clock   Clock
 	hub     *Hub
 	log     *slog.Logger
@@ -89,7 +95,7 @@ func New(d Deps, cfg Config) (*Service, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Service{
-		jobs: d.Jobs, workers: d.Workers, clock: d.Clock, hub: d.Hub, log: log, cfg: cfg,
+		jobs: d.Jobs, workers: d.Workers, specs: d.Specs, clock: d.Clock, hub: d.Hub, log: log, cfg: cfg,
 		sessions: make(map[domain.WorkerID]*session),
 	}, nil
 }

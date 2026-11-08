@@ -6,15 +6,29 @@ import (
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
-// Job is one run of a job spec on a worker.
+// Job is one run of a job definition on a worker.
 type Job struct {
 	ID       domain.JobID
 	WorkerID domain.WorkerID
-	// Kind is the JobSpec operation name, e.g. "rclone_transfer".
+	// OwnerID is the user who ran the job.
+	OwnerID domain.UserID
+	// Kind is the JobDefinition (and JobSpec) operation name, e.g.
+	// "rclone_transfer".
 	Kind   string
 	Status domain.JobStatus
-	// SpecEnc is the encoded JobSpec, encrypted (associated data SpecAD(ID)).
-	SpecEnc []byte
+	// Definition is the encoded job definition (protojson of
+	// syncr.v1.JobDefinition, see internal/jobkind). It contains no
+	// secrets; the dispatcher builds the worker's spec from it.
+	Definition []byte
+	// RemoteIDs are the remotes the definition refers to directly (not the
+	// members of unions among them), without duplicates, sorted by ID. They
+	// were live remotes of the owner when the job was created and may have
+	// been deleted since.
+	RemoteIDs []domain.RemoteID
+	// SearchText is what ListFilter.Query matches: the kind, the
+	// definition's search terms (mode, paths) and the remotes' names at
+	// creation time, lower-cased, one per line.
+	SearchText string
 
 	// Epoch is the worker epoch that accepted the job; empty while queued.
 	// Dispatched and running jobs always have one.
@@ -98,6 +112,11 @@ const (
 	CodeWorkerRestarted = "worker_restarted"
 	CodeWorkerLost      = "worker_lost"
 	CodeWorkerRemoved   = "worker_removed"
+	// CodeInvalidSpec: the job's definition cannot be decoded or built.
+	CodeInvalidSpec = "invalid_spec"
+	// CodeRemoteUnavailable: a remote of the job was deleted or is no
+	// longer usable by its owner when the job was dispatched.
+	CodeRemoteUnavailable = "remote_unavailable"
 )
 
 // Outcome is a worker-reported terminal result (Finish).
@@ -118,29 +137,54 @@ type Outcome struct {
 // Progress is set.
 type Update struct {
 	JobID domain.JobID
-	// Job is the job after a stored change (status, cancel request), without
-	// its spec.
+	// Job is the job after a stored change (status, cancel request).
 	Job *Job
 	// Progress is a live sample; it may not be stored.
 	Progress *Sample
 }
 
-// CreateParams are the inputs of Create.
+// CreateParams are the inputs of Create. The owner is the actor.
 type CreateParams struct {
 	WorkerID domain.WorkerID
-	// Kind is the JobSpec operation name (the caller derives it from the
-	// spec).
+	// Kind is the definition's operation name (the caller derives it from
+	// the definition).
 	Kind string
-	// Spec is the encoded JobSpec (protobuf wire form).
-	Spec []byte
+	// Definition is the encoded job definition (see Job.Definition), checked
+	// by the caller (internal/jobkind).
+	Definition []byte
+	// RemoteIDs are the remotes the definition refers to (jobkind.Refs);
+	// each must be a live remote of the actor.
+	RemoteIDs []domain.RemoteID
+	// SearchTerms are the definition's texts a search matches
+	// (jobkind.Refs); the service adds the kind and the remote names.
+	SearchTerms []string
 }
 
-// ListFilter selects jobs for List.
+// ListFilter selects jobs for List. Zero fields do not filter.
 type ListFilter struct {
-	// WorkerID keeps only this worker's jobs; zero means all.
+	// OwnerID keeps only this user's jobs. List sets it to the actor unless
+	// the actor is an admin and AllUsers is set (then zero means every
+	// user).
+	OwnerID domain.UserID
+	// AllUsers asks for every user's jobs; only admins may (List ignores it
+	// for other actors). Repositories ignore it.
+	AllUsers bool
+	// WorkerID keeps only this worker's jobs.
 	WorkerID domain.WorkerID
-	// Statuses keeps only jobs in one of these; empty means all.
+	// Statuses keeps only jobs in one of these.
 	Statuses []domain.JobStatus
+	// RemoteID keeps only jobs whose RemoteIDs contain it.
+	RemoteID domain.RemoteID
+	// Kinds keeps only jobs of one of these kinds.
+	Kinds []string
+	// Query keeps only jobs whose SearchText contains it as a plain
+	// substring (no wildcards: repositories escape LIKE patterns). List
+	// trims and lower-cases it, so matching is case-insensitive.
+	Query string
+	// CreatedAfter keeps only jobs created at or after it; CreatedBefore
+	// only jobs created before it.
+	CreatedAfter  time.Time
+	CreatedBefore time.Time
 	// Before is a keyset cursor: only jobs with ID < Before. Zero starts at
 	// the newest job.
 	Before domain.JobID
@@ -149,10 +193,14 @@ type ListFilter struct {
 	Limit int
 }
 
-// Page sizes for List.
+// Limits of List.
 const (
 	DefaultPageSize = 50
 	MaxPageSize     = 500
+	// MaxQueryLen bounds ListFilter.Query, in bytes.
+	MaxQueryLen = 256
+	// MaxKinds bounds ListFilter.Kinds.
+	MaxKinds = 32
 )
 
 // Page is one page of List.
@@ -162,7 +210,3 @@ type Page struct {
 	// last page.
 	Next domain.JobID
 }
-
-// SpecAD is the associated data binding a job's encrypted spec to its
-// record.
-func SpecAD(id domain.JobID) []byte { return []byte("job-spec:" + id.String()) }

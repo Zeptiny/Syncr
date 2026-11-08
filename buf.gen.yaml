@@ -1,8 +1,12 @@
 # Code generation: https://buf.build/docs/configuration/v2/buf-gen-yaml
 #
-# Plugins run through `go tool`, so their versions are pinned by go.mod
+# The Go plugins run through `go tool`, so their versions are pinned by go.mod
 # (the same google.golang.org/protobuf and connectrpc.com/connect versions the
-# code links against). Output is committed; CI fails if it drifts.
+# code links against). The TypeScript plugin (protoc-gen-es, which also emits
+# the Connect service descriptors) is pinned in web/package.json and writes
+# into web/src/gen, where the generated imports of @bufbuild/protobuf resolve
+# against web/node_modules: run `npm ci --prefix web` before `buf generate`.
+# Output is committed; CI fails if it drifts.
 version: v2
 clean: true
 managed:
@@ -17,3 +21,6 @@ plugins:
   - local: ["go", "tool", "protoc-gen-connect-go"]
     out: gen/go
     opt: paths=source_relative
+  - local: ["node", "web/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es"]
+    out: web/src/gen
+    opt: [target=ts, import_extension=none]

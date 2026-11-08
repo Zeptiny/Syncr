@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -42,7 +43,24 @@ func tableExists(t *testing.T, s *Store, name string) bool {
 	return ok
 }
 
-var schemaTables = []string{"workers", "enrollment_tokens", "jobs", "job_samples"}
+var schemaTables = []string{
+	"workers", "enrollment_tokens", "jobs", "job_samples",
+	"users", "sessions", "api_tokens", "remotes", "union_members", "job_remotes",
+}
+
+// allVersions are the versions of the embedded migrations.
+var allVersions = []int64{1, 2}
+
+func columnExists(t *testing.T, s *Store, table, column string) bool {
+	t.Helper()
+	var ok bool
+	err := s.pool.QueryRow(t.Context(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2)`, table, column).Scan(&ok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ok
+}
 
 func TestMigrateIdempotent(t *testing.T) {
 	s := openStore(t, createDB(t, false))
@@ -61,8 +79,8 @@ func TestMigrateIdempotent(t *testing.T) {
 			t.Errorf("table %s missing after Migrate", table)
 		}
 	}
-	if got := appliedVersions(t, s); len(got) != 1 || got[0] != 1 {
-		t.Errorf("applied versions = %v, want [1]", got)
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) {
+		t.Errorf("applied versions = %v, want %v", got, allVersions)
 	}
 }
 
@@ -87,8 +105,8 @@ func TestMigrateConcurrent(t *testing.T) {
 			t.Errorf("concurrent Migrate: %v", err)
 		}
 	}
-	if got := appliedVersions(t, stores[0]); len(got) != 1 || got[0] != 1 {
-		t.Errorf("applied versions = %v, want [1] (each migration applied once)", got)
+	if got := appliedVersions(t, stores[0]); !slices.Equal(got, allVersions) {
+		t.Errorf("applied versions = %v, want %v (each migration applied once)", got, allVersions)
 	}
 }
 
@@ -154,5 +172,56 @@ func TestMigrateDownUp(t *testing.T) {
 		if !tableExists(t, s, table) {
 			t.Errorf("table %s missing after down+up", table)
 		}
+	}
+}
+
+// TestMigrateUsersRemotesDown checks the down migration of 00002: back at
+// version 1 the Milestone 3 tables are gone and jobs has its Milestone 2
+// columns again; migrating up restores version 2.
+func TestMigrateUsersRemotesDown(t *testing.T) {
+	s := openStore(t, createDB(t, true))
+	ctx := t.Context()
+	// A Milestone 3 job, which the down migration drops.
+	w := newTestWorker()
+	if err := s.CreateWorker(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateJob(ctx, newTestJob(w.ID, seedUser(t, s))); err != nil {
+		t.Fatal(err)
+	}
+	p, closeDB, err := s.migrationProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+
+	if _, err := p.DownTo(ctx, 1); err != nil {
+		t.Fatalf("down to 1: %v", err)
+	}
+	for _, table := range []string{"users", "sessions", "api_tokens", "remotes", "union_members", "job_remotes"} {
+		if tableExists(t, s, table) {
+			t.Errorf("table %s survived the down migration", table)
+		}
+	}
+	if !columnExists(t, s, "jobs", "spec_enc") || columnExists(t, s, "jobs", "owner_id") ||
+		columnExists(t, s, "jobs", "definition") || columnExists(t, s, "jobs", "search_text") {
+		t.Error("jobs does not have its version 1 columns after the down migration")
+	}
+	var jobs int
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM jobs").Scan(&jobs); err != nil || jobs != 0 {
+		t.Errorf("jobs after down = (%d, %v), want 0", jobs, err)
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, []int64{1}) {
+		t.Errorf("applied versions = %v, want [1]", got)
+	}
+
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) {
+		t.Errorf("applied versions = %v, want %v", got, allVersions)
+	}
+	if !columnExists(t, s, "jobs", "owner_id") || columnExists(t, s, "jobs", "spec_enc") {
+		t.Error("jobs does not have its version 2 columns after up")
 	}
 }

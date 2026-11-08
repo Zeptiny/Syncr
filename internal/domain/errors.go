@@ -9,11 +9,14 @@ import "errors"
 //	error                                              Connect code
 //	ErrNotFound                                        NotFound
 //	ErrAlreadyExists                                   AlreadyExists
+//	*ValidationError                                   InvalidArgument (with field details)
 //	ErrInvalidArgument, ErrInvalidID,
 //	ErrInvalidJobStatus, ErrInvalidWorkerMode           InvalidArgument
 //	ErrFailedPrecondition, ErrInvalidTransition        FailedPrecondition
 //	ErrConflict                                        Aborted
 //	ErrUnauthenticated                                 Unauthenticated
+//	ErrPermissionDenied                                PermissionDenied
+//	ErrRateLimited                                     ResourceExhausted
 //
 // Anything else is an internal error.
 var (
@@ -44,4 +47,12 @@ var (
 	ErrConflict = errors.New("concurrent modification")
 	// ErrUnauthenticated reports missing, unknown or wrong credentials.
 	ErrUnauthenticated = errors.New("unauthenticated")
+	// ErrPermissionDenied reports an authenticated caller whose role does
+	// not allow the operation (e.g. a non-admin managing users). Objects the
+	// caller may not see at all are ErrNotFound instead, so their existence
+	// does not leak.
+	ErrPermissionDenied = errors.New("permission denied")
+	// ErrRateLimited reports a caller that made too many attempts (logins,
+	// setup codes) and must wait.
+	ErrRateLimited = errors.New("too many attempts")
 )

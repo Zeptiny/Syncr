@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
@@ -21,6 +20,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
 	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch/active"
@@ -38,6 +38,8 @@ type env struct {
 	disp    *dispatch.Service
 	srv     *httptest.Server
 	stop    context.CancelFunc
+	// owner owns the queued jobs (it exists in the store).
+	owner domain.Actor
 }
 
 type envOptions struct {
@@ -56,10 +58,13 @@ func newEnv(t *testing.T, o envOptions) *env {
 		t.Fatal(err)
 	}
 	store, ids := memstore.New(), &idgen.Sequential{}
-	e := &env{t: t, clock: clock.NewFake(time.Now())}
+	e := &env{t: t, clock: clock.NewFake(time.Now()), owner: domain.Actor{UserID: domain.NewUserID(), Role: domain.RoleUser}}
+	if err := store.CreateUser(context.Background(), users.User{ID: e.owner.UserID, Username: "owner", Role: domain.RoleUser, Version: 1}); err != nil {
+		t.Fatal(err)
+	}
 	hub := dispatch.NewHub()
 	e.jobs, err = jobs.New(jobs.Deps{
-		Jobs: store, Samples: store, Cipher: cipher, Clock: e.clock, IDs: ids,
+		Jobs: store, Samples: store, Clock: e.clock, IDs: ids,
 		Broker: broker.New(), Notifier: jobs.NopNotifier{}, Waker: hub,
 	}, jobs.Config{})
 	if err != nil {
@@ -71,7 +76,7 @@ func newEnv(t *testing.T, o envOptions) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.disp, err = dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Clock: e.clock, Hub: hub}, dispatch.Config{MaxWait: o.maxWait})
+	e.disp, err = dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Specs: specBuilder{}, Clock: e.clock, Hub: hub}, dispatch.Config{MaxWait: o.maxWait})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,13 +135,20 @@ func hello(seq int64) *syncrv1.Event {
 	return &syncrv1.Event{Seq: seq, Payload: &syncrv1.Event_Hello{Hello: &syncrv1.Hello{Hostname: "h"}}}
 }
 
+// specBuilder sends every job as an empty rclone transfer: these transport
+// tests only need some spec delivered (dispatch.Specs, which builds real
+// specs from definitions, is tested in package dispatch).
+type specBuilder struct{}
+
+func (specBuilder) Build(context.Context, jobs.Job) (*syncrv1.JobSpec, error) {
+	return &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransfer{}}}, nil
+}
+
 func (e *env) queue(id domain.WorkerID) domain.JobID {
 	e.t.Helper()
-	raw, err := proto.Marshal(&syncrv1.JobSpec{Operation: &syncrv1.JobSpec_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransfer{}}})
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	j, err := e.jobs.Create(context.Background(), jobs.CreateParams{WorkerID: id, Kind: "rclone_transfer", Spec: raw})
+	j, err := e.jobs.Create(context.Background(), e.owner, jobs.CreateParams{
+		WorkerID: id, Kind: "rclone_transfer", Definition: []byte(`{"rclone_transfer":{}}`),
+	})
 	if err != nil {
 		e.t.Fatal(err)
 	}

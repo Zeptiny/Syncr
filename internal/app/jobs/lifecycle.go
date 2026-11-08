@@ -35,15 +35,6 @@ func (s *Service) QueuedBefore(ctx context.Context, before time.Time, limit int)
 	return js, nil
 }
 
-// Spec decrypts a job's encoded spec.
-func (s *Service) Spec(j Job) ([]byte, error) {
-	spec, err := s.cipher.Decrypt(j.SpecEnc, SpecAD(j.ID))
-	if err != nil {
-		return nil, fmt.Errorf("decrypt spec of job %s: %w", j.ID, err)
-	}
-	return spec, nil
-}
-
 // MarkDispatched records that epoch accepted the job: queued -> dispatched.
 // No-op unless the job is queued.
 func (s *Service) MarkDispatched(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string) (Job, bool, error) {

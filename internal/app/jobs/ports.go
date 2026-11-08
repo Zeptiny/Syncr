@@ -12,13 +12,16 @@ import (
 // several calls. Errors wrap the domain sentinels named below; anything else
 // is an internal error. Returned values must not alias storage.
 type Repository interface {
-	// CreateJob inserts j (Version is stored as given, normally 1).
-	// ErrAlreadyExists if j.ID is taken; ErrNotFound if j.WorkerID does not
-	// exist or is removed (checked in the same statement, e.g. INSERT ...
-	// SELECT ... WHERE EXISTS (worker not removed)).
+	// CreateJob inserts j with its RemoteIDs, in one transaction (Version
+	// is stored as given, normally 1). ErrAlreadyExists if j.ID is taken;
+	// ErrNotFound if j.WorkerID does not exist or is removed (checked in the
+	// same statement, e.g. INSERT ... SELECT ... WHERE EXISTS (worker not
+	// removed)), or if the owner or one of the remotes does not exist
+	// (foreign keys; a deleted remote still exists).
 	CreateJob(ctx context.Context, j Job) error
 
-	// GetJob returns a job. ErrNotFound if missing.
+	// GetJob returns a job. ErrNotFound if missing. Every method returning
+	// jobs returns them with their RemoteIDs (sorted by ID) and SearchText.
 	GetJob(ctx context.Context, id domain.JobID) (Job, error)
 
 	// UpdateJob is an optimistic, version-checked update: if the stored
@@ -26,14 +29,19 @@ type Repository interface {
 	// (Status, Epoch, CancelRequestedAt, QueuedAt, DispatchedAt, StartedAt,
 	// FinishedAt, Requeues, Stats, Error, Warnings, ExitCode, Output), sets
 	// Version = j.Version + 1 and returns the stored job. The immutable
-	// fields (ID, WorkerID, Kind, SpecEnc, CreatedAt) are never written.
+	// fields (ID, WorkerID, OwnerID, Kind, Definition, CreatedAt) are never
+	// written, nor are RemoteIDs and SearchText.
 	// ErrConflict if the version differs (the caller re-reads and
 	// re-decides), ErrNotFound if missing. SQL: UPDATE jobs SET ...,
 	// version = version + 1 WHERE id = $1 AND version = $2 RETURNING *.
 	UpdateJob(ctx context.Context, j Job) (Job, error)
 
-	// ListJobs returns at most f.Limit jobs matching f, by ID descending
-	// (IDs are UUIDv7, so newest first). f.Before is exclusive.
+	// ListJobs returns at most f.Limit (negative: no limit) jobs matching
+	// every set field of f, by ID descending (IDs are UUIDv7, so newest
+	// first). f.Before and f.CreatedBefore are exclusive, f.CreatedAfter is
+	// inclusive. f.Query is a literal substring of SearchText: "%", "_" and
+	// "\" in it match themselves. f.AllUsers is ignored (the service has
+	// resolved it into f.OwnerID).
 	ListJobs(ctx context.Context, f ListFilter) ([]Job, error)
 
 	// ListUnfinishedJobs returns the worker's queued, dispatched and running
@@ -59,6 +67,13 @@ type SampleRepository interface {
 
 	// ListJobSamples returns all samples of the job by Time ascending.
 	ListJobSamples(ctx context.Context, id domain.JobID) ([]Sample, error)
+}
+
+// RemoteChecker checks the remotes a new job uses (*remotes.Service).
+type RemoteChecker interface {
+	// Usable returns the names of ids, which must all be live remotes of
+	// owner: ErrNotFound if any is missing, deleted or another user's.
+	Usable(ctx context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]string, error)
 }
 
 // Broker fans job updates out to live watchers within the process.
@@ -105,13 +120,6 @@ func (NopNotifier) JobFailed(context.Context, Job) error { return nil }
 // dispatcher implements it; it must not block.
 type Waker interface {
 	Wake(workerID domain.WorkerID)
-}
-
-// Cipher encrypts secrets at rest; associated data binds a ciphertext to its
-// record. internal/adapters/secrets implements it.
-type Cipher interface {
-	Encrypt(plaintext, associatedData []byte) ([]byte, error)
-	Decrypt(ciphertext, associatedData []byte) ([]byte, error)
 }
 
 // Clock tells the time.

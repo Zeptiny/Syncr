@@ -1,7 +1,8 @@
 // Package storetest is the contract test suite of the controller's
 // repository ports (workers.Repository, workers.TokenRepository,
-// jobs.Repository, jobs.SampleRepository). Every store adapter runs it from
-// its tests:
+// jobs.Repository, jobs.SampleRepository, users.Repository,
+// users.SessionRepository, users.APITokenRepository, remotes.Repository).
+// Every store adapter runs it from its tests:
 //
 //	func TestContract(t *testing.T) {
 //		storetest.Run(t, func(t *testing.T) storetest.Store { return newStore(t) })
@@ -9,23 +10,29 @@
 //
 // It checks the documented semantics, above all the conditional updates the
 // use cases rely on for concurrency safety (compare-and-swap epoch,
-// monotonic cursors, single-use tokens, version-checked job updates), and
-// that returned values do not alias the store.
+// monotonic cursors, single-use tokens, version-checked updates, the first
+// user race), the referential rules (owners, union members, soft delete),
+// and that returned values do not alias the store.
 //
 // It is test support, not an adapter: it imports only the standard library,
-// internal/domain and the app packages whose ports it exercises.
+// internal/domain, internal/backend (for its value types) and the app
+// packages whose ports it exercises.
 package storetest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
@@ -36,6 +43,10 @@ type Store interface {
 	workers.TokenRepository
 	jobs.Repository
 	jobs.SampleRepository
+	users.Repository
+	users.SessionRepository
+	users.APITokenRepository
+	remotes.Repository
 }
 
 // Run runs the suite; open returns a new, empty store for each subtest.
@@ -57,8 +68,26 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 		{"JobUpdateVersioned", testJobUpdateVersioned},
 		{"JobUpdateRace", testJobUpdateRace},
 		{"JobLists", testJobLists},
+		{"JobListFilters", testJobListFilters},
+		{"JobQueryIsLiteral", testJobQueryIsLiteral},
+		{"JobRemotes", testJobRemotes},
 		{"Samples", testSamples},
 		{"NoAliasing", testNoAliasing},
+
+		{"UserCreateGetList", testUserCreateGetList},
+		{"UserUpdateVersioned", testUserUpdateVersioned},
+		{"UserFirstUserRace", testUserFirstUserRace},
+		{"UserDelete", testUserDelete},
+		{"UserDeleteOwner", testUserDeleteOwner},
+		{"Sessions", testSessions},
+		{"APITokens", testAPITokens},
+
+		{"RemoteCreateGetList", testRemoteCreateGetList},
+		{"RemoteNamesUniqueAmongLive", testRemoteNamesUniqueAmongLive},
+		{"RemoteUpdateVersioned", testRemoteUpdateVersioned},
+		{"RemoteUnionMembers", testRemoteUnionMembers},
+		{"RemoteSoftDelete", testRemoteSoftDelete},
+		{"RemoteNoAliasing", testRemoteNoAliasing},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -81,6 +110,21 @@ func id[K any](t *testing.T, parse func(string) (domain.ID[K], error), n int) do
 
 func workerID(t *testing.T, n int) domain.WorkerID { return id(t, domain.ParseWorkerID, n) }
 func jobID(t *testing.T, n int) domain.JobID       { return id(t, domain.ParseJobID, 1000+n) }
+func userID(t *testing.T, n int) domain.UserID     { return id(t, domain.ParseUserID, 2000+n) }
+func remoteID(t *testing.T, n int) domain.RemoteID { return id(t, domain.ParseRemoteID, 3000+n) }
+
+// testDefinition is the encoded definition of test jobs (jobs store it as
+// JSON; databases may normalize its whitespace).
+const testDefinition = `{"rclone_transfer": {"mode": "RCLONE_TRANSFER_MODE_COPY"}}`
+
+// sameJSON reports whether a and b are equal JSON documents.
+func sameJSON(a, b []byte) bool {
+	var va, vb any
+	return json.Unmarshal(a, &va) == nil && json.Unmarshal(b, &vb) == nil && reflect.DeepEqual(va, vb)
+}
+
+// ownerID is the owner of test jobs; mustCreateJob creates it.
+func ownerID(t *testing.T) domain.UserID { return userID(t, 1) }
 
 func newWorker(t *testing.T, n int) workers.Worker {
 	return workers.Worker{
@@ -98,15 +142,28 @@ func mustCreateWorker(t *testing.T, s Store, w workers.Worker) {
 
 func newJob(t *testing.T, n int, w domain.WorkerID) jobs.Job {
 	return jobs.Job{
-		ID: jobID(t, n), WorkerID: w, Kind: "rclone_transfer", Status: domain.JobQueued,
-		SpecEnc: []byte("spec"), CreatedAt: t0(), QueuedAt: t0(), ExitCode: -1, Version: 1,
+		ID: jobID(t, n), WorkerID: w, OwnerID: ownerID(t), Kind: "rclone_transfer", Status: domain.JobQueued,
+		Definition: []byte(testDefinition), CreatedAt: t0(), QueuedAt: t0(), ExitCode: -1, Version: 1,
 	}
 }
 
+// mustCreateJob creates j, and its owner first if needed.
 func mustCreateJob(t *testing.T, s Store, j jobs.Job) {
 	t.Helper()
+	ensureUser(t, s, j.OwnerID)
 	if err := s.CreateJob(context.Background(), j); err != nil {
 		t.Fatalf("CreateJob: %v", err)
+	}
+}
+
+// ensureUser creates a user with id unless it exists.
+func ensureUser(t *testing.T, s Store, id domain.UserID) {
+	t.Helper()
+	u := newUser(t, 0)
+	u.ID, u.Username = id, "owner-"+id.String()[len(id.String())-6:]
+	err := s.CreateUser(context.Background(), u)
+	if err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("CreateUser(%s): %v", id, err)
 	}
 }
 
@@ -368,11 +425,20 @@ func testJobCreateGet(t *testing.T, s Store) {
 	w := newWorker(t, 1)
 	mustCreateWorker(t, s, w)
 	j := newJob(t, 1, w.ID)
+	j.SearchText = "rclone_transfer\ncopy\n/data"
 	mustCreateJob(t, s, j)
 	wantErr(t, "duplicate CreateJob", s.CreateJob(ctx, j), domain.ErrAlreadyExists)
 	wantErr(t, "CreateJob(unknown worker)", s.CreateJob(ctx, newJob(t, 2, workerID(t, 9))), domain.ErrNotFound)
+	orphan := newJob(t, 3, w.ID)
+	orphan.OwnerID = userID(t, 99)
+	wantErr(t, "CreateJob(unknown owner)", s.CreateJob(ctx, orphan), domain.ErrNotFound)
+	if _, err := s.GetJob(ctx, orphan.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("a job without owner was stored: %v", err)
+	}
 	got, err := s.GetJob(ctx, j.ID)
-	if err != nil || got.Status != domain.JobQueued || got.Version != 1 || string(got.SpecEnc) != "spec" || got.ExitCode != -1 || !got.QueuedAt.Equal(t0()) {
+	if err != nil || got.Status != domain.JobQueued || got.Version != 1 || got.OwnerID != ownerID(t) ||
+		!sameJSON(got.Definition, []byte(testDefinition)) || got.ExitCode != -1 || !got.QueuedAt.Equal(t0()) ||
+		got.SearchText != j.SearchText || len(got.RemoteIDs) != 0 {
 		t.Errorf("GetJob = (%+v, %v)", got, err)
 	}
 	_, err = s.GetJob(ctx, jobID(t, 99))
@@ -393,7 +459,8 @@ func testJobUpdateVersioned(t *testing.T, s Store) {
 	next.Warnings, next.Output, next.ExitCode, next.Requeues = []string{"w"}, []byte{1}, 3, 2
 	next.CancelRequestedAt = t0().Add(2 * time.Second)
 	// Immutable fields are never written.
-	next.Kind, next.SpecEnc, next.CreatedAt = "other", []byte("x"), t0().Add(time.Hour)
+	next.Kind, next.Definition, next.CreatedAt = "other", []byte(`{"other": true}`), t0().Add(time.Hour)
+	next.OwnerID, next.SearchText, next.RemoteIDs = userID(t, 99), "other", []domain.RemoteID{remoteID(t, 99)}
 	stored, err := s.UpdateJob(ctx, next)
 	if err != nil {
 		t.Fatal(err)
@@ -402,7 +469,8 @@ func testJobUpdateVersioned(t *testing.T, s Store) {
 		stored.Error.Code != "c" || stored.Requeues != 2 || stored.ExitCode != 3 || !stored.CancelRequestedAt.Equal(t0().Add(2*time.Second)) {
 		t.Errorf("UpdateJob returned %+v", stored)
 	}
-	if stored.Kind != "rclone_transfer" || string(stored.SpecEnc) != "spec" || !stored.CreatedAt.Equal(t0()) {
+	if stored.Kind != "rclone_transfer" || !sameJSON(stored.Definition, []byte(testDefinition)) || stored.OwnerID != ownerID(t) || !stored.CreatedAt.Equal(t0()) ||
+		stored.SearchText != "" || len(stored.RemoteIDs) != 0 {
 		t.Errorf("UpdateJob wrote immutable fields: %+v", stored)
 	}
 	// Stale version: conflict, nothing written.
@@ -511,6 +579,243 @@ func testJobLists(t *testing.T, s Store) {
 	}
 }
 
+func jobIDs(js []jobs.Job) []domain.JobID {
+	out := make([]domain.JobID, len(js))
+	for i, j := range js {
+		out[i] = j.ID
+	}
+	return out
+}
+
+// testJobListFilters covers the filters that need no remotes: owner,
+// kinds, query and the creation time range, alone and combined with the
+// others and the keyset cursor.
+func testJobListFilters(t *testing.T, s Store) {
+	ctx := context.Background()
+	w1, w2 := newWorker(t, 1), newWorker(t, 2)
+	mustCreateWorker(t, s, w1)
+	mustCreateWorker(t, s, w2)
+	alice, bob := ownerID(t), userID(t, 2)
+	ensureUser(t, s, bob)
+	type spec struct {
+		owner  domain.UserID
+		worker domain.WorkerID
+		kind   string
+		status domain.JobStatus
+		text   string
+	}
+	specs := []spec{
+		{alice, w1.ID, "rclone_transfer", domain.JobSucceeded, "rclone_transfer\nsync\n/srv/photos\nphotos"},
+		{bob, w1.ID, "rclone_transfer", domain.JobFailed, "rclone_transfer\ncopy\n/home/bob\nbob's nas"},
+		{alice, w2.ID, "restic_backup", domain.JobSucceeded, "restic_backup\n/srv/photos"},
+		{alice, w1.ID, "rclone_transfer", domain.JobQueued, "rclone_transfer\nmove\ninbox\narchive"},
+		{bob, w2.ID, "restic_check", domain.JobQueued, "restic_check"},
+	}
+	for i, sp := range specs {
+		j := newJob(t, i+1, sp.worker)
+		j.OwnerID, j.Kind, j.SearchText = sp.owner, sp.kind, sp.text
+		j.CreatedAt = t0().Add(time.Duration(i) * time.Minute)
+		mustCreateJob(t, s, j)
+		if sp.status != domain.JobQueued {
+			j.Status = sp.status
+			if _, err := s.UpdateJob(ctx, j); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	n := func(is ...int) []domain.JobID {
+		out := make([]domain.JobID, len(is))
+		for i, x := range is {
+			out[i] = jobID(t, x)
+		}
+		return out
+	}
+	tests := []struct {
+		name string
+		f    jobs.ListFilter
+		want []domain.JobID
+	}{
+		{"everyone", jobs.ListFilter{}, n(5, 4, 3, 2, 1)},
+		{"owner", jobs.ListFilter{OwnerID: alice}, n(4, 3, 1)},
+		{"other owner", jobs.ListFilter{OwnerID: bob}, n(5, 2)},
+		{"owner without jobs", jobs.ListFilter{OwnerID: userID(t, 77)}, nil},
+		{"AllUsers is the service's business", jobs.ListFilter{OwnerID: bob, AllUsers: true}, n(5, 2)},
+		{"one kind", jobs.ListFilter{Kinds: []string{"restic_backup"}}, n(3)},
+		{"kinds", jobs.ListFilter{Kinds: []string{"restic_backup", "restic_check"}}, n(5, 3)},
+		{"unknown kind", jobs.ListFilter{Kinds: []string{"nope"}}, nil},
+		{"query", jobs.ListFilter{Query: "/srv/photos"}, n(3, 1)},
+		{"query across a separator matches nothing", jobs.ListFilter{Query: "sync /srv"}, nil},
+		{"query with an apostrophe", jobs.ListFilter{Query: "bob's"}, n(2)},
+		{"query matching every job", jobs.ListFilter{Query: "r"}, n(5, 4, 3, 2, 1)},
+		{"created after (inclusive)", jobs.ListFilter{CreatedAfter: t0().Add(3 * time.Minute)}, n(5, 4)},
+		{"created before (exclusive)", jobs.ListFilter{CreatedBefore: t0().Add(time.Minute)}, n(1)},
+		{"created range", jobs.ListFilter{CreatedAfter: t0().Add(time.Minute), CreatedBefore: t0().Add(4 * time.Minute)}, n(4, 3, 2)},
+		{"empty range", jobs.ListFilter{CreatedAfter: t0().Add(time.Hour), CreatedBefore: t0()}, nil},
+		{"owner and worker", jobs.ListFilter{OwnerID: alice, WorkerID: w1.ID}, n(4, 1)},
+		{"owner and status", jobs.ListFilter{OwnerID: alice, Statuses: []domain.JobStatus{domain.JobSucceeded}}, n(3, 1)},
+		{"owner, kind and query", jobs.ListFilter{OwnerID: alice, Kinds: []string{"rclone_transfer"}, Query: "photos"}, n(1)},
+		{"everything", jobs.ListFilter{
+			OwnerID: alice, WorkerID: w1.ID, Statuses: []domain.JobStatus{domain.JobQueued, domain.JobSucceeded},
+			Kinds: []string{"rclone_transfer"}, Query: "a", CreatedAfter: t0(), CreatedBefore: t0().Add(time.Hour),
+		}, n(4, 1)},
+		{"cursor and filter", jobs.ListFilter{OwnerID: alice, Before: jobID(t, 4)}, n(3, 1)},
+		{"cursor, filter and limit", jobs.ListFilter{OwnerID: alice, Before: jobID(t, 4), Limit: 1}, n(3)},
+	}
+	for _, tt := range tests {
+		if tt.f.Limit == 0 {
+			tt.f.Limit = 10
+		}
+		got, err := s.ListJobs(ctx, tt.f)
+		if err != nil || !slices.Equal(jobIDs(got), tt.want) {
+			t.Errorf("ListJobs(%s) = %v (%v), want %v", tt.name, jobIDs(got), err, tt.want)
+		}
+	}
+}
+
+// testJobQueryIsLiteral: the query is a plain substring; LIKE wildcards
+// and the escape character in it match only themselves.
+func testJobQueryIsLiteral(t *testing.T, s Store) {
+	ctx := context.Background()
+	w := newWorker(t, 1)
+	mustCreateWorker(t, s, w)
+	texts := []string{
+		"rclone_transfer\na_b",               // 1
+		"rclone_transfer\naxb",               // 2
+		"rclone_transfer\n100%",              // 3
+		"rclone_transfer\n1000",              // 4
+		`rclone_transfer` + "\n" + `c:\data`, // 5
+		"rclone_transfer\ncd",                // 6
+		"rclone_transfer\nab",                // 7
+	}
+	for i, text := range texts {
+		j := newJob(t, i+1, w.ID)
+		j.SearchText = text
+		mustCreateJob(t, s, j)
+	}
+	for _, tt := range []struct {
+		query string
+		want  []int
+	}{
+		{"a_b", []int{1}},
+		{"_", []int{7, 6, 5, 4, 3, 2, 1}}, // every text has the kind's underscore
+		{"x_", nil},
+		{"100%", []int{3}},
+		{"%", []int{3}},
+		{"10%0", nil},
+		{`\d`, []int{5}},
+		{`\`, []int{5}},
+		{`c:\`, []int{5}},
+		{`\%`, nil},
+	} {
+		got, err := s.ListJobs(ctx, jobs.ListFilter{Query: tt.query, Limit: 10})
+		var want []domain.JobID
+		for _, n := range tt.want {
+			want = append(want, jobID(t, n))
+		}
+		if err != nil || !slices.Equal(jobIDs(got), want) {
+			t.Errorf("ListJobs(query %q) = %v (%v), want jobs %v", tt.query, jobIDs(got), err, tt.want)
+		}
+	}
+}
+
+// mustCreateJobRemote creates remote n of owner (and the owner) for the
+// job tests.
+func mustCreateJobRemote(t *testing.T, s Store, n int, owner domain.UserID) domain.RemoteID {
+	t.Helper()
+	ensureUser(t, s, owner)
+	r := remotes.Remote{
+		ID: remoteID(t, n), OwnerID: owner, Name: fmt.Sprintf("Remote %d", n), Type: "s3",
+		CreatedAt: t0(), UpdatedAt: t0(), Version: 1,
+	}
+	err := s.CreateRemote(context.Background(), r)
+	if err != nil {
+		t.Fatalf("CreateRemote(%d): %v", n, err)
+	}
+	return r.ID
+}
+
+// testJobRemotes covers RemoteIDs: stored with the job in one
+// transaction, returned sorted by every read, filtered by ListFilter.RemoteID,
+// and referencing existing (possibly deleted) remotes only.
+func testJobRemotes(t *testing.T, s Store) {
+	ctx := context.Background()
+	w := newWorker(t, 1)
+	mustCreateWorker(t, s, w)
+	r1, r2, r3 := mustCreateJobRemote(t, s, 1, ownerID(t)), mustCreateJobRemote(t, s, 2, ownerID(t)), mustCreateJobRemote(t, s, 3, ownerID(t))
+	if err := s.DeleteRemote(ctx, r3, t0()); err != nil {
+		t.Fatal(err)
+	}
+
+	a := newJob(t, 1, w.ID)
+	a.RemoteIDs = []domain.RemoteID{r2, r1} // any order; read back sorted
+	mustCreateJob(t, s, a)
+	b := newJob(t, 2, w.ID)
+	b.RemoteIDs = []domain.RemoteID{r2}
+	mustCreateJob(t, s, b)
+	c := newJob(t, 3, w.ID)
+	c.RemoteIDs = []domain.RemoteID{r3} // a deleted remote still exists
+	mustCreateJob(t, s, c)
+	mustCreateJob(t, s, newJob(t, 4, w.ID))
+
+	sorted := []domain.RemoteID{r1, r2}
+	got, err := s.GetJob(ctx, a.ID)
+	if err != nil || !slices.Equal(got.RemoteIDs, sorted) {
+		t.Errorf("GetJob remotes = %v (%v), want %v", got.RemoteIDs, err, sorted)
+	}
+	next := got
+	next.Status, next.RemoteIDs = domain.JobDispatched, nil
+	updated, err := s.UpdateJob(ctx, next)
+	if err != nil || !slices.Equal(updated.RemoteIDs, sorted) {
+		t.Errorf("UpdateJob remotes = %v (%v), want them kept", updated.RemoteIDs, err)
+	}
+	all, _ := s.ListJobs(ctx, jobs.ListFilter{Limit: 10})
+	byID := map[domain.JobID][]domain.RemoteID{}
+	for _, j := range all {
+		byID[j.ID] = j.RemoteIDs
+	}
+	if !slices.Equal(byID[a.ID], sorted) || !slices.Equal(byID[b.ID], []domain.RemoteID{r2}) || !slices.Equal(byID[c.ID], []domain.RemoteID{r3}) || len(byID[jobID(t, 4)]) != 0 {
+		t.Errorf("ListJobs remotes = %v", byID)
+	}
+	unfinished, _ := s.ListUnfinishedJobs(ctx, w.ID)
+	queued, _ := s.ListQueuedJobs(ctx, t0().Add(time.Hour), 10)
+	for _, list := range [][]jobs.Job{unfinished, queued} {
+		for _, j := range list {
+			if j.ID == b.ID && !slices.Equal(j.RemoteIDs, []domain.RemoteID{r2}) {
+				t.Errorf("job %s listed with remotes %v", j.ID, j.RemoteIDs)
+			}
+		}
+	}
+
+	for _, tt := range []struct {
+		remote domain.RemoteID
+		want   []domain.JobID
+	}{
+		{r1, []domain.JobID{a.ID}},
+		{r2, []domain.JobID{b.ID, a.ID}},
+		{r3, []domain.JobID{c.ID}},
+		{remoteID(t, 9), nil},
+	} {
+		got, err := s.ListJobs(ctx, jobs.ListFilter{RemoteID: tt.remote, Limit: 10})
+		if err != nil || !slices.Equal(jobIDs(got), tt.want) {
+			t.Errorf("ListJobs(remote %s) = %v (%v), want %v", tt.remote, jobIDs(got), err, tt.want)
+		}
+	}
+	if got, _ := s.ListJobs(ctx, jobs.ListFilter{RemoteID: r2, Before: b.ID, Limit: 10}); !slices.Equal(jobIDs(got), []domain.JobID{a.ID}) {
+		t.Errorf("ListJobs(remote, cursor) = %v", jobIDs(got))
+	}
+
+	// A missing remote fails the whole insert: no job, no remote rows.
+	bad := newJob(t, 5, w.ID)
+	bad.RemoteIDs = []domain.RemoteID{r1, remoteID(t, 99)}
+	wantErr(t, "CreateJob(unknown remote)", s.CreateJob(ctx, bad), domain.ErrNotFound)
+	if _, err := s.GetJob(ctx, bad.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("a job with an unknown remote was stored: %v", err)
+	}
+	if got, _ := s.ListJobs(ctx, jobs.ListFilter{RemoteID: r1, Limit: 10}); !slices.Equal(jobIDs(got), []domain.JobID{a.ID}) {
+		t.Errorf("a failed insert left remote rows: %v", jobIDs(got))
+	}
+}
+
 func testSamples(t *testing.T, s Store) {
 	ctx := context.Background()
 	w := newWorker(t, 1)
@@ -563,10 +868,30 @@ func testNoAliasing(t *testing.T, s Store) {
 	j.Warnings = []string{"w"}
 	mustCreateJob(t, s, j)
 	j.Warnings[0] = "mutated"
+	j.Definition[0] = 'X'
 	gj, _ := s.GetJob(ctx, j.ID)
-	gj.SpecEnc[0] = 'X'
+	gj.Definition[0] = 'X'
 	gj2, _ := s.GetJob(ctx, j.ID)
-	if gj2.Warnings[0] != "w" || string(gj2.SpecEnc) != "spec" {
+	if gj2.Warnings[0] != "w" || !sameJSON(gj2.Definition, []byte(testDefinition)) {
 		t.Error("store aliases job values")
 	}
+
+	t.Run("remotes", func(t *testing.T) {
+		r1, r2 := mustCreateJobRemote(t, s, 1, ownerID(t)), mustCreateJobRemote(t, s, 2, ownerID(t))
+		k := newJob(t, 2, w.ID)
+		k.RemoteIDs = []domain.RemoteID{r1, r2}
+		mustCreateJob(t, s, k)
+		k.RemoteIDs[0] = r2
+		got, _ := s.GetJob(ctx, k.ID)
+		got.RemoteIDs[0] = r2
+		list, _ := s.ListJobs(ctx, jobs.ListFilter{Limit: 10})
+		for _, l := range list {
+			if len(l.RemoteIDs) > 0 {
+				l.RemoteIDs[0] = r2
+			}
+		}
+		if again, _ := s.GetJob(ctx, k.ID); !slices.Equal(again.RemoteIDs, []domain.RemoteID{r1, r2}) {
+			t.Errorf("store aliases job remote IDs: %v", again.RemoteIDs)
+		}
+	})
 }

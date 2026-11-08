@@ -12,8 +12,8 @@ func TestUUIDv7(t *testing.T) {
 	if a.IsZero() || a == b || a.String() >= b.String() {
 		t.Errorf("job ids %v, %v: want distinct, increasing", a, b)
 	}
-	if g.NewWorkerID().IsZero() {
-		t.Error("zero worker id")
+	if g.NewWorkerID().IsZero() || g.NewUserID().IsZero() || g.NewAPITokenID().IsZero() || g.NewRemoteID().IsZero() {
+		t.Error("zero id")
 	}
 }
 
@@ -25,6 +25,10 @@ func TestSequential(t *testing.T) {
 	}
 	if got := g.NewJobID().String(); got != "00000000-0000-7000-8000-000000000002" {
 		t.Errorf("second id = %s", got)
+	}
+	if u, k, r := g.NewUserID(), g.NewAPITokenID(), g.NewRemoteID(); u.String() != "00000000-0000-7000-8000-000000000003" ||
+		k.String() != "00000000-0000-7000-8000-000000000004" || r.String() != "00000000-0000-7000-8000-000000000005" {
+		t.Errorf("user, token, remote ids = %s, %s, %s", u, k, r)
 	}
 
 	// Concurrent use yields distinct IDs.

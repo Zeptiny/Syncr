@@ -6,6 +6,7 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
@@ -16,7 +17,6 @@ import (
 type Jobs interface {
 	Unfinished(ctx context.Context, workerID domain.WorkerID) ([]jobs.Job, error)
 	QueuedBefore(ctx context.Context, before time.Time, limit int) ([]jobs.Job, error)
-	Spec(j jobs.Job) ([]byte, error)
 	MarkDispatched(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string) (jobs.Job, bool, error)
 	MarkRunning(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, startedAt time.Time) (jobs.Job, bool, error)
 	RecordProgress(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, smp jobs.Sample) (bool, error)
@@ -24,6 +24,33 @@ type Jobs interface {
 	Requeue(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string) (jobs.Job, bool, error)
 	Interrupt(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, e jobs.JobError) (jobs.Job, bool, error)
 	FailQueued(ctx context.Context, id domain.JobID, queuedBefore time.Time, e jobs.JobError) (jobs.Job, bool, error)
+}
+
+// SpecBuilder builds the worker spec of a queued job from its stored
+// definition, resolving the credentials of the remotes it uses. It is
+// called for every queued job on every poll until the worker accepts it, so
+// the spec (which contains secrets) is never stored. Specs (spec.go) is the
+// implementation over the remotes service and the job kinds.
+//
+// Errors that fail the job instead of being retried: domain.ErrNotFound (a
+// remote was deleted or is not the owner's) fails it with
+// "remote_unavailable", domain.ErrInvalidArgument (the definition cannot be
+// decoded or built) with "invalid_spec", domain.ErrFailedPrecondition (a
+// remote's stored credentials cannot be used, e.g. they no longer decrypt)
+// with "internal". Any other error is returned to the worker's call and
+// retried on its next poll.
+type SpecBuilder interface {
+	Build(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, error)
+}
+
+// Remotes resolves a job's remotes with their credentials
+// (*remotes.Service).
+type Remotes interface {
+	// Resolve returns ids and the members of the unions among them,
+	// decrypted and mapped to rclone remotes, keyed by ID. ErrNotFound if
+	// any is missing, deleted or not owner's; ErrFailedPrecondition if a
+	// remote's stored secrets cannot be decrypted.
+	Resolve(ctx context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Resolved, error)
 }
 
 // Workers is the part of the worker service (*workers.Service) the

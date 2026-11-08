@@ -516,6 +516,9 @@ enum JobErrorCode {
   // The worker was removed before the job finished. Status FAILED (never
   // dispatched) or INTERRUPTED.
   JOB_ERROR_CODE_WORKER_REMOVED = 23;
+  // A remote the job references was deleted, or can no longer be used by
+  // the job's owner, before the job was dispatched. Status FAILED.
+  JOB_ERROR_CODE_REMOTE_UNAVAILABLE = 24;
 }
 
 // WorkerState is a snapshot (not an event) of the jobs a worker holds,

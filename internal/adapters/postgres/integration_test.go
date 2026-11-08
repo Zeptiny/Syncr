@@ -19,6 +19,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/Zeptiny/Syncr/internal/adapters/storetest"
+	"github.com/Zeptiny/Syncr/internal/app/users"
+	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/platform/redact"
 )
 
@@ -202,4 +204,19 @@ func newMigratedStore(t *testing.T) *Store {
 
 func TestContract(t *testing.T) {
 	storetest.Run(t, func(t *testing.T) storetest.Store { return newMigratedStore(t) })
+}
+
+// seedUser inserts a user (e.g. to own test jobs) and returns its ID.
+func seedUser(t *testing.T, s *Store) domain.UserID {
+	t.Helper()
+	id := domain.NewUserID()
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	u := users.User{
+		ID: id, Username: "u" + id.String()[len(id.String())-12:], Role: domain.RoleUser, PasswordHash: "x",
+		CreatedAt: now, UpdatedAt: now, PasswordChangedAt: now, Version: 1,
+	}
+	if err := s.CreateUser(t.Context(), u); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
