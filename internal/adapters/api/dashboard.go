@@ -155,7 +155,7 @@ func (h *dashboardHandler) GetDashboard(ctx context.Context, req *connect.Reques
 	}
 	resp.RecentMissed = make([]*syncrv1.ScheduleRun, 0, len(runs))
 	for _, r := range runs {
-		resp.RecentMissed = append(resp.RecentMissed, dashboardRunToProto(r))
+		resp.RecentMissed = append(resp.RecentMissed, scheduleRunToProto(r))
 	}
 	return connect.NewResponse(resp), nil
 }
@@ -214,7 +214,7 @@ func (h *dashboardHandler) upcoming(ctx context.Context, actor domain.Actor, ws 
 			ScheduleId:   u.ScheduleID.String(),
 			ScheduleName: u.Name,
 			At:           ts(u.At),
-			Target:       dashboardTargetToProto(u.Target),
+			Target:       scheduleTargetToProto(u.Target),
 		}
 		if w, ok := h.targetWorker(u.Target, ws); ok {
 			msg.WorkerName = w.Name
@@ -249,7 +249,8 @@ func (h *dashboardHandler) targetWorker(t schedules.Target, ws []workers.Worker)
 	return *found, true
 }
 
-// recentFailures returns the latest failed or interrupted jobs.
+// recentFailures returns the latest failed or interrupted jobs, with their
+// remote and schedule references.
 func (h *dashboardHandler) recentFailures(ctx context.Context, actor domain.Actor, allUsers bool) ([]*syncrv1.Job, error) {
 	page, err := h.jobs.List(ctx, actor, jobs.ListFilter{
 		Statuses: []domain.JobStatus{domain.JobFailed, domain.JobInterrupted},
@@ -259,57 +260,6 @@ func (h *dashboardHandler) recentFailures(ctx context.Context, actor domain.Acto
 	if err != nil {
 		return nil, err
 	}
-	conv := &jobHandler{jobs: h.jobs, remotes: h.remotes, errs: h.errs, log: cmp.Or(h.errs.log, slog.New(slog.DiscardHandler))}
+	conv := &jobHandler{jobs: h.jobs, remotes: h.remotes, schedules: h.schedules, errs: h.errs, log: cmp.Or(h.errs.log, slog.New(slog.DiscardHandler))}
 	return conv.protoJobs(ctx, page.Jobs)
-}
-
-// dashboardTargetToProto converts a schedule target.
-func dashboardTargetToProto(t schedules.Target) *syncrv1.ScheduleTarget {
-	if !t.WorkerID.IsZero() {
-		return &syncrv1.ScheduleTarget{Target: &syncrv1.ScheduleTarget_WorkerId{WorkerId: t.WorkerID.String()}}
-	}
-	return &syncrv1.ScheduleTarget{Target: &syncrv1.ScheduleTarget_WorkerLabel{WorkerLabel: t.Label}}
-}
-
-// dashboardRunToProto converts a schedule run.
-func dashboardRunToProto(r schedules.Run) *syncrv1.ScheduleRun {
-	out := &syncrv1.ScheduleRun{
-		Id:           r.ID.String(),
-		ScheduleId:   r.ScheduleID.String(),
-		ScheduledFor: ts(r.ScheduledFor),
-		Deadline:     ts(r.Deadline),
-		Coalesced:    int32(min(max(r.Coalesced, 0), 1<<31-1)),
-		Reason:       r.Reason,
-		Message:      r.Message,
-		JobStatus:    jobStatusToProto(r.JobStatus),
-		CreatedAt:    ts(r.CreatedAt),
-		UpdatedAt:    ts(r.UpdatedAt),
-	}
-	switch r.Trigger {
-	case schedules.TriggerCron:
-		out.Trigger = syncrv1.ScheduleRunTrigger_SCHEDULE_RUN_TRIGGER_CRON
-	case schedules.TriggerManual:
-		out.Trigger = syncrv1.ScheduleRunTrigger_SCHEDULE_RUN_TRIGGER_MANUAL
-	}
-	switch r.Status {
-	case schedules.RunPending:
-		out.Status = syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_PENDING
-	case schedules.RunLaunching:
-		out.Status = syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_LAUNCHING
-	case schedules.RunLaunched:
-		out.Status = syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_LAUNCHED
-	case schedules.RunMissed:
-		out.Status = syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_MISSED
-	case schedules.RunFailed:
-		out.Status = syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_FAILED
-	case schedules.RunCancelled:
-		out.Status = syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_CANCELLED
-	}
-	if !r.WorkerID.IsZero() {
-		out.WorkerId = r.WorkerID.String()
-	}
-	if !r.JobID.IsZero() {
-		out.JobId = r.JobID.String()
-	}
-	return out
 }

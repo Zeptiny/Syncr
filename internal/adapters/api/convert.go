@@ -308,9 +308,10 @@ func overlapFromProto(o syncrv1.OverlapPolicy) (schedules.Overlap, bool) {
 	}
 }
 
-// scheduleEventToProto and scheduleEventFromProto convert the events of a
-// schedule's contact links.
-func scheduleEventToProto(e domain.NotificationEvent) syncrv1.NotificationEvent {
+// notificationEventToProto and notificationEventFromProto convert
+// notification events: the events of a schedule's contact links, of a
+// contact's manual jobs and of a delivery.
+func notificationEventToProto(e domain.NotificationEvent) syncrv1.NotificationEvent {
 	switch e {
 	case domain.EventSucceeded:
 		return syncrv1.NotificationEvent_NOTIFICATION_EVENT_SUCCEEDED
@@ -327,7 +328,9 @@ func scheduleEventToProto(e domain.NotificationEvent) syncrv1.NotificationEvent 
 	}
 }
 
-func scheduleEventFromProto(e syncrv1.NotificationEvent) (domain.NotificationEvent, bool) {
+// notificationEventFromProto maps an event; UNSPECIFIED and unknown values
+// are not events.
+func notificationEventFromProto(e syncrv1.NotificationEvent) (domain.NotificationEvent, bool) {
 	switch e {
 	case syncrv1.NotificationEvent_NOTIFICATION_EVENT_SUCCEEDED:
 		return domain.EventSucceeded, true
@@ -441,7 +444,7 @@ func scheduleToProto(sc schedules.Schedule, refs scheduleRefs) (*syncrv1.Schedul
 		c := refs.contacts[l.ContactID]
 		link := &syncrv1.ScheduleContact{ContactId: l.ContactID.String(), ContactName: c.Name, ChannelType: c.Type}
 		for _, e := range l.Events {
-			link.Events = append(link.Events, scheduleEventToProto(e))
+			link.Events = append(link.Events, notificationEventToProto(e))
 		}
 		out.Contacts = append(out.Contacts, link)
 	}

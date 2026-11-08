@@ -36,6 +36,10 @@ type Config struct {
 	Workers Workers `yaml:"workers"`
 	// Database configures the Postgres store.
 	Database Database `yaml:"database"`
+	// Schedules configures the scheduler.
+	Schedules Schedules `yaml:"schedules"`
+	// Notify configures notifications and their network policy.
+	Notify Notify `yaml:"notify"`
 	// Dev holds development-only switches.
 	Dev Dev `yaml:"dev"`
 }
@@ -48,9 +52,11 @@ type Dev struct {
 	// logs a loud warning when it is on.
 	MemoryStore bool `yaml:"memory_store" env:"SYNCR_DEV_MEMORY_STORE"`
 	// Seed fills the in-memory store with fixed demo data at start (users
-	// admin and alice, workers, remotes and jobs; internal/devseed), for
-	// screenshots and UI development. It needs MemoryStore. The demo
-	// passwords are public: never use it on a reachable controller.
+	// admin and alice, workers, remotes, schedules, contacts, deliveries
+	// and a month of jobs; internal/devseed), for screenshots and UI
+	// development. It needs MemoryStore. Notification channels only log
+	// what they would send (notify.DryRun). The demo passwords are public:
+	// never use it on a reachable controller.
 	Seed bool `yaml:"seed" env:"SYNCR_DEV_SEED"`
 }
 
@@ -283,13 +289,16 @@ func Default() Config {
 			MaxConns:       10,
 			ConnectTimeout: 10 * time.Second,
 		},
+		Schedules: Schedules{Tick: 10 * time.Second},
+		Notify:    defaultNotify(),
 	}
 }
 
 // Validate reports every invalid setting.
 func (c *Config) Validate() error {
 	return errors.Join(c.HTTP.validate(), c.Log.Validate(), c.Secrets.validate(), c.API.validate(),
-		c.Auth.validate(), c.Workers.validate(), c.Database.validate(), c.Dev.validate())
+		c.Auth.validate(), c.Workers.validate(), c.Database.validate(), c.Schedules.validate(), c.Notify.validate(),
+		c.Dev.validate())
 }
 
 func (h HTTP) validate() error {

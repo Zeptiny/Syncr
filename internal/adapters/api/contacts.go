@@ -285,7 +285,7 @@ func contactToProto(c contacts.Contact, usedBy []contacts.ScheduleRef) *syncrv1.
 		Version:     c.Version,
 	}
 	for _, e := range c.JobEvents {
-		out.JobEvents = append(out.JobEvents, contactEventToProto(e))
+		out.JobEvents = append(out.JobEvents, notificationEventToProto(e))
 	}
 	for _, r := range usedBy {
 		out.UsedBy = append(out.UsedBy, &syncrv1.ContactScheduleRef{Id: r.ID.String(), Name: r.Name})
@@ -307,47 +307,13 @@ func contactInputFromProto(in *syncrv1.ContactInput) (contacts.Input, error) {
 	}
 	var v domain.Validation
 	for i, e := range in.GetJobEvents() {
-		ev, ok := contactEventFromProto(e)
+		ev, ok := notificationEventFromProto(e)
 		if !ok {
 			v.Add(fmt.Sprintf("job_events[%d]", i), "is not a known event")
 		}
 		out.JobEvents = append(out.JobEvents, ev)
 	}
 	return out, v.Err()
-}
-
-func contactEventToProto(e domain.NotificationEvent) syncrv1.NotificationEvent {
-	switch e {
-	case domain.EventSucceeded:
-		return syncrv1.NotificationEvent_NOTIFICATION_EVENT_SUCCEEDED
-	case domain.EventFailed:
-		return syncrv1.NotificationEvent_NOTIFICATION_EVENT_FAILED
-	case domain.EventInterrupted:
-		return syncrv1.NotificationEvent_NOTIFICATION_EVENT_INTERRUPTED
-	case domain.EventMissed:
-		return syncrv1.NotificationEvent_NOTIFICATION_EVENT_MISSED
-	case domain.EventTest:
-		return syncrv1.NotificationEvent_NOTIFICATION_EVENT_TEST
-	}
-	return syncrv1.NotificationEvent_NOTIFICATION_EVENT_UNSPECIFIED
-}
-
-// contactEventFromProto maps an event; UNSPECIFIED and unknown values are
-// not events.
-func contactEventFromProto(e syncrv1.NotificationEvent) (domain.NotificationEvent, bool) {
-	switch e {
-	case syncrv1.NotificationEvent_NOTIFICATION_EVENT_SUCCEEDED:
-		return domain.EventSucceeded, true
-	case syncrv1.NotificationEvent_NOTIFICATION_EVENT_FAILED:
-		return domain.EventFailed, true
-	case syncrv1.NotificationEvent_NOTIFICATION_EVENT_INTERRUPTED:
-		return domain.EventInterrupted, true
-	case syncrv1.NotificationEvent_NOTIFICATION_EVENT_MISSED:
-		return domain.EventMissed, true
-	case syncrv1.NotificationEvent_NOTIFICATION_EVENT_TEST:
-		return domain.EventTest, true
-	}
-	return "", false
 }
 
 func deliveryStatusToProto(s notifications.Status) syncrv1.DeliveryStatus {
@@ -388,7 +354,7 @@ func deliveryToProto(d notifications.Delivery) *syncrv1.Delivery {
 	out := &syncrv1.Delivery{
 		Id:            d.ID.String(),
 		ContactId:     d.ContactID.String(),
-		Event:         contactEventToProto(d.Event),
+		Event:         notificationEventToProto(d.Event),
 		Status:        deliveryStatusToProto(d.Status),
 		Attempts:      int32(min(max(d.Attempts, 0), 1<<31-1)),
 		MaxAttempts:   int32(min(max(d.MaxAttempts, 0), 1<<31-1)),

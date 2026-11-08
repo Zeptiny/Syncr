@@ -90,8 +90,9 @@ This record fixes those rules.
   `setup_code`. It warns when session cookies would not be Secure, and about
   the removed `api.admin_token`. `dev.seed` (only with `dev.memory_store`)
   fills the store with demo data (`internal/devseed`) before that check.
-- **Background loops.** Besides the passive supervisor and the
-  dispatch-timeout sweeper: the hourly session purge
+- **Background loops**, started in this order: the dispatch-timeout
+  sweeper, the passive supervisor, the scheduler (ADR 0009), the
+  notification outbox (ADR 0010), the hourly session and API token purge
   (`users.Service.PurgeExpired`) and, with `dev.seed`, the demo animation.
 
 **Controller shutdown** (SIGINT/SIGTERM), each step logged:
@@ -101,9 +102,11 @@ This record fixes those rules.
    (pending Polls answer at once, empty), so step 2 does not wait for them.
 2. `http.Server.Shutdown` with `http.shutdown_timeout`: in-flight Reports and
    API calls finish.
-3. The background loops stop: the passive supervisor (and its loops), the
-   dispatch-timeout sweeper, the session purge and the demo animation. They
-   outlive the HTTP server so nothing they start races a closed store.
+3. The background loops stop: the dispatch-timeout sweeper, the passive
+   supervisor (and its loops), the scheduler, the notification outbox (it
+   records the outcome of the sends in flight first), the purge and the
+   demo animation. They outlive the HTTP server so nothing they start races
+   a closed store.
 4. The store is closed.
 
 ### Worker (`cmd/syncr-worker/link.go`)

@@ -349,6 +349,13 @@ type controller struct {
 	admin   syncrv1connect.WorkerAdminServiceClient
 	jobs    syncrv1connect.JobServiceClient
 	remotes syncrv1connect.RemoteServiceClient
+	// apiToken is the admin's API token.
+	apiToken string
+}
+
+// client is an HTTP client authenticated with the admin's API token.
+func (c *controller) client() *http.Client {
+	return &http.Client{Transport: headers{next: http.DefaultTransport, set: func(h http.Header) { h.Set("Authorization", "Bearer "+c.apiToken) }}}
 }
 
 // headers is a RoundTripper adding headers to every request.
@@ -363,7 +370,9 @@ func (h headers) RoundTrip(r *http.Request) (*http.Response, error) {
 	return h.next.RoundTrip(r)
 }
 
-func newController(t *testing.T, bin string) *controller {
+// newController starts a controller on a database of its own; extra are
+// further KEY=value environment settings.
+func newController(t *testing.T, bin string, extra ...string) *controller {
 	t.Helper()
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
@@ -380,9 +389,10 @@ func newController(t *testing.T, bin string) *controller {
 			"SYNCR_LOG_LEVEL=debug",
 		),
 	}
+	c.env = append(c.env, extra...)
 	c.start()
-	token := c.bootstrap()
-	client := &http.Client{Transport: headers{next: http.DefaultTransport, set: func(h http.Header) { h.Set("Authorization", "Bearer "+token) }}}
+	c.apiToken = c.bootstrap()
+	client := c.client()
 	c.admin = syncrv1connect.NewWorkerAdminServiceClient(client, c.base)
 	c.jobs = syncrv1connect.NewJobServiceClient(client, c.base)
 	c.remotes = syncrv1connect.NewRemoteServiceClient(client, c.base)

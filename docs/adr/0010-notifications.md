@@ -132,7 +132,9 @@ migration marks all earlier history as notified).
 
 `jobs.Notifier` becomes `JobFinished(Job)`. It must not block, and it only
 wakes background loops. The composition root fans it out to
-`notifications.Service.Wake` and the scheduler. `Run` makes a pass at once,
+`notifications.Service.Wake` and the scheduler; it also wakes the outbox
+when the scheduler fires a schedule or ends a run missed or failed (a
+decorator of the scheduler's `Schedules` port in `cmd/syncr-controller`). `Run` makes a pass at once,
 on every wake, and every 30 s as a backstop. A pass plans, then delivers in
 rounds of `notify.concurrency` (4) claims, and purges once an hour. A lost
 wake only delays a notification until the next tick.

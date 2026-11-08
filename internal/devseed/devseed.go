@@ -1,22 +1,29 @@
 // Package devseed fills an empty controller with fixed demo data, for UI
 // development and screenshots: two users (admin and alice, with public
-// passwords), four workers in every connection state, the admin's remotes of
-// every built-in backend type (a union among them), and about 25 jobs in
-// every status with statistics, errors, warnings and stored progress
-// samples. One job keeps running: Animate reports its progress every second
+// passwords), workers in every connection state with labels (and one that
+// was removed), the admin's remotes of every built-in backend type (a union
+// among them), a contact of every built-in channel, schedules of every
+// target type and policy with about a month of runs, and about 160 jobs
+// over those 30 days in every status with statistics, errors, warnings and
+// stored progress samples, and their notifications in every delivery
+// status. One job keeps running: Animate reports its progress every second
 // through the controller's job service, so live views move, and keeps the
 // online workers online.
 //
 // The seed runs in the controller's process when dev.seed is set, which
-// configuration validation allows only together with dev.memory_store. It
-// writes through the use cases (users, remotes, workers, jobs). Where they
-// offer no way to create the past (job history with its times, a worker
-// last seen hours ago) it uses a jobs service of its own with a clock it
-// sets, or the store port directly. Times are relative to the seed's start;
-// everything else (names, paths, statistics, IDs' random bits) is fixed.
+// configuration validation allows only together with dev.memory_store
+// (and under which the controller's notification channels only log what
+// they would send). It writes through the use cases (users, remotes,
+// workers, contacts, jobs, schedules, notifications). Where they offer no
+// way to create the past (history with its times, a worker last seen hours
+// ago) it replays the history with services of its own whose clock it sets
+// (history.go), or uses the store port directly. Times are relative to the
+// seed's start; everything else (names, paths, statistics, the IDs'
+// random bits) is fixed.
 //
 // Allowed dependencies: the standard library, the generated protobuf code,
-// internal/domain, internal/app/..., internal/jobkind, internal/link and
+// internal/domain, internal/app/..., internal/jobkind, internal/link,
+// internal/cronexpr, internal/descriptor, internal/notify and
 // internal/platform packages. Never the Postgres adapter, controller or
 // worker internals.
 package devseed
@@ -28,13 +35,17 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Zeptiny/Syncr/internal/app/contacts"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/notifications"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/backend"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
+	"github.com/Zeptiny/Syncr/internal/notify"
 )
 
 // Demo credentials. They are public (documented): a seeded controller must
@@ -48,12 +59,15 @@ const (
 	AlicePassword = "syncr-demo-alice"
 )
 
-// Store is what the seed writes directly, below the use cases: past jobs
-// (through a jobs service of its own) and a worker's last contact in the
-// past.
+// Store is what the seed writes directly, below the use cases: the
+// history (through services of its own: jobs, schedules and their runs,
+// deliveries), a worker's last contact in the past, and the deliveries it
+// leaves sending or queued again.
 type Store interface {
 	jobs.Repository
 	jobs.SampleRepository
+	schedules.Repository
+	notifications.Repository
 	// TouchWorker sets the worker's last contact to at (if later).
 	TouchWorker(ctx context.Context, id domain.WorkerID, at time.Time) error
 }
@@ -73,8 +87,14 @@ type Deps struct {
 	// job's progress through it, so its watchers (WatchJob) see it.
 	Jobs  *jobs.Service
 	Kinds *jobkind.Registry
-	Store Store
-	Clock Clock
+	// Contacts creates the demo contacts; the history's schedules and
+	// outbox check and resolve them through it.
+	Contacts *contacts.Service
+	// Channels are the controller's notification channels (the history's
+	// outbox sends through scripted copies of them, which never send).
+	Channels *notify.Registry
+	Store    Store
+	Clock    Clock
 	// Logger defaults to discarding.
 	Logger *slog.Logger
 }
@@ -94,7 +114,10 @@ type Seed struct {
 	Workers map[string]domain.WorkerID
 	// Remotes are the demo remotes by name (the admin's and alice's).
 	Remotes map[string]domain.RemoteID
-	// Jobs are the seeded jobs, oldest first.
+	// Contacts and Schedules are the demo contacts and schedules by name.
+	Contacts  map[string]domain.ContactID
+	Schedules map[string]domain.ScheduleID
+	// Jobs are the seeded jobs (manual and scheduled), oldest first.
 	Jobs []domain.JobID
 	// Running is the job that Animate keeps running.
 	Running domain.JobID
@@ -111,7 +134,8 @@ type Seed struct {
 // Run seeds the demo data into an empty controller. It fails with
 // ErrNotEmpty if any user exists (so it never runs twice on one store).
 func Run(ctx context.Context, d Deps) (*Seed, error) {
-	if d.Users == nil || d.Remotes == nil || d.Workers == nil || d.Jobs == nil || d.Kinds == nil || d.Store == nil || d.Clock == nil {
+	if d.Users == nil || d.Remotes == nil || d.Workers == nil || d.Jobs == nil || d.Kinds == nil || d.Contacts == nil ||
+		d.Channels == nil || d.Store == nil || d.Clock == nil {
 		return nil, errors.New("devseed: missing dependency")
 	}
 	log := d.Logger
@@ -125,7 +149,10 @@ func Run(ctx context.Context, d Deps) (*Seed, error) {
 	if !empty {
 		return nil, fmt.Errorf("devseed: %w", ErrNotEmpty)
 	}
-	s := &Seed{d: d, log: log, Workers: map[string]domain.WorkerID{}, Remotes: map[string]domain.RemoteID{}}
+	s := &Seed{
+		d: d, log: log, Workers: map[string]domain.WorkerID{}, Remotes: map[string]domain.RemoteID{},
+		Contacts: map[string]domain.ContactID{}, Schedules: map[string]domain.ScheduleID{},
+	}
 	now := d.Clock.Now()
 	steps := []struct {
 		what string
@@ -134,7 +161,8 @@ func Run(ctx context.Context, d Deps) (*Seed, error) {
 		{"users", s.seedUsers},
 		{"workers", s.seedWorkers},
 		{"remotes", s.seedRemotes},
-		{"jobs", s.seedJobs},
+		{"contacts", s.seedContacts},
+		{"history", s.seedHistory},
 	}
 	for _, step := range steps {
 		if err := step.fn(ctx, now); err != nil {
@@ -143,7 +171,7 @@ func Run(ctx context.Context, d Deps) (*Seed, error) {
 	}
 	log.Warn("DEVELOPMENT MODE: dev.seed filled the in-memory store with demo data; log in as "+AdminUsername+" / "+AdminPassword+
 		" or "+AliceUsername+" / "+AlicePassword+" (public passwords: never expose this controller)",
-		"workers", len(s.Workers), "remotes", len(s.Remotes), "jobs", len(s.Jobs))
+		"workers", len(s.Workers), "remotes", len(s.Remotes), "contacts", len(s.Contacts), "schedules", len(s.Schedules), "jobs", len(s.Jobs))
 	return s, nil
 }
 
@@ -209,6 +237,11 @@ func (s *Seed) seedWorkers(ctx context.Context, now time.Time) error {
 		if err := s.d.Store.TouchWorker(ctx, id, now.Add(-w.lastSeen)); err != nil {
 			return err
 		}
+		if len(w.labels) > 0 {
+			if _, err := s.d.Workers.SetLabels(ctx, id, w.labels); err != nil {
+				return err
+			}
+		}
 		if w.status == domain.WorkerOnline {
 			s.online = append(s.online, id)
 		}
@@ -246,6 +279,21 @@ func (s *Seed) seedRemotes(ctx context.Context, _ time.Time) error {
 			return fmt.Errorf("remote %q: %w", in.Name, err)
 		}
 		s.Remotes[in.Name] = created.ID
+	}
+	return nil
+}
+
+// seedContacts creates the demo contacts.
+func (s *Seed) seedContacts(ctx context.Context, _ time.Time) error {
+	for _, c := range demoContacts() {
+		created, err := s.d.Contacts.Create(ctx, s.actor(c.owner), contacts.Input{
+			Name: c.name, Type: c.channel, Options: c.options, Secrets: c.secrets, Enabled: true,
+			JobEvents: domain.EventSet(c.jobEvents).Normalize(),
+		})
+		if err != nil {
+			return fmt.Errorf("contact %q: %w", c.name, err)
+		}
+		s.Contacts[c.name] = created.ID
 	}
 	return nil
 }

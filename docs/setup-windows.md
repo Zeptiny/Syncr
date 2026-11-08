@@ -84,6 +84,20 @@ syncr-worker.exe service uninstall   # keeps the config and data
 Add `--user` for the scheduled task. `status`, `start`, `stop` and `uninstall`
 of the system service need an elevated terminal.
 
+## Labels and schedules
+
+Schedules run on one worker or on any worker with a label. An admin sets a
+worker's labels on its page in the web UI (or with
+`WorkerAdminService.SetWorkerLabels`), e.g. `nas` and `linux`: lower-case
+letters, digits, `-`, `_` and `.`. A schedule targeting a label picks the
+least busy online worker that has it and can run the job. A schedule's run
+waits for an offline worker as its missed-run policy says, so a desktop
+that is switched off at night catches up when it is back (several missed
+occurrences merge into one run). A worker shows as offline about 45
+seconds after its last contact; a run that comes due before that is still
+queued on it, and fails if the worker does not pick it up within 15
+minutes.
+
 ## Uninstall
 
 ```powershell

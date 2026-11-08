@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -121,7 +123,7 @@ func TestRunServesAndShutsDown(t *testing.T) {
 	for _, step := range []string{
 		`"msg":"shutdown: started`,
 		`"msg":"shutdown: http server stopped"`,
-		`"msg":"shutdown: passive supervisor and dispatch sweeper stopped"`,
+		`"msg":"` + backgroundStoppedMessage + `"`,
 		`"msg":"shutdown: store closed"`,
 		`"msg":"controller stopped"`,
 	} {
@@ -417,5 +419,75 @@ func TestEnrollClientKey(t *testing.T) {
 	}
 	if got := key(connect.Peer{Addr: "192.0.2.9:4444"}, h); got != "192.0.2.9" {
 		t.Errorf("from an untrusted peer: %q", got)
+	}
+}
+
+// TestRunNotifiesAllowedNetworks: with the loopback address in
+// notify.allowed_networks, a webhook on it receives the notification of a
+// schedule's failed run at once (the scheduler wakes the outbox), linking
+// to http.public_url.
+func TestRunNotifiesAllowedNetworks(t *testing.T) {
+	t.Parallel()
+	got := make(chan []byte, 4)
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if r.Header.Get("Webhook-Id") == "" || r.Header.Get("Webhook-Signature") == "" {
+			http.Error(w, "unsigned", http.StatusBadRequest)
+			return
+		}
+		got <- b
+	}))
+	defer hook.Close()
+
+	var logs syncBuffer
+	addr := startController(t, devEnv(map[string]string{
+		"SYNCR_SETUP_CODE": testSetupCode, "SYNCR_NOTIFY_ALLOWED_NETWORKS": "127.0.0.1",
+		"SYNCR_PUBLIC_URL": "http://127.0.0.1:8080/", "SYNCR_SCHEDULES_TICK": "5m",
+	}), &logs)
+	base := "http://" + addr.String()
+	ctx := t.Context()
+	c := newM4Client(bearerClient(http.DefaultTransport, bootstrap(t, http.DefaultTransport, base, testSetupCode)), base)
+	contact, err := c.contacts.CreateContact(ctx, connect.NewRequest(&syncrv1.CreateContactRequest{Input: &syncrv1.ContactInput{
+		Name: "Local hook", ChannelType: "webhook", Enabled: true,
+		Secrets: map[string]string{"url": hook.URL + "/hook", "signing_secret": "whsec_c3luY3ItdGVzdC1zaWduaW5nLWtleS0wMTIzNDU2Nzg5"},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := c.remotes.CreateRemote(ctx, connect.NewRequest(&syncrv1.CreateRemoteRequest{Input: &syncrv1.RemoteInput{
+		Name: "Data", BackendType: "local", Options: map[string]string{"path": "/srv/data"},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sched, err := c.schedules.CreateSchedule(ctx, connect.NewRequest(&syncrv1.CreateScheduleRequest{
+		Input: labelSchedule("Nightly", remote.Msg.GetRemote().GetId(), "nowhere", contact.Msg.GetContact().GetId()),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sched.Msg.GetSchedule().GetId()
+	if _, err := c.schedules.RunScheduleNow(ctx, connect.NewRequest(&syncrv1.RunScheduleNowRequest{ScheduleId: id})); err != nil {
+		t.Fatal(err)
+	}
+	// The scheduler and outbox ticks are 5 minutes and 30 s: only their
+	// wake-ups can deliver this in time.
+	select {
+	case b := <-got:
+		var msg struct {
+			Event string `json:"event"`
+			URL   string `json:"url"`
+			Run   struct {
+				Reason string `json:"reason"`
+			} `json:"run"`
+		}
+		if err := json.Unmarshal(b, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Event != "failed" || msg.Run.Reason != "no_worker_with_label" || msg.URL != "http://127.0.0.1:8080/schedules/"+id {
+			t.Errorf("notification = %s", b)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("no notification:\n%s", logs.String())
 	}
 }
