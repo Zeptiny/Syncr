@@ -101,3 +101,9 @@ DELETE FROM api_tokens WHERE id = sqlc.arg(id) AND user_id = sqlc.arg(user_id);
 
 -- name: TouchAPIToken :execrows
 UPDATE api_tokens SET last_used_at = sqlc.arg(at) WHERE id = sqlc.arg(id);
+
+-- name: DeleteExpiredAPITokens :execrows
+DELETE FROM api_tokens WHERE expires_at IS NOT NULL AND expires_at <= sqlc.arg(now);
+
+-- name: DeleteUserAPITokens :execrows
+DELETE FROM api_tokens WHERE user_id = sqlc.arg(user_id);

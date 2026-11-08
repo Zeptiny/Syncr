@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -71,7 +72,10 @@ func (s *Service) CreateEnrollmentToken(ctx context.Context, ttl time.Duration) 
 // random secret. The request is validated before the token is consumed, so a
 // typo does not burn it. The token is consumed before the worker is created:
 // if creating fails the token is spent and the admin issues a new one.
-// Invalid, expired and used tokens all yield ErrUnauthenticated.
+// Invalid, expired and used tokens all yield ErrUnauthenticated. Worker
+// names are unique among live workers: a taken name gets the first free
+// numeric suffix ("nas-01" becomes "nas-01-2"), since the worker cannot ask
+// its operator for another.
 func (s *Service) Enroll(ctx context.Context, p EnrollParams) (Enrollment, error) {
 	if !strings.HasPrefix(p.Token, tokenPrefix) || len(p.Token) > 128 {
 		return Enrollment{}, fmt.Errorf("enroll: %w: invalid enrollment token", domain.ErrUnauthenticated)
@@ -120,14 +124,74 @@ func (s *Service) Enroll(ctx context.Context, p EnrollParams) (Enrollment, error
 		return Enrollment{}, fmt.Errorf("enroll: encrypt secret: %w", err)
 	}
 	w.CreatedAt = now
-	if err := s.repo.CreateWorker(ctx, w); err != nil {
+	if w, err = s.createWithFreeName(ctx, w); err != nil {
 		return Enrollment{}, fmt.Errorf("enroll: %w", err)
 	}
 	s.log.InfoContext(ctx, "worker enrolled", "worker_id", id.String(), "name", w.Name, "mode", string(mode))
 	return Enrollment{Worker: w, Secret: secret}, nil
 }
 
+// maxNameAttempts bounds how often Enroll retries the create when the name
+// it picked was taken concurrently.
+const maxNameAttempts = 5
+
+// maxNameSuffix bounds the numeric suffixes Enroll tries.
+const maxNameSuffix = 1000
+
+// createWithFreeName stores w under its name or, when a live worker has
+// that name (case-insensitively), under the first free "<name>-2",
+// "<name>-3", ... (the name is shortened to keep within 64 characters). A
+// name taken between the check and the insert is retried a few times.
+func (s *Service) createWithFreeName(ctx context.Context, w Worker) (Worker, error) {
+	base := w.Name
+	for attempt := 1; ; attempt++ {
+		live, err := s.repo.ListWorkers(ctx, ListFilter{})
+		if err != nil {
+			return Worker{}, err
+		}
+		taken := make(map[string]bool, len(live))
+		for _, o := range live {
+			taken[strings.ToLower(o.Name)] = true
+		}
+		name, ok := freeName(base, taken)
+		if !ok {
+			return Worker{}, fmt.Errorf("%w: every worker name derived from %q is taken", domain.ErrAlreadyExists, base)
+		}
+		w.Name = name
+		err = s.repo.CreateWorker(ctx, w)
+		if err == nil {
+			if name != base {
+				s.log.InfoContext(ctx, "worker name was taken; enrolled with a suffix", "requested", base, "name", name)
+			}
+			return w, nil
+		}
+		if !errors.Is(err, domain.ErrAlreadyExists) || attempt == maxNameAttempts {
+			return Worker{}, err
+		}
+	}
+}
+
+// freeName returns base or the first "<base>-<n>" (n >= 2) whose lower case
+// is not in taken, cutting base so the result has at most maxNameLen runes.
+func freeName(base string, taken map[string]bool) (string, bool) {
+	if !taken[strings.ToLower(base)] {
+		return base, true
+	}
+	runes := []rune(base)
+	for n := 2; n <= maxNameSuffix; n++ {
+		suffix := "-" + strconv.Itoa(n)
+		keep := min(len(runes), maxNameLen-len(suffix))
+		name := strings.TrimRightFunc(string(runes[:keep]), unicode.IsSpace) + suffix
+		if !taken[strings.ToLower(name)] {
+			return name, true
+		}
+	}
+	return "", false
+}
+
 // RegisterPassive adds a passive worker from the values its setup printed.
+// ErrAlreadyExists if a worker that is not removed has the name
+// (case-insensitively); unlike Enroll, the admin picks another.
 func (s *Service) RegisterPassive(ctx context.Context, p PassiveParams) (Worker, error) {
 	name, err := validName(p.Name)
 	if err != nil {

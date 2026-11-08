@@ -298,18 +298,23 @@ func (s *Store) TouchAPIToken(ctx context.Context, id domain.APITokenID, at time
 	return nil
 }
 
-// DeleteExpiredAPITokens implements users.APITokenRepository (stub of the
-// contracts step: a wrapped errors.ErrUnsupported until the users track
-// adds the query).
-func (s *Store) DeleteExpiredAPITokens(context.Context, time.Time) (int, error) {
-	return 0, fmt.Errorf("postgres: delete expired api tokens: %w", errors.ErrUnsupported)
+// DeleteExpiredAPITokens implements users.APITokenRepository
+// (api_tokens_expires_idx serves it).
+func (s *Store) DeleteExpiredAPITokens(ctx context.Context, now time.Time) (int, error) {
+	n, err := s.q.DeleteExpiredAPITokens(ctx, pgTime(now))
+	if err != nil {
+		return 0, mapErr("delete expired api tokens", err)
+	}
+	return int(n), nil
 }
 
-// DeleteUserAPITokens implements users.APITokenRepository (stub of the
-// contracts step: a wrapped errors.ErrUnsupported until the users track
-// adds the query).
-func (s *Store) DeleteUserAPITokens(context.Context, domain.UserID) (int, error) {
-	return 0, fmt.Errorf("postgres: delete user api tokens: %w", errors.ErrUnsupported)
+// DeleteUserAPITokens implements users.APITokenRepository.
+func (s *Store) DeleteUserAPITokens(ctx context.Context, user domain.UserID) (int, error) {
+	n, err := s.q.DeleteUserAPITokens(ctx, pgID(user))
+	if err != nil {
+		return 0, mapErr(fmt.Sprintf("delete api tokens of user %s", user), err)
+	}
+	return int(n), nil
 }
 
 // Conversions.

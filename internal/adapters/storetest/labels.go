@@ -99,4 +99,15 @@ func testWorkerLabels(t *testing.T, s Store) {
 	if got := byLabel("nas"); len(got) != 0 {
 		t.Errorf("label nas after remove and clear: %v", got)
 	}
+
+	// CreateWorker stores the labels it is given.
+	c := newWorker(t, 4)
+	c.Labels = []string{"desktop", "windows"}
+	mustCreateWorker(t, s, c)
+	if w, err := s.GetWorker(ctx, c.ID); err != nil || !slices.Equal(w.Labels, c.Labels) {
+		t.Errorf("GetWorker(created with labels) = (%v, %v), want %v", w.Labels, err, c.Labels)
+	}
+	if got := byLabel("windows"); !slices.Equal(got, []domain.WorkerID{c.ID}) {
+		t.Errorf("label windows after create: %v", got)
+	}
 }

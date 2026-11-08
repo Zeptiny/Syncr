@@ -550,9 +550,21 @@ func TestDeleteUser(t *testing.T) {
 func TestPurgeExpired(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, func(_ *users.Deps, c *users.Config) { c.SessionIdleTimeout = time.Hour })
-	e.addUser("alice", domain.RoleUser)
+	alice := e.addUser("alice", domain.RoleUser)
 	bob := e.addUser("bob", domain.RoleUser)
 	idle := e.login("alice")
+	newToken := func(u users.User, ttl time.Duration) users.APIToken {
+		t.Helper()
+		tok, _, err := e.svc.CreateAPIToken(e.ctx(), u.Actor(), "script", ttl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
+	expiring := newToken(alice, time.Hour)
+	lasting := newToken(alice, 2*time.Hour)
+	forever := newToken(alice, 0)
+	bobsToken := newToken(bob, 0)
 	e.clock.Advance(30 * time.Minute)
 	live := e.login("alice")
 	bobs := e.login("bob")
@@ -565,8 +577,18 @@ func TestPurgeExpired(t *testing.T) {
 	e.clock.Advance(31 * time.Minute) // idle is idle for 61 minutes
 
 	n, err := e.svc.PurgeExpired(e.ctx())
-	if err != nil || n != 2 {
-		t.Errorf("PurgeExpired = (%d, %v), want 2", n, err)
+	if err != nil || n != 4 {
+		t.Errorf("PurgeExpired = (%d, %v), want 4 (2 sessions, 2 api tokens)", n, err)
+	}
+	for name, tok := range map[string]users.APIToken{"expired": expiring, "disabled user's": bobsToken} {
+		if _, err := e.store.GetAPITokenByHash(e.ctx(), tok.Hash); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("the %s api token was kept: %v", name, err)
+		}
+	}
+	for name, tok := range map[string]users.APIToken{"unexpired": lasting, "non-expiring": forever} {
+		if _, err := e.store.GetAPITokenByHash(e.ctx(), tok.Hash); err != nil {
+			t.Errorf("the %s api token was purged: %v", name, err)
+		}
 	}
 	for name, tok := range map[string]string{"idle": idle, "disabled user's": bobs} {
 		if _, err := e.store.GetSession(e.ctx(), users.HashToken(tok)); !errors.Is(err, domain.ErrNotFound) {
@@ -576,4 +598,24 @@ func TestPurgeExpired(t *testing.T) {
 	if !e.sessionValid(live) {
 		t.Error("a live session was purged")
 	}
+}
+
+func TestActive(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	root := e.addUser("root", domain.RoleAdmin)
+	alice := e.addUser("alice", domain.RoleUser)
+	if ok, err := e.svc.Active(e.ctx(), alice.ID); err != nil || !ok {
+		t.Errorf("Active(alice) = (%v, %v), want true", ok, err)
+	}
+	if _, err := e.svc.Update(e.ctx(), root.Actor(), alice.ID, users.UpdateParams{Version: 1, Disabled: ptr(true)}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := e.svc.Active(e.ctx(), alice.ID); err != nil || ok {
+		t.Errorf("Active(disabled alice) = (%v, %v), want false", ok, err)
+	}
+	_, err := e.svc.Active(e.ctx(), domain.NewUserID())
+	wantErr(t, "Active(unknown)", err, domain.ErrNotFound)
+	_, err = e.svc.Active(e.ctx(), domain.UserID{})
+	wantErr(t, "Active(zero)", err, domain.ErrInvalidID)
 }

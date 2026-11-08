@@ -74,11 +74,48 @@ func TestCreateAndUseAPIToken(t *testing.T) {
 	}
 	_, _, err = e.svc.AuthenticateAPIToken(e.ctx(), secret)
 	wantErr(t, "AuthenticateAPIToken(disabled owner)", err, domain.ErrUnauthenticated)
+	// Disabling deleted the tokens: enabling the account again does not
+	// revive them.
+	if ts, _ := e.store.ListAPITokens(e.ctx(), alice.ID); len(ts) != 0 {
+		t.Errorf("a disabled user's tokens remain: %v", ts)
+	}
 	if _, err = e.svc.Update(e.ctx(), root.Actor(), alice.ID, users.UpdateParams{Version: u.Version, Disabled: ptr(false)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.svc.AuthenticateAPIToken(e.ctx(), secret); err != nil {
-		t.Errorf("re-enabled owner's token: %v", err)
+	_, _, err = e.svc.AuthenticateAPIToken(e.ctx(), secret)
+	wantErr(t, "AuthenticateAPIToken(re-enabled owner)", err, domain.ErrUnauthenticated)
+}
+
+func TestDisablingKeepsOtherUsersTokens(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	root := e.addUser("root", domain.RoleAdmin)
+	alice := e.addUser("alice", domain.RoleUser)
+	bob := e.addUser("bob", domain.RoleUser)
+	for _, u := range []users.User{alice, alice, bob} {
+		if _, _, err := e.svc.CreateAPIToken(e.ctx(), u.Actor(), "script", 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A change that does not disable keeps the tokens.
+	u, err := e.svc.Update(e.ctx(), root.Actor(), alice.ID, users.UpdateParams{Version: 1, DisplayName: ptr("Alice")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts, _ := e.store.ListAPITokens(e.ctx(), alice.ID); len(ts) != 2 {
+		t.Errorf("renaming deleted tokens: %d left", len(ts))
+	}
+	if _, err := e.svc.Update(e.ctx(), root.Actor(), alice.ID, users.UpdateParams{Version: u.Version, Disabled: ptr(true)}); err != nil {
+		t.Fatal(err)
+	}
+	if ts, _ := e.store.ListAPITokens(e.ctx(), alice.ID); len(ts) != 0 {
+		t.Errorf("disabled user's tokens: %d left", len(ts))
+	}
+	if ts, _ := e.store.ListAPITokens(e.ctx(), bob.ID); len(ts) != 1 {
+		t.Errorf("another user's tokens: %d left, want 1", len(ts))
+	}
+	if !strings.Contains(e.logs.String(), "user api tokens revoked") {
+		t.Error("the revocation was not logged")
 	}
 }
 

@@ -125,7 +125,9 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Worker, error) {
 	return ws, nil
 }
 
-// Rename sets a worker's display name.
+// Rename sets a worker's display name. Names are unique among the workers
+// that are not removed, case-insensitively: ErrAlreadyExists if another
+// one has it.
 func (s *Service) Rename(ctx context.Context, id domain.WorkerID, name string) (Worker, error) {
 	if id.IsZero() {
 		return Worker{}, fmt.Errorf("rename worker: %w", domain.ErrInvalidID)
@@ -138,6 +140,27 @@ func (s *Service) Rename(ctx context.Context, id domain.WorkerID, name string) (
 	if err != nil {
 		return Worker{}, fmt.Errorf("rename worker %s: %w", id, err)
 	}
+	return w, nil
+}
+
+// SetLabels replaces the labels of a worker that is not removed. Labels are
+// lower-cased, deduplicated and sorted (domain.NormalizeLabels); an invalid
+// label or more than domain.MaxLabels is a *domain.ValidationError naming
+// "labels[i]" or "labels". No labels clears them. The API's policy table
+// keeps it to admins: labels decide where users' scheduled jobs run.
+func (s *Service) SetLabels(ctx context.Context, id domain.WorkerID, labels []string) (Worker, error) {
+	if id.IsZero() {
+		return Worker{}, fmt.Errorf("set worker labels: %w", domain.ErrInvalidID)
+	}
+	norm, err := domain.NormalizeLabels(labels)
+	if err != nil {
+		return Worker{}, fmt.Errorf("set labels of worker %s: %w", id, err)
+	}
+	w, err := s.repo.SetWorkerLabels(ctx, id, norm)
+	if err != nil {
+		return Worker{}, fmt.Errorf("set labels of worker %s: %w", id, err)
+	}
+	s.log.InfoContext(ctx, "worker labels set", "worker_id", id.String(), "labels", strings.Join(norm, ","))
 	return w, nil
 }
 

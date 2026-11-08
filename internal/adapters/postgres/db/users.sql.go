@@ -164,6 +164,18 @@ func (q *Queries) DeleteAPIToken(ctx context.Context, arg DeleteAPITokenParams) 
 	return result.RowsAffected(), nil
 }
 
+const deleteExpiredAPITokens = `-- name: DeleteExpiredAPITokens :execrows
+DELETE FROM api_tokens WHERE expires_at IS NOT NULL AND expires_at <= $1
+`
+
+func (q *Queries) DeleteExpiredAPITokens(ctx context.Context, now pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredAPITokens, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteExpiredSessions = `-- name: DeleteExpiredSessions :execrows
 DELETE FROM sessions WHERE idle_expires_at <= $1 OR expires_at <= $1
 `
@@ -193,6 +205,18 @@ DELETE FROM users WHERE id = $1
 // jobs keep it (their foreign keys fail the statement).
 func (q *Queries) DeleteUser(ctx context.Context, id pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteUser, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteUserAPITokens = `-- name: DeleteUserAPITokens :execrows
+DELETE FROM api_tokens WHERE user_id = $1
+`
+
+func (q *Queries) DeleteUserAPITokens(ctx context.Context, userID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUserAPITokens, userID)
 	if err != nil {
 		return 0, err
 	}
