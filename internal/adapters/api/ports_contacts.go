@@ -30,6 +30,12 @@ type ContactService interface {
 	Names(ctx context.Context, ids []domain.ContactID) (map[domain.ContactID]contacts.Ref, error)
 }
 
+// The contact and outbox use cases implement the ports.
+var (
+	_ ContactService  = (*contacts.Service)(nil)
+	_ DeliveryService = (*notifications.Service)(nil)
+)
+
 // DeliveryService is the part of the notifications use cases the API calls
 // (implemented by *notifications.Service): the delivery log of the actor's
 // contacts.
