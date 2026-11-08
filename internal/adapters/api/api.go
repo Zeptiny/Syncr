@@ -137,7 +137,7 @@ func NewHandler(deps Deps) http.Handler {
 	mux.Handle(syncrv1connect.NewSystemServiceHandler(NewSystemService(deps.BuildInfo), opts...))
 	mux.HandleFunc("GET /healthz", healthz)
 	if deps.Auth == nil {
-		logger.Warn("protected APIs are disabled: no authenticator is configured (set api.admin_token or SYNCR_ADMIN_TOKEN)")
+		logger.Warn("protected APIs are disabled: no authenticator is configured")
 	} else {
 		mountProtected(mux, deps, logger, opts)
 	}

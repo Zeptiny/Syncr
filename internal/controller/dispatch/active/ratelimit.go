@@ -1,8 +1,9 @@
 package active
 
 import (
-	"sync"
 	"time"
+
+	"github.com/Zeptiny/Syncr/internal/platform/ratelimit"
 )
 
 // RateLimit configures a RateLimiter: each key gets a token bucket of Burst
@@ -28,27 +29,12 @@ type Clock interface {
 	Now() time.Time
 }
 
-type systemClock struct{}
-
-func (systemClock) Now() time.Time { return time.Now() }
-
-// RateLimiter is a Limiter with one token bucket per key. Create it with
-// NewRateLimiter; it is safe for concurrent use.
+// RateLimiter is a Limiter with one token bucket per key: the keyed token
+// bucket of internal/platform/ratelimit. Create it with NewRateLimiter; it
+// is safe for concurrent use.
 type RateLimiter struct {
-	cfg   RateLimit
-	clock Clock
-
-	mu      sync.Mutex
-	buckets map[string]*bucket
+	limiter *ratelimit.Limiter
 }
-
-type bucket struct {
-	tokens float64
-	at     time.Time
-}
-
-// overflowKey is the shared bucket of new keys when MaxKeys is reached.
-const overflowKey = "\x00overflow"
 
 // NewRateLimiter returns a RateLimiter. Non-positive fields of cfg take the
 // DefaultRateLimit values; a nil clock means the system clock.
@@ -63,52 +49,17 @@ func NewRateLimiter(cfg RateLimit, clock Clock) *RateLimiter {
 	if cfg.MaxKeys <= 0 {
 		cfg.MaxKeys = def.MaxKeys
 	}
-	if clock == nil {
-		clock = systemClock{}
+	var c ratelimit.Clock
+	if clock != nil {
+		c = clock
 	}
-	return &RateLimiter{cfg: cfg, clock: clock, buckets: make(map[string]*bucket)}
+	l, err := ratelimit.New(ratelimit.Config{Burst: cfg.Burst, Every: cfg.Every, MaxKeys: cfg.MaxKeys}, c)
+	if err != nil {
+		// Unreachable: every field is positive after the defaults above.
+		panic(err)
+	}
+	return &RateLimiter{limiter: l}
 }
 
 // Allow takes a token from key's bucket and reports whether there was one.
-func (l *RateLimiter) Allow(key string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := l.clock.Now()
-	b, ok := l.buckets[key]
-	if !ok {
-		if len(l.buckets) >= l.cfg.MaxKeys {
-			l.pruneLocked(now)
-		}
-		if len(l.buckets) >= l.cfg.MaxKeys {
-			key = overflowKey
-			b = l.buckets[key]
-		}
-		if b == nil {
-			b = &bucket{tokens: float64(l.cfg.Burst), at: now}
-			l.buckets[key] = b
-		}
-	}
-	l.refill(b, now)
-	if b.tokens < 1 {
-		return false
-	}
-	b.tokens--
-	return true
-}
-
-func (l *RateLimiter) refill(b *bucket, now time.Time) {
-	if elapsed := now.Sub(b.at); elapsed > 0 {
-		b.tokens = min(float64(l.cfg.Burst), b.tokens+float64(elapsed)/float64(l.cfg.Every))
-		b.at = now
-	}
-}
-
-// pruneLocked forgets keys whose bucket is full again.
-func (l *RateLimiter) pruneLocked(now time.Time) {
-	for k, b := range l.buckets {
-		l.refill(b, now)
-		if b.tokens >= float64(l.cfg.Burst) {
-			delete(l.buckets, k)
-		}
-	}
-}
+func (l *RateLimiter) Allow(key string) bool { return l.limiter.Allow(key) }

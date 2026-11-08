@@ -8,10 +8,25 @@ Scheduled Task** that starts at logon.
 
 ## Quick path (one command)
 
-In the controller UI open **Workers, Add worker**; it shows this command with a
-single-use token. Put `syncr-worker.exe` where it will live (the service runs
-exactly that path), for example `C:\Program Files\Syncr\`, then in an
-**elevated** PowerShell (Run as administrator):
+In the controller's web UI open **Workers, Add worker**. The **Active** tab
+creates a single-use enrollment token and shows the install command for each
+platform and scope. For a Windows Service, paste it into an **elevated**
+PowerShell (Run as administrator):
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$d = Join-Path $env:ProgramFiles 'Syncr'
+$z = Join-Path $env:TEMP 'syncr-worker.zip'
+Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/Zeptiny/Syncr/releases/latest/download/syncr-worker_windows_amd64.zip' -OutFile $z
+Expand-Archive -Path $z -DestinationPath $d -Force
+& "$d\syncr-worker.exe" setup --controller 'https://syncr.example.com' --token 'syncr_et_...'
+```
+
+It downloads the release archive (or the controller's
+`workers.download_base_url` mirror) into `C:\Program Files\Syncr` (the service
+runs exactly that path) and runs setup. If `syncr-worker.exe` is already
+there (release archives are published from Milestone 6 on; until then build
+it with `make build GOOS=windows GOARCH=amd64`), run only the last line:
 
 ```powershell
 & 'C:\Program Files\Syncr\syncr-worker.exe' setup --controller https://syncr.example.com --token syncr_et_...
@@ -49,8 +64,9 @@ syncr-worker.exe setup --passive --listen :7443 --advertise-url https://pc.examp
 ```
 
 prints the URL, the certificate fingerprint and a pairing secret to paste into
-**Workers, Add worker, Passive worker** (or add `--controller` and `--token` to
-register it automatically). Allow the port through the firewall:
+the registration form of **Workers, Add worker, Passive** (or add
+`--controller` and `--token` to register it automatically); that tab also
+shows the install command. Allow the port through the firewall:
 
 ```powershell
 New-NetFirewallRule -DisplayName 'Syncr worker' -Direction Inbound -Protocol TCP -LocalPort 7443 -Action Allow
@@ -75,7 +91,8 @@ syncr-worker.exe service uninstall            # or: service uninstall --user
 Remove-Item -Recurse 'C:\ProgramData\Syncr'   # optional: config, tools, certificate
 ```
 
-Then delete the worker in the controller UI.
+Then remove the worker in the controller UI (**Workers**, the worker,
+**Remove**; admins only).
 
 ## Where things are
 

@@ -27,18 +27,15 @@ func newUser(t *testing.T, n int) users.User {
 func mustCreateUser(t *testing.T, s Store, u users.User) {
 	t.Helper()
 	err := s.CreateUser(context.Background(), u)
-	skipIfUnsupported(t, err)
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 }
 
-// requireUsers skips the test if the store does not implement the users
-// ports yet.
+// requireUsers checks that the users ports work before a users test.
 func requireUsers(t *testing.T, s Store) {
 	t.Helper()
 	_, err := s.CountUsers(context.Background())
-	skipIfUnsupported(t, err)
 	if err != nil {
 		t.Fatalf("CountUsers: %v", err)
 	}

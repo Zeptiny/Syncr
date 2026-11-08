@@ -29,13 +29,9 @@ import (
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
 	"github.com/Zeptiny/Syncr/internal/platform/clock"
-	"github.com/Zeptiny/Syncr/internal/platform/redact"
 )
 
 const (
-	// adminToken is the provisional admin token of AdminTokenAuth tests (a
-	// test value).
-	adminToken = "test-admin-token-0123456789-abcdefghij"
 	// pairingSecret is a valid pairing secret (32+ printable characters).
 	pairingSecret = "pairing-secret-0123456789-abcdefghij"
 	testFP        = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -134,22 +130,11 @@ type testEnv struct {
 }
 
 // newEnv starts a server authenticating with testAuth. mutate may adjust
-// the Deps before the handler is built (e.g. withAdminToken, or to drop a
+// the Deps before the handler is built (e.g. withSessionAuth, or to drop a
 // service).
 func newEnv(t *testing.T, mutate ...func(*Deps)) *testEnv {
 	t.Helper()
 	return newEnvServer(t, nil, mutate...)
-}
-
-// withAdminToken makes the server authenticate with the provisional
-// AdminTokenAuth (token adminToken) instead of testAuth.
-func withAdminToken(t *testing.T) func(*Deps) {
-	t.Helper()
-	auth, err := NewAdminTokenAuth(redact.Secret(adminToken))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return func(d *Deps) { d.Auth = auth }
 }
 
 // newEnvServer is newEnv with a hook that configures the http.Server before

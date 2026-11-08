@@ -30,6 +30,10 @@ type Config struct {
 	Log     logging.Config `yaml:"log"`
 	Secrets Secrets        `yaml:"secrets"`
 	API     API            `yaml:"api"`
+	// Auth configures users' sessions and the first-run setup.
+	Auth Auth `yaml:"auth"`
+	// Workers configures what the controller tells new workers.
+	Workers Workers `yaml:"workers"`
 	// Database configures the Postgres store.
 	Database Database `yaml:"database"`
 	// Dev holds development-only switches.
@@ -43,6 +47,18 @@ type Dev struct {
 	// exits. It is refused together with database.url, and the controller
 	// logs a loud warning when it is on.
 	MemoryStore bool `yaml:"memory_store" env:"SYNCR_DEV_MEMORY_STORE"`
+	// Seed fills the in-memory store with fixed demo data at start (users
+	// admin and alice, workers, remotes and jobs; internal/devseed), for
+	// screenshots and UI development. It needs MemoryStore. The demo
+	// passwords are public: never use it on a reachable controller.
+	Seed bool `yaml:"seed" env:"SYNCR_DEV_SEED"`
+}
+
+func (d Dev) validate() error {
+	if d.Seed && !d.MemoryStore {
+		return errors.New("dev.seed needs dev.memory_store (the demo data is only ever written to the in-memory store)")
+	}
+	return nil
 }
 
 // Database configures the Postgres connection pool (internal/adapters/postgres).
@@ -63,10 +79,10 @@ type Database struct {
 // Configured reports whether a database URL is set.
 func (d Database) Configured() bool { return strings.TrimSpace(d.URL.Reveal()) != "" }
 
-// Secrets configures the encryption of secrets at rest (job specs, worker
-// secrets) with AES-256-GCM (internal/adapters/secrets). Keys are 32 random
-// bytes in standard base64, e.g. from `openssl rand -base64 32`. Losing the
-// key makes every stored secret unreadable.
+// Secrets configures the encryption of secrets at rest (remote credentials,
+// worker secrets) with AES-256-GCM (internal/adapters/secrets). Keys are 32
+// random bytes in standard base64, e.g. from `openssl rand -base64 32`.
+// Losing the key makes every stored secret unreadable.
 //
 // To rotate: move the current key to previous_keys as "<key_id>:<key>", set
 // a new key with a new key_id, restart; stored values are re-encrypted with
@@ -123,10 +139,125 @@ type HTTP struct {
 	// TrustedProxies are the addresses (CIDRs or single IPs) of the
 	// reverse proxies allowed to set ClientIPHeader. Required with it.
 	TrustedProxies []string `yaml:"trusted_proxies" env:"SYNCR_HTTP_TRUSTED_PROXIES"`
+
+	// PublicURL is the controller's base URL as browsers and workers reach
+	// it, e.g. "https://syncr.example.com" behind a reverse proxy. It goes
+	// into the worker install commands (without it, the web UI's origin is
+	// used), and with "https://" the session cookie is Secure
+	// (auth.cookie_secure: auto). Workers accept https, or http on a
+	// loopback address only. Empty when unset.
+	PublicURL string `yaml:"public_url" env:"SYNCR_PUBLIC_URL"`
 }
 
 // TLS reports whether the controller serves HTTPS itself.
 func (h HTTP) TLS() bool { return h.TLSCertFile != "" || h.TLSKeyFile != "" }
+
+// Auth configures sessions and the first-run setup (internal/app/users,
+// the session cookie of internal/adapters/api).
+type Auth struct {
+	// CookieSecure decides whether the session cookie is Secure (sent over
+	// HTTPS only): "auto" (when the request came over TLS or
+	// http.public_url is https), "always" (behind a TLS-terminating proxy
+	// without public_url) or "never" (plain-HTTP LAN setups).
+	CookieSecure string `yaml:"cookie_secure" env:"SYNCR_AUTH_COOKIE_SECURE"`
+	// SessionIdleTimeout ends a session unused this long (at least a
+	// minute).
+	SessionIdleTimeout time.Duration `yaml:"session_idle_timeout" env:"SYNCR_AUTH_SESSION_IDLE_TIMEOUT"`
+	// SessionMaxAge ends a session this long after the login, however
+	// much it is used (at least a minute).
+	SessionMaxAge time.Duration `yaml:"session_max_age" env:"SYNCR_AUTH_SESSION_MAX_AGE"`
+	// SetupCode presets the one-time code of the first-run setup (for
+	// automation and tests); at least MinSetupCodeLen characters besides
+	// dashes and spaces. When empty, the controller generates a random
+	// code on every start until the first admin exists and logs it.
+	SetupCode redact.Secret `yaml:"setup_code" env:"SYNCR_SETUP_CODE"`
+}
+
+// Cookie security modes of Auth.CookieSecure.
+const (
+	CookieSecureAuto   = "auto"
+	CookieSecureAlways = "always"
+	CookieSecureNever  = "never"
+)
+
+// MinSetupCodeLen is the shortest auth.setup_code, in characters besides
+// dashes and white space (users.MinSetupCodeLen).
+const MinSetupCodeLen = 16
+
+// minSessionTimeout is the shortest session idle timeout and maximum age.
+const minSessionTimeout = time.Minute
+
+func (a Auth) validate() error {
+	var errs []error
+	switch a.CookieSecure {
+	case CookieSecureAuto, CookieSecureAlways, CookieSecureNever:
+	default:
+		errs = append(errs, fmt.Errorf("auth.cookie_secure must be %s, %s or %s, not %q", CookieSecureAuto, CookieSecureAlways, CookieSecureNever, a.CookieSecure))
+	}
+	if a.SessionIdleTimeout < minSessionTimeout {
+		errs = append(errs, fmt.Errorf("auth.session_idle_timeout must be at least %v", minSessionTimeout))
+	}
+	if a.SessionMaxAge < minSessionTimeout {
+		errs = append(errs, fmt.Errorf("auth.session_max_age must be at least %v", minSessionTimeout))
+	}
+	if code := a.SetupCode.Reveal(); code != "" {
+		n := 0
+		for _, r := range code {
+			switch {
+			case r == '-' || unicode.IsSpace(r):
+			case unicode.IsControl(r):
+				errs = append(errs, errors.New("auth.setup_code must not contain control characters"))
+				n = MinSetupCodeLen // reported once; do not also report the length
+			default:
+				n++
+			}
+		}
+		if n < MinSetupCodeLen {
+			errs = append(errs, fmt.Errorf("auth.setup_code must have at least %d characters besides dashes and spaces (it has %d)", MinSetupCodeLen, n))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Workers configures what the controller tells new workers.
+type Workers struct {
+	// DownloadBaseURL is where the worker install commands download the
+	// syncr-worker release archives from (default DefaultDownloadBaseURL,
+	// the project's latest GitHub release). A mirror must serve the same
+	// file names.
+	DownloadBaseURL string `yaml:"download_base_url" env:"SYNCR_WORKERS_DOWNLOAD_BASE_URL"`
+}
+
+// DefaultDownloadBaseURL is the default workers.download_base_url (equal to
+// api.DefaultDownloadBaseURL; a test in cmd/syncr-controller keeps them in
+// step).
+const DefaultDownloadBaseURL = "https://github.com/Zeptiny/Syncr/releases/latest/download"
+
+func (w Workers) validate() error {
+	if err := validateHTTPURL(w.DownloadBaseURL); err != nil {
+		return fmt.Errorf("workers.download_base_url: %w", err)
+	}
+	return nil
+}
+
+// validateHTTPURL accepts an absolute http or https URL with a host and
+// without credentials, query or fragment.
+func validateHTTPURL(raw string) error {
+	u, err := url.Parse(raw)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%q is not a valid URL", raw)
+	case u.Scheme != "http" && u.Scheme != "https":
+		return fmt.Errorf("%q must be an absolute http:// or https:// URL", raw)
+	case u.Host == "" || u.Opaque != "":
+		return fmt.Errorf("%q has no host", raw)
+	case u.User != nil:
+		return errors.New("must not contain credentials")
+	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "":
+		return fmt.Errorf("%q must not have a query or fragment", raw)
+	}
+	return nil
+}
 
 // Default returns the configuration used when nothing is overridden.
 func Default() Config {
@@ -142,6 +273,12 @@ func Default() Config {
 		Log:     logging.DefaultConfig(),
 		Secrets: Secrets{KeyID: 1},
 		API:     DefaultAPI(),
+		Auth: Auth{
+			CookieSecure:       CookieSecureAuto,
+			SessionIdleTimeout: 7 * 24 * time.Hour,
+			SessionMaxAge:      30 * 24 * time.Hour,
+		},
+		Workers: Workers{DownloadBaseURL: DefaultDownloadBaseURL},
 		Database: Database{
 			MaxConns:       10,
 			ConnectTimeout: 10 * time.Second,
@@ -151,7 +288,8 @@ func Default() Config {
 
 // Validate reports every invalid setting.
 func (c *Config) Validate() error {
-	return errors.Join(c.HTTP.validate(), c.Log.Validate(), c.Secrets.validate(), c.API.validate(), c.Database.validate())
+	return errors.Join(c.HTTP.validate(), c.Log.Validate(), c.Secrets.validate(), c.API.validate(),
+		c.Auth.validate(), c.Workers.validate(), c.Database.validate(), c.Dev.validate())
 }
 
 func (h HTTP) validate() error {
@@ -181,6 +319,11 @@ func (h HTTP) validate() error {
 		errs = append(errs, errors.New("http.trusted_proxies needs http.client_ip_header (the header they set)"))
 	case h.ClientIPHeader != "" && !validHeaderName(h.ClientIPHeader):
 		errs = append(errs, fmt.Errorf("http.client_ip_header: %q is not a valid header name", h.ClientIPHeader))
+	}
+	if h.PublicURL != "" {
+		if err := validateHTTPURL(h.PublicURL); err != nil {
+			errs = append(errs, fmt.Errorf("http.public_url: %w", err))
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -231,7 +374,7 @@ func (c *Config) CheckServe() error {
 	var errs []error
 	if c.Secrets.Key == "" {
 		errs = append(errs, errors.New("secrets.key is required (SYNCR_SECRETS_KEY): 32 random bytes in base64, e.g. from `openssl rand -base64 32`; "+
-			"it encrypts job specs and worker secrets at rest, so back it up"))
+			"it encrypts the credentials of remotes and workers at rest, so back it up"))
 	}
 	switch {
 	case c.Dev.MemoryStore && c.Database.Configured():

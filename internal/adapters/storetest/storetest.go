@@ -14,9 +14,6 @@
 // user race), the referential rules (owners, union members, soft delete),
 // and that returned values do not alias the store.
 //
-// Suites of ports an adapter does not implement yet are skipped: a test
-// whose first call returns errors.ErrUnsupported skips itself.
-//
 // It is test support, not an adapter: it imports only the standard library,
 // internal/domain, internal/backend (for its value types) and the app
 // packages whose ports it exercises.
@@ -116,15 +113,6 @@ func jobID(t *testing.T, n int) domain.JobID       { return id(t, domain.ParseJo
 func userID(t *testing.T, n int) domain.UserID     { return id(t, domain.ParseUserID, 2000+n) }
 func remoteID(t *testing.T, n int) domain.RemoteID { return id(t, domain.ParseRemoteID, 3000+n) }
 
-// skipIfUnsupported skips the test when the adapter does not implement the
-// port yet (its methods return errors.ErrUnsupported).
-func skipIfUnsupported(t *testing.T, err error) {
-	t.Helper()
-	if errors.Is(err, errors.ErrUnsupported) {
-		t.Skipf("m3: pending track A/B: the store does not implement this port yet (%v)", err)
-	}
-}
-
 // testDefinition is the encoded definition of test jobs (jobs store it as
 // JSON; databases may normalize its whitespace).
 const testDefinition = `{"rclone_transfer": {"mode": "RCLONE_TRANSFER_MODE_COPY"}}`
@@ -174,7 +162,6 @@ func ensureUser(t *testing.T, s Store, id domain.UserID) {
 	u := newUser(t, 0)
 	u.ID, u.Username = id, "owner-"+id.String()[len(id.String())-6:]
 	err := s.CreateUser(context.Background(), u)
-	skipIfUnsupported(t, err)
 	if err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("CreateUser(%s): %v", id, err)
 	}
@@ -732,8 +719,7 @@ func testJobQueryIsLiteral(t *testing.T, s Store) {
 }
 
 // mustCreateJobRemote creates remote n of owner (and the owner) for the
-// job tests. It skips the test if the store does not implement remotes
-// yet (m3: pending track B's Postgres remotes).
+// job tests.
 func mustCreateJobRemote(t *testing.T, s Store, n int, owner domain.UserID) domain.RemoteID {
 	t.Helper()
 	ensureUser(t, s, owner)
@@ -742,7 +728,6 @@ func mustCreateJobRemote(t *testing.T, s Store, n int, owner domain.UserID) doma
 		CreatedAt: t0(), UpdatedAt: t0(), Version: 1,
 	}
 	err := s.CreateRemote(context.Background(), r)
-	skipIfUnsupported(t, err)
 	if err != nil {
 		t.Fatalf("CreateRemote(%d): %v", n, err)
 	}

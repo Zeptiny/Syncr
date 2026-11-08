@@ -1,16 +1,23 @@
-# Syncr quick start: the controller and Postgres. Production-style: data in
-# named volumes, secrets from deploy/.env, restart policies, health checks.
+# Syncr quick start: the controller (API and web UI) and Postgres.
+# Production-style: data in named volumes, secrets from deploy/.env,
+# restart policies, health checks.
 #
-#   cp deploy/.env.example deploy/.env      # then fill in the three secrets
+#   cp deploy/.env.example deploy/.env      # then fill in the two secrets
 #   docker compose -f deploy/docker-compose.yml up -d --build --wait
-#   curl http://127.0.0.1:8080/healthz
+#   docker compose -f deploy/docker-compose.yml logs controller | grep setup_code
 #
-# The controller listens on port 8080 with plain HTTP. Workers on other
-# machines must reach it over HTTPS (plain http is accepted only on
-# loopback): put a TLS-terminating reverse proxy in front of it, or let the
-# controller serve TLS itself (SYNCR_HTTP_TLS_CERT_FILE / _KEY_FILE below).
-# Behind a proxy, set the proxy's read/idle timeout above 40 s (workers
-# long-poll for 25 s) and allow request bodies of 16 MiB.
+# Then open the web UI (http://127.0.0.1:8080, or SYNCR_PUBLIC_URL), enter
+# the setup code from the log and create the first admin account. Until
+# that is done the controller logs a new code on every start.
+#
+# The controller listens on port 8080 with plain HTTP. Browsers should and
+# workers on other machines must reach it over HTTPS (workers accept plain
+# http only on loopback): put a TLS-terminating reverse proxy in front of it
+# and set SYNCR_PUBLIC_URL to its https:// URL (which also makes the session
+# cookie Secure), or let the controller serve TLS itself
+# (SYNCR_HTTP_TLS_CERT_FILE / _KEY_FILE below). Behind a proxy, set the
+# proxy's read/idle timeout above 40 s (workers long-poll for 25 s) and
+# allow request bodies of 16 MiB.
 #
 # For development dependencies only (Postgres, MinIO, SFTP with public
 # credentials) see docker-compose.dev.yml instead.
@@ -44,14 +51,18 @@ services:
     environment:
       SYNCR_DATABASE_URL: postgres://syncr:${POSTGRES_PASSWORD}@postgres:5432/syncr?sslmode=disable
       SYNCR_SECRETS_KEY: ${SYNCR_SECRETS_KEY:?set SYNCR_SECRETS_KEY in deploy/.env}
-      SYNCR_ADMIN_TOKEN: ${SYNCR_ADMIN_TOKEN:?set SYNCR_ADMIN_TOKEN in deploy/.env}
+      # The URL browsers and workers use, e.g. https://syncr.example.com
+      # (empty: the browser's address goes into worker install commands).
+      SYNCR_PUBLIC_URL: ${SYNCR_PUBLIC_URL:-}
+      # Empty: a random first-run setup code, logged at start.
+      SYNCR_SETUP_CODE: ${SYNCR_SETUP_CODE:-}
       SYNCR_LOG_FORMAT: ${SYNCR_LOG_FORMAT:-json}
       # Serve HTTPS directly (no reverse proxy): mount the certificate and
       # uncomment. The files are re-read when they change.
       # SYNCR_HTTP_TLS_CERT_FILE: /certs/fullchain.pem
       # SYNCR_HTTP_TLS_KEY_FILE: /certs/privkey.pem
-      # Behind a reverse proxy: let the enrollment rate limit see the
-      # client's address (the proxy must set or append this header).
+      # Behind a reverse proxy: let the login and enrollment rate limits
+      # see the client's address (the proxy must set or append this header).
       # SYNCR_HTTP_CLIENT_IP_HEADER: X-Forwarded-For
       # SYNCR_HTTP_TRUSTED_PROXIES: 172.16.0.0/12
     # volumes:
@@ -68,8 +79,9 @@ services:
   # Optional: a worker in a container, next to the controller. It shares the
   # controller's network namespace, so it reaches the controller on
   # http://127.0.0.1:8080 (workers accept plain http only on loopback). On
-  # first start it enrolls with SYNCR_WORKER_TOKEN (an enrollment token, see
-  # README) and keeps its configuration in the worker-data volume; later
+  # first start it enrolls with SYNCR_WORKER_TOKEN (an enrollment token from
+  # Workers, Add worker in the web UI) and keeps its configuration in the
+  # worker-data volume; later
   # starts reuse it. Mount the directories jobs may use under /data; the
   # container user (uid 10001) needs access to them.
   #

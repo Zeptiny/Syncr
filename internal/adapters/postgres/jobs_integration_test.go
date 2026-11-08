@@ -14,10 +14,9 @@ import (
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
-// The job tests of the contract suite that need remotes skip on Postgres
-// until the remotes port is implemented (m3: pending track B). These tests
-// cover the same job paths now, with users and remotes inserted by plain
-// SQL.
+// These tests cover the job paths that involve users and remotes at the
+// SQL level (rows inserted by plain SQL, one transaction for a job and its
+// remotes); the contract suite covers them through the ports too.
 
 // insertJobsTestUser inserts a user row and returns its ID.
 func insertJobsTestUser(t *testing.T, s *Store) domain.UserID {

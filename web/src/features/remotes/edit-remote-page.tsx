@@ -43,6 +43,10 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
     );
   }
   const inUse = remote.usedByUnions.length > 0;
+  // used_by_unions holds IDs; show the unions' names.
+  const unionNames = remote.usedByUnions.map(
+    (id) => remotes.data?.remotes.find((r) => r.id === id)?.name ?? id,
+  );
 
   return (
     <>
@@ -93,7 +97,7 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
         title={`Delete ${remote.name}?`}
         description={
           inUse
-            ? `It is a member of ${remote.usedByUnions.join(", ")}. Remove it from ${remote.usedByUnions.length === 1 ? "that union" : "those unions"} first.`
+            ? `It is a member of ${unionNames.join(", ")}. Remove it from ${unionNames.length === 1 ? "that union" : "those unions"} first.`
             : "Its saved credentials are erased. Past jobs keep its name; queued jobs that use it will fail."
         }
         confirmLabel="Delete remote"

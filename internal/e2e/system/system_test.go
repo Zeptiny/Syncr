@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
@@ -40,7 +41,7 @@ func TestSystemActiveCopy(t *testing.T) {
 	src, dst := filepath.Join(w.root, "src"), filepath.Join(w.root, "dst")
 	writeRandom(t, filepath.Join(src, "a.bin"), 256<<10)
 	writeRandom(t, filepath.Join(src, "sub", "b.bin"), 64<<10)
-	j, seen := c.watch(c.runJob(w.id, copySpec(src, dst, 0)))
+	j, seen := c.watch(c.runJob(w.id, localCopy(src, dst, 0)))
 	wantStatus(t, j, syncrv1.JobStatus_JOB_STATUS_SUCCEEDED)
 	sameFiles(t, src, dst)
 	if j.GetStats().GetFiles() != 2 {
@@ -49,7 +50,7 @@ func TestSystemActiveCopy(t *testing.T) {
 	t.Logf("statuses seen: %v", seen)
 
 	// A path outside local_roots is refused by the worker.
-	j, _ = c.watch(c.runJob(w.id, copySpec(src, t.TempDir(), 0)))
+	j, _ = c.watch(c.runJob(w.id, localCopy(src, t.TempDir(), 0)))
 	wantStatus(t, j, syncrv1.JobStatus_JOB_STATUS_FAILED)
 	if j.GetError().GetCode() != syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED {
 		t.Errorf("error = %v", j.GetError())
@@ -75,11 +76,17 @@ func TestSystemPassiveCopy(t *testing.T) {
 		t.Errorf("worker = %v", info)
 	}
 
+	// The source is a stored local remote rooted at the worker's local
+	// root: the spec built at dispatch resolves it to a local path.
 	src, dst := filepath.Join(w.root, "src"), filepath.Join(w.root, "dst")
 	writeRandom(t, filepath.Join(src, "a.bin"), 300<<10)
-	j, _ := c.watch(c.runJob(w.id, copySpec(src, dst, 0)))
+	root := c.createRemote(&syncrv1.RemoteInput{Name: "worker root", BackendType: "local", Options: map[string]string{"path": w.root}})
+	j, _ := c.watch(c.runJob(w.id, copyDef(onRemote(root, "src"), local(dst), 0)))
 	wantStatus(t, j, syncrv1.JobStatus_JOB_STATUS_SUCCEEDED)
 	sameFiles(t, src, dst)
+	if refs := j.GetRemotes(); len(refs) != 1 || refs[0].GetName() != "worker root" {
+		t.Errorf("job remotes = %v", refs)
+	}
 
 	if err := w.proc.stop(30 * time.Second); err != nil {
 		t.Errorf("worker stop: %v", err)
@@ -100,7 +107,7 @@ func TestSystemControllerRestartMidJob(t *testing.T) {
 
 	src, dst := filepath.Join(w.root, "src"), filepath.Join(w.root, "dst")
 	writeRandom(t, filepath.Join(src, "big.bin"), slowSize)
-	id := c.runJob(w.id, copySpec(src, dst, slowLimit))
+	id := c.runJob(w.id, localCopy(src, dst, slowLimit))
 	c.waitJob(id, "running", func(j *syncrv1.Job) bool { return j.GetStatus() == syncrv1.JobStatus_JOB_STATUS_RUNNING })
 
 	c.proc.kill()
@@ -130,7 +137,7 @@ func TestSystemWorkerKillMidJob(t *testing.T) {
 
 	src := filepath.Join(w.root, "src")
 	writeRandom(t, filepath.Join(src, "big.bin"), slowSize)
-	id := c.runJob(w.id, copySpec(src, filepath.Join(w.root, "dst"), slowLimit/2))
+	id := c.runJob(w.id, localCopy(src, filepath.Join(w.root, "dst"), slowLimit/2))
 	c.waitJob(id, "running", func(j *syncrv1.Job) bool { return j.GetStatus() == syncrv1.JobStatus_JOB_STATUS_RUNNING })
 
 	w.proc.kill()
@@ -145,7 +152,7 @@ func TestSystemWorkerKillMidJob(t *testing.T) {
 
 	small := filepath.Join(w.root, "small")
 	writeRandom(t, filepath.Join(small, "s.bin"), 32<<10)
-	next, _ := c.watch(c.runJob(w.id, copySpec(small, filepath.Join(w.root, "dst2"), 0)))
+	next, _ := c.watch(c.runJob(w.id, localCopy(small, filepath.Join(w.root, "dst2"), 0)))
 	wantStatus(t, next, syncrv1.JobStatus_JOB_STATUS_SUCCEEDED)
 	sameFiles(t, small, filepath.Join(w.root, "dst2"))
 }
@@ -166,7 +173,7 @@ func TestSystemWorkerStopMidJob(t *testing.T) {
 
 	src := filepath.Join(w.root, "src")
 	writeRandom(t, filepath.Join(src, "big.bin"), slowSize)
-	id := c.runJob(w.id, copySpec(src, filepath.Join(w.root, "dst"), slowLimit/2))
+	id := c.runJob(w.id, localCopy(src, filepath.Join(w.root, "dst"), slowLimit/2))
 	c.waitJob(id, "running", func(j *syncrv1.Job) bool { return j.GetStatus() == syncrv1.JobStatus_JOB_STATUS_RUNNING })
 
 	if err := w.proc.stop(30 * time.Second); err != nil {
@@ -182,10 +189,13 @@ func TestSystemWorkerStopMidJob(t *testing.T) {
 	}
 }
 
-// TestSystemResticToMinIO initializes a restic repository in a MinIO bucket
-// and backs up the worker's files into it, one job each, over the active
-// link. The S3 credentials travel only inside the encrypted job spec.
-func TestSystemResticToMinIO(t *testing.T) {
+// TestSystemCopyThroughMinIO stores an S3 remote (MinIO) with its secret
+// key, copies the worker's files into a bucket and back, over the active
+// link. The secret is stored encrypted, travels only inside the spec built
+// at dispatch time, and never appears in a log or an API response. (Restic
+// jobs have no job definition before Milestone 5; the restic runner's
+// MinIO tests cover restic.)
+func TestSystemCopyThroughMinIO(t *testing.T) {
 	t.Parallel()
 	rclone, restic := requirements(t)
 	cbin, wbin := binaries(t)
@@ -195,37 +205,33 @@ func TestSystemResticToMinIO(t *testing.T) {
 	w.start()
 	c.waitOnline(w.id)
 
-	src := filepath.Join(w.root, "src")
+	src, back := filepath.Join(w.root, "src"), filepath.Join(w.root, "back")
 	writeRandom(t, filepath.Join(src, "a.bin"), 200<<10)
 	writeRandom(t, filepath.Join(src, "docs", "b.bin"), 20<<10)
-	remotes := []*syncrv1.RemoteDefinition{{
-		Alias:       "minio",
-		BackendType: "s3",
+	minio := c.createRemote(&syncrv1.RemoteInput{
+		Name: "MinIO", BackendType: "s3",
 		Options: map[string]string{
 			"provider": "Minio", "endpoint": endpoint, "region": "us-east-1",
-			"access_key_id": minioUser, "force_path_style": "true",
+			"access_key_id": minioUser, "bucket": "syncr-e2e", "force_path_style": "true",
 		},
 		Secrets: map[string]string{"secret_access_key": minioPassword},
-	}}
-	repo := &syncrv1.ResticRepository{
-		Location: &syncrv1.Location{Remote: "minio", Path: "syncr-e2e/repo"},
-		Password: "e2e-repository-password",
+	})
+
+	j, _ := c.watch(c.runJob(w.id, copyDef(local(src), onRemote(minio, "backup"), 0)))
+	wantStatus(t, j, syncrv1.JobStatus_JOB_STATUS_SUCCEEDED)
+	if j.GetStats().GetFiles() != 2 {
+		t.Errorf("upload stats = %v", j.GetStats())
 	}
-
-	j, _ := c.watch(c.runJob(w.id, &syncrv1.JobSpec{
-		Remotes:   remotes,
-		Operation: &syncrv1.JobSpec_ResticInit{ResticInit: &syncrv1.ResticInit{Repository: repo}},
-	}))
+	j, _ = c.watch(c.runJob(w.id, copyDef(onRemote(minio, "backup"), local(back), 0)))
 	wantStatus(t, j, syncrv1.JobStatus_JOB_STATUS_SUCCEEDED)
+	sameFiles(t, src, back)
 
-	j, _ = c.watch(c.runJob(w.id, &syncrv1.JobSpec{
-		Remotes:   remotes,
-		Operation: &syncrv1.JobSpec_ResticBackup{ResticBackup: &syncrv1.ResticBackup{Repository: repo, Paths: []string{src}, Tags: []string{"e2e"}}},
-	}))
-	wantStatus(t, j, syncrv1.JobStatus_JOB_STATUS_SUCCEEDED)
-	out := j.GetOutput().GetResticBackup()
-	if out.GetSnapshotId() == "" || out.GetFilesNew() != 2 {
-		t.Errorf("backup output = %v", out)
+	got, err := c.remotes.GetRemote(t.Context(), connect.NewRequest(&syncrv1.GetRemoteRequest{RemoteId: minio}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got.Msg) == "" || strings.Contains(fmt.Sprint(got.Msg), minioPassword) || len(got.Msg.GetRemote().GetSecretsSet()) != 1 {
+		t.Errorf("GetRemote = %v", got.Msg)
 	}
 	if strings.Contains(w.proc.out.String(), minioPassword) || strings.Contains(c.proc.out.String(), minioPassword) {
 		t.Error("the S3 secret appears in a log")

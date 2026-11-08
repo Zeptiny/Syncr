@@ -19,6 +19,9 @@ env:
   # Run with `go run` (pinned here and in the Makefile), so no install step is
   # needed and the generated code cannot depend on a stray local version.
   SQLC_VERSION: v1.31.1
+  # npm for web/ (keep in sync with NPM in the Makefile and
+  # deploy/Dockerfile.controller).
+  NPM_VERSION: "11.6.2"
 
 jobs:
   lint:
@@ -58,6 +61,9 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: npm ${{ env.NPM_VERSION }}
+        # Node 22 bundles npm 10, whose `npm ci` rejects web/package-lock.json.
+        run: npm install -g "npm@$NPM_VERSION"
       - uses: bufbuild/buf-action@v1
         with:
           version: ${{ env.BUF_VERSION }}
@@ -244,9 +250,42 @@ jobs:
         shell: pwsh
         run: Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='syncr-worker'} -MaxEvents 50 -ErrorAction SilentlyContinue | Format-List TimeCreated, LevelDisplayName, Message
 
+  web:
+    name: web (typecheck, lint, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: npm ${{ env.NPM_VERSION }}
+        # Node 22 bundles npm 10, whose `npm ci` rejects web/package-lock.json.
+        run: npm install -g "npm@$NPM_VERSION"
+      - run: npm ci
+      - name: Route tree is up to date
+        run: npm run generate:routes && git diff --exit-code -- src/routeTree.gen.ts
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm test
+      - run: npm run build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: web/dist/
+          if-no-files-found: error
+          retention-days: 7
+
   build:
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
     runs-on: ubuntu-latest
+    # The controller embeds the web UI built by the web job.
+    needs: web
     strategy:
       fail-fast: false
       matrix:
@@ -263,13 +302,23 @@ jobs:
           go-version-file: go.mod
           cache: true # modules and build cache, keyed by go.sum
           cache-dependency-path: go.sum
+      - uses: actions/download-artifact@v7
+        with:
+          name: web-dist
+          path: web/dist
+      - name: go vet with the embedded UI
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go vet -tags webui ./web/ ./internal/adapters/api/
       - name: Build binaries
         env:
           CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          # Same flags as `make build`.
+          # Same flags as `make build` after `make web`: the controller
+          # embeds the UI (-tags webui).
           version=$(git describe --tags --match 'v*' --dirty 2>/dev/null || echo dev)
           commit=$(git rev-parse HEAD)
           built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -278,8 +327,10 @@ jobs:
           if [ "$GOOS" = windows ]; then ext=.exe; fi
           mkdir -p bin
           for bin in syncr-controller syncr-worker; do
-            echo "building bin/$bin$ext ($GOOS/$GOARCH, $version)"
-            go build -trimpath \
+            tags=""
+            if [ "$bin" = syncr-controller ]; then tags=webui; fi
+            echo "building bin/$bin$ext ($GOOS/$GOARCH, $version, tags: ${tags:-none})"
+            go build -trimpath -tags "$tags" \
               -ldflags "-s -w -X $pkg.version=$version -X $pkg.commit=$commit -X $pkg.buildTime=$built" \
               -o "bin/$bin$ext" "./cmd/$bin"
           done
@@ -331,13 +382,29 @@ jobs:
         if: matrix.image == 'syncr-controller'
         # The image is distroless (no shell), so the entrypoint is overridden
         # to call the binary directly. The health check must fail here: no
-        # server is running in the container.
+        # server is running in the container. Then a throw-away controller
+        # (in-memory store) must serve the embedded web UI, not the
+        # placeholder of builds without -tags webui.
         run: |
           docker run --rm --entrypoint /usr/local/bin/syncr-controller syncr-controller:ci -version
           if docker run --rm --entrypoint /usr/local/bin/syncr-controller syncr-controller:ci -healthcheck; then
             echo "::error::-healthcheck succeeded without a running server"
             exit 1
           fi
+          docker run -d --name syncr-smoke -p 127.0.0.1:18080:8080 \
+            -e SYNCR_DEV_MEMORY_STORE=true -e SYNCR_SECRETS_KEY="$(openssl rand -base64 32)" syncr-controller:ci
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          page=$(curl -fsS http://127.0.0.1:18080/)
+          docker logs syncr-smoke 2>&1 | grep -q 'setup_code' || { echo "::error::no setup code logged"; docker logs syncr-smoke; exit 1; }
+          docker rm -f syncr-smoke
+          if echo "$page" | grep -qi "built without the web UI"; then
+            echo "::error::the image serves the placeholder page instead of the web UI"
+            exit 1
+          fi
+          echo "$page" | grep -q '<script type="module"' || { echo "::error::unexpected index.html: $page"; exit 1; }
       - name: Smoke test syncr-worker
         if: matrix.image == 'syncr-worker'
         # The pinned rclone and restic must be runnable inside the image.

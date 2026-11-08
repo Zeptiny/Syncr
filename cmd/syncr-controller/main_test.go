@@ -15,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Zeptiny/Syncr/internal/adapters/api"
 	controllerconfig "github.com/Zeptiny/Syncr/internal/controller/config"
+	"github.com/Zeptiny/Syncr/internal/platform/clientip"
 	"github.com/Zeptiny/Syncr/internal/worker/tlscert"
 
 	"connectrpc.com/connect"
@@ -211,14 +213,80 @@ func startController(t *testing.T, env map[string]string, logs io.Writer) net.Ad
 	return nil
 }
 
-const testAdminToken = "test-admin-token-0123456789-abcdefghij"
+// testSetupCode is the preset first-run setup code of test controllers (a
+// test value).
+const testSetupCode = "TESTS-ETUPC-ODE01-23456"
 
-type bearer struct{ next http.RoundTripper }
+// headers is a RoundTripper adding headers to every request.
+type headers struct {
+	next http.RoundTripper
+	set  func(http.Header)
+}
 
-func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
+func (h headers) RoundTrip(r *http.Request) (*http.Response, error) {
 	r = r.Clone(r.Context())
-	r.Header.Set("Authorization", "Bearer "+testAdminToken)
-	return b.next.RoundTrip(r)
+	h.set(r.Header)
+	return h.next.RoundTrip(r)
+}
+
+// bearerClient returns a client sending the personal API token with every
+// request.
+func bearerClient(tr http.RoundTripper, token string) *http.Client {
+	return &http.Client{Transport: headers{next: tr, set: func(h http.Header) { h.Set("Authorization", "Bearer "+token) }}}
+}
+
+// cookieClient returns a client sending the session cookie with every
+// request, with the CSRF header if csrf (as the web UI does).
+func cookieClient(tr http.RoundTripper, cookie *http.Cookie, csrf bool) *http.Client {
+	return &http.Client{Transport: headers{next: tr, set: func(h http.Header) {
+		h.Add("Cookie", cookie.Name+"="+cookie.Value)
+		if csrf {
+			h.Set(api.CSRFHeader, "1")
+		}
+	}}}
+}
+
+// sessionCookie returns the session cookie a response sets.
+func sessionCookie(t *testing.T, h http.Header) *http.Cookie {
+	t.Helper()
+	for _, line := range h.Values("Set-Cookie") {
+		c, err := http.ParseSetCookie(line)
+		if err == nil && (c.Name == api.SessionCookie || c.Name == api.SessionCookieSecure) && c.Value != "" {
+			return c
+		}
+	}
+	t.Fatalf("no session cookie in %q", h.Values("Set-Cookie"))
+	return nil
+}
+
+// bootstrap completes the first-run setup of the controller at base with
+// code, as the web UI's wizard does (CompleteSetup with the CSRF header,
+// which sets the session cookie), creates an API token with that session
+// and returns the token: what an operator does before scripting the API.
+func bootstrap(t *testing.T, tr http.RoundTripper, base, code string) string {
+	t.Helper()
+	ctx := t.Context()
+	setup := syncrv1connect.NewSetupServiceClient(&http.Client{Transport: tr}, base)
+	status, err := setup.GetSetupStatus(ctx, connect.NewRequest(&syncrv1.GetSetupStatusRequest{}))
+	if err != nil || !status.Msg.GetSetupRequired() {
+		t.Fatalf("GetSetupStatus = (%v, %v), want setup required", status, err)
+	}
+	req := connect.NewRequest(&syncrv1.CompleteSetupRequest{SetupCode: code, Username: "admin", DisplayName: "Admin", Password: "a long admin password"})
+	req.Header().Set(api.CSRFHeader, "1")
+	done, err := setup.CompleteSetup(ctx, req)
+	if err != nil {
+		t.Fatalf("CompleteSetup: %v", err)
+	}
+	cookie := sessionCookie(t, done.Header())
+	auth := syncrv1connect.NewAuthServiceClient(cookieClient(tr, cookie, true), base)
+	tok, err := auth.CreateAPIToken(ctx, connect.NewRequest(&syncrv1.CreateAPITokenRequest{Name: "tests"}))
+	if err != nil {
+		t.Fatalf("CreateAPIToken: %v", err)
+	}
+	if !strings.HasPrefix(tok.Msg.GetSecret(), "syncr_pat_") {
+		t.Fatalf("token secret = %q", tok.Msg.GetSecret())
+	}
+	return tok.Msg.GetSecret()
 }
 
 func waitLog(t *testing.T, logs *syncBuffer, want string) {
@@ -233,9 +301,10 @@ func waitLog(t *testing.T, logs *syncBuffer, want string) {
 }
 
 // TestRunWiresAPIAndLink drives the wired controller over direct TLS: the
-// admin API creates a token, the enrollment service redeems it, and
-// registering or removing a passive worker wakes the passive supervisor at
-// once (its periodic resync is 30 s).
+// first-run setup with the preset code (the cookie is the Secure one), an
+// API token, the admin API creates an enrollment token, the enrollment
+// service redeems it, and registering or removing a passive worker wakes
+// the passive supervisor at once (its periodic resync is 30 s).
 func TestRunWiresAPIAndLink(t *testing.T) {
 	t.Parallel()
 	pair, err := tlscert.Generate(tlscert.Options{Hostname: "localhost", IPs: []net.IP{net.IPv4(127, 0, 0, 1)}})
@@ -249,7 +318,7 @@ func TestRunWiresAPIAndLink(t *testing.T) {
 	}
 	var logs syncBuffer
 	env := devEnv(map[string]string{
-		"SYNCR_ADMIN_TOKEN":           testAdminToken,
+		"SYNCR_SETUP_CODE":            testSetupCode,
 		"SYNCR_HTTP_TLS_CERT_FILE":    certFile,
 		"SYNCR_HTTP_TLS_KEY_FILE":     keyFile,
 		"SYNCR_LOG_LEVEL":             "debug",
@@ -262,8 +331,9 @@ func TestRunWiresAPIAndLink(t *testing.T) {
 	pool.AppendCertsFromPEM(pair.CertPEM)
 	tr := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
 	base := "https://" + addr.String()
-	admin := syncrv1connect.NewWorkerAdminServiceClient(&http.Client{Transport: bearer{tr}}, base)
 	ctx := t.Context()
+	token := bootstrap(t, tr, base, testSetupCode)
+	admin := syncrv1connect.NewWorkerAdminServiceClient(bearerClient(tr, token), base)
 
 	// Unauthenticated admin calls are refused.
 	anon := syncrv1connect.NewWorkerAdminServiceClient(&http.Client{Transport: tr}, base)
@@ -331,14 +401,16 @@ func TestHealthcheckFailsWhenNothingListens(t *testing.T) {
 
 func TestEnrollClientKey(t *testing.T) {
 	t.Parallel()
-	key, err := enrollClientKey(controllerconfig.HTTP{})
-	if err != nil || key != nil {
-		t.Fatalf("no header: key %v, err %v (want the default PeerIP)", key, err)
+	if key := enrollClientKey(controllerconfig.HTTP{}, clientip.New("", nil)); key != nil {
+		t.Fatal("no header: want the default PeerIP")
 	}
-	key, err = enrollClientKey(controllerconfig.HTTP{ClientIPHeader: "X-Real-IP", TrustedProxies: []string{"10.0.0.0/8"}})
+	cfg := controllerconfig.Default()
+	cfg.HTTP.ClientIPHeader, cfg.HTTP.TrustedProxies = "X-Real-IP", []string{"10.0.0.0/8"}
+	ac, err := newAPIConfig(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	key := enrollClientKey(cfg.HTTP, ac.clientIP)
 	h := http.Header{"X-Real-Ip": []string{"198.51.100.4"}}
 	if got := key(connect.Peer{Addr: "10.1.2.3:4444"}, h); got != "198.51.100.4" {
 		t.Errorf("from a trusted proxy: %q", got)

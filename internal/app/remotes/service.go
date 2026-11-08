@@ -313,8 +313,11 @@ const maxUnionDepth = 1
 // and mapped to rclone remotes, for building a job's spec. Every remote must
 // be a live remote of owner: ErrNotFound otherwise (also for a remote whose
 // backend type is no longer available). A stored configuration that the
-// type cannot map is ErrInvalidArgument. The result holds secrets: it must
-// never be logged or stored.
+// type cannot map is ErrInvalidArgument. Stored credentials that cannot be
+// decrypted or decoded (a lost or rotated-out secrets key, corrupt data)
+// are ErrFailedPrecondition: retrying cannot help, so the dispatcher fails
+// the job at once. Other errors (the store) are worth a retry. The result
+// holds secrets: it must never be logged or stored.
 func (s *Service) Resolve(ctx context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]Resolved, error) {
 	out := map[domain.RemoteID]Resolved{}
 	visited := map[domain.RemoteID]bool{}
@@ -358,7 +361,8 @@ func (s *Service) resolve(r Remote) (Resolved, error) {
 	}
 	secrets, err := s.open(r)
 	if err != nil {
-		return Resolved{}, fmt.Errorf("remote %s: %w", r.ID, err)
+		// The cause names no secret (see open).
+		return Resolved{}, fmt.Errorf("remote %s: %w: its credentials cannot be read: %w", r.ID, domain.ErrFailedPrecondition, err)
 	}
 	rc, err := typ.ToRclone(backend.Config{Options: maps.Clone(r.Options), Secrets: secrets})
 	if err != nil {

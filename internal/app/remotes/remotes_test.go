@@ -496,12 +496,62 @@ func TestUsableResolveNames(t *testing.T) {
 		t.Errorf("Names = (%+v, %v)", refs, err)
 	}
 
-	// A decrypt failure is neither "not found" nor "invalid": the
-	// dispatcher retries or fails the job as an internal error.
+	// Credentials that cannot be read are neither "not found" nor
+	// "invalid": they are a failed precondition, which the dispatcher turns
+	// into an internal job error at once instead of retrying (see
+	// TestResolveUnreadableCredentials).
 	e.cipher.failDecrypt = true
 	_, err = e.svc.Resolve(ctx, e.alice.UserID, []domain.RemoteID{box.ID})
-	if err == nil || errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrInvalidArgument) {
+	if !errors.Is(err, domain.ErrFailedPrecondition) || errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrInvalidArgument) {
 		t.Errorf("Resolve(decrypt failure) = %v", err)
+	}
+}
+
+// TestResolveUnreadableCredentials: stored secrets that cannot be decrypted
+// or decoded make Resolve fail with ErrFailedPrecondition (directly and as a
+// union member), without the secret or the ciphertext in the message; a
+// remote without secrets still resolves.
+func TestResolveUnreadableCredentials(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	box := e.mustCreate(t, e.alice, remotes.Input{Name: "box", Type: "sftp",
+		Options: map[string]string{"host": "h", "user": "u"}, Secrets: map[string]string{"pass": "box-pass-sentinel"}})
+	disk := e.mustCreate(t, e.alice, localInput("disk", "/mnt/d"))
+	union := e.mustCreate(t, e.alice, remotes.Input{Name: "pool", Type: "union", Members: []remotes.Member{
+		{RemoteID: disk.ID, Mode: backend.UnionReadWrite}, {RemoteID: box.ID, Mode: backend.UnionReadWrite},
+	}})
+
+	// Not JSON: e.g. written by a bug, or a ciphertext of another record
+	// that happens to authenticate.
+	stored, err := e.store.GetRemote(ctx, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.SecretsEnc, err = e.cipher.Encrypt([]byte("box-pass-sentinel not json"), remotes.SecretsAD(box.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.UpdateRemote(ctx, stored); err != nil {
+		t.Fatal(err)
+	}
+	for what, ids := range map[string][]domain.RemoteID{"directly": {box.ID}, "as a union member": {union.ID}} {
+		_, err := e.svc.Resolve(ctx, e.alice.UserID, ids)
+		if !errors.Is(err, domain.ErrFailedPrecondition) {
+			t.Errorf("Resolve(corrupt secrets, %s) = %v, want ErrFailedPrecondition", what, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "sentinel") {
+			t.Errorf("Resolve(corrupt secrets, %s) error contains the plaintext: %v", what, err)
+		}
+	}
+
+	// A ciphertext the keyring cannot open (lost key, other record).
+	e.cipher.failDecrypt = true
+	if _, err := e.svc.Resolve(ctx, e.alice.UserID, []domain.RemoteID{box.ID}); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Errorf("Resolve(undecryptable secrets) = %v, want ErrFailedPrecondition", err)
+	}
+	if res, err := e.svc.Resolve(ctx, e.alice.UserID, []domain.RemoteID{disk.ID}); err != nil || len(res) != 1 {
+		t.Errorf("Resolve(no secrets) = (%v, %v)", res, err)
 	}
 }
 

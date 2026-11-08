@@ -39,8 +39,12 @@ const (
 	minioImage    = "pgsty/minio:RELEASE.2026-08-04T00-00-00Z"
 	pgUser        = "syncr"
 	pgPassword    = "syncr-e2e"
-	// adminToken is the test controller's admin token (a test value).
-	adminToken = "e2e-admin-token-0123456789-abcdefghij"
+	// setupCode is the test controllers' preset first-run setup code (a
+	// test value).
+	setupCode = "E2ETE-STSET-UPCOD-E0123"
+	// csrfHeader is the header cookie-authenticated calls carry (the web
+	// UI's transport sets it).
+	csrfHeader = "X-Syncr-CSRF"
 	// waitLong bounds every wait for an asynchronous outcome.
 	waitLong = 90 * time.Second
 )
@@ -79,10 +83,6 @@ func TestMain(m *testing.M) {
 // pinned tools.
 func requirements(t *testing.T) (rclone, restic string) {
 	t.Helper()
-	// Every test here runs jobs through RunJob, which takes a definition over
-	// the caller's stored remotes since Milestone 3.
-	t.Skip("m3: pending integration: bootstrap through SYNCR_SETUP_CODE, CompleteSetup and an API token, " +
-		"create the remotes with CreateRemote and send JobDefinitions to RunJob")
 	if runtime.GOOS != "linux" {
 		t.Skip("skipping: the binary end-to-end tests run on Linux only (Postgres and MinIO need Linux containers, and the drills use POSIX signals)")
 	}
@@ -339,23 +339,28 @@ func freePort(t *testing.T) string {
 // ---------------------------------------------------------------------------
 
 // controller is a syncr-controller process on its own database, with
-// clients of its admin API.
+// clients of its API authenticated with the admin's API token.
 type controller struct {
-	t     *testing.T
-	bin   string
-	env   []string
-	base  string
-	proc  *process
-	admin syncrv1connect.WorkerAdminServiceClient
-	jobs  syncrv1connect.JobServiceClient
+	t       *testing.T
+	bin     string
+	env     []string
+	base    string
+	proc    *process
+	admin   syncrv1connect.WorkerAdminServiceClient
+	jobs    syncrv1connect.JobServiceClient
+	remotes syncrv1connect.RemoteServiceClient
 }
 
-type bearer struct{ next http.RoundTripper }
+// headers is a RoundTripper adding headers to every request.
+type headers struct {
+	next http.RoundTripper
+	set  func(http.Header)
+}
 
-func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
+func (h headers) RoundTrip(r *http.Request) (*http.Response, error) {
 	r = r.Clone(r.Context())
-	r.Header.Set("Authorization", "Bearer "+adminToken)
-	return b.next.RoundTrip(r)
+	h.set(r.Header)
+	return h.next.RoundTrip(r)
 }
 
 func newController(t *testing.T, bin string) *controller {
@@ -371,15 +376,49 @@ func newController(t *testing.T, bin string) *controller {
 			"SYNCR_HTTP_ADDR="+addr,
 			"SYNCR_DATABASE_URL="+database(t),
 			"SYNCR_SECRETS_KEY="+base64.StdEncoding.EncodeToString(key),
-			"SYNCR_ADMIN_TOKEN="+adminToken,
+			"SYNCR_SETUP_CODE="+setupCode,
 			"SYNCR_LOG_LEVEL=debug",
 		),
 	}
-	client := &http.Client{Transport: bearer{http.DefaultTransport}}
+	c.start()
+	token := c.bootstrap()
+	client := &http.Client{Transport: headers{next: http.DefaultTransport, set: func(h http.Header) { h.Set("Authorization", "Bearer "+token) }}}
 	c.admin = syncrv1connect.NewWorkerAdminServiceClient(client, c.base)
 	c.jobs = syncrv1connect.NewJobServiceClient(client, c.base)
-	c.start()
+	c.remotes = syncrv1connect.NewRemoteServiceClient(client, c.base)
 	return c
+}
+
+// bootstrap completes the first-run setup with the preset code as the web
+// UI's wizard does (CompleteSetup with the CSRF header sets the session
+// cookie), creates an API token with that session and returns it.
+func (c *controller) bootstrap() string {
+	c.t.Helper()
+	ctx := c.t.Context()
+	req := connect.NewRequest(&syncrv1.CompleteSetupRequest{SetupCode: setupCode, Username: "admin", DisplayName: "E2E admin", Password: "e2e-admin-password"})
+	req.Header().Set(csrfHeader, "1")
+	resp, err := syncrv1connect.NewSetupServiceClient(http.DefaultClient, c.base).CompleteSetup(ctx, req)
+	if err != nil {
+		c.t.Fatalf("CompleteSetup: %v", err)
+	}
+	var cookie *http.Cookie
+	for _, line := range resp.Header().Values("Set-Cookie") {
+		if ck, err := http.ParseSetCookie(line); err == nil && ck.Value != "" {
+			cookie = ck
+		}
+	}
+	if cookie == nil {
+		c.t.Fatalf("CompleteSetup set no cookie: %q", resp.Header().Values("Set-Cookie"))
+	}
+	session := &http.Client{Transport: headers{next: http.DefaultTransport, set: func(h http.Header) {
+		h.Set("Cookie", cookie.Name+"="+cookie.Value)
+		h.Set(csrfHeader, "1")
+	}}}
+	tok, err := syncrv1connect.NewAuthServiceClient(session, c.base).CreateAPIToken(ctx, connect.NewRequest(&syncrv1.CreateAPITokenRequest{Name: "e2e"}))
+	if err != nil {
+		c.t.Fatalf("CreateAPIToken: %v", err)
+	}
+	return tok.Msg.GetSecret()
 }
 
 // start starts the controller process and waits until it answers.
@@ -431,19 +470,24 @@ func (c *controller) waitOnline(id string) *syncrv1.Worker {
 	}
 }
 
-// runJob queues a job on the worker.
-//
-// m3: pending integration: RunJob no longer takes a JobSpec; the
-// integration pass turns the specs of these tests into remotes
-// (CreateRemote) and JobDefinitions. Until then the tests are skipped (see
-// requirements).
-func (c *controller) runJob(workerID string, _ *syncrv1.JobSpec) string {
+// runJob queues a job with def on the worker.
+func (c *controller) runJob(workerID string, def *syncrv1.JobDefinition) string {
 	c.t.Helper()
-	resp, err := c.jobs.RunJob(c.t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: workerID}))
+	resp, err := c.jobs.RunJob(c.t.Context(), connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: workerID, Definition: def}))
 	if err != nil {
 		c.t.Fatal(err)
 	}
 	return resp.Msg.GetJob().GetId()
+}
+
+// createRemote stores a remote of the admin and returns its ID.
+func (c *controller) createRemote(in *syncrv1.RemoteInput) string {
+	c.t.Helper()
+	resp, err := c.remotes.CreateRemote(c.t.Context(), connect.NewRequest(&syncrv1.CreateRemoteRequest{Input: in}))
+	if err != nil {
+		c.t.Fatalf("CreateRemote(%s): %v", in.GetName(), err)
+	}
+	return resp.Msg.GetRemote().GetId()
 }
 
 func terminal(s syncrv1.JobStatus) bool {
@@ -589,17 +633,30 @@ func (w *worker) start() {
 // Jobs and files
 // ---------------------------------------------------------------------------
 
-// copySpec is a local-to-local rclone copy; bwlimit > 0 slows it down.
-func copySpec(src, dst string, bwlimit int64) *syncrv1.JobSpec {
-	tr := &syncrv1.RcloneTransfer{
+// local is a location on the worker's filesystem.
+func local(path string) *syncrv1.JobLocation { return &syncrv1.JobLocation{Path: path} }
+
+// onRemote is a location on a stored remote.
+func onRemote(remoteID, path string) *syncrv1.JobLocation {
+	return &syncrv1.JobLocation{RemoteId: remoteID, Path: path}
+}
+
+// copyDef is an rclone copy definition; bwlimit > 0 slows it down.
+func copyDef(src, dst *syncrv1.JobLocation, bwlimit int64) *syncrv1.JobDefinition {
+	tr := &syncrv1.RcloneTransferDefinition{
 		Mode:        syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_COPY,
-		Source:      &syncrv1.Location{Path: src},
-		Destination: &syncrv1.Location{Path: dst},
+		Source:      src,
+		Destination: dst,
 	}
 	if bwlimit > 0 {
 		tr.Options = &syncrv1.RcloneTransferOptions{BandwidthLimitBytesPerSecond: &bwlimit}
 	}
-	return &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_RcloneTransfer{RcloneTransfer: tr}}
+	return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_RcloneTransfer{RcloneTransfer: tr}}
+}
+
+// localCopy copies between two directories of the worker.
+func localCopy(src, dst string, bwlimit int64) *syncrv1.JobDefinition {
+	return copyDef(local(src), local(dst), bwlimit)
 }
 
 // writeRandom writes size random bytes to path.
