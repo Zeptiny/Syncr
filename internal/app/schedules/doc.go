@@ -38,75 +38,42 @@
 //
 // Pure functions decide fires and deadlines:
 //
-//   - Fire, when NextRunAt <= now: (last, n) := expr.Latest(NextRunAt -
-//     1ns, now, MaxCoalesce); the run is for last with Coalesced n - 1,
-//     and NewNext = expr.Next(now).
+//   - Fire, when NextRunAt <= now (PlanFire): (last, n) :=
+//     expr.Latest(NextRunAt - 1ns, now, MaxCoalesce); the run is for last
+//     with Coalesced n - 1, and NewNext = expr.Next(now). Occurrences that
+//     passed while the controller was down are never run one by one.
 //   - Deadline: run_late is ScheduledFor + MaxDelay, or the next
-//     occurrence after ScheduledFor for MaxDelay 0; skip is ScheduledFor +
-//     SkipGrace. A manual run's deadline counts from now (MaxDelay, or
-//     ManualUntilNext when "until next" has no next occurrence).
-//   - Overlap at fire time: skip records a missed run (ReasonOverlap) if a
-//     run is active (HasActiveRun), else opens or merges a run; queue and
-//     allow open or merge a run (launch waits for, or ignores, the active
-//     one).
+//     occurrence after ScheduledFor for MaxDelay 0 (ManualUntilNext if
+//     there is none); skip is ScheduledFor + SkipGrace. A manual run's
+//     deadline counts from now (ManualDeadline).
+//   - Overlap at fire time (SkipsOverlap): skip records a missed run
+//     (ReasonOverlap) if a run is active (HasActiveRun), else opens or
+//     merges a run; queue and allow open or merge a run. At launch queue
+//     (and skip) wait for the active run, allow does not (WaitsForActive).
+//   - A pending run past its deadline is missed: ReasonOverlap if it
+//     waited behind an active run, else ReasonWorkerOffline (MissedReason).
+//   - Permanent launch failures pause the schedule (AutoPauses); a failed
+//     run of a disabled owner is not notified (Notifies).
 //
-// # Service (Milestone 4, track A)
+// # Service
 //
 // The Service is constructed as New(Deps{Repo Repository; Remotes
 // RemoteChecker; Contacts ContactChecker; Workers WorkerChecker; Waker
 // Waker; Clock Clock; IDs IDGenerator; Logger *slog.Logger}, Config). Its
-// methods, all scoped by the actor (owner only; ErrNotFound otherwise):
+// user-facing methods are scoped by the actor (owner only, admins
+// included; ErrNotFound otherwise): Create, Get, List, Update, SetEnabled,
+// Delete, RunNow, Runs, LatestRuns, and the dashboard's Upcoming,
+// RecentProblems and CountMissed. Preview needs no actor; Names returns
+// references of any owner's schedules (a job's schedule).
 //
-//	// Create validates and stores a new schedule of actor.
-//	Create(ctx, actor domain.Actor, in Input) (Schedule, error)
-//	// Get returns one of actor's schedules.
-//	Get(ctx, actor domain.Actor, id domain.ScheduleID) (Schedule, error)
-//	// List returns actor's schedules matching f (f.OwnerID is forced to
-//	// the actor), by name.
-//	List(ctx, actor domain.Actor, f ListFilter) ([]Schedule, error)
-//	// Update changes one of actor's schedules; version is the one the
-//	// caller read (ErrConflict if it changed).
-//	Update(ctx, actor domain.Actor, id domain.ScheduleID, version int64, in Input) (Schedule, error)
-//	// SetEnabled pauses or resumes one of actor's schedules.
-//	SetEnabled(ctx, actor domain.Actor, id domain.ScheduleID, enabled bool) (Schedule, error)
-//	// Delete deletes one of actor's schedules and its runs.
-//	Delete(ctx, actor domain.Actor, id domain.ScheduleID) error
-//	// RunNow adds a manual run (merged into an open run, if any).
-//	// ErrFailedPrecondition if the overlap policy is skip and a run is
-//	// active.
-//	RunNow(ctx, actor domain.Actor, id domain.ScheduleID) (Run, error)
-//	// Runs returns a page of one of actor's schedules' runs, newest first
-//	// (before: cursor; limit 0 means DefaultPageSize).
-//	Runs(ctx, actor domain.Actor, id domain.ScheduleID, before domain.ScheduleRunID, limit int) (RunPage, error)
-//	// LatestRuns returns the newest run of each of actor's schedules ids.
-//	LatestRuns(ctx, actor domain.Actor, ids []domain.ScheduleID) (map[domain.ScheduleID]Run, error)
-//	// Preview checks an expression and returns its next count (1 to 20,
-//	// 0 means 5) occurrences after after (zero: now).
-//	Preview(cron, timezone string, after time.Time, count int) (Preview, error)
-//	// Names returns display references of ids, of any owner (jobs'
-//	// schedules).
-//	Names(ctx, ids []domain.ScheduleID) (map[domain.ScheduleID]Ref, error)
-//
-//	// Dashboard: actor's next occurrences, latest missed or failed runs,
-//	// and the count of missed runs scheduled in [from, until).
-//	Upcoming(ctx, actor domain.Actor, limit int) ([]Upcoming, error)
-//	RecentProblems(ctx, actor domain.Actor, limit int) ([]Run, error)
-//	CountMissed(ctx, actor domain.Actor, from, until time.Time) (int64, error)
-//
-//	// Scheduler-facing (no actor; the scheduler acts for the owner):
-//	// FireDue fires the due schedules (ListDueSchedules, FireSchedule) and
-//	// returns how many fired.
-//	FireDue(ctx) (int, error)
-//	OpenRuns(ctx, limit int) ([]Run, error)
-//	HasActiveRun(ctx, id domain.ScheduleID) (bool, error)
-//	// MarkLaunching reserves jobID on a pending run (pending -> launching).
-//	MarkLaunching(ctx, run Run, jobID domain.JobID, workerID domain.WorkerID) (Run, error)
-//	// MarkLaunched records that the run's job exists (launching ->
-//	// launched).
-//	MarkLaunched(ctx, run Run) (Run, error)
-//	// EndRun ends an open run as missed, failed or pending again (status),
-//	// pausing the schedule with reason if pause.
-//	EndRun(ctx, run Run, status RunStatus, reason, msg string, pause bool) (Run, error)
+// The scheduler-facing methods take no actor (the scheduler acts for the
+// owner): FireDue fires the due schedules (ListDueSchedules, then
+// FireSchedule per schedule, a compare-and-swap); OpenRuns, Load and
+// HasActiveRun read what a launch needs; MarkLaunching (pending ->
+// launching, reserving the job ID), MarkLaunched (launching -> launched)
+// and EndRun (to missed, failed or pending again, optionally pausing the
+// schedule) are compare-and-swaps of the run's status, so two ticks (or
+// two controllers) never launch a run twice.
 //
 // Allowed dependencies: the standard library, internal/domain and
 // internal/cronexpr; every other collaborator is a port declared in

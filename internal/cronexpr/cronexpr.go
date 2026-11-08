@@ -17,7 +17,8 @@ const (
 	MaxLen = 256
 	// MaxTimezoneLen bounds a time zone name, in bytes.
 	MaxTimezoneLen = 64
-	// horizonYears is how far Next looks for an occurrence.
+	// horizonYears is how far Next looks for an occurrence (and Latest
+	// back for the latest one).
 	horizonYears = 5
 )
 
@@ -33,9 +34,6 @@ type Expr struct {
 	loc                           *time.Location
 	// src is the normalized expression.
 	src string
-	// spec is robfig's schedule, used by the provisional occurrence
-	// functions.
-	spec *cron.SpecSchedule
 }
 
 // parser accepts the five standard fields and the descriptors.
@@ -66,14 +64,15 @@ func Parse(expr, tz string) (*Expr, error) {
 	if err := v.Err(); err != nil {
 		return nil, err
 	}
-	spec.Location = loc
 	e := &Expr{
 		minute: spec.Minute, hour: spec.Hour, dom: spec.Dom, month: spec.Month, dow: spec.Dow,
-		loc: loc, src: src, spec: spec,
+		loc: loc, src: src,
 	}
 	// A fixed reference keeps Parse pure; within five years of it every
-	// possible date (February 29 included) occurs.
-	if spec.Next(time.Date(2000, 1, 1, 0, 0, 0, 0, loc)).IsZero() {
+	// possible date (February 29 included) occurs, so an expression without
+	// a matching wall time there never matches.
+	ref := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if _, ok := e.nextWall(ref.Add(-time.Minute), ref.AddDate(horizonYears, 0, 0)); !ok {
 		v.Add("cron", "never matches a date (e.g. February 30)")
 		return nil, v.Err()
 	}
@@ -124,82 +123,6 @@ func parseSpec(src string, rawLen int) (spec *cron.SpecSchedule, msg string) {
 	}
 	return spec, ""
 }
-
-// Next returns the first occurrence strictly after after, in the
-// expression's zone, or the zero time if there is none within five years.
-//
-// Provisional (contracts step): robfig's iteration.
-func (e *Expr) Next(after time.Time) time.Time {
-	t := e.spec.Next(after)
-	if t.IsZero() || t.Year() > after.Year()+horizonYears {
-		return time.Time{}
-	}
-	return t.In(e.loc)
-}
-
-// NextN returns the first n occurrences after after, oldest first (fewer
-// if the five-year horizon ends first). n is capped at MaxPreview.
-func (e *Expr) NextN(after time.Time, n int) []time.Time {
-	n = min(max(n, 0), MaxPreview)
-	out := make([]time.Time, 0, n)
-	for len(out) < n {
-		t := e.Next(after)
-		if t.IsZero() {
-			break
-		}
-		out = append(out, t)
-		after = t
-	}
-	return out
-}
-
-// Latest returns the latest occurrence in (after, until] and how many
-// occurrences that interval holds, counting at most maxCount (at least 1).
-// last is zero and count 0 if there is none. The scheduler uses it to fire
-// one run for the occurrences that passed while the controller was down.
-func (e *Expr) Latest(after, until time.Time, maxCount int) (last time.Time, count int) {
-	maxCount = max(maxCount, 1)
-	t := after
-	for count < maxCount {
-		next := e.Next(t)
-		if next.IsZero() || next.After(until) {
-			return last, count
-		}
-		last, count, t = next, count+1, next
-	}
-	// More than maxCount: find the latest occurrence <= until by bisection
-	// over the start of the search (Next is monotonic).
-	if next := e.Next(last); next.IsZero() || next.After(until) {
-		return last, count
-	}
-	lo, hi := last, until // Next(lo) <= until < Next(hi)
-	for hi.Sub(lo) > time.Second {
-		mid := lo.Add(hi.Sub(lo) / 2)
-		if next := e.Next(mid); !next.IsZero() && !next.After(until) {
-			lo = mid
-		} else {
-			hi = mid
-		}
-	}
-	return e.Next(lo), count
-}
-
-// Matches reports whether the wall time of t in the expression's zone
-// (to the minute; seconds are ignored) matches every field, with cron's
-// day-of-month/day-of-week rule.
-func (e *Expr) Matches(t time.Time) bool {
-	t = t.In(e.loc)
-	if !bit(e.minute, t.Minute()) || !bit(e.hour, t.Hour()) || !bit(e.month, int(t.Month())) {
-		return false
-	}
-	domMatch, dowMatch := bit(e.dom, t.Day()), bit(e.dow, int(t.Weekday()))
-	if e.dom&starBit != 0 || e.dow&starBit != 0 {
-		return domMatch && dowMatch
-	}
-	return domMatch || dowMatch
-}
-
-func bit(set uint64, n int) bool { return set&(1<<uint(n)) != 0 }
 
 // Location returns the expression's time zone.
 func (e *Expr) Location() *time.Location { return e.loc }
