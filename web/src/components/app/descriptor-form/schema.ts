@@ -95,19 +95,27 @@ export function buildSchema(backend: Backend, ctx: SchemaContext = {}) {
   });
 }
 
-/** defaultValues returns the initial form state, from a remote when editing. */
+/**
+ * defaultValues returns the initial form state, from a remote when editing.
+ * Options the remote lacks take the descriptor default; an enum value that
+ * is not one of its choices starts empty.
+ */
 export function defaultValues(backend: Backend, remote?: Remote): DescriptorValues {
   const values: Record<string, string | boolean> = {};
   for (const f of formFields(backend)) {
+    // A value the stored remote lacks falls back to the descriptor default,
+    // on edit as well as create, so the form shows what the backend uses.
+    const value = remote?.options[f.name] ?? f.defaultValue;
     if (f.kind === FieldKind.BOOL) {
-      const stored = remote?.options[f.name];
-      values[f.name] = (stored ?? f.defaultValue) === "true";
+      values[f.name] = value === "true";
     } else if (f.secret) {
       values[f.name] = "";
-    } else if (remote) {
-      values[f.name] = remote.options[f.name] ?? "";
+    } else if (f.kind === FieldKind.ENUM) {
+      // A select can only show one of its choices; anything else would be
+      // submitted without the user seeing it, so it starts unchosen.
+      values[f.name] = f.choices.some((c) => c.value === value) ? value : "";
     } else {
-      values[f.name] = f.defaultValue;
+      values[f.name] = value;
     }
   }
   const members: MemberValue[] = remote

@@ -354,8 +354,11 @@ export function MembersField({ field, idPrefix, remotes, backends, selfId }: Mem
   const id = `${idPrefix}-${field.name}`;
   return (
     <fieldset className="flex flex-col gap-3" data-field={id} aria-describedby={`${id}-help`}>
-      <legend className="text-[13px] font-medium">{field.label || "Members"}</legend>
-      <p id={`${id}-help`} className="-mt-2.5 text-xs leading-5 text-muted-foreground">
+      {/* A legend is not a flex item, so the gap does not apply to it. */}
+      <legend className="mb-0.5 text-[13px] leading-5 font-medium">
+        {field.label || "Members"}
+      </legend>
+      <p id={`${id}-help`} className="-mt-1 text-xs leading-5 text-muted-foreground">
         {field.help || "The remotes this union combines, in order."}
       </p>
       <ol className="flex flex-col gap-2">

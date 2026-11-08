@@ -6,7 +6,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ValidationErrorSchema } from "@/gen/syncr/v1/api_pb";
 import { UnionUpstreamMode } from "@/gen/syncr/v1/link_pb";
-import { RemoteSchema, type Remote } from "@/gen/syncr/v1/remotes_pb";
+import {
+  BackendFieldSchema,
+  BackendSchema,
+  RemoteSchema,
+  type Remote,
+} from "@/gen/syncr/v1/remotes_pb";
 import * as fx from "@/test/fixtures";
 import { renderWithProviders } from "@/test/render";
 
@@ -75,6 +80,28 @@ describe("DescriptorForm schema", () => {
     });
     expect(input.options).not.toHaveProperty("force_path_style");
     expect(input.options).not.toHaveProperty("secret_access_key");
+  });
+
+  it("falls back to descriptor defaults for options the remote lacks", () => {
+    const union = fx.backend("union");
+    const remote = create(RemoteSchema, { ...remoteById(fx.ids.pooled), options: {} });
+    expect(defaultValues(union, remote).values).toEqual({
+      action_policy: "epall",
+      create_policy: "epmfs",
+      search_policy: "ff",
+      cache_time: "120",
+    });
+
+    // An enum default outside the choices would be sent unseen, so it starts empty.
+    const odd = create(BackendSchema, {
+      ...union,
+      fields: union.fields.map((f) =>
+        f.name === "search_policy" ? create(BackendFieldSchema, { ...f, defaultValue: "gone" }) : f,
+      ),
+    });
+    expect(defaultValues(odd).values.search_policy).toBe("");
+    expect(defaultValues(odd, remote).values.search_policy).toBe("");
+    expect(defaultValues(odd, remoteById(fx.ids.pooled)).values.search_policy).toBe("ff");
   });
 
   it.each([
@@ -195,6 +222,36 @@ describe("DescriptorForm", () => {
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByText("A union needs at least two members.")).toBeInTheDocument();
     expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows and submits enum defaults when editing a remote that lacks them", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const remote = create(RemoteSchema, { ...remoteById(fx.ids.pooled), options: {} });
+    renderWithProviders(
+      <DescriptorForm
+        backend={fx.backend("union")}
+        remote={remote}
+        remotes={fx.remotes(now)}
+        backends={backendMap}
+        onSubmit={onSubmit}
+      />,
+    );
+    expect(screen.getByLabelText("Action policy")).toHaveTextContent("epall");
+    expect(screen.getByLabelText("Create policy")).toHaveTextContent("epmfs");
+    expect(screen.getByLabelText("Search policy")).toHaveTextContent("ff");
+    expect(screen.queryByText("Choose…")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      options: {
+        action_policy: "epall",
+        create_policy: "epmfs",
+        search_policy: "ff",
+        cache_time: "120",
+      },
+    });
   });
 
   it("shows server field violations on their fields", async () => {
