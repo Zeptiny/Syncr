@@ -110,6 +110,7 @@ func TestRegisterPassiveWorker(t *testing.T) {
 	// Colons and upper case in the fingerprint are normalized (see the
 	// field's documentation).
 	req := valid()
+	req.Name = "passive-2" // names are unique among live workers
 	req.CertFingerprint = strings.ToUpper(strings.Repeat("ab:", 31) + "ab")
 	resp, err = c.RegisterPassiveWorker(t.Context(), connect.NewRequest(req))
 	if err != nil {

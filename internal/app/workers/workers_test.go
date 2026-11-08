@@ -264,6 +264,7 @@ func TestSecretIsBoundToItsWorker(t *testing.T) {
 	wb, _ := e.store.GetWorker(ctx, b.Worker.ID)
 	forged := wb
 	forged.ID = domain.NewWorkerID()
+	forged.Name = "forged" // names are unique among live workers
 	if err := e.store.CreateWorker(ctx, forged); err != nil {
 		t.Fatal(err)
 	}

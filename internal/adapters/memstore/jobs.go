@@ -12,7 +12,8 @@ import (
 )
 
 // CreateJob implements jobs.Repository. Like the database's foreign keys,
-// it requires the owner and every remote to exist (deleted remotes do).
+// it requires the owner, every remote (deleted remotes exist) and a set
+// schedule to exist.
 func (s *Store) CreateJob(_ context.Context, j jobs.Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -28,6 +29,11 @@ func (s *Store) CreateJob(_ context.Context, j jobs.Job) error {
 	for _, id := range j.RemoteIDs {
 		if _, ok := s.remotes[id]; !ok {
 			return fmt.Errorf("remote %s of job %s: %w", id, j.ID, domain.ErrNotFound)
+		}
+	}
+	if !j.ScheduleID.IsZero() {
+		if _, ok := s.schedules[j.ScheduleID]; !ok {
+			return fmt.Errorf("schedule %s of job %s: %w", j.ScheduleID, j.ID, domain.ErrNotFound)
 		}
 	}
 	j = cloneJob(j)
@@ -63,6 +69,7 @@ func (s *Store) UpdateJob(_ context.Context, j jobs.Job) (jobs.Job, error) {
 	next := cloneJob(j)
 	// Immutable fields keep their stored values.
 	next.WorkerID, next.OwnerID, next.Kind, next.Definition, next.CreatedAt = cur.WorkerID, cur.OwnerID, cur.Kind, cur.Definition, cur.CreatedAt
+	next.ScheduleID = cur.ScheduleID
 	next.RemoteIDs, next.SearchText = cur.RemoteIDs, cur.SearchText
 	next.Version = cur.Version + 1
 	s.jobs[j.ID] = next
@@ -95,6 +102,7 @@ func matchesJob(j jobs.Job, f jobs.ListFilter) bool {
 		(f.WorkerID.IsZero() || j.WorkerID == f.WorkerID) &&
 		(len(f.Statuses) == 0 || slices.Contains(f.Statuses, j.Status)) &&
 		(f.RemoteID.IsZero() || slices.Contains(j.RemoteIDs, f.RemoteID)) &&
+		(f.ScheduleID.IsZero() || j.ScheduleID == f.ScheduleID) &&
 		(len(f.Kinds) == 0 || slices.Contains(f.Kinds, j.Kind)) &&
 		(f.Query == "" || strings.Contains(j.SearchText, f.Query)) &&
 		(f.CreatedAfter.IsZero() || !j.CreatedAt.Before(f.CreatedAfter)) &&

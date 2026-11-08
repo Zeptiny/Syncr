@@ -45,40 +45,7 @@ func backendToProto(t backend.Type) *syncrv1.Backend {
 		},
 	}
 	for _, f := range fields {
-		bf := &syncrv1.BackendField{
-			Name:         f.Name,
-			Label:        f.Label,
-			Help:         f.Help,
-			Placeholder:  f.Placeholder,
-			Kind:         fieldKindToProto(f.Kind),
-			Required:     f.Required,
-			Secret:       f.Secret,
-			Advanced:     f.Advanced,
-			DefaultValue: f.Default,
-			Choices:      make([]*syncrv1.FieldChoice, 0, len(f.Choices)),
-		}
-		for _, c := range f.Choices {
-			bf.Choices = append(bf.Choices, &syncrv1.FieldChoice{Value: c.Value, Label: c.Label})
-		}
-		out.Fields = append(out.Fields, bf)
+		out.Fields = append(out.Fields, fieldToProto(f.Descriptor()))
 	}
 	return out
-}
-
-func fieldKindToProto(k backend.Kind) syncrv1.FieldKind {
-	switch k {
-	case backend.KindString:
-		return syncrv1.FieldKind_FIELD_KIND_STRING
-	case backend.KindText:
-		return syncrv1.FieldKind_FIELD_KIND_TEXT
-	case backend.KindInt:
-		return syncrv1.FieldKind_FIELD_KIND_INT
-	case backend.KindBool:
-		return syncrv1.FieldKind_FIELD_KIND_BOOL
-	case backend.KindEnum:
-		return syncrv1.FieldKind_FIELD_KIND_ENUM
-	case backend.KindMembers:
-		return syncrv1.FieldKind_FIELD_KIND_MEMBERS
-	}
-	return syncrv1.FieldKind_FIELD_KIND_UNSPECIFIED
 }

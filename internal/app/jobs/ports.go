@@ -16,8 +16,9 @@ type Repository interface {
 	// is stored as given, normally 1). ErrAlreadyExists if j.ID is taken;
 	// ErrNotFound if j.WorkerID does not exist or is removed (checked in the
 	// same statement, e.g. INSERT ... SELECT ... WHERE EXISTS (worker not
-	// removed)), or if the owner or one of the remotes does not exist
-	// (foreign keys; a deleted remote still exists).
+	// removed)), or if the owner, one of the remotes or a non-zero
+	// ScheduleID does not exist (foreign keys; a deleted remote still
+	// exists).
 	CreateJob(ctx context.Context, j Job) error
 
 	// GetJob returns a job. ErrNotFound if missing. Every method returning
@@ -29,8 +30,8 @@ type Repository interface {
 	// (Status, Epoch, CancelRequestedAt, QueuedAt, DispatchedAt, StartedAt,
 	// FinishedAt, Requeues, Stats, Error, Warnings, ExitCode, Output), sets
 	// Version = j.Version + 1 and returns the stored job. The immutable
-	// fields (ID, WorkerID, OwnerID, Kind, Definition, CreatedAt) are never
-	// written, nor are RemoteIDs and SearchText.
+	// fields (ID, WorkerID, OwnerID, Kind, Definition, CreatedAt,
+	// ScheduleID) are never written, nor are RemoteIDs and SearchText.
 	// ErrConflict if the version differs (the caller re-reads and
 	// re-decides), ErrNotFound if missing. SQL: UPDATE jobs SET ...,
 	// version = version + 1 WHERE id = $1 AND version = $2 RETURNING *.
@@ -69,6 +70,45 @@ type SampleRepository interface {
 	ListJobSamples(ctx context.Context, id domain.JobID) ([]Sample, error)
 }
 
+// ActivityRepository aggregates finished jobs for the dashboard. Same rules
+// as Repository.
+type ActivityRepository interface {
+	// JobActivity counts the jobs whose FinishedAt is in [q.From, q.Until)
+	// (of q.OwnerID; zero means every owner) by bucket and status, with the
+	// sums of their Stats.Bytes and Stats.Files, ordered by bucket, then
+	// status. Bucket is the start of the job's hour or local day in
+	// q.Location, exactly as Postgres computes date_trunc(q.Unit,
+	// finished_at, q.Location.String()): an ambiguous local time (DST
+	// fall-back) resolves to the later instant, a non-existent one (spring
+	// forward) with the offset before the transition. Buckets without jobs
+	// are omitted.
+	JobActivity(ctx context.Context, q ActivityQuery) ([]ActivityRow, error)
+
+	// CountUnfinished returns the number of the owner's (zero: every
+	// owner's) queued, dispatched and running jobs, by status; statuses
+	// without jobs are omitted.
+	CountUnfinished(ctx context.Context, owner domain.UserID) (map[domain.JobStatus]int64, error)
+}
+
+// ActivityQuery selects the jobs of ActivityRepository.JobActivity.
+type ActivityQuery struct {
+	From, Until time.Time
+	Unit        BucketUnit
+	// Location is an IANA zone (its String is passed to Postgres).
+	Location *time.Location
+	// OwnerID keeps only this user's jobs; zero means every owner.
+	OwnerID domain.UserID
+}
+
+// ActivityRow is one (bucket, status) group of JobActivity.
+type ActivityRow struct {
+	// Bucket is the first instant of the bucket.
+	Bucket time.Time
+	Status domain.JobStatus
+	// Jobs counts the group's jobs; Bytes and Files sum their stats.
+	Jobs, Bytes, Files int64
+}
+
 // RemoteChecker checks the remotes a new job uses (*remotes.Service).
 type RemoteChecker interface {
 	// Usable returns the names of ids, which must all be live remotes of
@@ -100,20 +140,22 @@ type Subscription interface {
 	Close()
 }
 
-// Notifier reports noteworthy job outcomes to people (Milestone 4 adds
-// channels; NopNotifier until then).
+// Notifier is told after a job reached a terminal status (any). It must not
+// block: it only wakes background loops (the notification planner, the
+// scheduler). Delivery is durable elsewhere: the planner finds finished
+// jobs that were not notified yet in the store, so a lost call only delays
+// a notification until the planner's next tick.
 type Notifier interface {
-	// JobFailed is called once after a job ended failed or interrupted. It
-	// runs on the caller's goroutine (often the link ingest), so it must
-	// return quickly; an error is only logged.
-	JobFailed(ctx context.Context, j Job) error
+	// JobFinished is called once per job, after the change to a terminal
+	// status was stored, on the caller's goroutine (often the link ingest).
+	JobFinished(j Job)
 }
 
 // NopNotifier is a Notifier that does nothing.
 type NopNotifier struct{}
 
-// JobFailed does nothing.
-func (NopNotifier) JobFailed(context.Context, Job) error { return nil }
+// JobFinished does nothing.
+func (NopNotifier) JobFinished(Job) {}
 
 // Waker wakes the command long polls of a worker after its pending commands
 // changed (a job was queued or re-queued, a cancel was requested). The

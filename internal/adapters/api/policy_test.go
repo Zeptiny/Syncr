@@ -19,15 +19,25 @@ import (
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
 	"github.com/Zeptiny/Syncr/internal/backend"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/notify"
 	"github.com/Zeptiny/Syncr/internal/platform/logging"
 )
 
 // Stand-ins for the use cases that later tracks implement: enough to mount
 // their services (the stub handlers never call them).
 type (
-	stubIdentity struct{ IdentityService }
-	stubUsers    struct{ UserAdminService }
-	stubRemotes  struct{ RemoteService }
+	stubIdentity   struct{ IdentityService }
+	stubUsers      struct{ UserAdminService }
+	stubRemotes    struct{ RemoteService }
+	stubSchedules  struct{ ScheduleService }
+	stubContacts   struct{ ContactService }
+	stubDeliveries struct{ DeliveryService }
+	// stubDashboardJobs adds the dashboard's job use cases to the real
+	// JobService.
+	stubDashboardJobs struct {
+		JobService
+		DashboardJobs
+	}
 )
 
 // withEveryService wires a stand-in for every service, so NewHandler mounts
@@ -38,8 +48,16 @@ func withEveryService(t *testing.T) func(*Deps) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	channels, err := notify.NewRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
 	return func(d *Deps) {
 		d.Identity, d.Users, d.Remotes, d.Backends = stubIdentity{}, stubUsers{}, stubRemotes{}, reg
+		d.Schedules, d.Contacts, d.Deliveries, d.Channels = stubSchedules{}, stubContacts{}, stubDeliveries{}, channels
+		if _, ok := d.Jobs.(DashboardJobs); !ok {
+			d.Jobs = stubDashboardJobs{JobService: d.Jobs}
+		}
 	}
 }
 
@@ -121,7 +139,7 @@ func TestPolicyLevels(t *testing.T) {
 		admin: {
 			syncrv1connect.WorkerAdminServiceCreateEnrollmentTokenProcedure, syncrv1connect.WorkerAdminServiceGetPassiveInstallCommandsProcedure,
 			syncrv1connect.WorkerAdminServiceRegisterPassiveWorkerProcedure, syncrv1connect.WorkerAdminServiceRenameWorkerProcedure,
-			syncrv1connect.WorkerAdminServiceRemoveWorkerProcedure,
+			syncrv1connect.WorkerAdminServiceRemoveWorkerProcedure, syncrv1connect.WorkerAdminServiceSetWorkerLabelsProcedure,
 		},
 	}
 	for level, procs := range want {
@@ -136,7 +154,11 @@ func TestPolicyLevels(t *testing.T) {
 		switch {
 		case svc == syncrv1connect.UserServiceName && level != admin:
 			t.Errorf("%s is %v; UserService is admin only", p, level)
-		case (svc == syncrv1connect.JobServiceName || svc == syncrv1connect.RemoteServiceName || svc == syncrv1connect.BackendServiceName) && level != user:
+		case slices.Contains([]string{
+			syncrv1connect.JobServiceName, syncrv1connect.RemoteServiceName, syncrv1connect.BackendServiceName,
+			syncrv1connect.ScheduleServiceName, syncrv1connect.ChannelServiceName, syncrv1connect.ContactServiceName,
+			syncrv1connect.DashboardServiceName,
+		}, svc) && level != user:
 			t.Errorf("%s is %v, want user", p, level)
 		}
 	}

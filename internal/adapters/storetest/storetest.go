@@ -1,7 +1,9 @@
 // Package storetest is the contract test suite of the controller's
 // repository ports (workers.Repository, workers.TokenRepository,
-// jobs.Repository, jobs.SampleRepository, users.Repository,
-// users.SessionRepository, users.APITokenRepository, remotes.Repository).
+// jobs.Repository, jobs.SampleRepository, jobs.ActivityRepository,
+// users.Repository, users.SessionRepository, users.APITokenRepository,
+// remotes.Repository, schedules.Repository, contacts.Repository,
+// notifications.Repository).
 // Every store adapter runs it from its tests:
 //
 //	func TestContract(t *testing.T) {
@@ -13,6 +15,9 @@
 // monotonic cursors, single-use tokens, version-checked updates, the first
 // user race), the referential rules (owners, union members, soft delete),
 // and that returned values do not alias the store.
+//
+// A suite whose port an adapter does not implement yet (its methods return
+// a wrapped errors.ErrUnsupported) is skipped, naming the pending work.
 //
 // It is test support, not an adapter: it imports only the standard library,
 // internal/domain, internal/backend (for its value types) and the app
@@ -30,8 +35,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Zeptiny/Syncr/internal/app/contacts"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/notifications"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -43,10 +51,14 @@ type Store interface {
 	workers.TokenRepository
 	jobs.Repository
 	jobs.SampleRepository
+	jobs.ActivityRepository
 	users.Repository
 	users.SessionRepository
 	users.APITokenRepository
 	remotes.Repository
+	schedules.Repository
+	contacts.Repository
+	notifications.Repository
 }
 
 // Run runs the suite; open returns a new, empty store for each subtest.
@@ -88,6 +100,39 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 		{"RemoteUnionMembers", testRemoteUnionMembers},
 		{"RemoteSoftDelete", testRemoteSoftDelete},
 		{"RemoteNoAliasing", testRemoteNoAliasing},
+
+		// Milestone 4.
+		{"WorkerNamesUniqueAmongLive", testWorkerNamesUniqueAmongLive},
+		{"WorkerLabels", testWorkerLabels},
+		{"APITokenPurge", testAPITokenPurge},
+
+		{"ScheduleCreateGetList", testScheduleCreateGetList},
+		{"ScheduleReferences", testScheduleReferences},
+		{"ScheduleUpdateVersioned", testScheduleUpdateVersioned},
+		{"ScheduleSetEnabled", testScheduleSetEnabled},
+		{"ScheduleFireCAS", testScheduleFireCAS},
+		{"ScheduleFireRace", testScheduleFireRace},
+		{"ScheduleMergeOpenRun", testScheduleMergeOpenRun},
+		{"ScheduleRunCAS", testScheduleRunCAS},
+		{"ScheduleHasActiveRun", testScheduleHasActiveRun},
+		{"ScheduleLists", testScheduleLists},
+		{"ScheduleDeleteCascades", testScheduleDeleteCascades},
+		{"ScheduleNoAliasing", testScheduleNoAliasing},
+
+		{"ContactCreateGetList", testContactCreateGetList},
+		{"ContactUpdateVersioned", testContactUpdateVersioned},
+		{"ContactSchedulesAndDelete", testContactSchedulesAndDelete},
+		{"ContactNoAliasing", testContactNoAliasing},
+
+		{"DeliveryPlanJobOnce", testDeliveryPlanJobOnce},
+		{"DeliverySubscribers", testDeliverySubscribers},
+		{"DeliveryPlanRun", testDeliveryPlanRun},
+		{"DeliveryClaimsDisjoint", testDeliveryClaimsDisjoint},
+		{"DeliveryLeaseAndComplete", testDeliveryLeaseAndComplete},
+		{"DeliveryRetryListPurge", testDeliveryRetryListPurge},
+
+		{"ActivityBuckets", testActivityBuckets},
+		{"ActivityCountUnfinished", testActivityCountUnfinished},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -112,6 +157,25 @@ func workerID(t *testing.T, n int) domain.WorkerID { return id(t, domain.ParseWo
 func jobID(t *testing.T, n int) domain.JobID       { return id(t, domain.ParseJobID, 1000+n) }
 func userID(t *testing.T, n int) domain.UserID     { return id(t, domain.ParseUserID, 2000+n) }
 func remoteID(t *testing.T, n int) domain.RemoteID { return id(t, domain.ParseRemoteID, 3000+n) }
+
+func scheduleID(t *testing.T, n int) domain.ScheduleID { return id(t, domain.ParseScheduleID, 5000+n) }
+func contactID(t *testing.T, n int) domain.ContactID   { return id(t, domain.ParseContactID, 6000+n) }
+func runID(t *testing.T, n int) domain.ScheduleRunID   { return id(t, domain.ParseScheduleRunID, 7000+n) }
+func deliveryID(t *testing.T, n int) domain.DeliveryID { return id(t, domain.ParseDeliveryID, 8000+n) }
+
+// skipIfUnsupported skips the test when err says the adapter does not
+// implement the port yet (a stub returning errors.ErrUnsupported), naming
+// the pending work; any other error fails it.
+func skipIfUnsupported(t *testing.T, what, pending string, err error) {
+	t.Helper()
+	switch {
+	case err == nil:
+	case errors.Is(err, errors.ErrUnsupported):
+		t.Skipf("m4: pending %s: %s is not implemented by this store (%v)", pending, what, err)
+	default:
+		t.Fatalf("%s: %v", what, err)
+	}
+}
 
 // testDefinition is the encoded definition of test jobs (jobs store it as
 // JSON; databases may normalize its whitespace).
@@ -895,3 +959,6 @@ func testNoAliasing(t *testing.T, s Store) {
 		}
 	})
 }
+
+// errorsIs is errors.Is, for compact conditions.
+func errorsIs(err, target error) bool { return errors.Is(err, target) }

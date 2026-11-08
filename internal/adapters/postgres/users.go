@@ -298,6 +298,20 @@ func (s *Store) TouchAPIToken(ctx context.Context, id domain.APITokenID, at time
 	return nil
 }
 
+// DeleteExpiredAPITokens implements users.APITokenRepository (stub of the
+// contracts step: a wrapped errors.ErrUnsupported until the users track
+// adds the query).
+func (s *Store) DeleteExpiredAPITokens(context.Context, time.Time) (int, error) {
+	return 0, fmt.Errorf("postgres: delete expired api tokens: %w", errors.ErrUnsupported)
+}
+
+// DeleteUserAPITokens implements users.APITokenRepository (stub of the
+// contracts step: a wrapped errors.ErrUnsupported until the users track
+// adds the query).
+func (s *Store) DeleteUserAPITokens(context.Context, domain.UserID) (int, error) {
+	return 0, fmt.Errorf("postgres: delete user api tokens: %w", errors.ErrUnsupported)
+}
+
 // Conversions.
 
 func createUserParams(u users.User) db.CreateUserParams {

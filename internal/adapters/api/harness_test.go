@@ -212,7 +212,12 @@ func (nopWaker) Wake(domain.WorkerID) {}
 func (e *testEnv) addWorker() domain.WorkerID {
 	e.t.Helper()
 	id := domain.NewWorkerID()
-	w := workers.Worker{ID: id, Name: "worker", Mode: domain.WorkerActive, CreatedAt: e.clock.Now()}
+	// Names are unique among live workers: the first is "worker".
+	name := "worker"
+	if !e.worker.IsZero() {
+		name += "-" + id.String()
+	}
+	w := workers.Worker{ID: id, Name: name, Mode: domain.WorkerActive, CreatedAt: e.clock.Now()}
 	if err := e.store.CreateWorker(context.Background(), w); err != nil {
 		e.t.Fatal(err)
 	}

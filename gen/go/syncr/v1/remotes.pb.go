@@ -254,7 +254,10 @@ func (x *Backend) GetCapabilities() *BackendCapabilities {
 	return nil
 }
 
-// BackendField describes one configuration field of a backend type.
+// BackendField describes one configuration field of a backend type. It also
+// describes the configuration fields of notification channel types
+// (ChannelType.fields in notify.proto), where "RemoteInput" reads as
+// "ContactInput" and the MEMBERS kind never occurs.
 type BackendField struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Key in RemoteInput.options (or secrets, for a secret field).

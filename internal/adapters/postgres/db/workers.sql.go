@@ -37,7 +37,7 @@ UPDATE workers SET
     past_epochs = $3,
     ack_seq = 0
 WHERE id = $4 AND removed_at IS NULL AND epoch = $5
-RETURNING id, name, mode, url, cert_fingerprint, secret_enc, info, epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at
+RETURNING id, name, mode, url, cert_fingerprint, secret_enc, info, epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at, labels
 `
 
 type AdvanceWorkerEpochParams struct {
@@ -72,6 +72,7 @@ func (q *Queries) AdvanceWorkerEpoch(ctx context.Context, arg AdvanceWorkerEpoch
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.RemovedAt,
+		&i.Labels,
 	)
 	return i, err
 }
@@ -126,7 +127,7 @@ func (q *Queries) CreateWorker(ctx context.Context, arg CreateWorkerParams) erro
 }
 
 const getWorker = `-- name: GetWorker :one
-SELECT id, name, mode, url, cert_fingerprint, secret_enc, info, epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at FROM workers WHERE id = $1
+SELECT id, name, mode, url, cert_fingerprint, secret_enc, info, epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at, labels FROM workers WHERE id = $1
 `
 
 func (q *Queries) GetWorker(ctx context.Context, id pgtype.UUID) (Worker, error) {
@@ -147,12 +148,13 @@ func (q *Queries) GetWorker(ctx context.Context, id pgtype.UUID) (Worker, error)
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.RemovedAt,
+		&i.Labels,
 	)
 	return i, err
 }
 
 const listWorkers = `-- name: ListWorkers :many
-SELECT id, name, mode, url, cert_fingerprint, secret_enc, info, epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at FROM workers
+SELECT id, name, mode, url, cert_fingerprint, secret_enc, info, epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at, labels FROM workers
 WHERE ($1::text = '' OR mode = $1::text)
   AND ($2::boolean OR removed_at IS NULL)
 ORDER BY id
@@ -187,6 +189,7 @@ func (q *Queries) ListWorkers(ctx context.Context, arg ListWorkersParams) ([]Wor
 			&i.LastSeen,
 			&i.CreatedAt,
 			&i.RemovedAt,
+			&i.Labels,
 		); err != nil {
 			return nil, err
 		}
@@ -201,7 +204,7 @@ func (q *Queries) ListWorkers(ctx context.Context, arg ListWorkersParams) ([]Wor
 const removeWorker = `-- name: RemoveWorker :one
 UPDATE workers SET removed_at = $1, secret_enc = NULL
 WHERE id = $2 AND removed_at IS NULL
-RETURNING id, name, mode, url, cert_fingerprint, secret_enc, info, epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at
+RETURNING id, name, mode, url, cert_fingerprint, secret_enc, info, epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at, labels
 `
 
 type RemoveWorkerParams struct {
@@ -227,6 +230,7 @@ func (q *Queries) RemoveWorker(ctx context.Context, arg RemoveWorkerParams) (Wor
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.RemovedAt,
+		&i.Labels,
 	)
 	return i, err
 }
@@ -234,7 +238,7 @@ func (q *Queries) RemoveWorker(ctx context.Context, arg RemoveWorkerParams) (Wor
 const renameWorker = `-- name: RenameWorker :one
 UPDATE workers SET name = $1
 WHERE id = $2 AND removed_at IS NULL
-RETURNING id, name, mode, url, cert_fingerprint, secret_enc, info, epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at
+RETURNING id, name, mode, url, cert_fingerprint, secret_enc, info, epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at, labels
 `
 
 type RenameWorkerParams struct {
@@ -260,6 +264,7 @@ func (q *Queries) RenameWorker(ctx context.Context, arg RenameWorkerParams) (Wor
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.RemovedAt,
+		&i.Labels,
 	)
 	return i, err
 }

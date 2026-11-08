@@ -26,11 +26,13 @@ import (
 // and jobs.Waker, and remembers every call.
 type recorder struct {
 	*broker.Broker
-	mu        sync.Mutex
-	updates   []jobs.Update
-	failed    []jobs.Job
-	wakes     []domain.WorkerID
-	notifyErr error
+	mu      sync.Mutex
+	updates []jobs.Update
+	// finished are the jobs the notifier was told about; failed are those
+	// of them that ended failed or interrupted.
+	finished []jobs.Job
+	failed   []jobs.Job
+	wakes    []domain.WorkerID
 }
 
 func (r *recorder) Publish(u jobs.Update) {
@@ -40,11 +42,13 @@ func (r *recorder) Publish(u jobs.Update) {
 	r.Broker.Publish(u)
 }
 
-func (r *recorder) JobFailed(_ context.Context, j jobs.Job) error {
+func (r *recorder) JobFinished(j jobs.Job) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.failed = append(r.failed, j)
-	return r.notifyErr
+	r.finished = append(r.finished, j)
+	if j.Status == domain.JobFailed || j.Status == domain.JobInterrupted {
+		r.failed = append(r.failed, j)
+	}
 }
 
 func (r *recorder) Wake(id domain.WorkerID) {
@@ -179,7 +183,8 @@ func (f *fakeRemotes) Usable(ctx context.Context, owner domain.UserID, ids []dom
 func (e *env) addWorker(t *testing.T) domain.WorkerID {
 	t.Helper()
 	id := domain.NewWorkerID()
-	if err := e.store.CreateWorker(context.Background(), workers.Worker{ID: id, Name: "w", Mode: domain.WorkerActive}); err != nil {
+	// Names are unique among live workers.
+	if err := e.store.CreateWorker(context.Background(), workers.Worker{ID: id, Name: "w-" + id.String(), Mode: domain.WorkerActive}); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -461,28 +466,30 @@ func TestUnrequestedCancelIsInterrupted(t *testing.T) {
 func TestNotifier(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	tests := []struct {
-		status domain.JobStatus
-		notify bool
-	}{
-		{domain.JobSucceeded, false},
-		{domain.JobFailed, true},
-		{domain.JobCancelled, false},
-		{domain.JobInterrupted, true},
-	}
-	for _, tt := range tests {
+	// Every terminal status is reported once, after it was stored; the
+	// notifier decides what is noteworthy.
+	for _, status := range []domain.JobStatus{domain.JobSucceeded, domain.JobFailed, domain.JobCancelled, domain.JobInterrupted} {
 		e := newEnv(t)
-		e.rec.notifyErr = errors.New("discord down") // never fails the change
-		j := e.at(t, tt.status)
-		if n := len(e.rec.failed); n != map[bool]int{true: 1, false: 0}[tt.notify] {
-			t.Errorf("%s: notifier called %d times", tt.status, n)
+		j := e.at(t, status)
+		if n := len(e.rec.finished); n != 1 {
+			t.Errorf("%s: notifier called %d times", status, n)
+		} else if got := e.rec.finished[0]; got.ID != j.ID || got.Status != status {
+			t.Errorf("%s: notifier got %s %s", status, got.ID, got.Status)
+		} else if stored, err := e.store.GetJob(ctx, j.ID); err != nil || stored.Version != got.Version {
+			t.Errorf("%s: notifier got version %d before it was stored (%v)", status, got.Version, err)
 		}
 		// Idempotent changes do not notify again.
 		_, _, _ = e.svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobFailed})
 		_, _, _ = e.svc.Interrupt(ctx, e.worker, j.ID, epoch, jobs.JobError{})
-		if n := len(e.rec.failed); n > 1 {
-			t.Errorf("%s: notifier called %d times after duplicates", tt.status, n)
+		if n := len(e.rec.finished); n > 1 {
+			t.Errorf("%s: notifier called %d times after duplicates", status, n)
 		}
+	}
+	// Unfinished jobs are never reported.
+	e := newEnv(t)
+	e.at(t, domain.JobRunning)
+	if n := len(e.rec.finished); n != 0 {
+		t.Errorf("running job: notifier called %d times", n)
 	}
 }
 

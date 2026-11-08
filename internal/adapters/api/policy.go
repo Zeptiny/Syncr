@@ -59,6 +59,10 @@ func apiServices() []string {
 		syncrv1connect.JobServiceName,
 		syncrv1connect.BackendServiceName,
 		syncrv1connect.RemoteServiceName,
+		syncrv1connect.ScheduleServiceName,
+		syncrv1connect.ChannelServiceName,
+		syncrv1connect.ContactServiceName,
+		syncrv1connect.DashboardServiceName,
 	}
 }
 
@@ -99,6 +103,7 @@ func newPolicy() map[string]access {
 		syncrv1connect.WorkerAdminServiceRegisterPassiveWorkerProcedure:     admin,
 		syncrv1connect.WorkerAdminServiceRenameWorkerProcedure:              admin,
 		syncrv1connect.WorkerAdminServiceRemoveWorkerProcedure:              admin,
+		syncrv1connect.WorkerAdminServiceSetWorkerLabelsProcedure:           admin,
 
 		syncrv1connect.JobServiceRunJobProcedure:         user,
 		syncrv1connect.JobServiceGetJobProcedure:         user,
@@ -114,6 +119,32 @@ func newPolicy() map[string]access {
 		syncrv1connect.RemoteServiceCreateRemoteProcedure: user,
 		syncrv1connect.RemoteServiceUpdateRemoteProcedure: user,
 		syncrv1connect.RemoteServiceDeleteRemoteProcedure: user,
+
+		// Schedules and contacts are owner-only (admins included); the use
+		// cases scope them. SendTestNotification is rate limited by the
+		// contacts use case.
+		syncrv1connect.ScheduleServiceListSchedulesProcedure:      user,
+		syncrv1connect.ScheduleServiceGetScheduleProcedure:        user,
+		syncrv1connect.ScheduleServiceCreateScheduleProcedure:     user,
+		syncrv1connect.ScheduleServiceUpdateScheduleProcedure:     user,
+		syncrv1connect.ScheduleServiceSetScheduleEnabledProcedure: user,
+		syncrv1connect.ScheduleServiceDeleteScheduleProcedure:     user,
+		syncrv1connect.ScheduleServiceRunScheduleNowProcedure:     user,
+		syncrv1connect.ScheduleServiceListScheduleRunsProcedure:   user,
+		syncrv1connect.ScheduleServicePreviewScheduleProcedure:    user,
+
+		syncrv1connect.ChannelServiceListChannelsProcedure: user,
+
+		syncrv1connect.ContactServiceListContactsProcedure:         user,
+		syncrv1connect.ContactServiceGetContactProcedure:           user,
+		syncrv1connect.ContactServiceCreateContactProcedure:        user,
+		syncrv1connect.ContactServiceUpdateContactProcedure:        user,
+		syncrv1connect.ContactServiceDeleteContactProcedure:        user,
+		syncrv1connect.ContactServiceSendTestNotificationProcedure: user,
+		syncrv1connect.ContactServiceListDeliveriesProcedure:       user,
+		syncrv1connect.ContactServiceRetryDeliveryProcedure:        user,
+
+		syncrv1connect.DashboardServiceGetDashboardProcedure: user,
 	}
 }
 

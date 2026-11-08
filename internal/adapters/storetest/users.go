@@ -381,3 +381,53 @@ func testAPITokens(t *testing.T, s Store) {
 	_, err = s.GetAPITokenByHash(ctx, t1.Hash)
 	wantErr(t, "GetAPITokenByHash(deleted)", err, domain.ErrNotFound)
 }
+
+func testAPITokenPurge(t *testing.T, s Store) {
+	requireUsers(t, s)
+	ctx := context.Background()
+	u, other := newUser(t, 1), newUser(t, 2)
+	mustCreateUser(t, s, u)
+	mustCreateUser(t, s, other)
+	tokenID := func(n int) domain.APITokenID { return id(t, domain.ParseAPITokenID, 4000+n) }
+	newToken := func(n int, user domain.UserID, expires time.Time) users.APIToken {
+		return users.APIToken{ID: tokenID(n), UserID: user, Name: fmt.Sprintf("token %d", n), Prefix: "syncr_pat_" + fmt.Sprint(1000+n),
+			Hash: hash(n), CreatedAt: t0(), ExpiresAt: expires}
+	}
+	now := t0().Add(48 * time.Hour)
+	tokens := []users.APIToken{
+		newToken(1, u.ID, time.Time{}),             // never expires
+		newToken(2, u.ID, now.Add(-time.Hour)),     // expired
+		newToken(3, u.ID, now),                     // expires now: expired
+		newToken(4, other.ID, now.Add(time.Hour)),  // valid
+		newToken(5, other.ID, now.Add(-time.Hour)), // expired
+	}
+	for _, tok := range tokens {
+		if err := s.CreateAPIToken(ctx, tok); err != nil {
+			t.Fatalf("CreateAPIToken: %v", err)
+		}
+	}
+	n, err := s.DeleteExpiredAPITokens(ctx, now)
+	skipIfUnsupported(t, "DeleteExpiredAPITokens", "track C (users)", err)
+	if n != 3 {
+		t.Errorf("DeleteExpiredAPITokens = %d, want 3", n)
+	}
+	for _, tok := range tokens {
+		_, err := s.GetAPITokenByHash(ctx, tok.Hash)
+		if expired := tok.Expired(now); expired != errorsIs(err, domain.ErrNotFound) {
+			t.Errorf("token %s (expired %v): GetAPITokenByHash err = %v", tok.Name, expired, err)
+		}
+	}
+	n, err = s.DeleteUserAPITokens(ctx, other.ID)
+	if err != nil || n != 1 {
+		t.Errorf("DeleteUserAPITokens = (%d, %v), want 1", n, err)
+	}
+	if left, _ := s.ListAPITokens(ctx, other.ID); len(left) != 0 {
+		t.Errorf("tokens left for the user: %v", left)
+	}
+	if left, _ := s.ListAPITokens(ctx, u.ID); len(left) != 1 || left[0].ID != tokenID(1) {
+		t.Errorf("tokens of the other user: %v", left)
+	}
+	if n, err := s.DeleteUserAPITokens(ctx, userID(t, 99)); err != nil || n != 0 {
+		t.Errorf("DeleteUserAPITokens(unknown user) = (%d, %v)", n, err)
+	}
+}

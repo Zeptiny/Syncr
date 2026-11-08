@@ -1,7 +1,8 @@
 // Package idgen mints entity IDs for the controller's use cases: UUIDv7 for
 // production, Sequential for tests and fixtures. Both satisfy the
 // IDGenerator ports of internal/app/... (NewWorkerID, NewJobID, NewUserID,
-// NewAPITokenID, NewRemoteID).
+// NewAPITokenID, NewRemoteID, NewScheduleID, NewScheduleRunID,
+// NewContactID, NewDeliveryID).
 //
 // Allowed dependencies: the standard library and internal/domain.
 package idgen
@@ -32,6 +33,18 @@ func (UUIDv7) NewAPITokenID() domain.APITokenID { return domain.NewAPITokenID() 
 // NewRemoteID returns a new random RemoteID.
 func (UUIDv7) NewRemoteID() domain.RemoteID { return domain.NewRemoteID() }
 
+// NewScheduleID returns a new random ScheduleID.
+func (UUIDv7) NewScheduleID() domain.ScheduleID { return domain.NewScheduleID() }
+
+// NewScheduleRunID returns a new random ScheduleRunID.
+func (UUIDv7) NewScheduleRunID() domain.ScheduleRunID { return domain.NewScheduleRunID() }
+
+// NewContactID returns a new random ContactID.
+func (UUIDv7) NewContactID() domain.ContactID { return domain.NewContactID() }
+
+// NewDeliveryID returns a new random DeliveryID.
+func (UUIDv7) NewDeliveryID() domain.DeliveryID { return domain.NewDeliveryID() }
+
 // Sequential mints predictable, strictly increasing IDs of the form
 // 00000000-0000-7000-8000-00000000000n, sharing one counter across entity
 // kinds. The zero value starts at 1. Safe for concurrent use.
@@ -53,6 +66,20 @@ func (s *Sequential) NewAPITokenID() domain.APITokenID { return mint(domain.Pars
 
 // NewRemoteID returns the next RemoteID.
 func (s *Sequential) NewRemoteID() domain.RemoteID { return mint(domain.ParseRemoteID, s.next()) }
+
+// NewScheduleID returns the next ScheduleID.
+func (s *Sequential) NewScheduleID() domain.ScheduleID { return mint(domain.ParseScheduleID, s.next()) }
+
+// NewScheduleRunID returns the next ScheduleRunID.
+func (s *Sequential) NewScheduleRunID() domain.ScheduleRunID {
+	return mint(domain.ParseScheduleRunID, s.next())
+}
+
+// NewContactID returns the next ContactID.
+func (s *Sequential) NewContactID() domain.ContactID { return mint(domain.ParseContactID, s.next()) }
+
+// NewDeliveryID returns the next DeliveryID.
+func (s *Sequential) NewDeliveryID() domain.DeliveryID { return mint(domain.ParseDeliveryID, s.next()) }
 
 func (s *Sequential) next() string {
 	return fmt.Sprintf("00000000-0000-7000-8000-%012x", s.n.Add(1))

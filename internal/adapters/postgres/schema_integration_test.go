@@ -17,8 +17,9 @@ import (
 func testTime() time.Time { return time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC) }
 
 func newTestWorker() workers.Worker {
+	id := domain.NewWorkerID()
 	return workers.Worker{
-		ID: domain.NewWorkerID(), Name: "w", Mode: domain.WorkerActive,
+		ID: id, Name: "w-" + id.String(), Mode: domain.WorkerActive, // names are unique among live workers
 		SecretEnc: []byte("enc"), CreatedAt: testTime(),
 	}
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -249,5 +250,24 @@ func TestProgressToProto(t *testing.T) {
 	got := progressToProto(jobs.Sample{Time: convT0, Stats: jobs.Stats{Bytes: 3, Elapsed: 2 * time.Second}})
 	if !got.GetTime().AsTime().Equal(convT0) || got.GetStats().GetBytes() != 3 || got.GetStats().GetElapsed().AsDuration() != 2*time.Second {
 		t.Errorf("progressToProto = %v", got)
+	}
+}
+
+// TestMilestone4Conversions covers the contracts step's additions: worker
+// labels and a job's schedule ID (the schedule reference itself is filled
+// in by the jobs handler).
+func TestMilestone4Conversions(t *testing.T) {
+	t.Parallel()
+	w := workers.Worker{ID: domain.NewWorkerID(), Name: "nas-01", Labels: []string{"linux", "nas"}}
+	if got := workerToProto(w, domain.WorkerOnline); !slices.Equal(got.GetLabels(), []string{"linux", "nas"}) {
+		t.Errorf("labels = %v", got.GetLabels())
+	}
+	sched := domain.NewScheduleID()
+	j, err := jobToProto(jobs.Job{ID: domain.NewJobID(), ScheduleID: sched, Status: domain.JobQueued}, nil, nil)
+	if err != nil || j.GetScheduleId() != sched.String() || j.GetSchedule() != nil {
+		t.Errorf("scheduled job = (%v, %v)", j, err)
+	}
+	if manual, _ := jobToProto(jobs.Job{ID: domain.NewJobID(), Status: domain.JobQueued}, nil, nil); manual.GetScheduleId() != "" {
+		t.Errorf("manual job schedule_id = %q", manual.GetScheduleId())
 	}
 }

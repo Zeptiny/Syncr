@@ -191,6 +191,7 @@ func workerFrom(r db.Worker) (workers.Worker, error) {
 		SecretEnc:       r.SecretEnc,
 		CreatedAt:       timeFrom(r.CreatedAt),
 		RemovedAt:       timeFrom(r.RemovedAt),
+		Labels:          nilIfEmpty(r.Labels),
 		Link: workers.Link{
 			Epoch:          r.Epoch,
 			EpochStartedAt: timeFrom(r.EpochStartedAt),
@@ -275,6 +276,9 @@ func jobFrom(r db.Job) (jobs.Job, error) {
 		return jobs.Job{}, err
 	}
 	if err := decodeID(&j.OwnerID, r.OwnerID); err != nil {
+		return jobs.Job{}, err
+	}
+	if err := decodeID(&j.ScheduleID, r.ScheduleID); err != nil {
 		return jobs.Job{}, err
 	}
 	return j, nil

@@ -113,9 +113,11 @@ linters:
           allow:
             - $gostd
 
-        # Use cases depend only on the domain, the backend registry's core API
-        # and on ports they declare. Allow entries are prefix matches: "$"
-        # admits internal/backend itself but not its built-in descriptors.
+        # Use cases depend only on the domain, the pure libraries below
+        # (backend registry core API, form descriptors, notification channel
+        # core, cron expressions) and on ports they declare. Allow entries are
+        # prefix matches: "$" admits the package itself but not its
+        # subpackages (built-in descriptors, the contract suites).
         app:
           list-mode: strict
           files: ["**/internal/app/**", "!$test"]
@@ -123,6 +125,9 @@ linters:
             - $gostd
             - github.com/Zeptiny/Syncr/internal/domain
             - github.com/Zeptiny/Syncr/internal/backend$
+            - github.com/Zeptiny/Syncr/internal/descriptor$
+            - github.com/Zeptiny/Syncr/internal/notify$
+            - github.com/Zeptiny/Syncr/internal/cronexpr$
         # Use-case tests (external test packages) wire the services with the
         # in-memory adapters, the built-in backends and fakes; nothing else.
         app-tests:
@@ -133,6 +138,10 @@ linters:
             - github.com/Zeptiny/Syncr/internal/domain
             - github.com/Zeptiny/Syncr/internal/backend$
             - github.com/Zeptiny/Syncr/internal/backend/builtin
+            - github.com/Zeptiny/Syncr/internal/descriptor$
+            - github.com/Zeptiny/Syncr/internal/notify$
+            - github.com/Zeptiny/Syncr/internal/notify/notifytest
+            - github.com/Zeptiny/Syncr/internal/cronexpr$
             - github.com/Zeptiny/Syncr/internal/app
             - github.com/Zeptiny/Syncr/internal/adapters/memstore
             - github.com/Zeptiny/Syncr/internal/adapters/broker
@@ -234,8 +243,10 @@ linters:
               desc: adapters must not import each other; wire them in cmd/
             - pkg: github.com/Zeptiny/Syncr/internal/adapters/idgen
               desc: adapters must not import each other; wire them in cmd/
+            - pkg: github.com/Zeptiny/Syncr/internal/app
+              desc: channels implement internal/notify only; the use cases call them
             - pkg: github.com/Zeptiny/Syncr/internal/controller
-              desc: notifiers implement app ports and knows nothing else
+              desc: channels implement internal/notify and know nothing else
             - pkg: github.com/Zeptiny/Syncr/internal/worker
               desc: controller code must not import worker code
 
@@ -291,7 +302,41 @@ linters:
           allow:
             - $gostd
             - github.com/Zeptiny/Syncr/internal/domain
+            - github.com/Zeptiny/Syncr/internal/descriptor$
             - github.com/Zeptiny/Syncr/internal/backend
+
+        # The generic form-descriptor machinery shared by backend types and
+        # notification channels: the standard library and the domain only.
+        descriptor:
+          list-mode: strict
+          files: ["**/internal/descriptor/**"]
+          allow:
+            - $gostd
+            - github.com/Zeptiny/Syncr/internal/domain
+            - github.com/Zeptiny/Syncr/internal/descriptor
+
+        # The notification channel core, its contract suite and the
+        # channels' message type: no I/O libraries, no use cases (channels
+        # under internal/adapters/notify bring their clients).
+        notify:
+          list-mode: strict
+          files: ["**/internal/notify/**"]
+          allow:
+            - $gostd
+            - github.com/Zeptiny/Syncr/internal/domain
+            - github.com/Zeptiny/Syncr/internal/descriptor$
+            - github.com/Zeptiny/Syncr/internal/notify
+
+        # Cron expressions: robfig's parser (only) and the domain's
+        # validation error.
+        cronexpr:
+          list-mode: strict
+          files: ["**/internal/cronexpr/**"]
+          allow:
+            - $gostd
+            - github.com/robfig/cron/v3
+            - github.com/Zeptiny/Syncr/internal/domain
+            - github.com/Zeptiny/Syncr/internal/cronexpr
 
         # Job kinds turn secret-free definitions into worker specs: protobuf,
         # the domain and the backend core API; no I/O, no use cases.

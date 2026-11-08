@@ -34,8 +34,13 @@ func (s *Store) GetWorker(ctx context.Context, id domain.WorkerID) (workers.Work
 	return workerFrom(row)
 }
 
-// ListWorkers implements workers.Repository.
+// ListWorkers implements workers.Repository. The label filter is a stub of
+// the contracts step: a wrapped errors.ErrUnsupported until the workers
+// track adds it to the query.
 func (s *Store) ListWorkers(ctx context.Context, f workers.ListFilter) ([]workers.Worker, error) {
+	if f.Label != "" {
+		return nil, fmt.Errorf("postgres: list workers by label: %w", errors.ErrUnsupported)
+	}
 	rows, err := s.q.ListWorkers(ctx, db.ListWorkersParams{Mode: string(f.Mode), IncludeRemoved: f.IncludeRemoved})
 	if err != nil {
 		return nil, mapErr("list workers", err)
@@ -50,6 +55,13 @@ func (s *Store) RenameWorker(ctx context.Context, id domain.WorkerID, name strin
 		return workers.Worker{}, mapErr(fmt.Sprintf("rename worker %s", id), err)
 	}
 	return workerFrom(row)
+}
+
+// SetWorkerLabels implements workers.Repository (stub of the contracts
+// step: a wrapped errors.ErrUnsupported until the workers track adds the
+// query).
+func (s *Store) SetWorkerLabels(context.Context, domain.WorkerID, []string) (workers.Worker, error) {
+	return workers.Worker{}, fmt.Errorf("postgres: set worker labels: %w", errors.ErrUnsupported)
 }
 
 // RemoveWorker implements workers.Repository.

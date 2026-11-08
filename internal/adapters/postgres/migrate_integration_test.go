@@ -4,10 +4,13 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
 // appliedVersions returns the goose bookkeeping rows of the store's database.
@@ -46,10 +49,14 @@ func tableExists(t *testing.T, s *Store, name string) bool {
 var schemaTables = []string{
 	"workers", "enrollment_tokens", "jobs", "job_samples",
 	"users", "sessions", "api_tokens", "remotes", "union_members", "job_remotes",
+	"contacts", "schedules", "schedule_remotes", "schedule_contacts", "schedule_runs", "deliveries",
 }
 
+// milestone4Tables are the tables of migration 00003.
+var milestone4Tables = []string{"contacts", "schedules", "schedule_remotes", "schedule_contacts", "schedule_runs", "deliveries"}
+
 // allVersions are the versions of the embedded migrations.
-var allVersions = []int64{1, 2}
+var allVersions = []int64{1, 2, 3}
 
 func columnExists(t *testing.T, s *Store, table, column string) bool {
 	t.Helper()
@@ -223,5 +230,97 @@ func TestMigrateUsersRemotesDown(t *testing.T) {
 	}
 	if !columnExists(t, s, "jobs", "owner_id") || columnExists(t, s, "jobs", "spec_enc") {
 		t.Error("jobs does not have its version 2 columns after up")
+	}
+}
+
+// TestMigrateSchedulesNotificationsDown checks migration 00003: going up it
+// suffixes duplicate live worker names and marks finished job history
+// notified; going down to version 2 removes its tables and columns, and
+// migrating up again restores version 3.
+func TestMigrateSchedulesNotificationsDown(t *testing.T) {
+	s := openStore(t, createDB(t, true))
+	ctx := t.Context()
+	p, closeDB, err := s.migrationProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+
+	if _, err := p.DownTo(ctx, 2); err != nil {
+		t.Fatalf("down to 2: %v", err)
+	}
+	for _, table := range milestone4Tables {
+		if tableExists(t, s, table) {
+			t.Errorf("table %s survived the down migration", table)
+		}
+	}
+	if columnExists(t, s, "workers", "labels") || columnExists(t, s, "jobs", "schedule_id") || columnExists(t, s, "jobs", "notified_at") {
+		t.Error("the 00003 columns survived the down migration")
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, []int64{1, 2}) {
+		t.Errorf("applied versions = %v, want [1 2]", got)
+	}
+
+	// Version 2 data the up migration rewrites: two live workers named
+	// alike (and a removed one), and a finished job.
+	owner := seedUser(t, s)
+	const insertWorker = `INSERT INTO workers (id, name, mode, secret_enc, info, created_at, removed_at)
+		VALUES ($1, $2, 'active', '\x00', '{}', now(), $3)`
+	ids := []string{"00000000-0000-7000-8000-000000000001", "00000000-0000-7000-8000-000000000002", "00000000-0000-7000-8000-000000000003"}
+	for i, id := range ids {
+		var removed *time.Time
+		if i == 2 {
+			now := time.Now()
+			removed = &now
+		}
+		if _, err := s.pool.Exec(ctx, insertWorker, id, []string{"nas", "NAS", "nas"}[i], removed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO jobs (id, worker_id, owner_id, kind, status, definition, created_at, queued_at, finished_at, exit_code, version)
+		VALUES ('00000000-0000-7000-8000-000000000010', $1, $2, 'rclone_transfer', 'succeeded', '{}', now(), now(), now(), 0, 1),
+		       ('00000000-0000-7000-8000-000000000011', $1, $2, 'rclone_transfer', 'queued', '{}', now(), now(), NULL, -1, 1)`,
+		ids[0], owner.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) {
+		t.Errorf("applied versions = %v, want %v", got, allVersions)
+	}
+	for _, table := range milestone4Tables {
+		if !tableExists(t, s, table) {
+			t.Errorf("table %s missing after up", table)
+		}
+	}
+	names := map[string]string{}
+	rows, err := s.pool.Query(ctx, "SELECT id::text, name FROM workers ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			t.Fatal(err)
+		}
+		names[id] = name
+	}
+	rows.Close()
+	if names[ids[0]] != "nas" || names[ids[1]] != "NAS-00000000" || names[ids[2]] != "nas" {
+		t.Errorf("worker names after up = %v, want the later live duplicate suffixed", names)
+	}
+	var notified, pending int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE notified_at IS NOT NULL), count(*) FILTER (WHERE notified_at IS NULL) FROM jobs`).
+		Scan(&notified, &pending); err != nil || notified != 1 || pending != 1 {
+		t.Errorf("notified jobs = %d, unnotified = %d (%v); want the finished one marked", notified, pending, err)
+	}
+	// The unique index now holds.
+	w := newTestWorker()
+	w.Name = "Nas"
+	wantErr := s.CreateWorker(ctx, w)
+	if !errors.Is(wantErr, domain.ErrAlreadyExists) {
+		t.Errorf("CreateWorker(taken name) = %v, want ErrAlreadyExists", wantErr)
 	}
 }

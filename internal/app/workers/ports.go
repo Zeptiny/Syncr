@@ -14,7 +14,9 @@ import (
 // is treated as an internal error. Returned values must not alias storage
 // (slices are copied).
 type Repository interface {
-	// CreateWorker inserts w. ErrAlreadyExists if w.ID is taken.
+	// CreateWorker inserts w. ErrAlreadyExists if w.ID is taken or another
+	// worker that is not removed has the same name, case-insensitively
+	// (Postgres: the unique index workers_name_key).
 	CreateWorker(ctx context.Context, w Worker) error
 
 	// GetWorker returns the worker, including a removed one (RemovedAt set,
@@ -27,8 +29,15 @@ type Repository interface {
 	ListWorkers(ctx context.Context, f ListFilter) ([]Worker, error)
 
 	// RenameWorker sets the name of a worker that is not removed and returns
-	// it. ErrNotFound if missing or removed.
+	// it. ErrNotFound if missing or removed; ErrAlreadyExists if another
+	// worker that is not removed has the name, case-insensitively.
 	RenameWorker(ctx context.Context, id domain.WorkerID, name string) (Worker, error)
+
+	// SetWorkerLabels replaces the labels of a worker that is not removed
+	// and returns it. labels are normalized by the caller
+	// (domain.NormalizeLabels) and stored as given. ErrNotFound if missing
+	// or removed.
+	SetWorkerLabels(ctx context.Context, id domain.WorkerID, labels []string) (Worker, error)
 
 	// RemoveWorker marks a worker removed: RemovedAt = at, SecretEnc =
 	// nil. ErrNotFound if missing or already removed. Returns the removed
@@ -67,6 +76,8 @@ type ListFilter struct {
 	Mode domain.WorkerMode
 	// IncludeRemoved also returns removed workers.
 	IncludeRemoved bool
+	// Label keeps only workers with this label; empty means any.
+	Label string
 }
 
 // NewEpoch is the link state a worker enters when its epoch changes.

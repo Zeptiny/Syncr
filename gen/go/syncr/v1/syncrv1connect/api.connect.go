@@ -60,6 +60,9 @@ const (
 	// WorkerAdminServiceRemoveWorkerProcedure is the fully-qualified name of the WorkerAdminService's
 	// RemoveWorker RPC.
 	WorkerAdminServiceRemoveWorkerProcedure = "/syncr.v1.WorkerAdminService/RemoveWorker"
+	// WorkerAdminServiceSetWorkerLabelsProcedure is the fully-qualified name of the
+	// WorkerAdminService's SetWorkerLabels RPC.
+	WorkerAdminServiceSetWorkerLabelsProcedure = "/syncr.v1.WorkerAdminService/SetWorkerLabels"
 	// JobServiceRunJobProcedure is the fully-qualified name of the JobService's RunJob RPC.
 	JobServiceRunJobProcedure = "/syncr.v1.JobService/RunJob"
 	// JobServiceGetJobProcedure is the fully-qualified name of the JobService's GetJob RPC.
@@ -175,6 +178,12 @@ type WorkerAdminServiceClient interface {
 	// queued jobs fail and its dispatched or running jobs become interrupted
 	// (error code WORKER_REMOVED). Job history is kept.
 	RemoveWorker(context.Context, *connect.Request[v1.RemoveWorkerRequest]) (*connect.Response[v1.RemoveWorkerResponse], error)
+	// SetWorkerLabels replaces a worker's labels, which schedules target by
+	// label (ScheduleTarget.worker_label). Labels are lower-cased,
+	// deduplicated and sorted; each matches ^[a-z0-9][a-z0-9_.-]{0,31}$ and a
+	// worker has at most 16. Labels are managed by admins, never reported by
+	// workers, so a worker cannot attract other users' jobs.
+	SetWorkerLabels(context.Context, *connect.Request[v1.SetWorkerLabelsRequest]) (*connect.Response[v1.SetWorkerLabelsResponse], error)
 }
 
 // NewWorkerAdminServiceClient constructs a client for the syncr.v1.WorkerAdminService service. By
@@ -235,6 +244,13 @@ func NewWorkerAdminServiceClient(httpClient connect.HTTPClient, baseURL string, 
 			connect.WithIdempotency(connect.IdempotencyIdempotent),
 			connect.WithClientOptions(opts...),
 		),
+		setWorkerLabels: connect.NewClient[v1.SetWorkerLabelsRequest, v1.SetWorkerLabelsResponse](
+			httpClient,
+			baseURL+WorkerAdminServiceSetWorkerLabelsProcedure,
+			connect.WithSchema(workerAdminServiceMethods.ByName("SetWorkerLabels")),
+			connect.WithIdempotency(connect.IdempotencyIdempotent),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -247,6 +263,7 @@ type workerAdminServiceClient struct {
 	getWorker                 *connect.Client[v1.GetWorkerRequest, v1.GetWorkerResponse]
 	renameWorker              *connect.Client[v1.RenameWorkerRequest, v1.RenameWorkerResponse]
 	removeWorker              *connect.Client[v1.RemoveWorkerRequest, v1.RemoveWorkerResponse]
+	setWorkerLabels           *connect.Client[v1.SetWorkerLabelsRequest, v1.SetWorkerLabelsResponse]
 }
 
 // CreateEnrollmentToken calls syncr.v1.WorkerAdminService.CreateEnrollmentToken.
@@ -284,6 +301,11 @@ func (c *workerAdminServiceClient) RemoveWorker(ctx context.Context, req *connec
 	return c.removeWorker.CallUnary(ctx, req)
 }
 
+// SetWorkerLabels calls syncr.v1.WorkerAdminService.SetWorkerLabels.
+func (c *workerAdminServiceClient) SetWorkerLabels(ctx context.Context, req *connect.Request[v1.SetWorkerLabelsRequest]) (*connect.Response[v1.SetWorkerLabelsResponse], error) {
+	return c.setWorkerLabels.CallUnary(ctx, req)
+}
+
 // WorkerAdminServiceHandler is an implementation of the syncr.v1.WorkerAdminService service.
 type WorkerAdminServiceHandler interface {
 	// CreateEnrollmentToken creates a short-lived, single-use token for
@@ -308,6 +330,12 @@ type WorkerAdminServiceHandler interface {
 	// queued jobs fail and its dispatched or running jobs become interrupted
 	// (error code WORKER_REMOVED). Job history is kept.
 	RemoveWorker(context.Context, *connect.Request[v1.RemoveWorkerRequest]) (*connect.Response[v1.RemoveWorkerResponse], error)
+	// SetWorkerLabels replaces a worker's labels, which schedules target by
+	// label (ScheduleTarget.worker_label). Labels are lower-cased,
+	// deduplicated and sorted; each matches ^[a-z0-9][a-z0-9_.-]{0,31}$ and a
+	// worker has at most 16. Labels are managed by admins, never reported by
+	// workers, so a worker cannot attract other users' jobs.
+	SetWorkerLabels(context.Context, *connect.Request[v1.SetWorkerLabelsRequest]) (*connect.Response[v1.SetWorkerLabelsResponse], error)
 }
 
 // NewWorkerAdminServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -364,6 +392,13 @@ func NewWorkerAdminServiceHandler(svc WorkerAdminServiceHandler, opts ...connect
 		connect.WithIdempotency(connect.IdempotencyIdempotent),
 		connect.WithHandlerOptions(opts...),
 	)
+	workerAdminServiceSetWorkerLabelsHandler := connect.NewUnaryHandler(
+		WorkerAdminServiceSetWorkerLabelsProcedure,
+		svc.SetWorkerLabels,
+		connect.WithSchema(workerAdminServiceMethods.ByName("SetWorkerLabels")),
+		connect.WithIdempotency(connect.IdempotencyIdempotent),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/syncr.v1.WorkerAdminService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkerAdminServiceCreateEnrollmentTokenProcedure:
@@ -380,6 +415,8 @@ func NewWorkerAdminServiceHandler(svc WorkerAdminServiceHandler, opts ...connect
 			workerAdminServiceRenameWorkerHandler.ServeHTTP(w, r)
 		case WorkerAdminServiceRemoveWorkerProcedure:
 			workerAdminServiceRemoveWorkerHandler.ServeHTTP(w, r)
+		case WorkerAdminServiceSetWorkerLabelsProcedure:
+			workerAdminServiceSetWorkerLabelsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -415,6 +452,10 @@ func (UnimplementedWorkerAdminServiceHandler) RenameWorker(context.Context, *con
 
 func (UnimplementedWorkerAdminServiceHandler) RemoveWorker(context.Context, *connect.Request[v1.RemoveWorkerRequest]) (*connect.Response[v1.RemoveWorkerResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.RemoveWorker is not implemented"))
+}
+
+func (UnimplementedWorkerAdminServiceHandler) SetWorkerLabels(context.Context, *connect.Request[v1.SetWorkerLabelsRequest]) (*connect.Response[v1.SetWorkerLabelsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.SetWorkerLabels is not implemented"))
 }
 
 // JobServiceClient is a client for the syncr.v1.JobService service.

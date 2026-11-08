@@ -2,6 +2,8 @@ package domain
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 )
@@ -41,5 +43,46 @@ func TestDeriveWorkerStatus(t *testing.T) {
 		if got := DeriveWorkerStatus(tt.lastSeen, now, threshold); got != tt.want {
 			t.Errorf("%s: DeriveWorkerStatus = %q, want %q", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestValidLabel(t *testing.T) {
+	t.Parallel()
+	for _, ok := range []string{"nas", "a", "0", "linux-x86_64", "eu.west.1", "a_b", "abcdefghijklmnopqrstuvwxyz012345"} {
+		if !ValidLabel(ok) {
+			t.Errorf("ValidLabel(%q) = false", ok)
+		}
+	}
+	for _, bad := range []string{"", "NAS", "-a", ".a", "_a", "a b", "a/b", "é", "abcdefghijklmnopqrstuvwxyz0123456", "a\n"} {
+		if ValidLabel(bad) {
+			t.Errorf("ValidLabel(%q) = true", bad)
+		}
+	}
+}
+
+func TestNormalizeLabels(t *testing.T) {
+	t.Parallel()
+	got, err := NormalizeLabels([]string{"Linux", "nas", "NAS", "desktop"})
+	if err != nil || !slices.Equal(got, []string{"desktop", "linux", "nas"}) {
+		t.Errorf("NormalizeLabels = (%v, %v)", got, err)
+	}
+	if got, err := NormalizeLabels(nil); got != nil || err != nil {
+		t.Errorf("NormalizeLabels(nil) = (%v, %v)", got, err)
+	}
+	_, err = NormalizeLabels([]string{"ok", "not ok", "-x"})
+	var verr *ValidationError
+	if !errors.As(err, &verr) || len(verr.Fields) != 2 || verr.Fields[0].Field != "labels[1]" || verr.Fields[1].Field != "labels[2]" {
+		t.Errorf("invalid labels: %v", err)
+	}
+	many := make([]string, 0, MaxLabels+1)
+	for i := range MaxLabels + 1 {
+		many = append(many, fmt.Sprintf("l%d", i))
+	}
+	if _, err := NormalizeLabels(many); !errors.As(err, &verr) || verr.Fields[0].Field != "labels" {
+		t.Errorf("too many labels: %v", err)
+	}
+	// Duplicates do not count against the limit.
+	if _, err := NormalizeLabels(append(many[:MaxLabels:MaxLabels], "L0")); err != nil {
+		t.Errorf("duplicate at the limit: %v", err)
 	}
 }
