@@ -24,6 +24,44 @@ const (
 	cacheRevalidate = "no-cache"
 )
 
+// uiContentType returns the Content-Type of a UI file from a fixed table
+// of the extensions the built UI ships. The handler sets it itself instead
+// of letting net/http consult mime.TypeByExtension, which reads the OS
+// database (the registry on Windows) and can return a different or wrong
+// type there; under nosniff a wrong type breaks module scripts and
+// stylesheets. Unknown extensions are application/octet-stream, which a
+// browser never runs or renders under nosniff.
+func uiContentType(name string) string {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".html":
+		return "text/html; charset=utf-8"
+	case ".js", ".mjs":
+		return "text/javascript; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".json", ".map":
+		return "application/json"
+	case ".webmanifest":
+		return "application/manifest+json"
+	case ".txt":
+		return "text/plain; charset=utf-8"
+	case ".svg":
+		return "image/svg+xml"
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	case ".ico":
+		return "image/vnd.microsoft.icon"
+	case ".woff":
+		return "font/woff"
+	case ".woff2":
+		return "font/woff2"
+	default:
+		return "application/octet-stream"
+	}
+}
+
 // spaHandler serves the built web UI. See newSPAHandler.
 type spaHandler struct {
 	files fs.FS
@@ -65,6 +103,8 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			hdr.Set("Cache-Control", cacheRevalidate)
 		}
+		// Set before serving, so ServeFileFS neither sniffs nor overrides it.
+		hdr.Set("Content-Type", uiContentType(name))
 		http.ServeFileFS(w, r, h.files, name) //nolint:gosec // G703: name is a cleaned fs.ValidPath inside an fs.FS
 		return
 	}
@@ -100,7 +140,7 @@ func (h *spaHandler) serveIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", cacheRevalidate)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Type", uiContentType("index.html"))
 	// ServeContent (not ServeFileFS) because the request path is a client
 	// route, and ServeFileFS would redirect a path ending in /index.html.
 	http.ServeContent(w, r, "index.html", st.ModTime(), rs)

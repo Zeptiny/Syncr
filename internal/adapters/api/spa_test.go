@@ -20,11 +20,20 @@ func testUI() fstest.MapFS {
 		"theme-init.js":           {Data: []byte("void 0")},
 		"assets/index-abc123.js":  {Data: []byte("console.log(1)")},
 		"assets/index-abc123.css": {Data: []byte("body{}")},
+		"assets/plex-sans.woff2":  {Data: []byte("wOF2")},
+		"assets/plex-mono.woff":   {Data: []byte("wOFF")},
+		"assets/data.bin":         {Data: []byte("<script>alert(1)</script>")},
+		"assets/upper-ABC.JS":     {Data: []byte("void 0")},
+		"robots.txt":              {Data: []byte("User-agent: *")},
 	}
 }
 
 func TestSPA(t *testing.T) {
 	t.Parallel()
+	const (
+		html = "text/html; charset=utf-8"
+		js   = "text/javascript; charset=utf-8"
+	)
 	srv := httptest.NewServer(NewHandler(Deps{Logger: logging.Discard(), UI: testUI()}))
 	t.Cleanup(srv.Close)
 
@@ -33,24 +42,30 @@ func TestSPA(t *testing.T) {
 		wantStatus         int
 		wantBody           string // substring; "" skips
 		wantCache          string // "" means the header must be absent
-		wantType           string // prefix; "" skips
+		wantType           string // exact; "" skips
 		wantCSP            bool
 	}{
-		{"root", "GET", "/", 200, testIndex, cacheRevalidate, "text/html", true},
-		{"index file", "GET", "/index.html", 200, testIndex, cacheRevalidate, "text/html", true},
-		{"client route", "GET", "/jobs/0b9c8f1e-4a7d-4c55", 200, testIndex, cacheRevalidate, "text/html", true},
-		{"client route with query", "GET", "/login?redirect=%2Fjobs", 200, testIndex, cacheRevalidate, "text/html", true},
-		{"directory is a route", "GET", "/assets", 200, testIndex, cacheRevalidate, "text/html", true},
-		{"traversal stays inside", "GET", "/../../etc/passwd", 200, testIndex, cacheRevalidate, "text/html", true},
-		{"head", "HEAD", "/remotes", 200, "", cacheRevalidate, "text/html", true},
-		{"hashed asset", "GET", "/assets/index-abc123.js", 200, "console.log(1)", cacheImmutable, "text/javascript", true},
-		{"hashed stylesheet", "GET", "/assets/index-abc123.css", 200, "body{}", cacheImmutable, "text/css", true},
+		{"root", "GET", "/", 200, testIndex, cacheRevalidate, html, true},
+		{"index file", "GET", "/index.html", 200, testIndex, cacheRevalidate, html, true},
+		{"client route", "GET", "/jobs/0b9c8f1e-4a7d-4c55", 200, testIndex, cacheRevalidate, html, true},
+		{"client route with query", "GET", "/login?redirect=%2Fjobs", 200, testIndex, cacheRevalidate, html, true},
+		{"directory is a route", "GET", "/assets", 200, testIndex, cacheRevalidate, html, true},
+		{"traversal stays inside", "GET", "/../../etc/passwd", 200, testIndex, cacheRevalidate, html, true},
+		{"head", "HEAD", "/remotes", 200, "", cacheRevalidate, html, true},
+		{"hashed asset", "GET", "/assets/index-abc123.js", 200, "console.log(1)", cacheImmutable, js, true},
+		{"hashed stylesheet", "GET", "/assets/index-abc123.css", 200, "body{}", cacheImmutable, "text/css; charset=utf-8", true},
+		{"font woff2", "GET", "/assets/plex-sans.woff2", 200, "wOF2", cacheImmutable, "font/woff2", true},
+		{"font woff", "GET", "/assets/plex-mono.woff", 200, "wOFF", cacheImmutable, "font/woff", true},
+		{"extension case", "GET", "/assets/upper-ABC.JS", 200, "void 0", cacheImmutable, js, true},
+		{"unknown extension", "GET", "/assets/data.bin", 200, "<script>", cacheImmutable, "application/octet-stream", true},
 		{"missing asset", "GET", "/assets/index-old999.js", 404, "", "no-store", "", true},
 		{"unhashed file", "GET", "/favicon.svg", 200, "<svg/>", cacheRevalidate, "image/svg+xml", true},
+		{"unhashed script", "GET", "/theme-init.js", 200, "void 0", cacheRevalidate, js, true},
+		{"unhashed text", "GET", "/robots.txt", 200, "User-agent", cacheRevalidate, "text/plain; charset=utf-8", true},
 		{"post", "POST", "/jobs", 405, "", "", "", false},
 		{"unmounted service", "POST", "/syncr.v1.UserService/ListUsers", 404, "", "", "", false},
 		{"unknown procedure path", "GET", "/syncr.v1.Nope/Get", 404, "", "", "", false},
-		{"health", "GET", "/healthz", 200, "ok", "no-store", "text/plain", false},
+		{"health", "GET", "/healthz", 200, "ok", "no-store", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -78,8 +93,8 @@ func TestSPA(t *testing.T) {
 			if got := resp.Header.Get("Cache-Control"); got != tt.wantCache {
 				t.Errorf("Cache-Control = %q, want %q", got, tt.wantCache)
 			}
-			if tt.wantType != "" && !strings.HasPrefix(resp.Header.Get("Content-Type"), tt.wantType) {
-				t.Errorf("Content-Type = %q, want %s…", resp.Header.Get("Content-Type"), tt.wantType)
+			if tt.wantType != "" && resp.Header.Get("Content-Type") != tt.wantType {
+				t.Errorf("Content-Type = %q, want %q", resp.Header.Get("Content-Type"), tt.wantType)
 			}
 			if got := resp.Header.Get("Content-Security-Policy"); (got == uiContentSecurityPolicy) != tt.wantCSP {
 				t.Errorf("Content-Security-Policy = %q, want set: %v", got, tt.wantCSP)
@@ -130,5 +145,35 @@ func TestNoUIMountsNothing(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 without Deps.UI", resp.StatusCode)
+	}
+}
+
+// TestUIContentType pins the whole table, so the served types never depend
+// on the OS MIME database.
+func TestUIContentType(t *testing.T) {
+	t.Parallel()
+	for name, want := range map[string]string{
+		"index.html":              "text/html; charset=utf-8",
+		"assets/index-abc.js":     "text/javascript; charset=utf-8",
+		"assets/worker.mjs":       "text/javascript; charset=utf-8",
+		"assets/index-abc.css":    "text/css; charset=utf-8",
+		"assets/index-abc.js.map": "application/json",
+		"data.json":               "application/json",
+		"site.webmanifest":        "application/manifest+json",
+		"robots.txt":              "text/plain; charset=utf-8",
+		"favicon.svg":             "image/svg+xml",
+		"logo.png":                "image/png",
+		"logo.webp":               "image/webp",
+		"favicon.ico":             "image/vnd.microsoft.icon",
+		"assets/plex.woff":        "font/woff",
+		"assets/plex.woff2":       "font/woff2",
+		"assets/INDEX.CSS":        "text/css; charset=utf-8",
+		"assets/blob.wasm":        "application/octet-stream",
+		"LICENSE":                 "application/octet-stream",
+		"assets/archive.tar.gz":   "application/octet-stream",
+	} {
+		if got := uiContentType(name); got != want {
+			t.Errorf("uiContentType(%q) = %q, want %q", name, got, want)
+		}
 	}
 }
