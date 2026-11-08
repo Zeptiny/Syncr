@@ -222,9 +222,9 @@ const (
 	// SkipGrace is the deadline of a skip-policy run after its scheduled
 	// time.
 	SkipGrace = 5 * time.Minute
-	// ManualUntilNext is the deadline of a manual run of a run_late
-	// schedule with "until next" (MaxDelay 0) when the expression has no
-	// next occurrence.
+	// ManualUntilNext is how long a run of a run_late schedule with "until
+	// next" (MaxDelay 0) may wait when the expression has no next
+	// occurrence (a manual run's deadline counts from the request).
 	ManualUntilNext = 24 * time.Hour
 	// MaxCoalesce bounds the occurrences counted for one fire
 	// (cronexpr.Expr.Latest).

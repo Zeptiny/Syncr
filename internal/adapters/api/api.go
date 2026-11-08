@@ -197,6 +197,7 @@ func mountProtected(mux *http.ServeMux, deps Deps, logger *slog.Logger, opts []c
 			jobs:      deps.Jobs,
 			kinds:     deps.Kinds,
 			remotes:   deps.Remotes,
+			schedules: deps.Schedules,
 			errs:      errs,
 			log:       logger,
 			base:      base,

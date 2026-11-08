@@ -28,11 +28,19 @@
 //     earlier instant; so "*/15" runs only during the first pass of the
 //     repeated hour.
 //
-// Provisional: in the contracts step Next, NextN and Latest delegate to
-// robfig's own iteration, which does not implement rules 2 and 3 exactly
-// (it can skip gap times and run twice in the repeated hour). The schedules
-// track replaces them with a field-wise iteration over days, hours and
-// minutes that resolves each wall time as described above.
+// Each wall time therefore runs at most once, and occurrences strictly
+// increase. Rules 2 and 3 are one rule: a wall time runs at the first
+// instant at which the zone's clock shows it or a later time. The
+// computation (next.go) iterates the calendar field-wise (months, days,
+// hours, minutes, so a yearly expression costs a few hundred steps) and
+// resolves each matching wall time against the zone's periods
+// (time.Time.ZoneBounds), which is exact for any transition, including the
+// 30-minute shifts of Australia/Lord_Howe and the day Pacific/Apia skipped
+// in 2011. robfig's own iteration is not used: it steps instants by hours,
+// so it can skip gap times and run twice in a repeated hour.
+//
+// Next looks five years ahead: "0 0 29 2 *" has no occurrence then from
+// 2097-03-01 on (2100 is not a leap year), and the schedule stops.
 //
 // Allowed dependencies: the standard library, internal/domain (for its
 // validation error) and github.com/robfig/cron/v3.

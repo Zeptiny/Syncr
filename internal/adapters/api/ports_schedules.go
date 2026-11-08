@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/Zeptiny/Syncr/internal/app/contacts"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
@@ -36,4 +37,18 @@ type ScheduleService interface {
 	Upcoming(ctx context.Context, actor domain.Actor, limit int) ([]schedules.Upcoming, error)
 	RecentProblems(ctx context.Context, actor domain.Actor, limit int) ([]schedules.Run, error)
 	CountMissed(ctx context.Context, actor domain.Actor, from, until time.Time) (int64, error)
+}
+
+var _ ScheduleService = (*schedules.Service)(nil)
+
+// ScheduleNames looks up the display references of jobs' schedules, of any
+// owner (ScheduleService.Names).
+type ScheduleNames interface {
+	Names(ctx context.Context, ids []domain.ScheduleID) (map[domain.ScheduleID]schedules.Ref, error)
+}
+
+// ContactNames looks up the display references of schedules' contacts
+// (ContactService.Names).
+type ContactNames interface {
+	Names(ctx context.Context, ids []domain.ContactID) (map[domain.ContactID]contacts.Ref, error)
 }
