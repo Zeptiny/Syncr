@@ -73,7 +73,7 @@ func (s *Store) PendingJobOutcomes(_ context.Context, limit int) ([]notification
 	for _, id := range pending {
 		j := s.jobs[id]
 		o := notifications.JobOutcome{
-			JobID: j.ID, OwnerID: j.OwnerID, Kind: j.Kind, Status: j.Status,
+			JobID: j.ID, OwnerID: j.OwnerID, Kind: j.Kind, Definition: slices.Clone(j.Definition), Status: j.Status,
 			WorkerID: j.WorkerID, WorkerName: s.workers[j.WorkerID].Name,
 			ErrorCode: j.Error.Code, ErrorMessage: j.Error.Message,
 			Bytes: j.Stats.Bytes, Files: j.Stats.Files, Errors: j.Stats.Errors,

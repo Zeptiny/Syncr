@@ -12,6 +12,7 @@ import { JobStatus, WorkerStatus } from "@/gen/syncr/v1/api_pb";
 import { ScheduleRunStatus, ScheduleService } from "@/gen/syncr/v1/schedules_pb";
 import { signedIn } from "@/test/app-api";
 import * as fx from "@/test/fixtures";
+import { formatInZone } from "@/lib/timezones";
 import { mockTransport, renderApp } from "@/test/render";
 
 // uPlot needs a canvas, which jsdom lacks; the charts' data shaping is
@@ -110,6 +111,14 @@ describe("DashboardPage", () => {
     expect(screen.getByText("2 failed, 1 interrupted")).toBeInTheDocument();
     const next = screen.getByRole("link", { name: /Nightly photos → B2/ });
     expect(within(next).getByText("nas")).toBeInTheDocument();
+    // In the schedule's zone, as on the schedules pages.
+    const when = await within(next).findByText(
+      formatInZone(new Date(now + 3 * HOUR), "Europe/Berlin", false),
+    );
+    expect(when).toHaveAttribute(
+      "title",
+      expect.stringMatching(/^In Europe \/ Berlin\. Your time: /),
+    );
     expect(screen.getByText("of 4 online")).toBeInTheDocument();
     expect(screen.getAllByText("Missed").length).toBeGreaterThan(0);
     expect(screen.getByRole("img", { name: /47 succeeded, 2 failed/ })).toBeInTheDocument();

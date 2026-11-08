@@ -45,7 +45,7 @@ func (s *Store) PendingJobOutcomes(ctx context.Context, limit int) ([]notificati
 	var scheduleIDs, ownerIDs []pgtype.UUID
 	for _, row := range rows {
 		o := notifications.JobOutcome{
-			Kind: row.Kind, Status: domain.JobStatus(row.Status), WorkerName: row.WorkerName,
+			Kind: row.Kind, Definition: row.Definition, Status: domain.JobStatus(row.Status), WorkerName: row.WorkerName,
 			ErrorCode: row.ErrorCode, ErrorMessage: row.ErrorMessage,
 			Bytes: row.StatBytes, Files: row.StatFiles, Errors: row.StatErrors,
 			StartedAt: timeFrom(row.StartedAt), FinishedAt: timeFrom(row.FinishedAt),

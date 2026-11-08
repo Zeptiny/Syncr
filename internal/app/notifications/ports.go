@@ -16,8 +16,8 @@ import (
 type Repository interface {
 	// PendingJobOutcomes returns at most limit terminal jobs (succeeded,
 	// failed, cancelled, interrupted) that were not notified yet, by
-	// FinishedAt, then ID, joined with their worker's and schedule's names
-	// and their subscribers (JobOutcome). Cancelled jobs are returned too,
+	// FinishedAt, then ID, with their definition, joined with their
+	// worker's and schedule's names and their subscribers (JobOutcome). Cancelled jobs are returned too,
 	// so the planner marks them notified without deliveries.
 	PendingJobOutcomes(ctx context.Context, limit int) ([]JobOutcome, error)
 
@@ -83,6 +83,18 @@ type ContactResolver interface {
 	// configuration. ErrNotFound if the contact was deleted;
 	// ErrFailedPrecondition if its secrets cannot be decrypted.
 	ResolveChannel(ctx context.Context, id domain.ContactID) (channelType string, cfg descriptor.Values, err error)
+}
+
+// JobDescriber describes jobs for their notifications (wired with the job
+// kinds and the remotes service; app packages cannot use them directly).
+type JobDescriber interface {
+	// DescribeJob returns a one-line description of a job of owner from
+	// its kind and stored definition, as the web UI's jobs list shows it,
+	// e.g. "Copy Photos → B2 offsite". Remotes are named as the owner named
+	// them, deleted ones included; only the owner's remotes are named. It
+	// returns "" for a definition it cannot describe, and an error only
+	// when the names cannot be read now (the outcome is planned again).
+	DescribeJob(ctx context.Context, owner domain.UserID, kind string, definition []byte) (string, error)
 }
 
 // Clock tells the time.

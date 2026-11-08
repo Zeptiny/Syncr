@@ -136,6 +136,10 @@ type services struct {
 	notifications *notifications.Service
 	schedules     *schedules.Service
 	scheduler     *scheduler.Scheduler
+
+	// describer describes jobs for their notifications (the outbox's and
+	// the dev seed's).
+	describer jobDescriber
 }
 
 // loginLimits are the rate limits of credential checks: per client IP
@@ -183,6 +187,7 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	if err != nil {
 		return nil, fmt.Errorf("job kinds: %w", err)
 	}
+	describer := jobDescriber{kinds: kinds, remotes: rs}
 	channels, err := newChannels(cfg, log)
 	if err != nil {
 		return nil, err
@@ -199,7 +204,7 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 		return nil, fmt.Errorf("contacts service: %w", err)
 	}
 	ns, err := notifications.New(notifications.Deps{
-		Repo: st, Channels: channels, Contacts: cs, Clock: clk, IDs: ids, PublicURL: cfg.HTTP.PublicURL,
+		Repo: st, Channels: channels, Contacts: cs, Jobs: describer, Clock: clk, IDs: ids, PublicURL: cfg.HTTP.PublicURL,
 		Logger: log.With("component", "notifications"),
 	}, notifications.Config{
 		MaxAttempts: cfg.Notify.MaxAttempts, Concurrency: cfg.Notify.Concurrency,
@@ -256,7 +261,7 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	}
 	wake := make(chan struct{}, 1)
 	return &services{
-		users: us, remotes: rs, backends: backends, kinds: kinds,
+		users: us, remotes: rs, backends: backends, kinds: kinds, describer: describer,
 		jobs: js, workers: ws, disp: disp, wake: wake,
 		adminWorkers: &wakingWorkers{Service: ws, wake: wake},
 		channels:     channels, contacts: cs, notifications: ns, schedules: ss, scheduler: sched,
@@ -334,6 +339,49 @@ func (s notifyingSchedules) EndRun(ctx context.Context, run schedules.Run, statu
 	return r, err
 }
 
+// remoteNames is the remotes service as jobDescriber uses it.
+type remoteNames interface {
+	Names(ctx context.Context, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Ref, error)
+}
+
+// jobDescriber is the notification outbox's notifications.JobDescriber: it
+// decodes a job's stored definition, names the remotes it refers to with
+// remotes.Names (deleted ones included, so a job whose remote was deleted
+// since still names it) and describes it with its kind
+// (jobkind.Registry.Describe), as the web UI's jobs list does. Only remotes
+// of the job's owner are named; any other (which a checked definition
+// cannot refer to) is an "Unknown remote".
+type jobDescriber struct {
+	kinds   *jobkind.Registry
+	remotes remoteNames
+}
+
+var _ notifications.JobDescriber = jobDescriber{}
+
+// DescribeJob implements notifications.JobDescriber. A definition that
+// cannot be decoded, or is not of kind, gets no description; a definition
+// the current rules reject is described without remote names.
+func (d jobDescriber) DescribeJob(ctx context.Context, owner domain.UserID, kind string, definition []byte) (string, error) {
+	def, err := jobkind.Unmarshal(definition)
+	if err != nil || jobkind.KindOf(def) != kind {
+		// Not an error to retry: the definition will not decode later.
+		return "", nil
+	}
+	names := map[domain.RemoteID]string{}
+	if _, refs, err := d.kinds.Check(def); err == nil && len(refs.RemoteIDs) > 0 {
+		rs, err := d.remotes.Names(ctx, refs.RemoteIDs)
+		if err != nil {
+			return "", fmt.Errorf("describe a %s job: %w", kind, err)
+		}
+		for id, r := range rs {
+			if r.OwnerID == owner {
+				names[id] = r.Name
+			}
+		}
+	}
+	return d.kinds.Describe(def, names), nil
+}
+
 // workerChecker adapts the workers service to schedules.WorkerChecker: its
 // Get fails with ErrNotFound for a missing or removed worker.
 type workerChecker struct{ ws *workers.Service }
@@ -409,7 +457,7 @@ func armSetup(ctx context.Context, cfg controllerconfig.Auth, us *users.Service,
 func seedDemo(ctx context.Context, st store, svc *services, log *slog.Logger) (*devseed.Seed, error) {
 	seed, err := devseed.Run(ctx, devseed.Deps{
 		Users: svc.users, Remotes: svc.remotes, Workers: svc.workers, Jobs: svc.jobs, Kinds: svc.kinds,
-		Contacts: svc.contacts, Channels: svc.channels,
+		Contacts: svc.contacts, Channels: svc.channels, Describer: svc.describer,
 		Store: st, Clock: clock.System{}, Logger: log.With("component", "devseed"),
 	})
 	if err != nil {

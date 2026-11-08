@@ -1,6 +1,7 @@
 Job failed: Nightly photos → B2
 
 Schedule: Nightly photos → B2
+Job: Copy Photos → B2 offsite
 Worker: nas-01
 Kind: rclone_transfer
 Status: failed

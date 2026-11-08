@@ -40,6 +40,10 @@ func (echoKind) Build(def *syncrv1.JobDefinition, remotes map[domain.RemoteID]jo
 	return spec, nil
 }
 
+func (echoKind) Describe(def *syncrv1.JobDefinition, _ map[domain.RemoteID]string) string {
+	return "echo " + def.GetRcloneTransfer().GetSource().GetPath()
+}
+
 func transfer(remoteID, path string) *syncrv1.JobDefinition {
 	return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransferDefinition{
 		Mode:        syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_SYNC,
@@ -79,12 +83,22 @@ func TestRegistry(t *testing.T) {
 		t.Errorf("Build = (%v, %v)", spec, err)
 	}
 
+	if got := r.Describe(transfer("", "/src"), nil); got != "echo /src" {
+		t.Errorf("Describe = %q, want the kind's description", got)
+	}
+	if got := r.Describe(nil, nil); got != "" {
+		t.Errorf("Describe(nil) = %q, want empty", got)
+	}
+
 	empty, err := jobkind.NewRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := empty.Check(transfer("", "/src")); !isValidation(err, "definition.operation") || !strings.Contains(err.Error(), "not supported") {
 		t.Errorf("Check on an empty registry = %v", err)
+	}
+	if got := empty.Describe(transfer("", "/src"), nil); got != "rclone_transfer" {
+		t.Errorf("Describe on an empty registry = %q, want the kind name", got)
 	}
 }
 

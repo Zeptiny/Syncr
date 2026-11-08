@@ -10,6 +10,7 @@ import type { Schedule, ScheduleRun } from "@/gen/syncr/v1/schedules_pb";
 import { formatDateTime, tsDate } from "@/lib/format";
 import { errorCodeLabel, runReasonLabel, workerStatusMeta } from "@/lib/status";
 import { sortWorkers } from "@/lib/workers";
+import { formatInZone, zoneLabel } from "@/lib/timezones";
 import { cn } from "@/lib/utils";
 import { jobTitle } from "@/features/jobs/model";
 
@@ -17,8 +18,41 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <p className="px-5 py-8 text-center text-[13px] text-muted-foreground">{children}</p>;
 }
 
-/** UpcomingRuns lists the next scheduled runs with their target worker's status. */
-export function UpcomingRuns({ runs }: { runs: UpcomingRun[] }) {
+const viewerTime = new Intl.DateTimeFormat("en-GB", {
+  weekday: "short",
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZoneName: "short",
+});
+
+/**
+ * runTime is when a run is due as the schedules pages show it: wall time in
+ * the schedule's zone, with the zone and the viewer's time on hover. A run
+ * of a schedule the viewer cannot list (another user's, for an admin
+ * viewing all users) is shown in the viewer's zone, named.
+ */
+function runTime(at: Date, schedule: Schedule | undefined): { text: string; title: string } {
+  if (!schedule?.timezone) return { text: viewerTime.format(at), title: formatDateTime(at) };
+  return {
+    text: formatInZone(at, schedule.timezone, false),
+    title: `In ${zoneLabel(schedule.timezone)}. Your time: ${formatDateTime(at)}`,
+  };
+}
+
+/**
+ * UpcomingRuns lists the next scheduled runs with their target worker's
+ * status. Times are in each schedule's zone, like the schedules pages
+ * (schedules is the viewer's schedules by ID).
+ */
+export function UpcomingRuns({
+  runs,
+  schedules,
+}: {
+  runs: UpcomingRun[];
+  schedules: Map<string, Schedule>;
+}) {
   if (!runs.length) {
     return (
       <Empty>
@@ -34,6 +68,7 @@ export function UpcomingRuns({ runs }: { runs: UpcomingRun[] }) {
     <ul className="divide-y">
       {runs.map((r) => {
         const at = tsDate(r.at);
+        const when = at ? runTime(at, schedules.get(r.scheduleId)) : undefined;
         const t = r.target?.target;
         const meta = workerStatusMeta(r.workerStatus);
         return (
@@ -69,14 +104,11 @@ export function UpcomingRuns({ runs }: { runs: UpcomingRun[] }) {
               </div>
               <div className="shrink-0 text-right">
                 <RelativeTime date={at} className="tabular block text-[13px] font-medium" />
-                <span className="tabular text-xs text-muted-foreground">
-                  {at
-                    ? new Intl.DateTimeFormat("en-GB", {
-                        weekday: "short",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      }).format(at)
-                    : ""}
+                <span
+                  className="tabular text-xs whitespace-nowrap text-muted-foreground"
+                  title={when?.title}
+                >
+                  {when?.text}
                 </span>
               </div>
             </Link>

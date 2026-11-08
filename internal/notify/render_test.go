@@ -42,6 +42,7 @@ func renderCases() map[string]notify.Message {
 
 	evil := notifytest.SampleMessage()
 	evil.Schedule.Name = hostile
+	evil.Job.Description = "Copy " + hostile + " → B2"
 	evil.Job.WorkerName = "nas\n01\tbox"
 	evil.Job.ErrorMessage = "line one\nline two\r\n" + strings.Repeat("é", 1200)
 	evil.URL = `https://syncr.example/jobs/1"><img src=x onerror=alert(1)>`
@@ -126,6 +127,28 @@ func TestEscapes(t *testing.T) {
 	for n, want := range map[int64]string{0: "0 bytes", 1: "1 byte", 1023: "1023 bytes", 1024: "1.0 KiB", 1536: "1.5 KiB", 5 << 30: "5.0 GiB", 1 << 62: "4.0 EiB"} {
 		if got := notify.FormatBytes(n); got != want {
 			t.Errorf("FormatBytes(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestTitleNamesTheJob(t *testing.T) {
+	t.Parallel()
+	job := func(kind, description string) *notify.JobInfo {
+		return &notify.JobInfo{Kind: kind, Description: description, Status: domain.JobFailed}
+	}
+	tests := []struct {
+		name string
+		m    notify.Message
+		want string
+	}{
+		{"scheduled", notify.Message{Event: domain.EventFailed, Schedule: &notify.ScheduleInfo{Name: "Nightly"},
+			Job: job("rclone_transfer", "Copy Photos → B2")}, "Job failed: Nightly"},
+		{"manual", notify.Message{Event: domain.EventFailed, Job: job("rclone_transfer", "Copy Photos → B2")}, "Job failed: Copy Photos → B2"},
+		{"manual without a description", notify.Message{Event: domain.EventFailed, Job: job("rclone_transfer", "")}, "Job failed: rclone_transfer"},
+	}
+	for _, tt := range tests {
+		if got := notify.Title(tt.m); got != tt.want {
+			t.Errorf("%s: Title = %q, want %q", tt.name, got, tt.want)
 		}
 	}
 }

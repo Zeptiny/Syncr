@@ -84,7 +84,9 @@ type Resolved struct {
 // Ref names a remote for display, e.g. in a job's details. It may be
 // another user's or a deleted remote.
 type Ref struct {
-	ID      domain.RemoteID
+	ID domain.RemoteID
+	// OwnerID is the remote's owner.
+	OwnerID domain.UserID
 	Name    string
 	Type    string
 	Deleted bool

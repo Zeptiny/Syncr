@@ -1,5 +1,6 @@
-Job succeeded: rclone_transfer
+Job succeeded: Copy Photos → B2 offsite
 
+Job: Copy Photos → B2 offsite
 Worker: nas-01
 Kind: rclone_transfer
 Status: succeeded

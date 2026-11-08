@@ -133,14 +133,17 @@ unknown fields should be ignored.
 | `id` | string | The delivery ID (equals `webhook-id`). |
 | `event` | string | `succeeded`, `failed`, `interrupted`, `missed` or `test`. |
 | `occurred_at` | RFC 3339 time | When it happened (the job finished, the run was missed). |
-| `title` | string | One-line summary, at most 200 characters. |
+| `title` | string | One-line summary, at most 200 characters: the event and the schedule's name, or for a job without a schedule its description (e.g. `Job failed: Copy Photos → B2 offsite`). |
 | `url` | string | Link to the job or schedule in the web UI; absent without `http.public_url`. |
 | `schedule` | object | For scheduled jobs and runs: `id`, `name`. |
 | `job` | object | For job outcomes (below). |
 | `run` | object | For missed or failed runs (below). |
 | `test` | boolean | `true` on test notifications; absent otherwise. |
 
-`job`: `id`, `kind` (e.g. `rclone_transfer`), `status`, `worker_id`,
+`job`: `id`, `kind` (e.g. `rclone_transfer`), `description` (what the job
+does, as the jobs list shows it, e.g. `Copy Photos → B2 offsite`: the mode,
+then the source and destination by remote name or path on the worker;
+absent if the job could not be described), `status`, `worker_id`,
 `worker_name`, `error_code` and `error_message` (absent on success), `bytes`,
 `files`, `errors`, `started_at` and `finished_at` (absent if the job never
 started or finished), `duration_seconds`.
@@ -168,6 +171,7 @@ A failed scheduled job:
   "job": {
     "id": "0195f0a4-3b7c-7d1e-9f00-000000000001",
     "kind": "rclone_transfer",
+    "description": "Copy Photos → B2 offsite",
     "status": "failed",
     "worker_id": "0195f0a4-3b7c-7d1e-9f00-000000000003",
     "worker_name": "nas-01",

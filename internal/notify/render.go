@@ -25,14 +25,17 @@ const (
 const TestText = "This is a test notification from Syncr. The contact is set up correctly."
 
 // Title returns the one-line summary of m, e.g. "Job failed: Nightly
-// photos" or "Scheduled run missed: Office docs", at most MaxTitleRunes
-// runes. Names come from users and are not escaped: renderers escape for
-// their format.
+// photos", "Job failed: Copy Photos → B2" (a job without a schedule, by its
+// description) or "Scheduled run missed: Office docs", at most
+// MaxTitleRunes runes. Names come from users and are not escaped:
+// renderers escape for their format.
 func Title(m Message) string {
 	subject := ""
 	switch {
 	case m.Schedule != nil && m.Schedule.Name != "":
 		subject = m.Schedule.Name
+	case m.Job != nil && m.Job.Description != "":
+		subject = m.Job.Description
 	case m.Job != nil:
 		subject = m.Job.Kind
 	}
@@ -64,8 +67,9 @@ type Fact struct {
 }
 
 // Facts returns the details of m in display order: the schedule, the
-// job's worker, kind, status, error, transfer counters, duration and end,
-// or the run's occurrence, reason and merged occurrences.
+// job's description, worker, kind, status, error, transfer counters,
+// duration and end, or the run's occurrence, reason and merged
+// occurrences.
 func Facts(m Message) []Fact {
 	var out []Fact
 	add := func(label, value string) {
@@ -80,6 +84,7 @@ func Facts(m Message) []Fact {
 		add("Schedule", m.Schedule.Name)
 	}
 	if j := m.Job; j != nil {
+		add("Job", j.Description)
 		add("Worker", j.WorkerName)
 		add("Kind", j.Kind)
 		add("Status", string(j.Status))

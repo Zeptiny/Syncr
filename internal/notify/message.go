@@ -48,11 +48,15 @@ type ScheduleInfo struct {
 
 // JobInfo describes the job a notification reports.
 type JobInfo struct {
-	ID         string           `json:"id"`
-	Kind       string           `json:"kind"`
-	Status     domain.JobStatus `json:"status"`
-	WorkerID   string           `json:"worker_id"`
-	WorkerName string           `json:"worker_name"`
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+	// Description says what the job does, as the web UI's jobs list shows
+	// it, e.g. "Copy Photos → B2 offsite" (remote names, or a path on the
+	// worker); empty if it could not be described.
+	Description string           `json:"description,omitempty"`
+	Status      domain.JobStatus `json:"status"`
+	WorkerID    string           `json:"worker_id"`
+	WorkerName  string           `json:"worker_name"`
 	// ErrorCode and ErrorMessage say why a job failed or was interrupted
 	// (see jobs.JobError).
 	ErrorCode    string `json:"error_code,omitempty"`

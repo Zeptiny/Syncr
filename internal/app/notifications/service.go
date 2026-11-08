@@ -53,8 +53,8 @@ const (
 	reasonOwnerDisabled = "owner_disabled"
 )
 
-// Deps are the service's collaborators. All are required except Random,
-// PublicURL and Logger.
+// Deps are the service's collaborators. All are required except Jobs,
+// Random, PublicURL and Logger.
 type Deps struct {
 	Repo Repository
 	// Channels are the channel types deliveries are sent with.
@@ -62,8 +62,12 @@ type Deps struct {
 	// Contacts resolves a delivery's contact at send time
 	// (*contacts.Service).
 	Contacts ContactResolver
-	Clock    Clock
-	IDs      IDGenerator
+	// Jobs describes the reported jobs (notify.JobInfo.Description, the
+	// title of a job without a schedule); nil means jobs are not described
+	// (titles name their kind).
+	Jobs  JobDescriber
+	Clock Clock
+	IDs   IDGenerator
 	// Random is the source of the retry jitter; nil means crypto/rand.
 	Random io.Reader
 	// PublicURL is the web UI's base URL (http.public_url), for the links
@@ -80,6 +84,7 @@ type Service struct {
 	repo      Repository
 	channels  *notify.Registry
 	contacts  ContactResolver
+	jobs      JobDescriber
 	clock     Clock
 	ids       IDGenerator
 	publicURL string
@@ -123,7 +128,7 @@ func New(d Deps, cfg Config) (*Service, error) {
 		random = crand.Reader
 	}
 	return &Service{
-		repo: d.Repo, channels: d.Channels, contacts: d.Contacts, clock: d.Clock, ids: d.IDs,
+		repo: d.Repo, channels: d.Channels, contacts: d.Contacts, jobs: d.Jobs, clock: d.Clock, ids: d.IDs,
 		publicURL: strings.TrimRight(d.PublicURL, "/"), log: log, cfg: cfg, random: random,
 		wake: make(chan struct{}, 1),
 	}, nil
@@ -200,7 +205,7 @@ func (s *Service) planJobs(ctx context.Context) (int, error) {
 		var errs []error
 		for _, o := range os {
 			now := s.clock.Now()
-			ds, err := s.jobDeliveries(o, now)
+			ds, err := s.jobDeliveries(ctx, o, now)
 			if err == nil {
 				var n int
 				if n, err = s.repo.CommitJobOutcome(ctx, o.JobID, ds, now); err == nil {
@@ -246,8 +251,9 @@ func (s *Service) planRuns(ctx context.Context) (int, error) {
 }
 
 // jobDeliveries returns the deliveries of a finished job: one per
-// subscriber of its event. Cancelled jobs have none.
-func (s *Service) jobDeliveries(o JobOutcome, now time.Time) ([]Delivery, error) {
+// subscriber of its event. Cancelled jobs have none. The job is described
+// only when it has deliveries.
+func (s *Service) jobDeliveries(ctx context.Context, o JobOutcome, now time.Time) ([]Delivery, error) {
 	e, ok := domain.EventForJobStatus(o.Status)
 	if !ok {
 		return nil, nil
@@ -263,6 +269,13 @@ func (s *Service) jobDeliveries(o JobOutcome, now time.Time) ([]Delivery, error)
 			ErrorCode: o.ErrorCode, ErrorMessage: truncateRunes(o.ErrorMessage, MaxErrorMessageRunes),
 			Bytes: o.Bytes, Files: o.Files, Errors: o.Errors, StartedAt: o.StartedAt, FinishedAt: o.FinishedAt,
 		},
+	}
+	if s.jobs != nil {
+		desc, err := s.jobs.DescribeJob(ctx, o.OwnerID, o.Kind, o.Definition)
+		if err != nil {
+			return nil, fmt.Errorf("describe the job: %w", err)
+		}
+		m.Job.Description = truncateRunes(desc, notify.MaxFactRunes)
 	}
 	if m.OccurredAt.IsZero() {
 		m.OccurredAt = now

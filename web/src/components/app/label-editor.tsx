@@ -2,7 +2,7 @@ import { Tag, X } from "lucide-react";
 import { useState } from "react";
 
 import { Input } from "@/components/ui/input";
-import { labelProblem, MAX_LABELS, normalizeLabels } from "@/lib/labels";
+import { addLabel, MAX_LABELS } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
 /** LabelChips shows worker labels as small monospace chips. */
@@ -50,6 +50,13 @@ export interface LabelEditorProps {
   /** suggestions are labels other workers use, offered as you type. */
   suggestions?: string[];
   disabled?: boolean;
+  /**
+   * text is the typed text not added as a label yet, and onTextChange is
+   * told when it changes. Pass both to control it, e.g. so a Save button
+   * can include it (see addLabel); otherwise the editor keeps it.
+   */
+  text?: string;
+  onTextChange?: (text: string) => void;
 }
 
 /**
@@ -64,22 +71,21 @@ export function LabelEditor({
   error,
   suggestions = [],
   disabled,
+  text,
+  onTextChange,
 }: LabelEditorProps) {
-  const [draft, setDraft] = useState("");
+  const [ownDraft, setOwnDraft] = useState("");
+  const draft = text ?? ownDraft;
+  const setDraft = onTextChange ?? setOwnDraft;
   const [problem, setProblem] = useState<string | undefined>();
   const add = (raw: string) => {
-    const label = raw.trim().toLowerCase();
-    if (!label) return true;
-    const bad = labelProblem(label);
-    if (bad) {
-      setProblem(`“${label}”: ${bad}`);
+    if (!raw.trim()) return true;
+    const next = addLabel(value, raw);
+    if (next.problem) {
+      setProblem(next.problem);
       return false;
     }
-    if (!value.includes(label) && value.length >= MAX_LABELS) {
-      setProblem(`A worker can have at most ${MAX_LABELS} labels.`);
-      return false;
-    }
-    onChange(normalizeLabels([...value, label]));
+    onChange(next.labels);
     setProblem(undefined);
     return true;
   };

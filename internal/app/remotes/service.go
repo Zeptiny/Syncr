@@ -384,7 +384,7 @@ func (s *Service) Names(ctx context.Context, ids []domain.RemoteID) (map[domain.
 		return nil, fmt.Errorf("remote names: %w", err)
 	}
 	for _, r := range rs {
-		out[r.ID] = Ref{ID: r.ID, Name: r.Name, Type: r.Type, Deleted: r.Deleted()}
+		out[r.ID] = Ref{ID: r.ID, OwnerID: r.OwnerID, Name: r.Name, Type: r.Type, Deleted: r.Deleted()}
 	}
 	return out, nil
 }

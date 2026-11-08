@@ -203,7 +203,11 @@ export function DashboardPage({ search }: { search: DashboardSearch }) {
             </Panel>
             <div className="flex flex-col gap-6">
               <Panel title="Up next" flush>
-                {!d ? <Skeleton className="m-5 h-40" /> : <UpcomingRuns runs={d.upcoming} />}
+                {!d ? (
+                  <Skeleton className="m-5 h-40" />
+                ) : (
+                  <UpcomingRuns runs={d.upcoming} schedules={scheduleMap} />
+                )}
               </Panel>
               <Panel title="Workers" flush>
                 {!d ? <Skeleton className="m-5 h-32" /> : <WorkerHealthPanel health={d.workers} />}

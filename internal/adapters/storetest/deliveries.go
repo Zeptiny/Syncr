@@ -103,7 +103,7 @@ func testDeliveryPlanJobOnce(t *testing.T, s Store) {
 		t.Fatalf("PendingJobOutcomes = (%+v, %v)", outcomes, err)
 	}
 	o := outcomes[0]
-	if o.JobID != j.ID || o.OwnerID != owner || o.Kind != j.Kind || o.Status != domain.JobFailed || o.WorkerID != w.ID ||
+	if o.JobID != j.ID || o.OwnerID != owner || o.Kind != j.Kind || !sameJSON(o.Definition, j.Definition) || o.Status != domain.JobFailed || o.WorkerID != w.ID ||
 		o.WorkerName != w.Name || !o.ScheduleID.IsZero() || o.ErrorCode != "path_not_allowed" || o.ErrorMessage == "" ||
 		o.Bytes != 100 || o.Files != 2 || o.Errors != 1 || !o.FinishedAt.Equal(t0().Add(time.Minute)) ||
 		len(o.Subscribers) != 1 || o.Subscribers[0].ContactID != c.ID || !slices.Equal(o.Subscribers[0].Events, c.JobEvents) {

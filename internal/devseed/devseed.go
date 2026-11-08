@@ -93,8 +93,12 @@ type Deps struct {
 	// Channels are the controller's notification channels (the history's
 	// outbox sends through scripted copies of them, which never send).
 	Channels *notify.Registry
-	Store    Store
-	Clock    Clock
+	// Describer describes the jobs of the history's notifications (the
+	// controller's notifications.JobDescriber); nil leaves them
+	// undescribed.
+	Describer notifications.JobDescriber
+	Store     Store
+	Clock     Clock
 	// Logger defaults to discarding.
 	Logger *slog.Logger
 }

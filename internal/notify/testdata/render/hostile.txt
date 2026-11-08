@@ -1,6 +1,7 @@
 Job failed: <script>alert("x")</script> & **bold** @everyone <@&123> [link](https://evil.example)
 
 Schedule: <script>alert("x")</script> & **bold** @everyone <@&123> [link](https://evil.example)
+Job: Copy <script>alert("x")</script> & **bold** @everyone <@&123> [link](https://evil.example) → B2
 Worker: nas 01 box
 Kind: rclone_transfer
 Status: failed

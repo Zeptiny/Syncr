@@ -415,6 +415,81 @@ func TestPlanManualJob(t *testing.T) {
 	}
 }
 
+// describer is a JobDescriber that describes every job as desc (or
+// fails with err) and records its calls.
+type describer struct {
+	mu    sync.Mutex
+	desc  string
+	err   error
+	calls []string
+}
+
+func (d *describer) DescribeJob(_ context.Context, owner domain.UserID, kind string, definition []byte) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls = append(d.calls, owner.String()+" "+kind+" "+string(definition))
+	return d.desc, d.err
+}
+
+func (d *describer) set(desc string, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.desc, d.err = desc, err
+}
+
+func (d *describer) callList() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.calls)
+}
+
+func withDescriber(d notifications.JobDescriber) option {
+	return func(_ *env, deps *notifications.Deps, _ *notifications.Config) { deps.Jobs = d }
+}
+
+// TestPlanDescribesJobs: a job without a schedule is titled by its
+// description (not its kind), a scheduled one keeps its schedule's name;
+// both carry the description. A describer error leaves the outcome to the
+// next pass; jobs without deliveries are not described.
+func TestPlanDescribesJobs(t *testing.T) {
+	t.Parallel()
+	desc := &describer{desc: "Copy Photos → B2 offsite"}
+	e := newEnv(t, withDescriber(desc))
+	on := e.contact(e.alice, "on", true, domain.EventFailed)
+	sc := e.schedule(e.alice, "Nightly photos", link(on.ID, domain.EventFailed))
+
+	e.job(e.alice, domain.JobSucceeded, domain.ScheduleID{}) // nobody subscribed: not described
+	manual := e.job(e.alice, domain.JobFailed, domain.ScheduleID{})
+	if n := e.plan(); n != 1 {
+		t.Fatalf("Plan = %d, want 1", n)
+	}
+	m := payload(t, e.only())
+	if m.Title != "Job failed: Copy Photos → B2 offsite" || m.Job == nil || m.Job.Description != "Copy Photos → B2 offsite" ||
+		m.Job.Kind != "rclone_transfer" || m.Job.ID != manual.ID.String() {
+		t.Errorf("message = %+v (job %+v)", m, m.Job)
+	}
+	if facts := notify.Facts(m); len(facts) == 0 || facts[0] != (notify.Fact{Label: "Job", Value: "Copy Photos → B2 offsite"}) {
+		t.Errorf("facts = %+v, want the description first", facts)
+	}
+	if calls := desc.callList(); !slices.Equal(calls, []string{e.alice.UserID.String() + " rclone_transfer {}"}) {
+		t.Errorf("DescribeJob calls = %q", calls)
+	}
+
+	desc.set("", errors.New("store unavailable"))
+	scheduled := e.job(e.alice, domain.JobFailed, sc.ID)
+	if n, err := e.svc.Plan(context.Background()); n != 0 || err == nil || e.pendingJobs() != 1 {
+		t.Fatalf("Plan with a failing describer = (%d, %v), pending %d; want an error and the job left pending", n, err, e.pendingJobs())
+	}
+	desc.set("Sync /srv/docs → B2", nil)
+	if n := e.plan(); n != 1 || e.pendingJobs() != 0 {
+		t.Fatalf("Plan again = %d, pending %d", n, e.pendingJobs())
+	}
+	m = payload(t, e.deliveries()[0])
+	if m.Job == nil || m.Job.ID != scheduled.ID.String() || m.Title != "Job failed: Nightly photos" || m.Job.Description != "Sync /srv/docs → B2" {
+		t.Errorf("scheduled message = %+v (job %+v)", m, m.Job)
+	}
+}
+
 func TestPlanScheduledJob(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

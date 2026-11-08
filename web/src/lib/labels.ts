@@ -20,6 +20,22 @@ export function normalizeLabels(labels: string[]): string[] {
   return [...new Set(labels.map((l) => l.trim().toLowerCase()).filter(Boolean))].sort();
 }
 
+/**
+ * addLabel adds the typed text raw to labels as one label (trimmed and
+ * lower-cased), returning the normalized labels, or the labels unchanged
+ * and the problem when the text is not a valid label or one too many.
+ * Empty text adds nothing.
+ */
+export function addLabel(labels: string[], raw: string): { labels: string[]; problem?: string } {
+  const label = raw.trim().toLowerCase();
+  if (!label) return { labels };
+  const bad = labelProblem(label);
+  if (bad) return { labels, problem: `“${label}”: ${bad}` };
+  if (!labels.includes(label) && labels.length >= MAX_LABELS)
+    return { labels, problem: `A worker can have at most ${MAX_LABELS} labels.` };
+  return { labels: normalizeLabels([...labels, label]) };
+}
+
 /** labelledWorkers returns the workers that carry a label. */
 export function labelledWorkers(workers: Worker[], label: string): Worker[] {
   const l = label.trim().toLowerCase();

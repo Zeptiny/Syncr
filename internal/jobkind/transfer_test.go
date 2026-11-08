@@ -67,6 +67,31 @@ func fields(err error) []string {
 	return out
 }
 
+func TestTransferDescribe(t *testing.T) {
+	t.Parallel()
+	names := map[domain.RemoteID]string{rid(1): "Photos", rid(2): "B2 offsite"}
+	tests := []struct {
+		name string
+		def  *syncrv1.JobDefinition
+		want string
+	}{
+		{"remote to remote", def(loc(rid(1), "albums"), loc(rid(2), ""), withMode(syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_COPY)),
+			"Copy Photos → B2 offsite"},
+		{"local to remote", def(loc(domain.RemoteID{}, "/srv/data"), loc(rid(2), "data")), "Sync /srv/data → B2 offsite"},
+		{"remote to local", def(loc(rid(1), ""), loc(domain.RemoteID{}, `D:\Backup`), withMode(syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_MOVE)),
+			`Move Photos → D:\Backup`},
+		{"unnamed remote", def(loc(rid(3), "x"), loc(domain.RemoteID{}, "/dst")), "Sync Unknown remote → /dst"},
+		{"invalid remote ID", def(&syncrv1.JobLocation{RemoteId: "nope"}, loc(domain.RemoteID{}, "")), "Sync Unknown remote → Worker filesystem"},
+		{"no mode", def(loc(rid(1), ""), loc(rid(2), ""), withMode(syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_UNSPECIFIED)),
+			"Transfer Photos → B2 offsite"},
+	}
+	for _, tt := range tests {
+		if got := (jobkind.Transfer{}).Describe(tt.def, names); got != tt.want {
+			t.Errorf("%s: Describe = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestTransferCheckAccepts(t *testing.T) {
 	t.Parallel()
 	a, b := rid(1), rid(2)

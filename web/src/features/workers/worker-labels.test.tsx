@@ -63,6 +63,36 @@ describe("WorkerLabelsPanel", () => {
     );
   });
 
+  it("saves typed text in one click, without Enter", async () => {
+    const user = userEvent.setup();
+    const { transport, calls } = api();
+    renderWithProviders(<WorkerLabelsPanel worker={nas()} canEdit />, { transport });
+    await user.click(screen.getByRole("button", { name: "Edit labels" }));
+    const save = screen.getByRole("button", { name: "Save labels" });
+    await user.type(screen.getByRole("textbox"), "Media");
+    expect(save).toBeEnabled();
+    await user.click(save);
+    await waitFor(() =>
+      expect(calls).toEqual([{ workerId: fx.ids.nas, labels: ["linux", "media", "nas"] }]),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Save labels" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("does not save invalid typed text", async () => {
+    const user = userEvent.setup();
+    const { transport, calls } = api();
+    renderWithProviders(<WorkerLabelsPanel worker={nas()} canEdit />, { transport });
+    await user.click(screen.getByRole("button", { name: "Edit labels" }));
+    await user.click(screen.getByRole("button", { name: "Remove label linux" }));
+    await user.type(screen.getByRole("textbox"), "-bad");
+    await user.click(screen.getByRole("button", { name: "Save labels" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Start with a letter or digit");
+    expect(screen.getByRole("textbox")).toHaveValue("-bad");
+    expect(calls).toEqual([]);
+  });
+
   it("shows the server's error", async () => {
     const user = userEvent.setup();
     const { transport } = api(true);

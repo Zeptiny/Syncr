@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { WorkerAdminService, type Worker } from "@/gen/syncr/v1/api_pb";
 import { errorMessage, fieldViolations } from "@/lib/errors";
 import { invalidateService } from "@/lib/invalidate";
-import { normalizeLabels } from "@/lib/labels";
+import { addLabel, normalizeLabels } from "@/lib/labels";
 
 /**
  * WorkerLabelsPanel shows a worker's labels; administrators can edit them.
@@ -22,18 +22,28 @@ export function WorkerLabelsPanel({ worker, canEdit }: { worker: Worker; canEdit
   const all = useQuery(WorkerAdminService.method.listWorkers, {}, { enabled: canEdit });
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string[]>(worker.labels);
+  // text is typed but not added yet: Save adds it, so one click saves it.
+  const [text, setText] = useState("");
   const [error, setError] = useState<string | undefined>();
   const suggestions = [
     ...new Set(
       (all.data?.workers ?? []).filter((w) => w.id !== worker.id).flatMap((w) => w.labels),
     ),
   ].sort();
-  const changed = normalizeLabels(draft).join(",") !== normalizeLabels(worker.labels).join(",");
+  const pending = addLabel(draft, text);
+  const changed =
+    normalizeLabels(pending.labels).join(",") !== normalizeLabels(worker.labels).join(",");
 
   const submit = async () => {
+    if (pending.problem) {
+      setError(pending.problem);
+      return;
+    }
     setError(undefined);
+    setDraft(pending.labels);
+    setText("");
     try {
-      await save.mutateAsync({ workerId: worker.id, labels: normalizeLabels(draft) });
+      await save.mutateAsync({ workerId: worker.id, labels: normalizeLabels(pending.labels) });
       await invalidateService(queryClient, WorkerAdminService);
       toast.success(`Saved the labels of ${worker.name}`);
       setEditing(false);
@@ -54,6 +64,7 @@ export function WorkerLabelsPanel({ worker, canEdit }: { worker: Worker; canEdit
             size="sm"
             onClick={() => {
               setDraft(worker.labels);
+              setText("");
               setError(undefined);
               setEditing(true);
             }}
@@ -70,6 +81,11 @@ export function WorkerLabelsPanel({ worker, canEdit }: { worker: Worker; canEdit
             id="worker-labels"
             value={draft}
             onChange={setDraft}
+            text={text}
+            onTextChange={(t) => {
+              setText(t);
+              setError(undefined);
+            }}
             error={error}
             suggestions={suggestions}
             disabled={save.isPending}

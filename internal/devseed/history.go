@@ -102,7 +102,7 @@ func (s *Seed) seedHistory(ctx context.Context, now time.Time) error {
 		return err
 	}
 	if h.outbox, err = notifications.New(notifications.Deps{
-		Repo: s.d.Store, Channels: channels, Contacts: s.d.Contacts, Clock: clk, IDs: ids, Random: zeroReader{},
+		Repo: s.d.Store, Channels: channels, Contacts: s.d.Contacts, Jobs: s.d.Describer, Clock: clk, IDs: ids, Random: zeroReader{},
 	}, notifications.Config{Concurrency: 1}); err != nil {
 		return err
 	}

@@ -86,9 +86,12 @@ type Subscriber struct {
 // JobOutcome is a finished job that was not notified yet (planner input),
 // with what its message needs and its subscribers.
 type JobOutcome struct {
-	JobID      domain.JobID
-	OwnerID    domain.UserID
-	Kind       string
+	JobID   domain.JobID
+	OwnerID domain.UserID
+	Kind    string
+	// Definition is the job's stored definition (jobs.Job.Definition), for
+	// its description (JobDescriber).
+	Definition []byte
 	Status     domain.JobStatus
 	WorkerID   domain.WorkerID
 	WorkerName string

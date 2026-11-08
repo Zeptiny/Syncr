@@ -737,15 +737,26 @@ func checkSeededMilestone4(t *testing.T, s *seeded, admin *http.Client) {
 		t.Fatal(err)
 	}
 	statuses := map[syncrv1.DeliveryStatus]int{}
-	retrying := 0
+	retrying, manual := 0, 0
 	for _, d := range ds.Msg.GetDeliveries() {
 		statuses[d.GetStatus()]++
+		// Jobs without a schedule are titled by their description, never
+		// by their kind.
+		if strings.Contains(d.GetTitle(), "rclone_transfer") {
+			t.Errorf("delivery title %q names the job kind", d.GetTitle())
+		}
+		if d.GetJobId() != "" && d.GetScheduleId() == "" {
+			manual++
+			if !strings.Contains(d.GetTitle(), " → ") {
+				t.Errorf("manual job delivery title %q has no description", d.GetTitle())
+			}
+		}
 		if d.GetStatus() == syncrv1.DeliveryStatus_DELIVERY_STATUS_PENDING && d.GetAttempts() > 0 && d.GetLastError() != "" {
 			retrying++
 		}
 	}
-	if len(statuses) != 4 || retrying == 0 {
-		t.Errorf("delivery statuses %v, %d retrying", statuses, retrying)
+	if len(statuses) != 4 || retrying == 0 || manual == 0 {
+		t.Errorf("delivery statuses %v, %d retrying, %d of manual jobs", statuses, retrying, manual)
 	}
 	res, err := cc.SendTestNotification(ctx, connect.NewRequest(&syncrv1.SendTestNotificationRequest{ContactId: mail}))
 	if err != nil || !res.Msg.GetOk() {
