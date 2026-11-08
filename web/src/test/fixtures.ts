@@ -381,7 +381,7 @@ export function remotes(now: number): Remote[] {
       name: "Media disk",
       backendType: "local",
       options: { path: "/mnt/media" },
-      usedByUnions: ["Pooled disks"],
+      usedByUnions: [ids.pooled],
     }),
     create(RemoteSchema, {
       ...base,
@@ -415,7 +415,7 @@ export function remotes(now: number): Remote[] {
       name: "Photos",
       backendType: "local",
       options: { path: "/srv/photos" },
-      usedByUnions: ["Pooled disks"],
+      usedByUnions: [ids.pooled],
     }),
     create(RemoteSchema, {
       ...base,

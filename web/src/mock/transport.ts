@@ -338,7 +338,7 @@ export function createMockTransport(): Transport {
         const r = remote(req.remoteId);
         if (r.usedByUnions.length) {
           throw new ConnectError(
-            `remote is a member of ${r.usedByUnions.join(", ")}`,
+            `remote is a member of ${r.usedByUnions.map((id) => remotes.find((x) => x.id === id)?.name ?? id).join(", ")}`,
             Code.FailedPrecondition,
           );
         }

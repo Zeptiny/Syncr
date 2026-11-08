@@ -81,7 +81,7 @@ export function RemotesPage() {
         header: "In unions",
         cell: ({ row }) => (
           <span className="text-[13px]">
-            {row.original.usedByUnions.join(", ") || (
+            {row.original.usedByUnions.map((id) => names.get(id) ?? id).join(", ") || (
               <span className="text-muted-foreground">–</span>
             )}
           </span>
