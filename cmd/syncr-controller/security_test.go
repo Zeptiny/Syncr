@@ -220,6 +220,7 @@ func TestRunSeeded(t *testing.T) {
 	if err != nil || len(workers.Msg.GetWorkers()) != 4 {
 		t.Fatalf("ListWorkers = %v (%v)", workers, err)
 	}
+	checkSeededMilestone4(t, s, admin)
 
 	// Live progress arrives about every second.
 	wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -664,5 +665,102 @@ func checkSecretsStayHidden(t *testing.T, s *seeded, admin, alice *http.Client) 
 	}
 	if !strings.Contains(logs, `"msg":"remote created"`) {
 		t.Errorf("the log is not the controller's debug log:\n%s", logs)
+	}
+}
+
+// checkSeededMilestone4 checks the seeded schedules, contacts, deliveries,
+// worker labels and dashboard through the API, as the web UI's screenshot
+// script expects them (by name), and that a test send under dev.seed
+// succeeds without sending (notify.DryRun).
+func checkSeededMilestone4(t *testing.T, s *seeded, admin *http.Client) {
+	t.Helper()
+	ctx := t.Context()
+	withLabel, err := syncrv1connect.NewWorkerAdminServiceClient(admin, s.base).ListWorkers(ctx, connect.NewRequest(&syncrv1.ListWorkersRequest{Label: "nas"}))
+	if err != nil || len(withLabel.Msg.GetWorkers()) != 1 || withLabel.Msg.GetWorkers()[0].GetName() != "nas-01" {
+		t.Errorf("workers withLabel nas = %v (%v)", withLabel, err)
+	}
+	sc := syncrv1connect.NewScheduleServiceClient(admin, s.base)
+	list, err := sc.ListSchedules(ctx, connect.NewRequest(&syncrv1.ListSchedulesRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]*syncrv1.Schedule{}
+	for _, x := range list.Msg.GetSchedules() {
+		byName[x.GetName()] = x
+	}
+	for _, n := range []string{"Nightly photos → B2", "Office docs hourly", "Weekly archive", "Offsite mirror", "Old NAS sync"} {
+		if byName[n] == nil {
+			t.Errorf("no seeded schedule %q in %v", n, slices.Collect(maps.Keys(byName)))
+		}
+	}
+	if p := byName["Old NAS sync"]; p == nil || p.GetEnabled() || p.GetPausedReason() != "worker_removed" {
+		t.Errorf("Old NAS sync = %v", p)
+	}
+	if n := byName["Nightly photos → B2"]; n == nil || n.GetTarget().GetWorkerLabel() != "nas" || n.GetTimezone() != "Europe/Berlin" {
+		t.Errorf("Nightly photos = %v", n)
+	}
+	if o := byName["Offsite mirror"]; o != nil {
+		jobs, err := syncrv1connect.NewJobServiceClient(admin, s.base).ListJobs(ctx, connect.NewRequest(&syncrv1.ListJobsRequest{ScheduleId: o.GetId()}))
+		if err != nil || len(jobs.Msg.GetJobs()) == 0 || jobs.Msg.GetJobs()[0].GetSchedule().GetName() != "Offsite mirror" {
+			t.Errorf("jobs of Offsite mirror = %d (%v)", len(jobs.Msg.GetJobs()), err)
+		}
+	}
+	if o := byName["Office docs hourly"]; o != nil {
+		runs, err := sc.ListScheduleRuns(ctx, connect.NewRequest(&syncrv1.ListScheduleRunsRequest{ScheduleId: o.GetId()}))
+		if err != nil || len(runs.Msg.GetRuns()) == 0 || runs.Msg.GetRuns()[0].GetStatus() != syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_PENDING ||
+			runs.Msg.GetRuns()[0].GetCoalesced() == 0 {
+			t.Errorf("Office docs hourly runs = %v (%v)", runs.Msg.GetRuns()[:min(1, len(runs.Msg.GetRuns()))], err)
+		}
+	}
+
+	cc := syncrv1connect.NewContactServiceClient(admin, s.base)
+	contacts, err := cc.ListContacts(ctx, connect.NewRequest(&syncrv1.ListContactsRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := map[string]string{}
+	var mail string
+	for _, c := range contacts.Msg.GetContacts() {
+		types[c.GetName()] = c.GetChannelType()
+		if c.GetName() == "Admin mail" {
+			mail = c.GetId()
+		}
+		if strings.Contains(c.GetSummary(), "syncr-demo") {
+			t.Errorf("summary of %s = %q", c.GetName(), c.GetSummary())
+		}
+	}
+	if !maps.Equal(types, map[string]string{"Ops Discord": "discord", "Admin mail": "email", "Home Assistant": "webhook"}) {
+		t.Errorf("contacts = %v", types)
+	}
+	ds, err := cc.ListDeliveries(ctx, connect.NewRequest(&syncrv1.ListDeliveriesRequest{PageSize: 500}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[syncrv1.DeliveryStatus]int{}
+	retrying := 0
+	for _, d := range ds.Msg.GetDeliveries() {
+		statuses[d.GetStatus()]++
+		if d.GetStatus() == syncrv1.DeliveryStatus_DELIVERY_STATUS_PENDING && d.GetAttempts() > 0 && d.GetLastError() != "" {
+			retrying++
+		}
+	}
+	if len(statuses) != 4 || retrying == 0 {
+		t.Errorf("delivery statuses %v, %d retrying", statuses, retrying)
+	}
+	res, err := cc.SendTestNotification(ctx, connect.NewRequest(&syncrv1.SendTestNotificationRequest{ContactId: mail}))
+	if err != nil || !res.Msg.GetOk() {
+		t.Errorf("SendTest(Admin mail) under dev.seed = %v (%v)", res, err)
+	}
+
+	dash, err := syncrv1connect.NewDashboardServiceClient(admin, s.base).GetDashboard(ctx, connect.NewRequest(&syncrv1.GetDashboardRequest{
+		Range: syncrv1.DashboardRange_DASHBOARD_RANGE_WEEK,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tot := dash.Msg.GetTotals(); tot.GetSucceeded() < 30 || tot.GetFailed() == 0 || len(dash.Msg.GetUpcoming()) == 0 ||
+		len(dash.Msg.GetRecentFailures()) == 0 || len(dash.Msg.GetRecentMissed()) == 0 {
+		t.Errorf("7-day dashboard: totals %v, %d upcoming, %d failures, %d missed", tot, len(dash.Msg.GetUpcoming()),
+			len(dash.Msg.GetRecentFailures()), len(dash.Msg.GetRecentMissed()))
 	}
 }

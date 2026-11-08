@@ -299,11 +299,11 @@ func TestScheduleConversions(t *testing.T) {
 		t.Error("unknown overlap accepted")
 	}
 	for _, e := range domain.NotificationEvents() {
-		if got, ok := scheduleEventFromProto(scheduleEventToProto(e)); !ok || got != e {
+		if got, ok := notificationEventFromProto(notificationEventToProto(e)); !ok || got != e {
 			t.Errorf("event %q round trip = %q", e, got)
 		}
 	}
-	if _, ok := scheduleEventFromProto(syncrv1.NotificationEvent_NOTIFICATION_EVENT_UNSPECIFIED); ok {
+	if _, ok := notificationEventFromProto(syncrv1.NotificationEvent_NOTIFICATION_EVENT_UNSPECIFIED); ok {
 		t.Error("unspecified event accepted")
 	}
 	statuses := map[schedules.RunStatus]syncrv1.ScheduleRunStatus{

@@ -6,6 +6,9 @@ import (
 	crand "crypto/rand"
 	"errors"
 	"log/slog"
+	"maps"
+	"net"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -14,10 +17,14 @@ import (
 	"github.com/Zeptiny/Syncr/internal/adapters/broker"
 	"github.com/Zeptiny/Syncr/internal/adapters/idgen"
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
+	notifybuiltin "github.com/Zeptiny/Syncr/internal/adapters/notify/builtin"
 	"github.com/Zeptiny/Syncr/internal/adapters/password"
 	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
+	"github.com/Zeptiny/Syncr/internal/app/contacts"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/notifications"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/backend"
@@ -25,6 +32,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/devseed"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
+	"github.com/Zeptiny/Syncr/internal/notify"
 	"github.com/Zeptiny/Syncr/internal/platform/clock"
 	"github.com/Zeptiny/Syncr/internal/platform/ratelimit"
 )
@@ -42,6 +50,13 @@ type env struct {
 }
 
 type nopWaker struct{}
+
+// refuse fails every request: the seed must never send.
+type refuse struct{}
+
+var errRefused = errors.New("the seed tried to send")
+
+func (refuse) RoundTrip(*http.Request) (*http.Response, error) { return nil, errRefused }
 
 func (nopWaker) Wake(domain.WorkerID) {}
 
@@ -102,7 +117,23 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.deps = devseed.Deps{Users: us, Remotes: rs, Workers: ws, Jobs: js, Kinds: kinds, Store: e.store, Clock: e.clock, Logger: log}
+	channels, err := notify.NewRegistry(notifybuiltin.Channels(notifybuiltin.Deps{
+		HTTP: &http.Client{Transport: refuse{}}, Dial: func(context.Context, string, string) (net.Conn, error) { return nil, errRefused },
+	})...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	channels = notify.DryRun(channels, log)
+	cs, err := contacts.New(contacts.Deps{
+		Contacts: e.store, Channels: channels, Cipher: ring, Limiter: lim(), Clock: e.clock, IDs: ids, Logger: log,
+	}, contacts.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.deps = devseed.Deps{
+		Users: us, Remotes: rs, Workers: ws, Jobs: js, Kinds: kinds, Contacts: cs, Channels: channels,
+		Store: e.store, Clock: e.clock, Logger: log,
+	}
 	return e
 }
 
@@ -291,7 +322,7 @@ func TestSeedIsDeterministic(t *testing.T) {
 	t.Parallel()
 	a, b := newEnv(t), newEnv(t)
 	sa, sb := a.seed(t), b.seed(t)
-	if !slices.Equal(sa.Jobs, sb.Jobs) || sa.Running != sb.Running {
+	if !slices.Equal(sa.Jobs, sb.Jobs) || sa.Running != sb.Running || !maps.Equal(sa.Schedules, sb.Schedules) {
 		t.Fatalf("job IDs differ:\n%v\n%v", sa.Jobs, sb.Jobs)
 	}
 	ja, err := a.deps.Jobs.Get(context.Background(), sa.Admin, sa.Running)
@@ -388,4 +419,178 @@ func TestAnimateStopsWithItsContext(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("Animate did not return after its context ended")
 	}
+}
+
+// TestSeedSchedulesAndNotifications: the demo schedules cover every target
+// type and policy with a month of runs (launched, missed for every reason,
+// coalesced, failed, a Run now), one paused by its owner and one because
+// its worker was removed; the contacts cover every built-in channel; their
+// deliveries are in every status; the workers have labels.
+func TestSeedSchedulesAndNotifications(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	s := e.seed(t)
+
+	// Workers: labels, and old-nas was removed.
+	for name, want := range map[string][]string{"nas-01": {"linux", "nas"}, "office-pc": {"desktop", "windows"}, "backup-host": {"offsite"}} {
+		w, err := e.deps.Workers.Get(ctx, s.Workers[name])
+		if err != nil || !slices.Equal(w.Labels, want) {
+			t.Errorf("%s labels = %v (%v), want %v", name, w.Labels, err, want)
+		}
+	}
+	if _, err := e.deps.Workers.Get(ctx, s.Workers["old-nas"]); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("old-nas = %v, want removed", err)
+	}
+
+	// Contacts: one per channel; Home Assistant hears of failed manual jobs.
+	wantContacts := map[string]string{"Ops Discord": "discord", "Admin mail": "email", "Home Assistant": "webhook"}
+	cs, err := e.deps.Contacts.List(ctx, s.Admin, contacts.ListFilter{})
+	if err != nil || len(cs) != len(wantContacts) {
+		t.Fatalf("contacts = %v (%v)", cs, err)
+	}
+	for _, c := range cs {
+		if wantContacts[c.Name] != c.Type || !c.Enabled {
+			t.Errorf("contact %q is %s (enabled %v)", c.Name, c.Type, c.Enabled)
+		}
+		if c.Name == "Home Assistant" && !slices.Equal(c.JobEvents, domain.EventSet{domain.EventFailed}) {
+			t.Errorf("Home Assistant job events = %v", c.JobEvents)
+		}
+	}
+
+	// Schedules.
+	want := map[string]struct {
+		enabled bool
+		paused  string
+		label   string
+		worker  string
+	}{
+		"Nightly photos → B2": {enabled: true, label: "nas"},
+		"Office docs hourly":  {enabled: true, worker: "office-pc"},
+		"Weekly archive":      {enabled: true, worker: "backup-host"},
+		"Offsite mirror":      {enabled: true, label: "offsite"},
+		"Old NAS sync":        {paused: "worker_removed", worker: "old-nas"},
+		"Alice's documents":   {label: "linux"},
+	}
+	if len(s.Schedules) != len(want) {
+		t.Fatalf("schedules = %v", s.Schedules)
+	}
+	missed := map[schedules.MissedAction]bool{}
+	overlap := map[schedules.Overlap]bool{}
+	reasons := map[string]bool{}
+	var coalescedPending, manual, failedJobs bool
+	for name, w := range want {
+		id, ok := s.Schedules[name]
+		if !ok {
+			t.Fatalf("no schedule %q", name)
+		}
+		sc, err := e.store.GetSchedule(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sc.Enabled != w.enabled || sc.PausedReason != w.paused || sc.Target.Label != w.label ||
+			(w.worker != "" && sc.Target.WorkerID != s.Workers[w.worker]) {
+			t.Errorf("%s = %+v", name, sc)
+		}
+		if sc.Enabled && !sc.NextRunAt.After(t0) {
+			t.Errorf("%s next run %v is not after the seed", name, sc.NextRunAt)
+		}
+		missed[sc.Missed.Action], overlap[sc.Overlap] = true, true
+		runs, err := e.store.ListRuns(ctx, schedules.RunFilter{ScheduleID: id, Limit: -1})
+		if err != nil || len(runs) < 4 {
+			t.Fatalf("%s: %d runs (%v)", name, len(runs), err)
+		}
+		for _, r := range runs {
+			reasons[r.Reason] = reasons[r.Reason] || r.Status == schedules.RunMissed || r.Status == schedules.RunFailed
+			manual = manual || r.Trigger == schedules.TriggerManual
+			if name == "Office docs hourly" && r.Status == schedules.RunPending && r.Coalesced > 0 {
+				coalescedPending = true
+			}
+			if r.Status == schedules.RunLaunched && r.JobStatus == domain.JobFailed {
+				failedJobs = true
+			}
+			if r.ScheduledFor.After(t0) || r.UpdatedAt.After(t0) {
+				t.Errorf("%s run %+v lies in the future", name, r)
+			}
+		}
+		page, err := e.deps.Jobs.List(ctx, actorOf(s, sc.OwnerID), jobs.ListFilter{ScheduleID: id, Limit: jobs.MaxPageSize})
+		if err != nil || len(page.Jobs) == 0 {
+			t.Errorf("%s has no jobs (%v)", name, err)
+		}
+	}
+	if len(missed) != 2 || len(overlap) != 3 {
+		t.Errorf("policies: missed %v, overlap %v", missed, overlap)
+	}
+	for _, r := range []string{"worker_offline", "overlap", "worker_removed"} {
+		if !reasons[r] {
+			t.Errorf("no run missed or failed for %s (%v)", r, reasons)
+		}
+	}
+	if !coalescedPending || !manual || !failedJobs {
+		t.Errorf("coalesced pending run %v, manual run %v, failed scheduled job %v", coalescedPending, manual, failedJobs)
+	}
+
+	// Enough jobs for the dashboard's 7 and 30 days.
+	page, err := e.deps.Jobs.List(ctx, s.Admin, jobs.ListFilter{AllUsers: true, Limit: jobs.MaxPageSize})
+	if err != nil {
+		t.Fatal(err)
+	}
+	week, month := 0, 0
+	for _, j := range page.Jobs {
+		if j.CreatedAt.After(t0.Add(-7 * 24 * time.Hour)) {
+			week++
+		}
+		if j.CreatedAt.Before(t0.Add(-25 * 24 * time.Hour)) {
+			month++
+		}
+	}
+	if len(page.Jobs) < 120 || week < 50 || month < 3 {
+		t.Errorf("%d jobs, %d in the last 7 days, %d older than 25 days", len(page.Jobs), week, month)
+	}
+
+	// Deliveries in every status: delivered, retrying (pending after a
+	// failed attempt), pending (never attempted since queued again),
+	// sending and dead, the failed ones with their reason.
+	ds, err := e.store.ListDeliveries(ctx, notifications.DeliveryFilter{Limit: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var delivered, retrying, pending, sending, dead int
+	for _, d := range ds {
+		switch {
+		case d.Status == notifications.StatusDelivered:
+			delivered++
+		case d.Status == notifications.StatusPending && d.Attempts > 0 && d.LastError != "" && d.NextAttemptAt.After(t0):
+			retrying++
+		case d.Status == notifications.StatusPending && d.Attempts == 0 && d.NextAttemptAt.After(t0):
+			pending++
+		case d.Status == notifications.StatusSending && d.LeaseUntil.After(t0.Add(30*time.Minute)):
+			sending++
+		case d.Status == notifications.StatusDead && d.LastError != "":
+			dead++
+		default:
+			t.Errorf("unexpected delivery %+v", d)
+		}
+	}
+	if delivered < 20 || retrying != 1 || pending != 1 || sending != 1 || dead != 1 {
+		t.Errorf("deliveries: %d delivered, %d retrying, %d pending, %d sending, %d dead", delivered, retrying, pending, sending, dead)
+	}
+
+	// Nothing was sent, and no contact secret was logged.
+	if strings.Contains(e.logs.String(), "the seed tried to send") {
+		t.Error("the seed sent a notification")
+	}
+	for _, secret := range []string{"syncr-demo-discord-token", "syncr-demo-smtp-password", "syncr-demo-hook", "whsec_c3luY3I"} {
+		if strings.Contains(e.logs.String(), secret) {
+			t.Errorf("the log contains %q", secret)
+		}
+	}
+}
+
+// actorOf is the demo user id.
+func actorOf(s *devseed.Seed, id domain.UserID) domain.Actor {
+	if id == s.Alice.UserID {
+		return s.Alice
+	}
+	return s.Admin
 }

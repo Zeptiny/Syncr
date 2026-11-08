@@ -298,7 +298,7 @@ func (h *scheduleHandler) input(ctx context.Context, procedure string, m *syncrv
 		}
 		link := schedules.ContactLink{ContactID: id}
 		for _, e := range c.GetEvents() {
-			ev, ok := scheduleEventFromProto(e)
+			ev, ok := notificationEventFromProto(e)
 			if !ok {
 				v.Add(fmt.Sprintf("contacts[%d].events", i), "has an unknown event")
 				break

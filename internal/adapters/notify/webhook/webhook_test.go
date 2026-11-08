@@ -346,3 +346,32 @@ func TestContract(t *testing.T) {
 		webhook.FieldAuthorization: "Bearer notifytest-failing-bearer",
 	}, "")))
 }
+
+// TestSummaryShowsOnlyTheHost: the URL is a secret (its path or query is
+// often the only credential), and the UI shows the summary verbatim, so
+// the summary names the host and nothing else of the URL.
+func TestSummaryShowsOnlyTheHost(t *testing.T) {
+	t.Parallel()
+	ch := webhook.New(http.DefaultClient)
+	for _, tt := range []struct {
+		cfg  descriptor.Values
+		want string
+	}{
+		{descriptor.Values{Secrets: map[string]string{webhook.FieldURL: "https://user:pw@ha.example.lan:8123/api/webhook/tok-path-123?key=tok-query-456"}},
+			"ha.example.lan"},
+		{descriptor.Values{Options: map[string]string{webhook.FieldFormat: webhook.FormatSlack},
+			Secrets: map[string]string{webhook.FieldURL: "https://hooks.slack.example/services/T0/B0/tok-path-123", webhook.FieldSigningSecret: "whsec_x"}},
+			"hooks.slack.example · Slack format · signed"},
+		{descriptor.Values{Secrets: map[string]string{webhook.FieldURL: "not a url tok-path-123"}}, "webhook"},
+	} {
+		got := ch.Summary(tt.cfg)
+		if got != tt.want {
+			t.Errorf("Summary(%v) = %q, want %q", tt.cfg.Options, got, tt.want)
+		}
+		for _, secret := range []string{"tok-path-123", "tok-query-456", "pw", "8123", "/api/"} {
+			if strings.Contains(got, secret) {
+				t.Errorf("Summary = %q contains %q", got, secret)
+			}
+		}
+	}
+}

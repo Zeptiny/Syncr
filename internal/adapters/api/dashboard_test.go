@@ -318,3 +318,60 @@ func TestDashboardIsMounted(t *testing.T) {
 	_, err = c.GetDashboard(t.Context(), connect.NewRequest(&syncrv1.GetDashboardRequest{}))
 	wantCode(t, err, connect.CodeUnimplemented)
 }
+
+// namedDashSchedules also names schedules (ScheduleService.Names), for the
+// schedule references of the recent failures.
+type namedDashSchedules struct {
+	*fakeDashSchedules
+	names map[domain.ScheduleID]schedules.Ref
+}
+
+func (f namedDashSchedules) Names(_ context.Context, ids []domain.ScheduleID) (map[domain.ScheduleID]schedules.Ref, error) {
+	out := make(map[domain.ScheduleID]schedules.Ref, len(ids))
+	for _, id := range ids {
+		if r, ok := f.names[id]; ok {
+			out[id] = r
+		}
+	}
+	return out, nil
+}
+
+func TestDashboardRecentFailuresNameTheirSchedule(t *testing.T) {
+	t.Parallel()
+	d := newDashEnv(t)
+	ctx := context.Background()
+	sid := domain.NewScheduleID()
+	now := d.clock.Now()
+	if err := d.store.CreateSchedule(ctx, schedules.Schedule{
+		ID: sid, OwnerID: testUser.UserID, Name: "Nightly photos", Cron: "0 2 * * *", Timezone: "UTC",
+		Kind: "rclone_transfer", Definition: []byte(`{}`), Target: schedules.Target{WorkerID: d.worker},
+		Missed: schedules.MissedPolicy{Action: schedules.MissedRunLate}, Overlap: schedules.OverlapSkip,
+		Version: 1, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d.h.schedules = namedDashSchedules{fakeDashSchedules: d.sched, names: map[domain.ScheduleID]schedules.Ref{sid: {ID: sid, Name: "Nightly photos"}}}
+	j, err := d.jobs.Create(ctx, testUser, jobs.CreateParams{WorkerID: d.worker, Kind: "rclone_transfer", Definition: []byte(`{}`), ScheduleID: sid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Status, j.FinishedAt = domain.JobFailed, now.Add(-time.Hour)
+	if _, err := d.store.UpdateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	d.finish(t, testUser, domain.JobInterrupted, now.Add(-2*time.Hour), 0) // a manual job
+
+	got := d.get(t, testUser, &syncrv1.GetDashboardRequest{}).GetRecentFailures()
+	if len(got) != 2 {
+		t.Fatalf("recent failures = %v", got)
+	}
+	byID := map[string]*syncrv1.Job{got[0].GetId(): got[0], got[1].GetId(): got[1]}
+	if ref := byID[j.ID.String()].GetSchedule(); ref.GetId() != sid.String() || ref.GetName() != "Nightly photos" {
+		t.Errorf("scheduled failure's schedule = %v", ref)
+	}
+	for id, m := range byID {
+		if id != j.ID.String() && m.GetSchedule() != nil {
+			t.Errorf("manual failure has a schedule: %v", m.GetSchedule())
+		}
+	}
+}

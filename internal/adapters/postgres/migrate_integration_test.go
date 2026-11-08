@@ -56,7 +56,7 @@ var schemaTables = []string{
 var milestone4Tables = []string{"contacts", "schedules", "schedule_remotes", "schedule_contacts", "schedule_runs", "deliveries"}
 
 // allVersions are the versions of the embedded migrations.
-var allVersions = []int64{1, 2, 3}
+var allVersions = []int64{1, 2, 3, 4}
 
 func columnExists(t *testing.T, s *Store, table, column string) bool {
 	t.Helper()

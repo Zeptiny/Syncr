@@ -57,6 +57,12 @@ services:
       # Empty: a random first-run setup code, logged at start.
       SYNCR_SETUP_CODE: ${SYNCR_SETUP_CODE:-}
       SYNCR_LOG_FORMAT: ${SYNCR_LOG_FORMAT:-json}
+      # Which addresses notifications (Discord, email, webhooks) may reach:
+      # private (the default: not loopback, link-local or cloud metadata;
+      # the LAN is fine), public (no private networks either) or any; plus
+      # CIDRs or IPs allowed anyway, comma-separated.
+      SYNCR_NOTIFY_NETWORK_POLICY: ${SYNCR_NOTIFY_NETWORK_POLICY:-private}
+      SYNCR_NOTIFY_ALLOWED_NETWORKS: ${SYNCR_NOTIFY_ALLOWED_NETWORKS:-}
       # Serve HTTPS directly (no reverse proxy): mount the certificate and
       # uncomment. The files are re-read when they change.
       # SYNCR_HTTP_TLS_CERT_FILE: /certs/fullchain.pem
