@@ -8,6 +8,8 @@ import { formatBytes, formatDateTime, formatRate, rateBetween } from "@/lib/form
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
+import { cssVar, withAlpha } from "./charts/uplot-theme";
+
 /** chartData turns cumulative samples into [time, throughput, bytes]. */
 function chartData(samples: JobSample[]): [number[], (number | null)[], number[]] {
   const t: number[] = [];
@@ -27,18 +29,6 @@ const hms = new Intl.DateTimeFormat("en-GB", {
   minute: "2-digit",
   second: "2-digit",
 });
-
-function cssVar(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888";
-}
-
-function withAlpha(color: string, alpha: number): string {
-  // Theme colours are hex; uPlot fills need rgba.
-  const m = /^#([0-9a-f]{6})$/i.exec(color);
-  if (!m) return color;
-  const n = parseInt(m[1], 16);
-  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
-}
 
 /** ProgressChartProps configures ProgressChart. */
 export interface ProgressChartProps {

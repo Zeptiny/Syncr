@@ -21,6 +21,7 @@ import {
   WorkerSchema,
   WorkerStatus,
   type Job,
+  type JobDefinition,
 } from "@/gen/syncr/v1/api_pb";
 import { APITokenSchema, AuthMethod, AuthService, SetupService } from "@/gen/syncr/v1/auth_pb";
 import { WorkerMode } from "@/gen/syncr/v1/link_pb";
@@ -32,6 +33,8 @@ import {
 } from "@/gen/syncr/v1/remotes_pb";
 import { UserRole, UserSchema, UserService } from "@/gen/syncr/v1/users_pb";
 import * as fx from "@/test/fixtures";
+
+import { registerM4 } from "./m4";
 
 const passwords: Record<string, string> = { admin: "syncr-demo-admin", alice: "syncr-demo-alice" };
 const SESSION_KEY = "syncr.mock.session";
@@ -71,7 +74,12 @@ export function createMockTransport(): Transport {
   const users = fx.users(now);
   const workers = fx.workers(now);
   let remotes = fx.remotes(now);
-  const jobs = fx.jobs(now);
+  const hist = fx.history(now);
+  const jobs = [...fx.jobs(now), ...hist.jobs].sort(
+    (a, b) =>
+      timestampMs(b.createdAt ?? timestampFromMs(0)) -
+      timestampMs(a.createdAt ?? timestampFromMs(0)),
+  );
   const tokens = fx.apiTokens(now);
   let setupRequired = store(SETUP_KEY) === "1";
   let sessionUser = store(SESSION_KEY) ?? undefined;
@@ -138,7 +146,70 @@ export function createMockTransport(): Transport {
     }
   };
 
-  return createRouterTransport(({ service }) => {
+  // queueJob adds a queued job, which the mock worker picks up after a moment.
+  const queueJob = (p: {
+    workerId: string;
+    definition: JobDefinition | undefined;
+    ownerId: string;
+    scheduleId?: string;
+    scheduleName?: string;
+  }): Job => {
+    const op = p.definition?.operation;
+    const refs =
+      op?.case === "rcloneTransfer"
+        ? [op.value.source?.remoteId, op.value.destination?.remoteId]
+            .filter((id): id is string => !!id)
+            .map((id) => {
+              const r = remotes.find((x) => x.id === id);
+              return { id, name: r?.name ?? "?", backendType: r?.backendType ?? "" };
+            })
+        : [];
+    const j = create(JobSchema, {
+      id: uuid(),
+      workerId: p.workerId,
+      kind: "rclone_transfer",
+      status: JobStatus.QUEUED,
+      ownerId: p.ownerId,
+      createdAt: timestampFromMs(Date.now()),
+      definition: p.definition,
+      remotes: refs,
+      scheduleId: p.scheduleId ?? "",
+      schedule: p.scheduleId ? { id: p.scheduleId, name: p.scheduleName ?? "" } : undefined,
+    });
+    jobs.unshift(j);
+    setTimeout(() => {
+      if (j.status !== JobStatus.QUEUED) return;
+      j.status = JobStatus.RUNNING;
+      j.dispatchedAt = timestampFromMs(Date.now());
+      j.startedAt = timestampFromMs(Date.now());
+      j.stats = {
+        $typeName: "syncr.v1.JobStats",
+        bytes: 0n,
+        totalBytes: BigInt(6 * 1024 ** 3),
+        files: 0n,
+        totalFiles: 1500n,
+        checks: 0n,
+        deletes: 0n,
+        renames: 0n,
+        errors: 0n,
+      };
+    }, 1500);
+    return j;
+  };
+
+  return createRouterTransport((router) => {
+    const { service } = router;
+    registerM4(router, {
+      now,
+      history: hist,
+      me,
+      jobs,
+      workers,
+      remotes: () => remotes,
+      invalid,
+      sleep: (ms) => sleep(ms),
+      queueJob,
+    });
     service(SetupService, {
       getSetupStatus: () => ({ setupRequired }),
       completeSetup: async (req) => {
@@ -348,9 +419,27 @@ export function createMockTransport(): Transport {
     });
 
     service(WorkerAdminService, {
-      listWorkers: () => {
+      listWorkers: (req) => {
         me();
-        return { workers };
+        return { workers: workers.filter((w) => !req.label || w.labels.includes(req.label)) };
+      },
+      setWorkerLabels: async (req) => {
+        admin();
+        await sleep(250);
+        const w = workers.find((x) => x.id === req.workerId);
+        if (!w) throw new ConnectError("worker not found", Code.NotFound);
+        const labels = [...new Set(req.labels.map((l) => l.trim().toLowerCase()))].sort();
+        const bad = labels.findIndex((l) => !/^[a-z0-9][a-z0-9_.-]{0,31}$/.test(l));
+        if (bad >= 0)
+          throw invalid([
+            {
+              field: `labels[${bad}]`,
+              message: `"${labels[bad]}" is not a valid label: use up to 32 lower-case letters, digits, dots, dashes and underscores.`,
+            },
+          ]);
+        if (labels.length > 16) throw invalid([{ field: "labels", message: "At most 16 labels." }]);
+        w.labels = labels;
+        return { worker: w };
       },
       getWorker: (req) => {
         me();
@@ -414,6 +503,7 @@ export function createMockTransport(): Transport {
           if (!(req.allUsers && u.role === UserRole.ADMIN) && j.ownerId !== u.id) return false;
           if (req.statuses.length && !req.statuses.includes(j.status)) return false;
           if (req.workerId && j.workerId !== req.workerId) return false;
+          if (req.scheduleId && j.scheduleId !== req.scheduleId) return false;
           if (req.remoteId && !j.remotes.some((r) => r.id === req.remoteId)) return false;
           if (req.kinds.length && !req.kinds.includes(j.kind)) return false;
           const at = timestampMs(j.createdAt ?? timestampFromMs(0));
@@ -457,42 +547,9 @@ export function createMockTransport(): Transport {
         const op = req.definition?.operation;
         if (op?.case !== "rcloneTransfer")
           throw invalid([{ field: "definition", message: "Choose what to transfer." }]);
-        const refs = [op.value.source?.remoteId, op.value.destination?.remoteId]
-          .filter((id): id is string => !!id)
-          .map((id) => {
-            const r = remotes.find((x) => x.id === id);
-            return { id, name: r?.name ?? "?", backendType: r?.backendType ?? "" };
-          });
-        const j = create(JobSchema, {
-          id: uuid(),
-          workerId: req.workerId,
-          kind: "rclone_transfer",
-          status: JobStatus.QUEUED,
-          ownerId: u.id,
-          createdAt: timestampFromMs(Date.now()),
-          definition: req.definition,
-          remotes: refs,
-        });
-        jobs.unshift(j);
-        // The mock worker picks it up after a moment.
-        setTimeout(() => {
-          if (j.status !== JobStatus.QUEUED) return;
-          j.status = JobStatus.RUNNING;
-          j.dispatchedAt = timestampFromMs(Date.now());
-          j.startedAt = timestampFromMs(Date.now());
-          j.stats = {
-            $typeName: "syncr.v1.JobStats",
-            bytes: 0n,
-            totalBytes: BigInt(6 * 1024 ** 3),
-            files: 0n,
-            totalFiles: 1500n,
-            checks: 0n,
-            deletes: 0n,
-            renames: 0n,
-            errors: 0n,
-          };
-        }, 1500);
-        return { job: j };
+        return {
+          job: queueJob({ workerId: req.workerId, definition: req.definition, ownerId: u.id }),
+        };
       },
       async *watchJob(req, ctx) {
         const j = job(req.jobId);

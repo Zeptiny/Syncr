@@ -16,14 +16,21 @@ import { Route as AppIndexRouteImport } from "./routes/_app/index";
 import { Route as AppWorkersIndexRouteImport } from "./routes/_app/workers/index";
 import { Route as AppUsersIndexRouteImport } from "./routes/_app/users/index";
 import { Route as AppSettingsIndexRouteImport } from "./routes/_app/settings/index";
+import { Route as AppSchedulesIndexRouteImport } from "./routes/_app/schedules/index";
 import { Route as AppRemotesIndexRouteImport } from "./routes/_app/remotes/index";
+import { Route as AppNotificationsIndexRouteImport } from "./routes/_app/notifications/index";
 import { Route as AppJobsIndexRouteImport } from "./routes/_app/jobs/index";
 import { Route as AppWorkersNewRouteImport } from "./routes/_app/workers/new";
 import { Route as AppWorkersWorkerIdRouteImport } from "./routes/_app/workers/$workerId";
+import { Route as AppSchedulesNewRouteImport } from "./routes/_app/schedules/new";
+import { Route as AppSchedulesScheduleIdRouteImport } from "./routes/_app/schedules/$scheduleId";
 import { Route as AppRemotesNewRouteImport } from "./routes/_app/remotes/new";
 import { Route as AppRemotesRemoteIdRouteImport } from "./routes/_app/remotes/$remoteId";
+import { Route as AppNotificationsNewRouteImport } from "./routes/_app/notifications/new";
+import { Route as AppNotificationsContactIdRouteImport } from "./routes/_app/notifications/$contactId";
 import { Route as AppJobsNewRouteImport } from "./routes/_app/jobs/new";
 import { Route as AppJobsJobIdRouteImport } from "./routes/_app/jobs/$jobId";
+import { Route as AppSchedulesScheduleIdEditRouteImport } from "./routes/_app/schedules/$scheduleId_.edit";
 
 const SetupRoute = SetupRouteImport.update({
   id: "/setup",
@@ -59,9 +66,19 @@ const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
   path: "/settings/",
   getParentRoute: () => AppRoute,
 } as any);
+const AppSchedulesIndexRoute = AppSchedulesIndexRouteImport.update({
+  id: "/schedules/",
+  path: "/schedules/",
+  getParentRoute: () => AppRoute,
+} as any);
 const AppRemotesIndexRoute = AppRemotesIndexRouteImport.update({
   id: "/remotes/",
   path: "/remotes/",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppNotificationsIndexRoute = AppNotificationsIndexRouteImport.update({
+  id: "/notifications/",
+  path: "/notifications/",
   getParentRoute: () => AppRoute,
 } as any);
 const AppJobsIndexRoute = AppJobsIndexRouteImport.update({
@@ -79,6 +96,16 @@ const AppWorkersWorkerIdRoute = AppWorkersWorkerIdRouteImport.update({
   path: "/workers/$workerId",
   getParentRoute: () => AppRoute,
 } as any);
+const AppSchedulesNewRoute = AppSchedulesNewRouteImport.update({
+  id: "/schedules/new",
+  path: "/schedules/new",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppSchedulesScheduleIdRoute = AppSchedulesScheduleIdRouteImport.update({
+  id: "/schedules/$scheduleId",
+  path: "/schedules/$scheduleId",
+  getParentRoute: () => AppRoute,
+} as any);
 const AppRemotesNewRoute = AppRemotesNewRouteImport.update({
   id: "/remotes/new",
   path: "/remotes/new",
@@ -89,6 +116,17 @@ const AppRemotesRemoteIdRoute = AppRemotesRemoteIdRouteImport.update({
   path: "/remotes/$remoteId",
   getParentRoute: () => AppRoute,
 } as any);
+const AppNotificationsNewRoute = AppNotificationsNewRouteImport.update({
+  id: "/notifications/new",
+  path: "/notifications/new",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppNotificationsContactIdRoute =
+  AppNotificationsContactIdRouteImport.update({
+    id: "/notifications/$contactId",
+    path: "/notifications/$contactId",
+    getParentRoute: () => AppRoute,
+  } as any);
 const AppJobsNewRoute = AppJobsNewRouteImport.update({
   id: "/jobs/new",
   path: "/jobs/new",
@@ -99,6 +137,12 @@ const AppJobsJobIdRoute = AppJobsJobIdRouteImport.update({
   path: "/jobs/$jobId",
   getParentRoute: () => AppRoute,
 } as any);
+const AppSchedulesScheduleIdEditRoute =
+  AppSchedulesScheduleIdEditRouteImport.update({
+    id: "/schedules/$scheduleId_/edit",
+    path: "/schedules/$scheduleId/edit",
+    getParentRoute: () => AppRoute,
+  } as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof AppIndexRoute;
@@ -106,15 +150,22 @@ export interface FileRoutesByFullPath {
   "/setup": typeof SetupRoute;
   "/jobs/$jobId": typeof AppJobsJobIdRoute;
   "/jobs/new": typeof AppJobsNewRoute;
+  "/notifications/$contactId": typeof AppNotificationsContactIdRoute;
+  "/notifications/new": typeof AppNotificationsNewRoute;
   "/remotes/$remoteId": typeof AppRemotesRemoteIdRoute;
   "/remotes/new": typeof AppRemotesNewRoute;
+  "/schedules/$scheduleId": typeof AppSchedulesScheduleIdRoute;
+  "/schedules/new": typeof AppSchedulesNewRoute;
   "/workers/$workerId": typeof AppWorkersWorkerIdRoute;
   "/workers/new": typeof AppWorkersNewRoute;
   "/jobs/": typeof AppJobsIndexRoute;
+  "/notifications/": typeof AppNotificationsIndexRoute;
   "/remotes/": typeof AppRemotesIndexRoute;
+  "/schedules/": typeof AppSchedulesIndexRoute;
   "/settings/": typeof AppSettingsIndexRoute;
   "/users/": typeof AppUsersIndexRoute;
   "/workers/": typeof AppWorkersIndexRoute;
+  "/schedules/$scheduleId/edit": typeof AppSchedulesScheduleIdEditRoute;
 }
 export interface FileRoutesByTo {
   "/login": typeof LoginRoute;
@@ -122,15 +173,22 @@ export interface FileRoutesByTo {
   "/": typeof AppIndexRoute;
   "/jobs/$jobId": typeof AppJobsJobIdRoute;
   "/jobs/new": typeof AppJobsNewRoute;
+  "/notifications/$contactId": typeof AppNotificationsContactIdRoute;
+  "/notifications/new": typeof AppNotificationsNewRoute;
   "/remotes/$remoteId": typeof AppRemotesRemoteIdRoute;
   "/remotes/new": typeof AppRemotesNewRoute;
+  "/schedules/$scheduleId": typeof AppSchedulesScheduleIdRoute;
+  "/schedules/new": typeof AppSchedulesNewRoute;
   "/workers/$workerId": typeof AppWorkersWorkerIdRoute;
   "/workers/new": typeof AppWorkersNewRoute;
   "/jobs": typeof AppJobsIndexRoute;
+  "/notifications": typeof AppNotificationsIndexRoute;
   "/remotes": typeof AppRemotesIndexRoute;
+  "/schedules": typeof AppSchedulesIndexRoute;
   "/settings": typeof AppSettingsIndexRoute;
   "/users": typeof AppUsersIndexRoute;
   "/workers": typeof AppWorkersIndexRoute;
+  "/schedules/$scheduleId/edit": typeof AppSchedulesScheduleIdEditRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
@@ -140,15 +198,22 @@ export interface FileRoutesById {
   "/_app/": typeof AppIndexRoute;
   "/_app/jobs/$jobId": typeof AppJobsJobIdRoute;
   "/_app/jobs/new": typeof AppJobsNewRoute;
+  "/_app/notifications/$contactId": typeof AppNotificationsContactIdRoute;
+  "/_app/notifications/new": typeof AppNotificationsNewRoute;
   "/_app/remotes/$remoteId": typeof AppRemotesRemoteIdRoute;
   "/_app/remotes/new": typeof AppRemotesNewRoute;
+  "/_app/schedules/$scheduleId": typeof AppSchedulesScheduleIdRoute;
+  "/_app/schedules/new": typeof AppSchedulesNewRoute;
   "/_app/workers/$workerId": typeof AppWorkersWorkerIdRoute;
   "/_app/workers/new": typeof AppWorkersNewRoute;
   "/_app/jobs/": typeof AppJobsIndexRoute;
+  "/_app/notifications/": typeof AppNotificationsIndexRoute;
   "/_app/remotes/": typeof AppRemotesIndexRoute;
+  "/_app/schedules/": typeof AppSchedulesIndexRoute;
   "/_app/settings/": typeof AppSettingsIndexRoute;
   "/_app/users/": typeof AppUsersIndexRoute;
   "/_app/workers/": typeof AppWorkersIndexRoute;
+  "/_app/schedules/$scheduleId_/edit": typeof AppSchedulesScheduleIdEditRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
@@ -158,15 +223,22 @@ export interface FileRouteTypes {
     | "/setup"
     | "/jobs/$jobId"
     | "/jobs/new"
+    | "/notifications/$contactId"
+    | "/notifications/new"
     | "/remotes/$remoteId"
     | "/remotes/new"
+    | "/schedules/$scheduleId"
+    | "/schedules/new"
     | "/workers/$workerId"
     | "/workers/new"
     | "/jobs/"
+    | "/notifications/"
     | "/remotes/"
+    | "/schedules/"
     | "/settings/"
     | "/users/"
-    | "/workers/";
+    | "/workers/"
+    | "/schedules/$scheduleId/edit";
   fileRoutesByTo: FileRoutesByTo;
   to:
     | "/login"
@@ -174,15 +246,22 @@ export interface FileRouteTypes {
     | "/"
     | "/jobs/$jobId"
     | "/jobs/new"
+    | "/notifications/$contactId"
+    | "/notifications/new"
     | "/remotes/$remoteId"
     | "/remotes/new"
+    | "/schedules/$scheduleId"
+    | "/schedules/new"
     | "/workers/$workerId"
     | "/workers/new"
     | "/jobs"
+    | "/notifications"
     | "/remotes"
+    | "/schedules"
     | "/settings"
     | "/users"
-    | "/workers";
+    | "/workers"
+    | "/schedules/$scheduleId/edit";
   id:
     | "__root__"
     | "/_app"
@@ -191,15 +270,22 @@ export interface FileRouteTypes {
     | "/_app/"
     | "/_app/jobs/$jobId"
     | "/_app/jobs/new"
+    | "/_app/notifications/$contactId"
+    | "/_app/notifications/new"
     | "/_app/remotes/$remoteId"
     | "/_app/remotes/new"
+    | "/_app/schedules/$scheduleId"
+    | "/_app/schedules/new"
     | "/_app/workers/$workerId"
     | "/_app/workers/new"
     | "/_app/jobs/"
+    | "/_app/notifications/"
     | "/_app/remotes/"
+    | "/_app/schedules/"
     | "/_app/settings/"
     | "/_app/users/"
-    | "/_app/workers/";
+    | "/_app/workers/"
+    | "/_app/schedules/$scheduleId_/edit";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -259,11 +345,25 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AppSettingsIndexRouteImport;
       parentRoute: typeof AppRoute;
     };
+    "/_app/schedules/": {
+      id: "/_app/schedules/";
+      path: "/schedules";
+      fullPath: "/schedules/";
+      preLoaderRoute: typeof AppSchedulesIndexRouteImport;
+      parentRoute: typeof AppRoute;
+    };
     "/_app/remotes/": {
       id: "/_app/remotes/";
       path: "/remotes";
       fullPath: "/remotes/";
       preLoaderRoute: typeof AppRemotesIndexRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/notifications/": {
+      id: "/_app/notifications/";
+      path: "/notifications";
+      fullPath: "/notifications/";
+      preLoaderRoute: typeof AppNotificationsIndexRouteImport;
       parentRoute: typeof AppRoute;
     };
     "/_app/jobs/": {
@@ -287,6 +387,20 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AppWorkersWorkerIdRouteImport;
       parentRoute: typeof AppRoute;
     };
+    "/_app/schedules/new": {
+      id: "/_app/schedules/new";
+      path: "/schedules/new";
+      fullPath: "/schedules/new";
+      preLoaderRoute: typeof AppSchedulesNewRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/schedules/$scheduleId": {
+      id: "/_app/schedules/$scheduleId";
+      path: "/schedules/$scheduleId";
+      fullPath: "/schedules/$scheduleId";
+      preLoaderRoute: typeof AppSchedulesScheduleIdRouteImport;
+      parentRoute: typeof AppRoute;
+    };
     "/_app/remotes/new": {
       id: "/_app/remotes/new";
       path: "/remotes/new";
@@ -299,6 +413,20 @@ declare module "@tanstack/react-router" {
       path: "/remotes/$remoteId";
       fullPath: "/remotes/$remoteId";
       preLoaderRoute: typeof AppRemotesRemoteIdRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/notifications/new": {
+      id: "/_app/notifications/new";
+      path: "/notifications/new";
+      fullPath: "/notifications/new";
+      preLoaderRoute: typeof AppNotificationsNewRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/notifications/$contactId": {
+      id: "/_app/notifications/$contactId";
+      path: "/notifications/$contactId";
+      fullPath: "/notifications/$contactId";
+      preLoaderRoute: typeof AppNotificationsContactIdRouteImport;
       parentRoute: typeof AppRoute;
     };
     "/_app/jobs/new": {
@@ -315,6 +443,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AppJobsJobIdRouteImport;
       parentRoute: typeof AppRoute;
     };
+    "/_app/schedules/$scheduleId_/edit": {
+      id: "/_app/schedules/$scheduleId_/edit";
+      path: "/schedules/$scheduleId/edit";
+      fullPath: "/schedules/$scheduleId/edit";
+      preLoaderRoute: typeof AppSchedulesScheduleIdEditRouteImport;
+      parentRoute: typeof AppRoute;
+    };
   }
 }
 
@@ -322,30 +457,44 @@ interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute;
   AppJobsJobIdRoute: typeof AppJobsJobIdRoute;
   AppJobsNewRoute: typeof AppJobsNewRoute;
+  AppNotificationsContactIdRoute: typeof AppNotificationsContactIdRoute;
+  AppNotificationsNewRoute: typeof AppNotificationsNewRoute;
   AppRemotesRemoteIdRoute: typeof AppRemotesRemoteIdRoute;
   AppRemotesNewRoute: typeof AppRemotesNewRoute;
+  AppSchedulesScheduleIdRoute: typeof AppSchedulesScheduleIdRoute;
+  AppSchedulesNewRoute: typeof AppSchedulesNewRoute;
   AppWorkersWorkerIdRoute: typeof AppWorkersWorkerIdRoute;
   AppWorkersNewRoute: typeof AppWorkersNewRoute;
   AppJobsIndexRoute: typeof AppJobsIndexRoute;
+  AppNotificationsIndexRoute: typeof AppNotificationsIndexRoute;
   AppRemotesIndexRoute: typeof AppRemotesIndexRoute;
+  AppSchedulesIndexRoute: typeof AppSchedulesIndexRoute;
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute;
   AppUsersIndexRoute: typeof AppUsersIndexRoute;
   AppWorkersIndexRoute: typeof AppWorkersIndexRoute;
+  AppSchedulesScheduleIdEditRoute: typeof AppSchedulesScheduleIdEditRoute;
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppJobsJobIdRoute: AppJobsJobIdRoute,
   AppJobsNewRoute: AppJobsNewRoute,
+  AppNotificationsContactIdRoute: AppNotificationsContactIdRoute,
+  AppNotificationsNewRoute: AppNotificationsNewRoute,
   AppRemotesRemoteIdRoute: AppRemotesRemoteIdRoute,
   AppRemotesNewRoute: AppRemotesNewRoute,
+  AppSchedulesScheduleIdRoute: AppSchedulesScheduleIdRoute,
+  AppSchedulesNewRoute: AppSchedulesNewRoute,
   AppWorkersWorkerIdRoute: AppWorkersWorkerIdRoute,
   AppWorkersNewRoute: AppWorkersNewRoute,
   AppJobsIndexRoute: AppJobsIndexRoute,
+  AppNotificationsIndexRoute: AppNotificationsIndexRoute,
   AppRemotesIndexRoute: AppRemotesIndexRoute,
+  AppSchedulesIndexRoute: AppSchedulesIndexRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
   AppUsersIndexRoute: AppUsersIndexRoute,
   AppWorkersIndexRoute: AppWorkersIndexRoute,
+  AppSchedulesScheduleIdEditRoute: AppSchedulesScheduleIdEditRoute,
 };
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren);

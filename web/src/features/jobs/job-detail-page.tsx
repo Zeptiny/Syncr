@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
   AlertTriangle,
+  CalendarClock,
   CircleSlash,
   HardDrive,
   Pencil,
@@ -46,6 +47,7 @@ import { invalidateService } from "@/lib/invalidate";
 import { errorCodeLabel, isTerminal, kindLabel, transferModeLabel } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
+import { ScheduleChip } from "./jobs-table";
 import {
   endpoint,
   jobElapsed,
@@ -283,6 +285,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
               <RelativeTime date={tsDate(job.createdAt)} />
               {foreign && owner && <> by {owner.displayName || owner.username}</>}
             </span>
+            {job.scheduleId && <ScheduleChip job={job} />}
             <span
               className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground"
               title={job.id}
@@ -308,6 +311,14 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
               >
                 <CircleSlash aria-hidden />
                 {job.cancelRequested ? "Cancelling…" : "Cancel job"}
+              </Button>
+            )}
+            {!foreign && !job.scheduleId && (
+              <Button variant="outline" asChild>
+                <Link to="/schedules/new" search={{ job: job.id }}>
+                  <CalendarClock aria-hidden />
+                  Schedule
+                </Link>
               </Button>
             )}
             {!foreign && (
@@ -435,6 +446,20 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
                     </Link>
                   ) : (
                     "Removed"
+                  ),
+                },
+                {
+                  label: "Started by",
+                  value: job.scheduleId ? (
+                    <Link
+                      to="/schedules/$scheduleId"
+                      params={{ scheduleId: job.scheduleId }}
+                      className="text-primary hover:underline"
+                    >
+                      {job.schedule?.name || "A deleted schedule"}
+                    </Link>
+                  ) : (
+                    "Run by hand"
                   ),
                 },
                 { label: "Mode", value: transferModeLabel(transferOf(job)?.mode ?? 0) },

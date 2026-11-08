@@ -241,7 +241,7 @@ export function SetupPage({ step }: { step: SetupStep }) {
             </p>
           </div>
           <ActiveEnrollment />
-          <Button size="lg" variant="outline" onClick={() => void navigate({ to: "/jobs" })}>
+          <Button size="lg" variant="outline" onClick={() => void navigate({ to: "/" })}>
             Continue to Syncr
           </Button>
         </div>

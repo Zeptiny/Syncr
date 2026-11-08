@@ -28,7 +28,24 @@ export default defineConfig({
     sourcemap: false,
     // index.html must not be inlined into: the CSP forbids inline scripts.
     assetsInlineLimit: 0,
-    chunkSizeWarningLimit: 900,
+    chunkSizeWarningLimit: 300,
+    rolldownOptions: {
+      output: {
+        // Routes are split by the router plugin (autoCodeSplitting). The
+        // framework every page needs goes into a few vendor chunks, which
+        // stay cached across deploys while the app chunk changes.
+        codeSplitting: {
+          groups: [
+            { name: "react", test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
+            { name: "rpc", test: /node_modules[\\/]@(bufbuild|connectrpc)[\\/]/ },
+            {
+              name: "tanstack",
+              test: /node_modules[\\/]@tanstack[\\/](react-router|router-core|history|store|react-store|query-core|react-query)[\\/]/,
+            },
+          ],
+        },
+      },
+    },
   },
   test: {
     environment: "jsdom",

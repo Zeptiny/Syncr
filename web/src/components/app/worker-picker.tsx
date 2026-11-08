@@ -7,16 +7,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { workerStatusMeta } from "@/lib/status";
+import { toneDot } from "@/lib/tones";
 import { sortWorkers } from "@/lib/workers";
 import { cn } from "@/lib/utils";
-
-const dot: Record<string, string> = {
-  success: "bg-success",
-  warning: "bg-warning",
-  neutral: "bg-neutral/60",
-  danger: "bg-danger",
-  live: "bg-live",
-};
 
 /** WorkerPicker selects a worker, online ones first. */
 export function WorkerPicker({
@@ -48,7 +41,10 @@ export function WorkerPicker({
           const meta = workerStatusMeta(w.status);
           return (
             <SelectItem key={w.id} value={w.id}>
-              <span className={cn("size-2 shrink-0 rounded-full", dot[meta.tone])} aria-hidden />
+              <span
+                className={cn("size-2 shrink-0 rounded-full", toneDot[meta.tone])}
+                aria-hidden
+              />
               <span className="truncate">{w.name}</span>
               <span className="ml-1 text-xs text-muted-foreground">
                 {meta.label}
