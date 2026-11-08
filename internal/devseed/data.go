@@ -35,6 +35,10 @@ type demoWorker struct {
 	url         string // passive only
 	fingerprint string // passive only
 	info        workers.Info
+	labels      []string
+	// removedAgo removes the worker this long before the seed's start, as
+	// part of the history (its schedule is paused when it next runs).
+	removedAgo time.Duration
 }
 
 // passivePairingSecret is the pairing secret of the demo passive worker (a
@@ -55,6 +59,7 @@ func demoWorkers() []demoWorker {
 				Version: "2.0.0-dev", OS: "linux", Arch: "amd64", Hostname: "nas-01", Tools: tools(), JobKinds: link.Kinds(),
 				MaxConcurrentJobs: 2, LocalRoots: []string{"/srv", "/mnt"},
 			},
+			labels: []string{"nas", "linux"},
 		},
 		{
 			name: "office-pc", mode: domain.WorkerActive, status: domain.WorkerOffline, lastSeen: 3 * time.Hour,
@@ -62,6 +67,7 @@ func demoWorkers() []demoWorker {
 				Version: "2.0.0-dev", OS: "windows", Arch: "amd64", Hostname: "OFFICE-PC", Tools: tools(), JobKinds: link.Kinds(),
 				MaxConcurrentJobs: 1, LocalRoots: []string{`C:\Users\ada\Documents`, `D:\Backups`},
 			},
+			labels: []string{"desktop", "windows"},
 		},
 		{
 			name: "backup-host", mode: domain.WorkerPassive, status: domain.WorkerOnline,
@@ -70,13 +76,28 @@ func demoWorkers() []demoWorker {
 				Version: "2.0.0-dev", OS: "linux", Arch: "arm64", Hostname: "backup-host", Tools: tools(), JobKinds: link.Kinds(),
 				MaxConcurrentJobs: 4, LocalRoots: []string{"/backup"},
 			},
+			labels: []string{"offsite"},
 		},
 		{
 			name: "laptop", mode: domain.WorkerActive, status: domain.WorkerPending,
 			info: workers.Info{OS: "linux", Arch: "amd64"},
 		},
+		{
+			name: wOldNAS, mode: domain.WorkerActive, status: domain.WorkerOffline, lastSeen: oldNASRemoved,
+			info: workers.Info{
+				Version: "2.0.0-dev", OS: "linux", Arch: "amd64", Hostname: "old-nas", Tools: tools(), JobKinds: link.Kinds(),
+				MaxConcurrentJobs: 1, LocalRoots: []string{"/volume1"},
+			},
+			labels: []string{"nas", "linux"}, removedAgo: oldNASRemoved,
+		},
 	}
 }
+
+// wOldNAS is the demo worker that was removed (its schedule is paused).
+const wOldNAS = "old-nas"
+
+// oldNASRemoved is how long before the seed old-nas was removed.
+const oldNASRemoved = 6*24*time.Hour + 9*time.Hour
 
 // demoRemote is a seeded remote; members name earlier remotes of a union.
 type demoRemote struct {
@@ -159,6 +180,9 @@ type demoJob struct {
 	exitCode int
 	// cancelled: a cancel was requested (Finish then records cancelled).
 	cancelled bool
+	// samples is about how many progress samples a finished job stores
+	// (default 60).
+	samples int
 }
 
 const (
@@ -169,13 +193,25 @@ const (
 
 func ptr[T any](v T) *T { return &v }
 
+// ptrOptions are transfer options with transfers parallel transfers.
+func ptrOptions(transfers int32, checksum bool) *syncrv1.RcloneTransferOptions {
+	return &syncrv1.RcloneTransferOptions{Transfers: ptr(transfers), Checksum: checksum}
+}
+
 // done are the counters of a transfer that completed: everything
 // transferred.
 func done(bytes, files, checks int64) jobs.Stats {
 	return jobs.Stats{Bytes: bytes, TotalBytes: bytes, Files: files, TotalFiles: files, Checks: checks}
 }
 
-// demoJobs are the jobs, oldest first. Exactly one is running.
+// Ages of the manual jobs whose notifications the seed leaves retrying
+// (the email) or dead (the webhook), and sending (the email).
+const (
+	retryingJobAgo = 25 * time.Minute
+	sendingJobAgo  = 6 * time.Minute
+)
+
+// demoJobs are the jobs run by hand, oldest first. Exactly one is running.
 func demoJobs() []demoJob {
 	h, m, s, d := time.Hour, time.Minute, time.Second, 24*time.Hour
 	return []demoJob{
@@ -255,12 +291,20 @@ func demoJobs() []demoJob {
 		{owner: ownerAdmin, worker: "backup-host", mode: copyMode, src: loc{rNextcloud, "Photos"}, dst: loc{"", "/backup/nextcloud-photos"},
 			status: domain.JobSucceeded, created: 2 * h, queue: 2 * s, run: 14*m + 44*s,
 			stats: done(6*gib+222*mib, 1890, 1890), exitCode: 0},
+		{owner: ownerAdmin, worker: "nas-01", mode: copyMode, src: loc{rNextcloud, "Shared"}, dst: loc{rMinIO, "nextcloud/shared"},
+			status: domain.JobFailed, created: retryingJobAgo, queue: 2 * s, run: 48 * s,
+			stats: jobs.Stats{Bytes: 21 * mib, TotalBytes: 900 * mib, Files: 14, TotalFiles: 702, Errors: 1},
+			err:   jobs.JobError{Code: "execution_failed", Message: "rclone exited with status 7: couldn't list directory: 401 Unauthorized"}, exitCode: 7},
 		{owner: ownerAdmin, worker: "nas-01", mode: syncMode, src: loc{rPhotos, ""}, dst: loc{rMinIO, "photos"},
 			status: domain.JobRunning, created: 12 * m, queue: 3 * s,
 			stats:   jobs.Stats{TotalBytes: 380 * gib, TotalFiles: 52340},
 			options: &syncrv1.RcloneTransferOptions{Transfers: ptr[int32](8), Checkers: ptr[int32](16), Checksum: true}},
 		{owner: ownerAlice, worker: "office-pc", mode: copyMode, src: loc{"", `D:\Backups\alice`}, dst: loc{rAliceB2, "pc"},
 			status: domain.JobQueued, created: 4 * m},
+		{owner: ownerAdmin, worker: "backup-host", mode: copyMode, src: loc{rNextcloud, "Calendar"}, dst: loc{rStorage, "calendar"},
+			status: domain.JobInterrupted, created: sendingJobAgo, queue: 2 * s, run: 50 * s,
+			stats: jobs.Stats{Bytes: 3 * mib, TotalBytes: 40 * mib, Files: 12, TotalFiles: 150},
+			err:   jobs.JobError{Code: "worker_lost", Message: "the worker no longer holds the job and reported no result"}, exitCode: -1},
 		{owner: ownerAdmin, worker: "backup-host", mode: copyMode, src: loc{rNextcloud, ""}, dst: loc{rStorage, "nextcloud"},
 			status: domain.JobDispatched, created: 1 * m, queue: 4 * s},
 		{owner: ownerAdmin, worker: "laptop", mode: copyMode, src: loc{"", "/home/ada/projects"}, dst: loc{rStorage, "laptop/projects"},

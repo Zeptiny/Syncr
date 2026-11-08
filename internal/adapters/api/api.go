@@ -25,7 +25,8 @@
 //
 // Allowed dependencies: the standard library, connect, the generated
 // protobuf code, internal/domain, internal/app/... services,
-// internal/backend, internal/jobkind and internal/platform packages. It must
+// internal/backend, internal/descriptor, internal/notify, internal/jobkind
+// and internal/platform packages. It must
 // not import other adapters; the composition root (cmd/syncr-controller)
 // wires them together.
 package api
@@ -45,6 +46,7 @@ import (
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
 	"github.com/Zeptiny/Syncr/internal/backend"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
+	"github.com/Zeptiny/Syncr/internal/notify"
 	"github.com/Zeptiny/Syncr/internal/platform/version"
 )
 
@@ -88,6 +90,19 @@ type Deps struct {
 	Remotes RemoteService
 	// Backends serves BackendService: the backend type descriptors.
 	Backends *backend.Registry
+
+	// Schedules serves ScheduleService (*schedules.Service), with Kinds
+	// checking the definitions, Remotes naming their remotes and Contacts
+	// naming their contacts. With Jobs (implementing DashboardJobs) and
+	// Workers it also serves DashboardService.
+	Schedules ScheduleService
+	// Contacts serves ContactService (*contacts.Service), with Deliveries
+	// (*notifications.Service) serving its delivery log.
+	Contacts   ContactService
+	Deliveries DeliveryService
+	// Channels serves ChannelService (the notification channel
+	// descriptors) and validates contacts' channel types.
+	Channels *notify.Registry
 
 	// UI is the web UI's files (index.html at the root); nil serves no UI.
 	UI fs.FS
@@ -182,6 +197,7 @@ func mountProtected(mux *http.ServeMux, deps Deps, logger *slog.Logger, opts []c
 			jobs:      deps.Jobs,
 			kinds:     deps.Kinds,
 			remotes:   deps.Remotes,
+			schedules: deps.Schedules,
 			errs:      errs,
 			log:       logger,
 			base:      base,
@@ -201,6 +217,38 @@ func mountProtected(mux *http.ServeMux, deps Deps, logger *slog.Logger, opts []c
 		mux.Handle(syncrv1connect.NewRemoteServiceHandler(&remoteHandler{remotes: deps.Remotes, backends: deps.Backends, errs: errs}, opts...))
 	} else {
 		disabled(syncrv1connect.RemoteServiceName)
+	}
+	mountMilestone4(mux, deps, errs, disabled, opts)
+}
+
+// mountMilestone4 adds the schedule, notification and dashboard services.
+func mountMilestone4(mux *http.ServeMux, deps Deps, errs errorMapper, disabled func(string), opts []connect.HandlerOption) {
+	if deps.Schedules != nil {
+		mux.Handle(syncrv1connect.NewScheduleServiceHandler(&scheduleHandler{
+			schedules: deps.Schedules, kinds: deps.Kinds, remotes: deps.Remotes, contacts: deps.Contacts, errs: errs,
+		}, opts...))
+	} else {
+		disabled(syncrv1connect.ScheduleServiceName)
+	}
+	if deps.Contacts != nil {
+		mux.Handle(syncrv1connect.NewContactServiceHandler(&contactHandler{
+			contacts: deps.Contacts, deliveries: deps.Deliveries, channels: deps.Channels, errs: errs,
+		}, opts...))
+	} else {
+		disabled(syncrv1connect.ContactServiceName)
+	}
+	if deps.Channels != nil {
+		mux.Handle(syncrv1connect.NewChannelServiceHandler(&channelHandler{channels: deps.Channels}, opts...))
+	} else {
+		disabled(syncrv1connect.ChannelServiceName)
+	}
+	activity, ok := deps.Jobs.(DashboardJobs)
+	if ok && deps.Workers != nil && deps.Schedules != nil {
+		mux.Handle(syncrv1connect.NewDashboardServiceHandler(&dashboardHandler{
+			jobs: deps.Jobs, activity: activity, workers: deps.Workers, schedules: deps.Schedules, remotes: deps.Remotes, errs: errs,
+		}, opts...))
+	} else {
+		disabled(syncrv1connect.DashboardServiceName)
 	}
 }
 

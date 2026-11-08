@@ -100,7 +100,10 @@ export const BackendSchema: GenMessage<Backend> = /*@__PURE__*/
   messageDesc(file_syncr_v1_remotes, 2);
 
 /**
- * BackendField describes one configuration field of a backend type.
+ * BackendField describes one configuration field of a backend type. It also
+ * describes the configuration fields of notification channel types
+ * (ChannelType.fields in notify.proto), where "RemoteInput" reads as
+ * "ContactInput" and the MEMBERS kind never occurs.
  *
  * @generated from message syncr.v1.BackendField
  */

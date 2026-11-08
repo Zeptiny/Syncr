@@ -1,6 +1,7 @@
 package api
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -8,8 +9,10 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/app/contacts"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
@@ -249,5 +252,109 @@ func TestProgressToProto(t *testing.T) {
 	got := progressToProto(jobs.Sample{Time: convT0, Stats: jobs.Stats{Bytes: 3, Elapsed: 2 * time.Second}})
 	if !got.GetTime().AsTime().Equal(convT0) || got.GetStats().GetBytes() != 3 || got.GetStats().GetElapsed().AsDuration() != 2*time.Second {
 		t.Errorf("progressToProto = %v", got)
+	}
+}
+
+// TestMilestone4Conversions covers the contracts step's additions: worker
+// labels and a job's schedule ID (the schedule reference itself is filled
+// in by the jobs handler).
+func TestMilestone4Conversions(t *testing.T) {
+	t.Parallel()
+	w := workers.Worker{ID: domain.NewWorkerID(), Name: "nas-01", Labels: []string{"linux", "nas"}}
+	if got := workerToProto(w, domain.WorkerOnline); !slices.Equal(got.GetLabels(), []string{"linux", "nas"}) {
+		t.Errorf("labels = %v", got.GetLabels())
+	}
+	sched := domain.NewScheduleID()
+	j, err := jobToProto(jobs.Job{ID: domain.NewJobID(), ScheduleID: sched, Status: domain.JobQueued}, nil, nil)
+	if err != nil || j.GetScheduleId() != sched.String() || j.GetSchedule() != nil {
+		t.Errorf("scheduled job = (%v, %v)", j, err)
+	}
+	if manual, _ := jobToProto(jobs.Job{ID: domain.NewJobID(), Status: domain.JobQueued}, nil, nil); manual.GetScheduleId() != "" {
+		t.Errorf("manual job schedule_id = %q", manual.GetScheduleId())
+	}
+}
+
+func TestScheduleConversions(t *testing.T) {
+	t.Parallel()
+	for _, a := range []schedules.MissedAction{schedules.MissedRunLate, schedules.MissedSkip} {
+		if got, ok := missedActionFromProto(missedActionToProto(a)); !ok || got != a {
+			t.Errorf("missed action %q round trip = %q", a, got)
+		}
+	}
+	if got, ok := missedActionFromProto(syncrv1.MissedRunAction_MISSED_RUN_ACTION_UNSPECIFIED); !ok || got != schedules.MissedRunLate {
+		t.Errorf("unspecified missed action = %q", got)
+	}
+	if _, ok := missedActionFromProto(99); ok {
+		t.Error("unknown missed action accepted")
+	}
+	for _, o := range []schedules.Overlap{schedules.OverlapSkip, schedules.OverlapQueue, schedules.OverlapAllow} {
+		if got, ok := overlapFromProto(overlapToProto(o)); !ok || got != o {
+			t.Errorf("overlap %q round trip = %q", o, got)
+		}
+	}
+	if got, ok := overlapFromProto(syncrv1.OverlapPolicy_OVERLAP_POLICY_UNSPECIFIED); !ok || got != "" {
+		t.Errorf("unspecified overlap = %q", got)
+	}
+	if _, ok := overlapFromProto(99); ok {
+		t.Error("unknown overlap accepted")
+	}
+	for _, e := range domain.NotificationEvents() {
+		if got, ok := notificationEventFromProto(notificationEventToProto(e)); !ok || got != e {
+			t.Errorf("event %q round trip = %q", e, got)
+		}
+	}
+	if _, ok := notificationEventFromProto(syncrv1.NotificationEvent_NOTIFICATION_EVENT_UNSPECIFIED); ok {
+		t.Error("unspecified event accepted")
+	}
+	statuses := map[schedules.RunStatus]syncrv1.ScheduleRunStatus{
+		schedules.RunPending: syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_PENDING, schedules.RunLaunching: syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_LAUNCHING,
+		schedules.RunLaunched: syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_LAUNCHED, schedules.RunMissed: syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_MISSED,
+		schedules.RunFailed: syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_FAILED, schedules.RunCancelled: syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_CANCELLED,
+		"bogus": syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_UNSPECIFIED,
+	}
+	for s, want := range statuses {
+		if got := runStatusToProto(s); got != want {
+			t.Errorf("runStatusToProto(%q) = %v", s, got)
+		}
+	}
+
+	r := schedules.Run{
+		ID: domain.NewScheduleRunID(), ScheduleID: domain.NewScheduleID(), Trigger: schedules.TriggerCron,
+		ScheduledFor: convT0, Deadline: convT0.Add(time.Hour), Coalesced: 3, Status: schedules.RunLaunched,
+		WorkerID: domain.NewWorkerID(), JobID: domain.NewJobID(), JobStatus: domain.JobRunning, CreatedAt: convT0, UpdatedAt: convT0,
+	}
+	pr := scheduleRunToProto(r)
+	if pr.GetId() != r.ID.String() || pr.GetTrigger() != syncrv1.ScheduleRunTrigger_SCHEDULE_RUN_TRIGGER_CRON || pr.GetCoalesced() != 3 ||
+		pr.GetJobId() != r.JobID.String() || pr.GetWorkerId() != r.WorkerID.String() || pr.GetJobStatus() != syncrv1.JobStatus_JOB_STATUS_RUNNING ||
+		!pr.GetDeadline().AsTime().Equal(r.Deadline) {
+		t.Errorf("scheduleRunToProto = %v", pr)
+	}
+	if p := scheduleRunToProto(schedules.Run{Trigger: schedules.TriggerManual, Status: schedules.RunPending}); p.GetJobId() != "" || p.GetWorkerId() != "" ||
+		p.GetTrigger() != syncrv1.ScheduleRunTrigger_SCHEDULE_RUN_TRIGGER_MANUAL || p.GetJobStatus() != syncrv1.JobStatus_JOB_STATUS_UNSPECIFIED {
+		t.Errorf("pending run = %v", p)
+	}
+
+	remote, contact := domain.NewRemoteID(), domain.NewContactID()
+	sc := schedules.Schedule{
+		ID: r.ScheduleID, OwnerID: domain.NewUserID(), Name: "n", Cron: "0 * * * *", Timezone: "UTC",
+		Definition: []byte(`{"rclone_transfer":{"mode":"RCLONE_TRANSFER_MODE_SYNC"}}`), RemoteIDs: []domain.RemoteID{remote},
+		Target: schedules.Target{Label: "nas"}, Missed: schedules.MissedPolicy{Action: schedules.MissedSkip}, Overlap: schedules.OverlapAllow,
+		Contacts: []schedules.ContactLink{{ContactID: contact, Events: domain.EventSet{domain.EventMissed}}}, Version: 4,
+	}
+	refs := scheduleRefs{
+		remotes:  map[domain.RemoteID]remotes.Ref{remote: {ID: remote, Name: "Photos", Type: "s3", Deleted: true}},
+		contacts: map[domain.ContactID]contacts.Ref{contact: {ID: contact, Name: "Ops", Type: "webhook"}},
+		last:     map[domain.ScheduleID]schedules.Run{sc.ID: r},
+	}
+	ps, err := scheduleToProto(sc, refs)
+	if err != nil || ps.GetTarget().GetWorkerLabel() != "nas" || ps.GetMissedRun().GetMaxDelay() != nil ||
+		ps.GetOverlap() != syncrv1.OverlapPolicy_OVERLAP_POLICY_ALLOW || !ps.GetRemotes()[0].GetDeleted() ||
+		ps.GetContacts()[0].GetContactName() != "Ops" || ps.GetLastRun().GetId() != r.ID.String() || ps.GetNextRunAt() != nil ||
+		ps.GetDefinition().GetRcloneTransfer().GetMode() != syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_SYNC || ps.GetVersion() != 4 {
+		t.Errorf("scheduleToProto = (%v, %v)", ps, err)
+	}
+	sc.Definition = []byte("not json")
+	if ps, err := scheduleToProto(sc, scheduleRefs{}); err == nil || ps.GetDefinition() != nil || ps.GetName() != "n" || ps.GetLastRun() != nil {
+		t.Errorf("scheduleToProto(corrupt definition) = (%v, %v)", ps, err)
 	}
 }

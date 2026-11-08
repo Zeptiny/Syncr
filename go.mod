@@ -12,9 +12,12 @@ tool (
 
 require (
 	connectrpc.com/connect v1.21.1
+	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
+	github.com/emersion/go-smtp v0.24.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/kardianos/service v1.3.0
 	github.com/pressly/goose/v3 v3.27.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/testcontainers/testcontainers-go v0.44.0
 	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/crypto v0.54.0

@@ -19,6 +19,42 @@ type ApiToken struct {
 	LastUsedAt pgtype.Timestamptz
 }
 
+type Contact struct {
+	ID          pgtype.UUID
+	OwnerID     pgtype.UUID
+	Name        string
+	ChannelType string
+	Options     []byte
+	SecretsEnc  []byte
+	SecretKeys  []string
+	Summary     string
+	Enabled     bool
+	JobEvents   []string
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	Version     int64
+}
+
+type Delivery struct {
+	ID            pgtype.UUID
+	ContactID     pgtype.UUID
+	OwnerID       pgtype.UUID
+	Event         string
+	DedupeKey     string
+	JobID         pgtype.UUID
+	ScheduleID    pgtype.UUID
+	Payload       []byte
+	Status        string
+	Attempts      int32
+	MaxAttempts   int32
+	NextAttemptAt pgtype.Timestamptz
+	LeaseUntil    pgtype.Timestamptz
+	LastAttemptAt pgtype.Timestamptz
+	DeliveredAt   pgtype.Timestamptz
+	LastError     string
+	CreatedAt     pgtype.Timestamptz
+}
+
 type EnrollmentToken struct {
 	Hash      []byte
 	CreatedAt pgtype.Timestamptz
@@ -58,6 +94,8 @@ type Job struct {
 	OwnerID           pgtype.UUID
 	Definition        []byte
 	SearchText        string
+	ScheduleID        pgtype.UUID
+	NotifiedAt        pgtype.Timestamptz
 }
 
 type JobRemote struct {
@@ -91,6 +129,58 @@ type Remote struct {
 	UpdatedAt   pgtype.Timestamptz
 	DeletedAt   pgtype.Timestamptz
 	Version     int64
+}
+
+type Schedule struct {
+	ID           pgtype.UUID
+	OwnerID      pgtype.UUID
+	Name         string
+	Description  string
+	Cron         string
+	Timezone     string
+	Kind         string
+	Definition   []byte
+	SearchText   string
+	WorkerID     pgtype.UUID
+	WorkerLabel  *string
+	MissedAction string
+	MaxDelayNs   int64
+	Overlap      string
+	Enabled      bool
+	PausedReason string
+	NextRunAt    pgtype.Timestamptz
+	LastFiredAt  pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+	Version      int64
+}
+
+type ScheduleContact struct {
+	ScheduleID pgtype.UUID
+	ContactID  pgtype.UUID
+	Events     []string
+}
+
+type ScheduleRemote struct {
+	ScheduleID pgtype.UUID
+	RemoteID   pgtype.UUID
+}
+
+type ScheduleRun struct {
+	ID           pgtype.UUID
+	ScheduleID   pgtype.UUID
+	Trigger      string
+	ScheduledFor pgtype.Timestamptz
+	Deadline     pgtype.Timestamptz
+	Coalesced    int32
+	Status       string
+	Reason       string
+	Message      string
+	WorkerID     pgtype.UUID
+	JobID        pgtype.UUID
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+	NotifiedAt   pgtype.Timestamptz
 }
 
 type Session struct {
@@ -141,4 +231,5 @@ type Worker struct {
 	LastSeen        pgtype.Timestamptz
 	CreatedAt       pgtype.Timestamptz
 	RemovedAt       pgtype.Timestamptz
+	Labels          []string
 }

@@ -1,6 +1,7 @@
 package devseed
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -16,44 +17,17 @@ import (
 	"github.com/Zeptiny/Syncr/internal/jobkind"
 )
 
-// seedJobs creates the demo jobs through a jobs service of its own, whose
-// clock it moves to each step of a job's history, so every job goes through
-// the real lifecycle (queued, dispatched, running with progress samples,
-// finished) with times in the past. Its IDs are time-ordered UUIDv7s of
-// those times, so jobs list in creation order.
-func (s *Seed) seedJobs(ctx context.Context, now time.Time) error {
-	clk := &stepClock{now: now}
-	past, err := jobs.New(jobs.Deps{
-		Jobs: s.d.Store, Samples: s.d.Store, Clock: clk, IDs: &seedIDs{clock: clk},
-		Broker: nopBroker{}, Notifier: jobs.NopNotifier{}, Waker: nopWaker{}, Remotes: s.d.Remotes,
-		Logger: nil,
-	}, jobs.Config{})
-	if err != nil {
-		return err
-	}
-	running := 0
-	for i, dj := range demoJobs() {
-		id, err := s.seedJob(ctx, past, clk, now, dj)
-		if err != nil {
-			return fmt.Errorf("job %d (%s on %s): %w", i, dj.status, dj.worker, err)
-		}
-		s.Jobs = append(s.Jobs, id)
-		if dj.status == domain.JobRunning {
-			running++
-			s.Running = id
-			s.runningWorker = s.Workers[dj.worker]
-			s.runningEpoch = epochOf(dj.worker)
-			s.runningStart = now.Add(-dj.created + dj.queue)
-		}
-	}
-	if running != 1 {
-		return fmt.Errorf("%d running demo jobs, want exactly one", running)
-	}
-	return nil
+// jobPreset is what a scheduled run presets on its job: the ID it
+// reserved and its schedule.
+type jobPreset struct {
+	id       domain.JobID
+	schedule domain.ScheduleID
 }
 
-// seedJob runs one demo job through its history and returns its ID.
-func (s *Seed) seedJob(ctx context.Context, svc *jobs.Service, clk *stepClock, now time.Time, dj demoJob) (domain.JobID, error) {
+// seedJob runs one demo job, created at created, through its history (the
+// past jobs service svc, whose clock clk it moves) and returns its ID. now
+// is the seed's start.
+func (s *Seed) seedJob(ctx context.Context, svc *jobs.Service, clk *stepClock, now, created time.Time, dj demoJob, preset jobPreset) (domain.JobID, error) {
 	def, err := s.definition(dj)
 	if err != nil {
 		return domain.JobID{}, err
@@ -73,9 +47,9 @@ func (s *Seed) seedJob(ctx context.Context, svc *jobs.Service, clk *stepClock, n
 	actor := s.actor(dj.owner)
 	epoch := epochOf(dj.worker)
 
-	created := now.Add(-dj.created)
 	clk.set(created)
 	j, err := svc.Create(ctx, actor, jobs.CreateParams{
+		ID: preset.id, ScheduleID: preset.schedule,
 		WorkerID: workerID, Kind: kind, Definition: enc, RemoteIDs: refs.RemoteIDs, SearchTerms: refs.SearchTerms,
 	})
 	if err != nil {
@@ -125,7 +99,7 @@ func (s *Seed) seedJob(ctx context.Context, svc *jobs.Service, clk *stepClock, n
 		}
 		return id, nil
 	}
-	every := max(5*time.Second, dj.run/60)
+	every := max(5*time.Second, dj.run/time.Duration(cmp.Or(dj.samples, 60)))
 	for at := start.Add(every); at.Before(end); at = at.Add(every) {
 		if err := s.sample(ctx, svc, clk, workerID, id, epoch, at, partialStats(dj.stats, at.Sub(start), dj.run)); err != nil {
 			return id, err
@@ -299,27 +273,51 @@ func (c *stepClock) set(t time.Time) {
 	c.mu.Unlock()
 }
 
-// seedIDs mints time-ordered UUIDv7 job IDs: the clock's time and fixed
-// "random" bits derived from a counter, so IDs order like the jobs'
-// creation times.
+// seedIDs mints time-ordered UUIDv7 IDs of every kind the seed's own
+// services create (jobs, schedules, runs, deliveries): the clock's time and
+// fixed "random" bits derived from a counter, so IDs order like the
+// objects' creation times and two seeds at the same time mint the same IDs.
 type seedIDs struct {
 	clock *stepClock
+	mu    sync.Mutex
 	n     int
 }
 
-func (g *seedIDs) NewJobID() domain.JobID {
+// next returns the next ID in canonical text form.
+func (g *seedIDs) next(kind string) string {
+	g.mu.Lock()
 	g.n++
+	n := g.n
+	g.mu.Unlock()
 	var u [16]byte
 	binary.BigEndian.PutUint64(u[:8], uint64(g.clock.Now().UnixMilli())<<16)
-	sum := sha256.Sum256(fmt.Appendf(nil, "syncr devseed job %d", g.n))
+	sum := sha256.Sum256(fmt.Appendf(nil, "syncr devseed %s %d", kind, n))
 	copy(u[6:], sum[:10])
 	u[6] = 0x70 | u[6]&0x0f // version 7
 	u[8] = 0x80 | u[8]&0x3f // RFC 9562 variant
-	id, err := domain.ParseJobID(fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16]))
+	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
+}
+
+// mustID parses an ID next minted; the bytes always form a valid UUID.
+func mustID[T any](id T, err error) T {
 	if err != nil {
-		panic(err) // the bytes above always form a valid UUID
+		panic(err)
 	}
 	return id
+}
+
+func (g *seedIDs) NewJobID() domain.JobID { return mustID(domain.ParseJobID(g.next("job"))) }
+
+func (g *seedIDs) NewScheduleID() domain.ScheduleID {
+	return mustID(domain.ParseScheduleID(g.next("schedule")))
+}
+
+func (g *seedIDs) NewScheduleRunID() domain.ScheduleRunID {
+	return mustID(domain.ParseScheduleRunID(g.next("run")))
+}
+
+func (g *seedIDs) NewDeliveryID() domain.DeliveryID {
+	return mustID(domain.ParseDeliveryID(g.next("delivery")))
 }
 
 // nopBroker drops the past jobs' updates: nobody watches them while the

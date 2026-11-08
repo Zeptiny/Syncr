@@ -6,7 +6,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/app/confirm-dialog";
-import { DescriptorForm } from "@/components/app/descriptor-form";
+import { RemoteForm } from "@/components/app/descriptor-form";
 import { ErrorState } from "@/components/app/error-state";
 import { PageHeader } from "@/components/app/page-header";
 import { Panel } from "@/components/app/panel";
@@ -14,6 +14,7 @@ import { RelativeTime } from "@/components/app/relative-time";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
+import { ScheduleService } from "@/gen/syncr/v1/schedules_pb";
 import { useBackendMap } from "@/hooks/use-backends";
 import { tsDate } from "@/lib/format";
 import { invalidateService } from "@/lib/invalidate";
@@ -27,6 +28,7 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
   const backends = useBackendMap();
   const q = useQuery(RemoteService.method.getRemote, { remoteId });
   const remotes = useQuery(RemoteService.method.listRemotes, {});
+  const usedBy = useQuery(ScheduleService.method.listSchedules, { remoteId });
   const update = useMutation(RemoteService.method.updateRemote);
   const del = useMutation(RemoteService.method.deleteRemote);
   const [deleting, setDeleting] = useState(false);
@@ -43,6 +45,7 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
     );
   }
   const inUse = remote.usedByUnions.length > 0;
+  const schedules = usedBy.data?.schedules ?? [];
   // used_by_unions holds IDs; show the unions' names.
   const unionNames = remote.usedByUnions.map(
     (id) => remotes.data?.remotes.find((r) => r.id === id)?.name ?? id,
@@ -65,7 +68,7 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
         }
       />
       <Panel className="max-w-4xl">
-        <DescriptorForm
+        <RemoteForm
           key={String(remote.version)}
           backend={backend}
           remote={remote}
@@ -98,7 +101,9 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
         description={
           inUse
             ? `It is a member of ${unionNames.join(", ")}. Remove it from ${unionNames.length === 1 ? "that union" : "those unions"} first.`
-            : "Its saved credentials are erased. Past jobs keep its name; queued jobs that use it will fail."
+            : schedules.length
+              ? `${schedules.map((x) => x.name).join(", ")} ${schedules.length === 1 ? "uses" : "use"} it, and will be paused at ${schedules.length === 1 ? "its" : "their"} next run. Its saved credentials are erased; past jobs keep its name.`
+              : "Its saved credentials are erased. Past jobs keep its name; queued jobs that use it will fail."
         }
         confirmLabel="Delete remote"
         onConfirm={async () => {

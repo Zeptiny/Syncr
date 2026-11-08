@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -19,11 +21,15 @@ import (
 	"github.com/Zeptiny/Syncr/internal/adapters/broker"
 	"github.com/Zeptiny/Syncr/internal/adapters/idgen"
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
+	notifybuiltin "github.com/Zeptiny/Syncr/internal/adapters/notify/builtin"
 	"github.com/Zeptiny/Syncr/internal/adapters/password"
 	"github.com/Zeptiny/Syncr/internal/adapters/postgres"
 	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
+	"github.com/Zeptiny/Syncr/internal/app/contacts"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/notifications"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/backend"
@@ -32,9 +38,11 @@ import (
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch/active"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch/passive"
+	"github.com/Zeptiny/Syncr/internal/controller/scheduler"
 	"github.com/Zeptiny/Syncr/internal/devseed"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
+	"github.com/Zeptiny/Syncr/internal/notify"
 	"github.com/Zeptiny/Syncr/internal/platform/clientip"
 	"github.com/Zeptiny/Syncr/internal/platform/clock"
 	"github.com/Zeptiny/Syncr/internal/platform/httpserver"
@@ -50,10 +58,14 @@ type store interface {
 	workers.TokenRepository
 	jobs.Repository
 	jobs.SampleRepository
+	jobs.ActivityRepository
 	users.Repository
 	users.SessionRepository
 	users.APITokenRepository
 	remotes.Repository
+	schedules.Repository
+	contacts.Repository
+	notifications.Repository
 }
 
 // openStore opens and migrates the configured store. close releases it.
@@ -116,6 +128,18 @@ type services struct {
 	adminWorkers *wakingWorkers
 	// wake triggers a resync of the passive supervisor.
 	wake chan struct{}
+
+	// channels are the notification channel types (notify.DryRun under
+	// dev.seed); contacts and notifications use them.
+	channels      *notify.Registry
+	contacts      *contacts.Service
+	notifications *notifications.Service
+	schedules     *schedules.Service
+	scheduler     *scheduler.Scheduler
+
+	// describer describes jobs for their notifications (the outbox's and
+	// the dev seed's).
+	describer jobDescriber
 }
 
 // loginLimits are the rate limits of credential checks: per client IP
@@ -127,11 +151,22 @@ func loginLimits() (clientIP, username, setup ratelimit.Config) {
 		ratelimit.Config{Burst: 5, Every: time.Minute, MaxKeys: 1}
 }
 
+// sendTestLimit is the rate limit of contacts' test sends, per user.
+func sendTestLimit() ratelimit.Config {
+	return ratelimit.Config{Burst: contacts.TestBurst, Every: contacts.TestEvery, MaxKeys: 10000}
+}
+
 // newServices wires the use cases. One Hub is shared by the job service (as
 // its Waker) and the dispatcher, so queued jobs and cancel requests wake the
 // long polls and passive loops of their worker. The remotes service checks
 // the remotes of new jobs (jobs.RemoteChecker) and resolves them with their
 // credentials when the dispatcher builds a job's spec (dispatch.Specs).
+//
+// A finished job wakes the notification outbox and the scheduler
+// (jobFinished): the outbox plans its notifications, and runs queued
+// behind it may launch. One scheduler.Signal is shared by the schedules
+// service (a saved schedule or Run now wakes it) and the scheduler, which
+// breaks their construction cycle.
 func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring, log *slog.Logger) (*services, error) {
 	hub := dispatch.NewHub()
 	clk := clock.System{}
@@ -152,9 +187,36 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	if err != nil {
 		return nil, fmt.Errorf("job kinds: %w", err)
 	}
+	describer := jobDescriber{kinds: kinds, remotes: rs}
+	channels, err := newChannels(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	testLimit, err := ratelimit.New(sendTestLimit(), clk)
+	if err != nil {
+		return nil, err
+	}
+	cs, err := contacts.New(contacts.Deps{
+		Contacts: st, Channels: channels, Cipher: cipher, Limiter: testLimit, Clock: clk, IDs: ids,
+		Logger: log.With("component", "contacts"),
+	}, contacts.Config{SendTimeout: cfg.Notify.SendTimeout})
+	if err != nil {
+		return nil, fmt.Errorf("contacts service: %w", err)
+	}
+	ns, err := notifications.New(notifications.Deps{
+		Repo: st, Channels: channels, Contacts: cs, Jobs: describer, Clock: clk, IDs: ids, PublicURL: cfg.HTTP.PublicURL,
+		Logger: log.With("component", "notifications"),
+	}, notifications.Config{
+		MaxAttempts: cfg.Notify.MaxAttempts, Concurrency: cfg.Notify.Concurrency,
+		SendTimeout: cfg.Notify.SendTimeout, Retention: cfg.Notify.Retention,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("notifications service: %w", err)
+	}
+	sig := scheduler.NewSignal()
 	js, err := jobs.New(jobs.Deps{
-		Jobs: st, Samples: st, Clock: clk, IDs: ids,
-		Broker: broker.New(), Notifier: jobs.NopNotifier{}, Waker: hub, Remotes: rs,
+		Jobs: st, Samples: st, Activity: st, Clock: clk, IDs: ids,
+		Broker: broker.New(), Notifier: jobFinished{ns, sig}, Waker: hub, Remotes: rs,
 		Logger: log.With("component", "jobs"),
 	}, jobs.Config{})
 	if err != nil {
@@ -183,12 +245,151 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	if err != nil {
 		return nil, err
 	}
+	ss, err := schedules.New(schedules.Deps{
+		Repo: st, Remotes: rs, Contacts: cs, Workers: workerChecker{ws}, Waker: sig, Clock: clk, IDs: ids,
+		Logger: log.With("component", "schedules"),
+	}, schedules.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("schedules service: %w", err)
+	}
+	sched, err := scheduler.New(scheduler.Deps{
+		Schedules: notifyingSchedules{Service: ss, outbox: ns}, Jobs: js, Workers: ws, Kinds: kinds, Owners: us,
+		IDs: ids, Clock: clk, Signal: sig, Logger: log.With("component", "scheduler"),
+	}, scheduler.Config{Tick: cfg.Schedules.Tick})
+	if err != nil {
+		return nil, fmt.Errorf("scheduler: %w", err)
+	}
 	wake := make(chan struct{}, 1)
 	return &services{
-		users: us, remotes: rs, backends: backends, kinds: kinds,
+		users: us, remotes: rs, backends: backends, kinds: kinds, describer: describer,
 		jobs: js, workers: ws, disp: disp, wake: wake,
 		adminWorkers: &wakingWorkers{Service: ws, wake: wake},
+		channels:     channels, contacts: cs, notifications: ns, schedules: ss, scheduler: sched,
 	}, nil
+}
+
+// newChannels returns the built-in notification channels. Their HTTP
+// client and SMTP dialer check every connected address against
+// notify.network_policy and notify.allowed_networks (netguard), with
+// notify.send_timeout. Under dev.seed they only log what they would send
+// (notify.DryRun), so demo contacts never reach their made-up targets.
+func newChannels(cfg controllerconfig.Config, log *slog.Logger) (*notify.Registry, error) {
+	policy, err := cfg.Notify.Policy()
+	if err != nil {
+		return nil, err
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "" // the channels fall back to "localhost"
+	}
+	timeout := cfg.Notify.SendTimeout
+	reg, err := notify.NewRegistry(notifybuiltin.Channels(notifybuiltin.Deps{
+		HTTP: policy.HTTPClient(timeout), Dial: policy.Dialer(timeout), Hostname: hostname,
+	})...)
+	if err != nil {
+		return nil, fmt.Errorf("notification channels: %w", err)
+	}
+	if cfg.Dev.Seed {
+		reg = notify.DryRun(reg, log.With("component", "notify"))
+	}
+	return reg, nil
+}
+
+// jobFinished is the jobs service's Notifier: a job that reached a
+// terminal status wakes the notification outbox (to plan its
+// notifications) and the scheduler (runs queued behind the job may launch
+// now). Both are non-blocking; their periodic ticks are the backstop.
+type jobFinished struct {
+	outbox    *notifications.Service
+	scheduler *scheduler.Signal
+}
+
+// JobFinished implements jobs.Notifier.
+func (f jobFinished) JobFinished(jobs.Job) {
+	f.outbox.Wake()
+	f.scheduler.Wake()
+}
+
+// notifyingSchedules is the schedules service as the scheduler uses it: a
+// fire (which may record a run missed for overlap at once) and a run that
+// ends missed or failed wake the notification outbox, so the notification
+// goes out now instead of at the outbox's next tick.
+type notifyingSchedules struct {
+	*schedules.Service
+	outbox interface{ Wake() }
+}
+
+var _ scheduler.Schedules = notifyingSchedules{}
+
+// FireDue fires the due schedules and wakes the outbox if any fired.
+func (s notifyingSchedules) FireDue(ctx context.Context) (int, error) {
+	n, err := s.Service.FireDue(ctx)
+	if n > 0 {
+		s.outbox.Wake()
+	}
+	return n, err
+}
+
+// EndRun ends a run and wakes the outbox if it ended missed or failed.
+func (s notifyingSchedules) EndRun(ctx context.Context, run schedules.Run, status schedules.RunStatus, reason, msg string, pause bool) (schedules.Run, error) {
+	r, err := s.Service.EndRun(ctx, run, status, reason, msg, pause)
+	if err == nil && (status == schedules.RunMissed || status == schedules.RunFailed) {
+		s.outbox.Wake()
+	}
+	return r, err
+}
+
+// remoteNames is the remotes service as jobDescriber uses it.
+type remoteNames interface {
+	Names(ctx context.Context, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Ref, error)
+}
+
+// jobDescriber is the notification outbox's notifications.JobDescriber: it
+// decodes a job's stored definition, names the remotes it refers to with
+// remotes.Names (deleted ones included, so a job whose remote was deleted
+// since still names it) and describes it with its kind
+// (jobkind.Registry.Describe), as the web UI's jobs list does. Only remotes
+// of the job's owner are named; any other (which a checked definition
+// cannot refer to) is an "Unknown remote".
+type jobDescriber struct {
+	kinds   *jobkind.Registry
+	remotes remoteNames
+}
+
+var _ notifications.JobDescriber = jobDescriber{}
+
+// DescribeJob implements notifications.JobDescriber. A definition that
+// cannot be decoded, or is not of kind, gets no description; a definition
+// the current rules reject is described without remote names.
+func (d jobDescriber) DescribeJob(ctx context.Context, owner domain.UserID, kind string, definition []byte) (string, error) {
+	def, err := jobkind.Unmarshal(definition)
+	if err != nil || jobkind.KindOf(def) != kind {
+		// Not an error to retry: the definition will not decode later.
+		return "", nil
+	}
+	names := map[domain.RemoteID]string{}
+	if _, refs, err := d.kinds.Check(def); err == nil && len(refs.RemoteIDs) > 0 {
+		rs, err := d.remotes.Names(ctx, refs.RemoteIDs)
+		if err != nil {
+			return "", fmt.Errorf("describe a %s job: %w", kind, err)
+		}
+		for id, r := range rs {
+			if r.OwnerID == owner {
+				names[id] = r.Name
+			}
+		}
+	}
+	return d.kinds.Describe(def, names), nil
+}
+
+// workerChecker adapts the workers service to schedules.WorkerChecker: its
+// Get fails with ErrNotFound for a missing or removed worker.
+type workerChecker struct{ ws *workers.Service }
+
+// CheckWorker implements schedules.WorkerChecker.
+func (c workerChecker) CheckWorker(ctx context.Context, id domain.WorkerID) error {
+	_, err := c.ws.Get(ctx, id)
+	return err
 }
 
 // newUsers wires the users service: argon2id passwords (internal/adapters/
@@ -256,6 +457,7 @@ func armSetup(ctx context.Context, cfg controllerconfig.Auth, us *users.Service,
 func seedDemo(ctx context.Context, st store, svc *services, log *slog.Logger) (*devseed.Seed, error) {
 	seed, err := devseed.Run(ctx, devseed.Deps{
 		Users: svc.users, Remotes: svc.remotes, Workers: svc.workers, Jobs: svc.jobs, Kinds: svc.kinds,
+		Contacts: svc.contacts, Channels: svc.channels, Describer: svc.describer,
 		Store: st, Clock: clock.System{}, Logger: log.With("component", "devseed"),
 	})
 	if err != nil {
@@ -264,11 +466,15 @@ func seedDemo(ctx context.Context, st store, svc *services, log *slog.Logger) (*
 	return seed, nil
 }
 
-// sessionPurgeInterval is how often expired sessions are deleted.
+// backgroundStoppedMessage is logged in shutdown step 3 (see serve).
+const backgroundStoppedMessage = "shutdown: background loops stopped (dispatch sweeper, passive supervisor, scheduler, notifications, purges)"
+
+// sessionPurgeInterval is how often expired sessions and API tokens are
+// deleted.
 const sessionPurgeInterval = time.Hour
 
-// purgeSessions deletes expired sessions now and every interval until ctx
-// ends.
+// purgeSessions deletes expired sessions and API tokens (and the tokens
+// of disabled users) now and every interval until ctx ends.
 func purgeSessions(ctx context.Context, us *users.Service, interval time.Duration, log *slog.Logger) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -278,7 +484,7 @@ func purgeSessions(ctx context.Context, us *users.Service, interval time.Duratio
 		case err != nil && ctx.Err() == nil:
 			log.Error("session purge failed", "error", err.Error())
 		case n > 0:
-			log.Info("expired sessions purged", "sessions", n)
+			log.Info("expired sessions and API tokens purged", "count", n)
 		}
 		select {
 		case <-ctx.Done():
@@ -338,6 +544,10 @@ func newHandler(lifetime context.Context, cfg controllerconfig.Config, ac apiCon
 		Kinds:            svc.kinds,
 		Remotes:          svc.remotes,
 		Backends:         svc.backends,
+		Schedules:        svc.schedules,
+		Contacts:         svc.contacts,
+		Deliveries:       svc.notifications,
+		Channels:         svc.channels,
 		UI:               web.FS(),
 		Cookies:          ac.cookies,
 		ClientIP:         ac.clientIP.ClientIP,
@@ -401,8 +611,10 @@ func newServer(cfg controllerconfig.HTTP, h http.Handler, log *slog.Logger) *htt
 //     (api BaseContext) and makes pending long polls answer at once
 //     (active Lifetime), so step 2 does not wait for them;
 //  2. the HTTP server shuts down gracefully (http.shutdown_timeout);
-//  3. the background loops stop: the passive supervisor, the
-//     dispatch-timeout sweeper, the session purge (and the dev seed's
+//  3. the background loops stop, all before the store closes: the
+//     dispatch-timeout sweeper, the passive supervisor, the scheduler,
+//     the notification outbox (it records the outcome of the sends in
+//     flight first), the session and token purge (and the dev seed's
 //     animation);
 //  4. the store is closed.
 //
@@ -463,8 +675,12 @@ func serve(ctx context.Context, cfg controllerconfig.Config, info version.Info, 
 	if err != nil {
 		return err
 	}
+	var targets passive.Targets = svc.workers
+	if seed != nil {
+		targets = seededTargets{Targets: svc.workers, skip: seed.Workers}
+	}
 	sup, err := passive.NewSupervisor(passive.SupervisorOptions{
-		Workers: svc.workers,
+		Workers: targets,
 		NewLoop: passive.DispatchLoops(svc.disp),
 		Wake:    svc.wake,
 		Logger:  log.With("component", "passive"),
@@ -478,12 +694,15 @@ func serve(ctx context.Context, cfg controllerconfig.Config, info version.Info, 
 		return fmt.Errorf("listen: %w", err)
 	}
 
-	// Background loops outlive the HTTP server: they stop in step 3.
+	// Background loops outlive the HTTP server: they stop in step 3, in
+	// any order, but all before the store closes.
 	bgCtx, stopBackground := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopBackground()
 	var background sync.WaitGroup
 	background.Go(func() { _ = svc.disp.Run(bgCtx) })
 	background.Go(func() { _ = sup.Run(bgCtx) })
+	background.Go(func() { _ = svc.scheduler.Run(bgCtx) })
+	background.Go(func() { _ = svc.notifications.Run(bgCtx) })
 	background.Go(func() { purgeSessions(bgCtx, svc.users, sessionPurgeInterval, log.With("component", "users")) })
 	if seed != nil {
 		background.Go(func() { seed.Animate(bgCtx) })
@@ -491,7 +710,7 @@ func serve(ctx context.Context, cfg controllerconfig.Config, info version.Info, 
 	stopLoops := func() {
 		stopBackground()
 		background.Wait()
-		log.Info("shutdown: passive supervisor and dispatch sweeper stopped")
+		log.Info(backgroundStoppedMessage)
 	}
 
 	srv := newServer(cfg.HTTP, handler, log)
@@ -535,6 +754,26 @@ func storeKind(cfg controllerconfig.Config) string {
 		return "memory (dev)"
 	}
 	return "postgres"
+}
+
+// seededTargets are the passive workers the supervisor links to on a
+// seeded controller: not the demo workers (their URLs lead nowhere, and
+// the seed's animation keeps them online), so a demo logs no link errors.
+// Passive workers registered later get their links as usual.
+type seededTargets struct {
+	passive.Targets
+	skip map[string]domain.WorkerID
+}
+
+// List lists the workers of f without the demo workers.
+func (t seededTargets) List(ctx context.Context, f workers.ListFilter) ([]workers.Worker, error) {
+	ws, err := t.Targets.List(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(ws, func(w workers.Worker) bool {
+		return slices.Contains(slices.Collect(maps.Values(t.skip)), w.ID)
+	}), nil
 }
 
 // wakingWorkers is the workers service as the API and the enrollment

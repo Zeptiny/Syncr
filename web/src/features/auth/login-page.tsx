@@ -28,7 +28,7 @@ export function LoginPage({ redirect }: { redirect?: string }) {
     try {
       await login.mutateAsync({ username: username.trim().toLowerCase(), password });
       forgetSession(queryClient);
-      await navigate({ href: redirect ?? "/jobs", replace: true });
+      await navigate({ href: redirect ?? "/", replace: true });
     } catch (err) {
       setError(
         hasCode(err, Code.Unauthenticated) || hasCode(err, Code.InvalidArgument)

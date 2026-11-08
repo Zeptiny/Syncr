@@ -79,3 +79,23 @@ func TestIDText(t *testing.T) {
 		t.Errorf("UnmarshalText(garbage) = %v, want ErrInvalidID", err)
 	}
 }
+
+func TestM4IDs(t *testing.T) {
+	t.Parallel()
+	c, r, d := NewContactID(), NewScheduleRunID(), NewDeliveryID()
+	if c.IsZero() || r.IsZero() || d.IsZero() {
+		t.Fatal("new ID is zero")
+	}
+	if got, err := ParseContactID(c.String()); err != nil || got != c {
+		t.Errorf("ParseContactID = (%v, %v)", got, err)
+	}
+	if got, err := ParseScheduleRunID(r.String()); err != nil || got != r {
+		t.Errorf("ParseScheduleRunID = (%v, %v)", got, err)
+	}
+	if got, err := ParseDeliveryID(d.String()); err != nil || got != d {
+		t.Errorf("ParseDeliveryID = (%v, %v)", got, err)
+	}
+	if _, err := ParseDeliveryID("x"); !errors.Is(err, ErrInvalidID) {
+		t.Errorf("ParseDeliveryID(x) = %v", err)
+	}
+}

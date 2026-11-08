@@ -13,12 +13,14 @@ import (
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
-// CreateWorker implements workers.Repository.
+// CreateWorker implements workers.Repository. A live worker whose name is
+// taken (case-insensitively) violates workers_name_key: ErrAlreadyExists.
 func (s *Store) CreateWorker(ctx context.Context, w workers.Worker) error {
 	p, err := createWorkerParams(w)
 	if err != nil {
 		return err
 	}
+	p.Labels = textArray(w.Labels)
 	if err := s.q.CreateWorker(ctx, p); err != nil {
 		return mapErr(fmt.Sprintf("create worker %s", w.ID), err)
 	}
@@ -36,18 +38,28 @@ func (s *Store) GetWorker(ctx context.Context, id domain.WorkerID) (workers.Work
 
 // ListWorkers implements workers.Repository.
 func (s *Store) ListWorkers(ctx context.Context, f workers.ListFilter) ([]workers.Worker, error) {
-	rows, err := s.q.ListWorkers(ctx, db.ListWorkersParams{Mode: string(f.Mode), IncludeRemoved: f.IncludeRemoved})
+	rows, err := s.q.ListWorkers(ctx, db.ListWorkersParams{Mode: string(f.Mode), IncludeRemoved: f.IncludeRemoved, Label: f.Label})
 	if err != nil {
 		return nil, mapErr("list workers", err)
 	}
 	return workersFrom(rows)
 }
 
-// RenameWorker implements workers.Repository.
+// RenameWorker implements workers.Repository. A name taken by another live
+// worker violates workers_name_key: ErrAlreadyExists.
 func (s *Store) RenameWorker(ctx context.Context, id domain.WorkerID, name string) (workers.Worker, error) {
 	row, err := s.q.RenameWorker(ctx, db.RenameWorkerParams{ID: pgID(id), Name: name})
 	if err != nil {
 		return workers.Worker{}, mapErr(fmt.Sprintf("rename worker %s", id), err)
+	}
+	return workerFrom(row)
+}
+
+// SetWorkerLabels implements workers.Repository.
+func (s *Store) SetWorkerLabels(ctx context.Context, id domain.WorkerID, labels []string) (workers.Worker, error) {
+	row, err := s.q.SetWorkerLabels(ctx, db.SetWorkerLabelsParams{ID: pgID(id), Labels: textArray(labels)})
+	if err != nil {
+		return workers.Worker{}, mapErr(fmt.Sprintf("set labels of worker %s", id), err)
 	}
 	return workerFrom(row)
 }

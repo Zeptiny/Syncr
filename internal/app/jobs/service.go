@@ -43,6 +43,9 @@ type Deps struct {
 	// that uses a remote fails with ErrUnknownRemote (fail closed); jobs
 	// on the worker's filesystem only still work.
 	Remotes RemoteChecker
+	// Activity aggregates finished jobs for the dashboard (Activity,
+	// CountUnfinished); optional, those use cases fail without it.
+	Activity ActivityRepository
 	// Logger defaults to discarding.
 	Logger *slog.Logger
 }
@@ -58,6 +61,7 @@ type Service struct {
 	notifier Notifier
 	waker    Waker
 	remotes  RemoteChecker
+	activity ActivityRepository
 	log      *slog.Logger
 	cfg      Config
 
@@ -87,7 +91,8 @@ func New(d Deps, cfg Config) (*Service, error) {
 	}
 	return &Service{
 		repo: d.Jobs, samples: d.Samples, clock: d.Clock, ids: d.IDs,
-		broker: d.Broker, notifier: d.Notifier, waker: d.Waker, remotes: d.Remotes, log: log, cfg: cfg,
+		broker: d.Broker, notifier: d.Notifier, waker: d.Waker, remotes: d.Remotes, activity: d.Activity,
+		log: log, cfg: cfg,
 		lastStored: make(map[domain.JobID]time.Time),
 	}, nil
 }
@@ -112,7 +117,9 @@ var (
 
 // Create queues a job of the actor on a worker. The definition's remotes
 // must be live remotes of the actor (ErrUnknownRemote otherwise); the
-// worker must exist and not be removed (ErrUnknownWorker otherwise).
+// worker must exist and not be removed (ErrUnknownWorker otherwise). A
+// preset p.ID is used as the job's ID (ErrAlreadyExists if it is taken);
+// p.ScheduleID links the job to the schedule launching it.
 func (s *Service) Create(ctx context.Context, actor domain.Actor, p CreateParams) (Job, error) {
 	switch {
 	case p.WorkerID.IsZero():
@@ -145,10 +152,13 @@ func (s *Service) Create(ctx context.Context, actor domain.Actor, p CreateParams
 			return Job{}, fmt.Errorf("create job: check remotes: %w", err)
 		}
 	}
-	id := s.ids.NewJobID()
+	id := p.ID
+	if id.IsZero() {
+		id = s.ids.NewJobID()
+	}
 	now := s.clock.Now()
 	j := Job{
-		ID: id, WorkerID: p.WorkerID, OwnerID: actor.UserID, Kind: p.Kind, Status: domain.JobQueued,
+		ID: id, WorkerID: p.WorkerID, OwnerID: actor.UserID, ScheduleID: p.ScheduleID, Kind: p.Kind, Status: domain.JobQueued,
 		Definition: slices.Clone(p.Definition), RemoteIDs: remoteIDs, SearchText: searchText(p.Kind, p.SearchTerms, remoteIDs, names),
 		CreatedAt: now, QueuedAt: now, ExitCode: -1, Version: 1,
 	}
@@ -420,11 +430,7 @@ func (s *Service) published(ctx context.Context, prev, cur Job) {
 	s.forget(cur.ID)
 	s.log.InfoContext(ctx, "job finished", "job_id", cur.ID.String(), "worker_id", cur.WorkerID.String(),
 		"status", string(cur.Status), "error_code", cur.Error.Code)
-	if cur.Status == domain.JobFailed || cur.Status == domain.JobInterrupted {
-		if err := s.notifier.JobFailed(ctx, *copyOf(cur)); err != nil {
-			s.log.WarnContext(ctx, "job failure notification failed", "job_id", cur.ID.String(), "error", err.Error())
-		}
-	}
+	s.notifier.JobFinished(*copyOf(cur))
 }
 
 // copyOf returns a copy of j for publishing. Jobs hold no secrets (the

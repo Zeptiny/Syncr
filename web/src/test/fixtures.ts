@@ -37,7 +37,28 @@ import {
   type BackendField,
   type Remote,
 } from "@/gen/syncr/v1/remotes_pb";
+import {
+  ChannelTypeSchema,
+  ContactSchema,
+  DeliverySchema,
+  DeliveryStatus,
+  NotificationEvent,
+  type ChannelType,
+  type Contact,
+  type Delivery,
+} from "@/gen/syncr/v1/notify_pb";
+import {
+  MissedRunAction,
+  OverlapPolicy,
+  ScheduleRunSchema,
+  ScheduleRunStatus,
+  ScheduleRunTrigger,
+  ScheduleSchema,
+  type Schedule,
+  type ScheduleRun,
+} from "@/gen/syncr/v1/schedules_pb";
 import { UserRole, UserSchema, type User } from "@/gen/syncr/v1/users_pb";
+import { next, previousRuns } from "@/mock/cron";
 
 type FieldInit = Omit<MessageInitShape<typeof BackendFieldSchema>, "$typeName">;
 
@@ -248,6 +269,15 @@ export const ids = {
   pooled: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d06",
   media: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d07",
   runningJob: "c3d2e1f0-7a6b-4c5d-8e9f-a0b1c2d3e401",
+  removedLaptop: "5a1e2b7c-1d3f-4e8a-9b0c-2d4f6a8b0c09",
+  nightly: "4b8f0d2a-6c1e-4f3a-9d5b-7e2c1a0f3b01",
+  officeHourly: "4b8f0d2a-6c1e-4f3a-9d5b-7e2c1a0f3b02",
+  weekly: "4b8f0d2a-6c1e-4f3a-9d5b-7e2c1a0f3b03",
+  offsite: "4b8f0d2a-6c1e-4f3a-9d5b-7e2c1a0f3b04",
+  laptopSync: "4b8f0d2a-6c1e-4f3a-9d5b-7e2c1a0f3b05",
+  opsDiscord: "8c1d3e5f-7a9b-4c2d-8e0f-1a3b5c7d9e01",
+  adminMail: "8c1d3e5f-7a9b-4c2d-8e0f-1a3b5c7d9e02",
+  homeAssistant: "8c1d3e5f-7a9b-4c2d-8e0f-1a3b5c7d9e03",
 };
 
 function ts(ms: number) {
@@ -297,6 +327,7 @@ export function workers(now: number): Worker[] {
     create(WorkerSchema, {
       id: ids.backupHost,
       name: "backup-host",
+      labels: ["offsite"],
       mode: WorkerMode.PASSIVE,
       status: WorkerStatus.ONLINE,
       lastSeen: ts(now - 4_000),
@@ -325,6 +356,7 @@ export function workers(now: number): Worker[] {
     create(WorkerSchema, {
       id: ids.nas,
       name: "nas-01",
+      labels: ["linux", "nas"],
       mode: WorkerMode.ACTIVE,
       status: WorkerStatus.ONLINE,
       lastSeen: ts(now - 2_000),
@@ -344,6 +376,7 @@ export function workers(now: number): Worker[] {
     create(WorkerSchema, {
       id: ids.office,
       name: "office-pc",
+      labels: ["desktop", "windows"],
       mode: WorkerMode.ACTIVE,
       status: WorkerStatus.OFFLINE,
       lastSeen: ts(now - 3 * HOUR),
@@ -867,4 +900,660 @@ export function apiTokens(now: number): APIToken[] {
       expiresAt: ts(now + 84 * DAY),
     }),
   ];
+}
+
+// ---------------------------------------------------------------------------
+// Milestone 4: notification channels, contacts, schedules, their runs and
+// jobs, and deliveries. Names match what the integration pass seeds
+// (internal/devseed), so screenshot scripts work against both.
+
+/** channels are the notification channel descriptors (internal/adapters/notify). */
+export const channels: ChannelType[] = [
+  create(ChannelTypeSchema, {
+    id: "discord",
+    label: "Discord",
+    description: "Post to a Discord channel through a webhook.",
+    fields: [
+      f("webhook_url", "Webhook URL", FieldKind.STRING, {
+        required: true,
+        secret: true,
+        placeholder: "https://discord.com/api/webhooks/…",
+        help: "In Discord: channel settings, Integrations, Webhooks, Copy webhook URL.",
+      }),
+      f("username", "Post as", FieldKind.STRING, {
+        advanced: true,
+        placeholder: "Syncr",
+        help: "The name the messages appear under.",
+      }),
+    ],
+  }),
+  create(ChannelTypeSchema, {
+    id: "email",
+    label: "Email",
+    description: "Send mail through your SMTP server.",
+    fields: [
+      f("host", "SMTP server", FieldKind.STRING, {
+        required: true,
+        placeholder: "smtp.example.com",
+      }),
+      f("port", "Port", FieldKind.INT, { defaultValue: "587" }),
+      f("security", "Encryption", FieldKind.ENUM, {
+        defaultValue: "starttls",
+        choices: [
+          { value: "starttls", label: "STARTTLS (required)" },
+          { value: "tls", label: "TLS from the start" },
+          { value: "none", label: "None" },
+        ],
+      }),
+      f("username", "Username", FieldKind.STRING),
+      f("password", "Password", FieldKind.STRING, { secret: true }),
+      f("from", "From", FieldKind.STRING, {
+        required: true,
+        placeholder: "Syncr <syncr@example.com>",
+      }),
+      f("to", "To", FieldKind.STRING, {
+        required: true,
+        placeholder: "ops@example.com, me@example.com",
+        help: "Up to 20 addresses, separated by commas.",
+      }),
+      f("helo_name", "HELO name", FieldKind.STRING, {
+        advanced: true,
+        help: "The host name to greet the server with. Defaults to the controller's.",
+      }),
+    ],
+  }),
+  create(ChannelTypeSchema, {
+    id: "webhook",
+    label: "Webhook",
+    description: "POST JSON to any URL: Home Assistant, ntfy, Slack, Mattermost and more.",
+    fields: [
+      f("url", "URL", FieldKind.STRING, {
+        required: true,
+        secret: true,
+        placeholder: "https://example.com/hooks/syncr",
+        help: "Kept secret, because URLs often carry a token.",
+      }),
+      f("signing_secret", "Signing secret", FieldKind.STRING, {
+        secret: true,
+        help: "Signs each request (Standard Webhooks), so the receiver can check it came from Syncr.",
+      }),
+      f("format", "Body format", FieldKind.ENUM, {
+        defaultValue: "syncr",
+        choices: [
+          { value: "syncr", label: "Syncr JSON" },
+          { value: "slack", label: "Slack-compatible text" },
+        ],
+      }),
+      f("authorization", "Authorization header", FieldKind.STRING, {
+        secret: true,
+        advanced: true,
+        placeholder: "Bearer …",
+      }),
+    ],
+  }),
+];
+
+/** contacts returns the admin's notification contacts, by name. */
+export function contacts(now: number): Contact[] {
+  const base = { createdAt: ts(now - 20 * DAY), updatedAt: ts(now - 2 * DAY), version: 2n };
+  return [
+    create(ContactSchema, {
+      ...base,
+      id: ids.adminMail,
+      name: "Admin mail",
+      channelType: "email",
+      options: {
+        host: "smtp.example.net",
+        port: "587",
+        security: "starttls",
+        username: "syncr@example.net",
+        from: "Syncr <syncr@example.net>",
+        to: "dana@example.net, ops@example.net",
+      },
+      secretsSet: ["password"],
+      summary: "smtp.example.net → 2 recipients",
+      enabled: true,
+    }),
+    create(ContactSchema, {
+      ...base,
+      id: ids.homeAssistant,
+      name: "Home Assistant",
+      channelType: "webhook",
+      options: { format: "syncr" },
+      secretsSet: ["url", "signing_secret"],
+      summary: "Signed webhook, Syncr JSON",
+      enabled: true,
+      jobEvents: [NotificationEvent.FAILED],
+    }),
+    create(ContactSchema, {
+      ...base,
+      id: ids.opsDiscord,
+      name: "Ops Discord",
+      channelType: "discord",
+      options: { username: "Syncr" },
+      secretsSet: ["webhook_url"],
+      summary: "discord.com webhook",
+      enabled: true,
+    }),
+  ];
+}
+
+const H = HOUR;
+
+interface ScheduleSeed {
+  id: string;
+  name: string;
+  description: string;
+  cron: string;
+  timezone: string;
+  target: { case: "workerId" | "workerLabel"; value: string };
+  missed: [MissedRunAction, number | undefined];
+  overlap: OverlapPolicy;
+  enabled: boolean;
+  pausedReason?: string;
+  contacts: [string, NotificationEvent[]][];
+  src: [string, string];
+  dst: [string, string];
+  mode: RcloneTransferMode;
+  created: number;
+}
+
+function scheduleSeeds(now: number): ScheduleSeed[] {
+  return [
+    {
+      id: ids.nightly,
+      name: "Nightly photos → B2",
+      description: "Mirror this year's photo library to Backblaze every night.",
+      cron: "30 2 * * *",
+      timezone: "Europe/Berlin",
+      target: { case: "workerLabel", value: "nas" },
+      missed: [MissedRunAction.RUN_LATE, 6 * H],
+      overlap: OverlapPolicy.SKIP,
+      enabled: true,
+      contacts: [
+        [
+          ids.opsDiscord,
+          [NotificationEvent.FAILED, NotificationEvent.INTERRUPTED, NotificationEvent.MISSED],
+        ],
+      ],
+      src: [ids.photos, "2026"],
+      dst: [ids.b2, "photos/2026"],
+      mode: RcloneTransferMode.SYNC,
+      created: now - 32 * DAY,
+    },
+    {
+      id: ids.officeHourly,
+      name: "Office docs hourly",
+      description: "Copy the office documents to B2 while the desktop is on.",
+      cron: "0 * * * *",
+      timezone: "Europe/Berlin",
+      target: { case: "workerId", value: ids.office },
+      missed: [MissedRunAction.RUN_LATE, 0],
+      overlap: OverlapPolicy.SKIP,
+      enabled: true,
+      contacts: [[ids.adminMail, [NotificationEvent.FAILED, NotificationEvent.MISSED]]],
+      src: ["", "C:\\Users\\dana\\Documents"],
+      dst: [ids.b2, "office/documents"],
+      mode: RcloneTransferMode.COPY,
+      created: now - 2 * DAY,
+    },
+    {
+      id: ids.weekly,
+      name: "Weekly archive",
+      description: "",
+      cron: "0 3 * * 0",
+      timezone: "Europe/Berlin",
+      target: { case: "workerId", value: ids.nas },
+      missed: [MissedRunAction.RUN_LATE, 24 * H],
+      overlap: OverlapPolicy.QUEUE,
+      enabled: true,
+      contacts: [[ids.adminMail, [NotificationEvent.SUCCEEDED, NotificationEvent.FAILED]]],
+      src: [ids.minio, "archive"],
+      dst: [ids.storageBox, "archive"],
+      mode: RcloneTransferMode.COPY,
+      created: now - 40 * DAY,
+    },
+    {
+      id: ids.offsite,
+      name: "Offsite mirror",
+      description: "Pull the database dumps to the offsite box four times a day.",
+      cron: "15 */6 * * *",
+      timezone: "UTC",
+      target: { case: "workerLabel", value: "offsite" },
+      missed: [MissedRunAction.SKIP, undefined],
+      overlap: OverlapPolicy.SKIP,
+      enabled: true,
+      contacts: [
+        [
+          ids.homeAssistant,
+          [NotificationEvent.FAILED, NotificationEvent.INTERRUPTED, NotificationEvent.MISSED],
+        ],
+      ],
+      src: [ids.storageBox, "db-dumps"],
+      dst: ["", "/srv/backup/db"],
+      mode: RcloneTransferMode.COPY,
+      created: now - 35 * DAY,
+    },
+    {
+      id: ids.laptopSync,
+      name: "Laptop projects",
+      description: "",
+      cron: "0 20 * * 1-5",
+      timezone: "Europe/Berlin",
+      target: { case: "workerId", value: ids.removedLaptop },
+      missed: [MissedRunAction.RUN_LATE, 12 * H],
+      overlap: OverlapPolicy.SKIP,
+      enabled: false,
+      pausedReason: "worker_removed",
+      contacts: [],
+      src: ["", "/home/dana/Projects"],
+      dst: [ids.nextcloud, "Projects"],
+      mode: RcloneTransferMode.SYNC,
+      created: now - 26 * DAY,
+    },
+  ];
+}
+
+function definitionOf(s: {
+  src: [string, string];
+  dst: [string, string];
+  mode: RcloneTransferMode;
+}) {
+  return {
+    operation: {
+      case: "rcloneTransfer" as const,
+      value: {
+        mode: s.mode,
+        source: { remoteId: s.src[0], path: s.src[1] },
+        destination: { remoteId: s.dst[0], path: s.dst[1] },
+        options: { transfers: 4, checksum: s.mode === RcloneTransferMode.SYNC, filters: [] },
+      },
+    },
+  };
+}
+
+function remoteRefs(...idList: string[]) {
+  return idList
+    .filter(Boolean)
+    .map((id) => ({ id, name: remoteMeta[id][0], backendType: remoteMeta[id][1] }));
+}
+
+/** History is the scheduled side of the dev seed: schedules, runs and jobs. */
+export interface History {
+  schedules: Schedule[];
+  runs: ScheduleRun[];
+  jobs: Job[];
+}
+
+// rand is a small deterministic generator, so fixtures look the same on
+// every load and in tests.
+function rand(seed: number): () => number {
+  let x = seed >>> 0 || 1;
+  return () => {
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    return (x >>> 0) / 0x1_0000_0000;
+  };
+}
+
+function historyId(prefix: string, n: number): string {
+  // The first segment varies, so short IDs (its first 8 hex digits) differ.
+  const head = ((parseInt(prefix, 16) + n * 0x9e3779b1) >>> 0).toString(16).padStart(8, "0");
+  return `${head}-7a6b-4c5d-8e9f-${n.toString(16).padStart(12, "0")}`;
+}
+
+/**
+ * history returns the schedules with about 30 days of runs and the jobs they
+ * launched: mostly successes, some missed runs (an offline worker, an
+ * overlap), a few failures, an open run on the offline desktop that
+ * coalesced earlier occurrences, and a paused schedule whose worker was
+ * removed.
+ */
+export function history(now: number): History {
+  const runs: ScheduleRun[] = [];
+  const jobList: Job[] = [];
+  const schedules: Schedule[] = [];
+  const r = rand(4242);
+  let runN = 0;
+  let jobN = 0;
+  const contactNames: Record<string, [string, string]> = {
+    [ids.opsDiscord]: ["Ops Discord", "discord"],
+    [ids.adminMail]: ["Admin mail", "email"],
+    [ids.homeAssistant]: ["Home Assistant", "webhook"],
+  };
+
+  const addJob = (
+    s: ScheduleSeed,
+    at: number,
+    worker: string,
+    status: JobStatus,
+    size: { bytes: number; files: number; minutes: number },
+    error?: [JobErrorCode, string],
+  ): Job => {
+    const started = at + 3_000 + Math.round(r() * 20_000);
+    const duration = Math.round(Math.max(20_000, size.minutes * MIN * (0.7 + r() * 0.6)));
+    const finished = started + duration;
+    const bytes = Math.round(size.bytes * (0.6 + r() * 0.8));
+    const files = Math.round(size.files * (0.6 + r() * 0.8));
+    const partial = status === JobStatus.SUCCEEDED ? 1 : 0.3 + r() * 0.4;
+    const j = create(JobSchema, {
+      id: historyId("d4e5f6a7", ++jobN),
+      workerId: worker,
+      kind: "rclone_transfer",
+      status,
+      ownerId: ids.admin,
+      createdAt: ts(at + 1_000),
+      dispatchedAt: ts(started - 500),
+      startedAt: ts(started),
+      finishedAt: ts(finished),
+      stats: {
+        bytes: BigInt(Math.round(bytes * partial)),
+        totalBytes: BigInt(bytes),
+        files: BigInt(Math.round(files * partial)),
+        totalFiles: BigInt(files),
+        checks: BigInt(files * 3),
+        errors: status === JobStatus.FAILED ? 2n : 0n,
+        elapsed: durationFromMs(duration),
+      },
+      error: error ? { code: error[0], message: error[1] } : undefined,
+      definition: definitionOf(s),
+      remotes: remoteRefs(s.src[0], s.dst[0]),
+      scheduleId: s.id,
+      schedule: { id: s.id, name: s.name },
+    });
+    jobList.push(j);
+    return j;
+  };
+
+  const addRun = (
+    s: ScheduleSeed,
+    at: number,
+    status: ScheduleRunStatus,
+    extra: Partial<{
+      reason: string;
+      message: string;
+      worker: string;
+      job: Job;
+      coalesced: number;
+      deadline: number;
+      trigger: ScheduleRunTrigger;
+    }> = {},
+  ) => {
+    runs.push(
+      create(ScheduleRunSchema, {
+        id: historyId("e6f7a8b9", ++runN),
+        scheduleId: s.id,
+        trigger: extra.trigger ?? ScheduleRunTrigger.CRON,
+        scheduledFor: ts(at),
+        deadline: extra.deadline ? ts(extra.deadline) : undefined,
+        coalesced: extra.coalesced ?? 0,
+        status,
+        reason: extra.reason ?? "",
+        message: extra.message ?? "",
+        workerId: extra.job?.workerId ?? extra.worker ?? "",
+        jobId: extra.job?.id ?? "",
+        jobStatus: extra.job?.status ?? JobStatus.UNSPECIFIED,
+        createdAt: ts(at),
+        updatedAt: ts(extra.job ? at + 2_000 : at),
+      }),
+    );
+  };
+
+  for (const s of scheduleSeeds(now)) {
+    const since = Math.max(s.created, now - 30 * DAY);
+    const past = previousRuns(s.cron, s.timezone, now, 400, now - since);
+    switch (s.id) {
+      case ids.nightly:
+        past.forEach((at, i) => {
+          if (i === 4) {
+            addRun(s, at, ScheduleRunStatus.MISSED, {
+              reason: "worker_offline",
+              message: "No worker labelled nas came online within 6 hours.",
+            });
+            return;
+          }
+          const failed = i === 11;
+          const job = addJob(
+            s,
+            at,
+            ids.nas,
+            failed ? JobStatus.FAILED : JobStatus.SUCCEEDED,
+            { bytes: 3.2 * GiB, files: 420, minutes: 38 },
+            failed
+              ? [
+                  JobErrorCode.EXECUTION_FAILED,
+                  "rclone exited with status 1: 2 errors: 503 Service Unavailable from B2",
+                ]
+              : undefined,
+          );
+          addRun(s, at, ScheduleRunStatus.LAUNCHED, { job });
+        });
+        break;
+      case ids.officeHourly: {
+        // The desktop went offline three hours ago: the latest occurrence
+        // waits, with the two before it merged into it.
+        const hourly = past.slice(0, 40);
+        hourly.forEach((at, i) => {
+          if (i === 0) {
+            addRun(s, at, ScheduleRunStatus.PENDING, {
+              reason: "worker_offline",
+              coalesced: 2,
+              deadline: at + HOUR,
+              worker: ids.office,
+            });
+            return;
+          }
+          if (i < 3) return;
+          if (i === 15 || i === 16) {
+            addRun(s, at, ScheduleRunStatus.MISSED, {
+              reason: "worker_offline",
+              message: "office-pc stayed offline until the next run was due.",
+            });
+            return;
+          }
+          const job = addJob(s, at, ids.office, JobStatus.SUCCEEDED, {
+            bytes: 60 * MiB,
+            files: 18,
+            minutes: 1.5,
+          });
+          addRun(s, at, ScheduleRunStatus.LAUNCHED, { job });
+        });
+        break;
+      }
+      case ids.weekly:
+        past.forEach((at, i) => {
+          if (i === 2) {
+            addRun(s, at, ScheduleRunStatus.MISSED, {
+              reason: "overlap",
+              message: "The previous archive copy was still running after 24 hours.",
+            });
+            return;
+          }
+          const job = addJob(s, at, ids.nas, JobStatus.SUCCEEDED, {
+            bytes: 26 * GiB,
+            files: 5200,
+            minutes: 70,
+          });
+          addRun(s, at, ScheduleRunStatus.LAUNCHED, { job });
+        });
+        break;
+      case ids.offsite:
+        past.forEach((at, i) => {
+          if (i === 1 || i === 23 || i === 57 || i === 58 || i === 90) {
+            addRun(s, at, ScheduleRunStatus.MISSED, {
+              reason: i === 23 ? "no_worker_with_label" : "worker_offline",
+              message:
+                i === 23
+                  ? "No worker had the label offsite."
+                  : "backup-host was offline at 5 minutes past the run.",
+            });
+            return;
+          }
+          const interrupted = i === 9;
+          const job = addJob(
+            s,
+            at,
+            ids.backupHost,
+            interrupted ? JobStatus.INTERRUPTED : JobStatus.SUCCEEDED,
+            { bytes: 810 * MiB, files: 14, minutes: 3 },
+            interrupted
+              ? [
+                  JobErrorCode.WORKER_LOST,
+                  "The worker stopped reporting and no longer holds the job.",
+                ]
+              : undefined,
+          );
+          addRun(s, at, ScheduleRunStatus.LAUNCHED, { job });
+        });
+        break;
+      case ids.laptopSync:
+        past.forEach((at, i) => {
+          if (i === 0) return; // paused after this
+          if (i === 1) {
+            addRun(s, at, ScheduleRunStatus.FAILED, {
+              reason: "worker_removed",
+              message: "The worker laptop was removed.",
+            });
+            return;
+          }
+          if (i > 9) return;
+          const job = addJob(s, at, ids.removedLaptop, JobStatus.SUCCEEDED, {
+            bytes: 240 * MiB,
+            files: 310,
+            minutes: 4,
+          });
+          addRun(s, at, ScheduleRunStatus.LAUNCHED, { job });
+        });
+        break;
+    }
+    const mine = runs.filter((x) => x.scheduleId === s.id);
+    const lastRun = mine[0];
+    const nextAt = s.enabled ? next(s.cron, s.timezone, now) : undefined;
+    schedules.push(
+      create(ScheduleSchema, {
+        id: s.id,
+        ownerId: ids.admin,
+        name: s.name,
+        description: s.description,
+        cron: s.cron,
+        timezone: s.timezone,
+        target: { target: s.target },
+        missedRun: {
+          action: s.missed[0],
+          maxDelay: s.missed[1] === undefined ? undefined : durationFromMs(s.missed[1]),
+        },
+        overlap: s.overlap,
+        enabled: s.enabled,
+        pausedReason: s.pausedReason ?? "",
+        definition: definitionOf(s),
+        remotes: remoteRefs(s.src[0], s.dst[0]),
+        contacts: s.contacts.map(([id, events]) => ({
+          contactId: id,
+          events,
+          contactName: contactNames[id][0],
+          channelType: contactNames[id][1],
+        })),
+        nextRunAt: nextAt ? ts(nextAt) : undefined,
+        lastFiredAt: lastRun?.scheduledFor,
+        lastRun,
+        createdAt: ts(s.created),
+        updatedAt: ts(s.created + DAY),
+        version: 3n,
+      }),
+    );
+  }
+  runs.sort((a, b) => Number((b.scheduledFor?.seconds ?? 0n) - (a.scheduledFor?.seconds ?? 0n)));
+  jobList.sort((a, b) => Number((b.createdAt?.seconds ?? 0n) - (a.createdAt?.seconds ?? 0n)));
+  return { schedules, runs, jobs: jobList };
+}
+
+/**
+ * deliveries returns the notification log of the scheduled history: one
+ * per subscribed outcome, all delivered except a retrying email, a webhook
+ * that gave up and one being sent.
+ */
+export function deliveries(now: number, h: History): Delivery[] {
+  const out: Delivery[] = [];
+  let n = 0;
+  const byId = new Map(h.schedules.map((s) => [s.id, s]));
+  const eventOf = (run: ScheduleRun): NotificationEvent | undefined => {
+    if (run.status === ScheduleRunStatus.MISSED) return NotificationEvent.MISSED;
+    if (run.status === ScheduleRunStatus.FAILED) return NotificationEvent.FAILED;
+    switch (run.jobStatus) {
+      case JobStatus.SUCCEEDED:
+        return NotificationEvent.SUCCEEDED;
+      case JobStatus.FAILED:
+        return NotificationEvent.FAILED;
+      case JobStatus.INTERRUPTED:
+        return NotificationEvent.INTERRUPTED;
+      default:
+        return undefined;
+    }
+  };
+  const verb: Partial<Record<NotificationEvent, string>> = {
+    [NotificationEvent.SUCCEEDED]: "succeeded",
+    [NotificationEvent.FAILED]: "failed",
+    [NotificationEvent.INTERRUPTED]: "was interrupted",
+    [NotificationEvent.MISSED]: "missed a run",
+  };
+  for (const run of h.runs) {
+    const s = byId.get(run.scheduleId);
+    const ev = eventOf(run);
+    if (!s || ev === undefined) continue;
+    for (const link of s.contacts) {
+      if (!link.events.includes(ev)) continue;
+      const at = Number(run.scheduledFor?.seconds ?? 0n) * 1000 + (run.jobId ? 40 * MIN : 5 * MIN);
+      if (at > now) continue;
+      out.push(
+        create(DeliverySchema, {
+          id: historyId("f7a8b9c0", ++n),
+          contactId: link.contactId,
+          event: ev,
+          status: DeliveryStatus.DELIVERED,
+          attempts: 1,
+          maxAttempts: 8,
+          lastAttemptAt: ts(at),
+          deliveredAt: ts(at + 400),
+          createdAt: ts(at),
+          title: `${s.name} ${verb[ev]}`,
+          jobId: run.jobId,
+          scheduleId: s.id,
+        }),
+      );
+    }
+  }
+  out.sort((a, b) => Number((b.createdAt?.seconds ?? 0n) - (a.createdAt?.seconds ?? 0n)));
+  // The latest office miss is still retrying; an older webhook gave up.
+  const mail = out.find((d) => d.contactId === ids.adminMail);
+  if (mail) {
+    mail.status = DeliveryStatus.PENDING;
+    mail.attempts = 3;
+    mail.deliveredAt = undefined;
+    mail.nextAttemptAt = ts(now + 4 * MIN);
+    mail.lastError = "SMTP 451: 4.7.0 Temporary server error. Please try again later.";
+  }
+  const hooks = out.filter((d) => d.contactId === ids.homeAssistant);
+  const dead = hooks[0];
+  if (dead) {
+    dead.status = DeliveryStatus.DEAD;
+    dead.attempts = 8;
+    dead.deliveredAt = undefined;
+    dead.lastError = "HTTP 503: Service Unavailable (homeassistant: integration reloading)";
+  }
+  out.unshift(
+    create(DeliverySchema, {
+      id: historyId("f7a8b9c0", n + 1),
+      contactId: ids.homeAssistant,
+      event: NotificationEvent.FAILED,
+      status: DeliveryStatus.SENDING,
+      attempts: 1,
+      maxAttempts: 8,
+      lastAttemptAt: ts(now - 4_000),
+      createdAt: ts(now - 2 * HOUR),
+      title: "Nextcloud → MinIO archive failed",
+      jobId: jobId(4),
+    }),
+  );
+  return out;
 }

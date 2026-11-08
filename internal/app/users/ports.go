@@ -49,7 +49,8 @@ type Repository interface {
 
 	// DeleteUser deletes a user with their sessions and API tokens.
 	// ErrNotFound if missing; ErrFailedPrecondition if the user owns remotes
-	// (deleted ones included) or jobs (Postgres: the foreign keys).
+	// (deleted ones included), jobs, schedules or contacts (Postgres: the
+	// foreign keys).
 	DeleteUser(ctx context.Context, id domain.UserID) error
 }
 
@@ -102,6 +103,15 @@ type APITokenRepository interface {
 	// TouchAPIToken sets the token's LastUsedAt to at. ErrNotFound if
 	// missing.
 	TouchAPIToken(ctx context.Context, id domain.APITokenID, at time.Time) error
+
+	// DeleteExpiredAPITokens deletes the tokens that are expired at now
+	// (APIToken.Expired) and returns how many it deleted.
+	DeleteExpiredAPITokens(ctx context.Context, now time.Time) (int, error)
+
+	// DeleteUserAPITokens deletes every token of user (when the user is
+	// disabled, so re-enabling does not revive them) and returns how many it
+	// deleted.
+	DeleteUserAPITokens(ctx context.Context, user domain.UserID) (int, error)
 }
 
 // PasswordHasher hashes and verifies passwords (argon2id PHC strings;

@@ -3,8 +3,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ArrowRightLeft,
+  Bell,
+  CalendarClock,
   ChevronsUpDown,
   Cloud,
+  LayoutDashboard,
   LogOut,
   Monitor,
   Moon,
@@ -49,16 +52,19 @@ import { useTheme, type Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 interface NavItem {
-  to: "/jobs" | "/remotes" | "/workers" | "/users" | "/settings";
+  to: "/" | "/jobs" | "/schedules" | "/remotes" | "/workers" | "/notifications" | "/users";
   label: string;
   icon: LucideIcon;
   adminOnly?: boolean;
 }
 
 const mainNav: NavItem[] = [
+  { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/jobs", label: "Jobs", icon: ArrowRightLeft },
+  { to: "/schedules", label: "Schedules", icon: CalendarClock },
   { to: "/remotes", label: "Remotes", icon: Cloud },
   { to: "/workers", label: "Workers", icon: Server },
+  { to: "/notifications", label: "Notifications", icon: Bell },
 ];
 
 const adminNav: NavItem[] = [{ to: "/users", label: "Users", icon: Users, adminOnly: true }];
@@ -87,7 +93,8 @@ function NavLinks({ items }: { items: NavItem[] }) {
   return (
     <SidebarMenu>
       {items.map((it) => {
-        const active = pathname === it.to || pathname.startsWith(`${it.to}/`);
+        const active =
+          it.to === "/" ? pathname === "/" : pathname === it.to || pathname.startsWith(`${it.to}/`);
         return (
           <SidebarMenuItem key={it.to}>
             <SidebarMenuButton
@@ -209,7 +216,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <SidebarProvider>
       <Sidebar className="border-r border-sidebar-border">
         <SidebarHeader className="gap-4 px-4 pt-5 pb-2">
-          <Link to="/jobs" className="flex items-center gap-2.5" aria-label="Syncr home">
+          <Link to="/" className="flex items-center gap-2.5" aria-label="Syncr home">
             <Logo />
             <span className="text-[17px] font-semibold tracking-[-0.01em] text-sidebar-accent-foreground">
               Syncr
@@ -256,7 +263,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <SidebarInset className="min-w-0 bg-background">
         <header className="sticky top-0 z-20 flex h-12 items-center gap-2 bg-sidebar px-3 text-sidebar-foreground md:hidden">
           <SidebarTrigger className="hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" />
-          <Link to="/jobs" className="flex items-center gap-2">
+          <Link to="/" className="flex items-center gap-2" aria-label="Syncr home">
             <Logo className="size-6" />
             <span className="font-semibold text-sidebar-accent-foreground">Syncr</span>
           </Link>

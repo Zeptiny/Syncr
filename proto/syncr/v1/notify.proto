@@ -1,0 +1,381 @@
+syntax = "proto3";
+
+package syncr.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "syncr/v1/remotes.proto";
+
+// Notifications: channel types (Discord, email, webhook, ...), the contacts
+// users configure with them, and the log of notifications sent to each
+// contact.
+//
+// A channel type is described by a descriptor like a backend type: its
+// fields, their kinds and which are secret (BackendField). The web UI renders
+// contact forms from the descriptors, so a new channel type needs no UI
+// change.
+//
+// Notifications are delivered at least once: each delivery is stored before
+// it is sent and retried with backoff until it succeeds, fails permanently
+// or runs out of attempts. Receivers can deduplicate on the delivery ID
+// (the webhook-id header, the email Message-ID).
+
+// NotificationEvent is what a notification reports.
+enum NotificationEvent {
+  NOTIFICATION_EVENT_UNSPECIFIED = 0;
+  // A job finished successfully.
+  NOTIFICATION_EVENT_SUCCEEDED = 1;
+  // A job failed (including a scheduled job that was never dispatched), or
+  // a scheduled run could not be launched.
+  NOTIFICATION_EVENT_FAILED = 2;
+  // A job was interrupted (its worker restarted, shut down or was removed).
+  NOTIFICATION_EVENT_INTERRUPTED = 3;
+  // A scheduled run was missed (its worker stayed offline past the
+  // deadline, or an earlier run was still active).
+  NOTIFICATION_EVENT_MISSED = 4;
+  // A test notification (SendTestNotification); never stored.
+  NOTIFICATION_EVENT_TEST = 5;
+}
+
+// ChannelService serves the notification channel descriptors. Any
+// authenticated user may call it; the data is static for a controller build.
+service ChannelService {
+  // ListChannels returns every channel type, by label.
+  rpc ListChannels(ListChannelsRequest) returns (ListChannelsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+// ListChannelsRequest is empty.
+message ListChannelsRequest {}
+
+// ListChannelsResponse lists the channel types.
+message ListChannelsResponse {
+  repeated ChannelType channels = 1;
+}
+
+// ChannelType describes a notification channel type.
+message ChannelType {
+  // Stable identifier, e.g. "discord"; Contact.channel_type refers to it.
+  string id = 1;
+
+  // Display name, e.g. "Discord".
+  string label = 2;
+
+  // One sentence for the type picker.
+  string description = 3;
+
+  // The configuration fields, in form order (never of kind MEMBERS).
+  repeated BackendField fields = 4;
+
+  reserved 5 to 15;
+}
+
+// ContactService manages the caller's contacts: configured notification
+// targets of a channel type, with their credentials. Contacts are private to
+// their owner, admins included: another user's contact is NOT_FOUND.
+//
+// Secret values are write-only: they are stored encrypted and never
+// returned. Invalid input fails with INVALID_ARGUMENT carrying a
+// ValidationError detail (field names like "name", "options.host",
+// "secrets.webhook_url").
+service ContactService {
+  // ListContacts lists the caller's contacts, by name.
+  rpc ListContacts(ListContactsRequest) returns (ListContactsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // GetContact returns one of the caller's contacts.
+  rpc GetContact(GetContactRequest) returns (GetContactResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // CreateContact creates a contact. ALREADY_EXISTS if the caller has a
+  // contact with the same name (case-insensitive).
+  rpc CreateContact(CreateContactRequest) returns (CreateContactResponse) {}
+
+  // UpdateContact changes a contact. The channel type cannot change.
+  // Options are replaced as a whole; secrets are merged (see ContactInput).
+  // ABORTED if the contact changed since version was read.
+  rpc UpdateContact(UpdateContactRequest) returns (UpdateContactResponse) {}
+
+  // DeleteContact deletes a contact, its links to schedules and its
+  // delivery log.
+  rpc DeleteContact(DeleteContactRequest) returns (DeleteContactResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // SendTestNotification sends a test notification right away (not through
+  // the delivery queue) and reports the outcome. With contact_id it uses the
+  // stored contact, with input's values (if set) merged over it, so an edit
+  // form can be tested before saving; without contact_id it uses input
+  // alone. It is rate limited per user (RESOURCE_EXHAUSTED).
+  rpc SendTestNotification(SendTestNotificationRequest) returns (SendTestNotificationResponse) {}
+
+  // ListDeliveries lists the notifications planned for the caller's
+  // contacts, newest first.
+  rpc ListDeliveries(ListDeliveriesRequest) returns (ListDeliveriesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // RetryDelivery queues a DEAD delivery again, with its attempts reset.
+  rpc RetryDelivery(RetryDeliveryRequest) returns (RetryDeliveryResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+}
+
+// Contact is a configured notification target. Secret values are never
+// returned.
+message Contact {
+  // Contact ID (UUID).
+  string id = 1;
+
+  // Display name, 1 to 64 characters; unique per owner (case-insensitive).
+  string name = 2;
+
+  // Channel type ID (ChannelType.id).
+  string channel_type = 3;
+
+  // Non-secret option values, keyed by field name.
+  map<string, string> options = 4;
+
+  // Names of the secret fields that have a value.
+  repeated string secrets_set = 5;
+
+  // A non-secret one-line description of the target, e.g. "discord.com
+  // webhook".
+  string summary = 6;
+
+  // Disabled contacts get no new notifications; already planned ones are
+  // still sent.
+  bool enabled = 7;
+
+  // Events of the owner's jobs run by hand (not by a schedule) this contact
+  // is notified of: SUCCEEDED, FAILED or INTERRUPTED. Empty by default.
+  // Scheduled jobs notify the contacts linked to their schedule instead.
+  repeated NotificationEvent job_events = 8;
+
+  // The caller's schedules that notify this contact.
+  repeated ContactScheduleRef used_by = 9;
+
+  // When the contact was created and last changed.
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+
+  // Optimistic concurrency token for UpdateContact.
+  int64 version = 12;
+
+  reserved 13 to 29;
+}
+
+// ContactInput is the configuration of a contact to create, update or test.
+message ContactInput {
+  // Display name, 1 to 64 characters.
+  string name = 1;
+
+  // Channel type ID; on update it must equal the contact's type.
+  string channel_type = 2;
+
+  // Non-secret option values, keyed by field name. On update they replace
+  // the stored options as a whole.
+  map<string, string> options = 3;
+
+  // Secret values, keyed by field name. On update, a non-empty value
+  // replaces the stored secret and an absent or empty one keeps it.
+  map<string, string> secrets = 4;
+
+  // On update: secret fields to clear (only fields that are not required).
+  repeated string clear_secrets = 5;
+
+  // Whether the contact receives new notifications.
+  bool enabled = 6;
+
+  // Events of the owner's jobs run by hand to notify (see Contact).
+  repeated NotificationEvent job_events = 7;
+}
+
+// ContactScheduleRef names a schedule that notifies a contact.
+message ContactScheduleRef {
+  // Schedule ID (UUID).
+  string id = 1;
+
+  // The schedule's name.
+  string name = 2;
+}
+
+// ListContactsRequest filters the contact list.
+message ListContactsRequest {
+  // Only contacts of this channel type; empty means all.
+  string channel_type = 1;
+}
+
+// ListContactsResponse lists contacts by name.
+message ListContactsResponse {
+  repeated Contact contacts = 1;
+}
+
+// GetContactRequest names a contact.
+message GetContactRequest {
+  string contact_id = 1;
+}
+
+// GetContactResponse returns the contact.
+message GetContactResponse {
+  Contact contact = 1;
+}
+
+// CreateContactRequest describes the new contact.
+message CreateContactRequest {
+  ContactInput input = 1;
+}
+
+// CreateContactResponse returns the new contact.
+message CreateContactResponse {
+  Contact contact = 1;
+}
+
+// UpdateContactRequest changes a contact.
+message UpdateContactRequest {
+  string contact_id = 1;
+
+  // The version the caller read (Contact.version).
+  int64 version = 2;
+
+  // The new configuration.
+  ContactInput input = 3;
+}
+
+// UpdateContactResponse returns the updated contact.
+message UpdateContactResponse {
+  Contact contact = 1;
+}
+
+// DeleteContactRequest names the contact to delete.
+message DeleteContactRequest {
+  string contact_id = 1;
+}
+
+// DeleteContactResponse is empty.
+message DeleteContactResponse {}
+
+// SendTestNotificationRequest names what to test: a stored contact, unsaved
+// form values, or both (see ContactService.SendTestNotification).
+message SendTestNotificationRequest {
+  // The stored contact to test; empty to test input alone.
+  string contact_id = 1;
+
+  // Form values to test, merged over the stored contact's (secrets left
+  // empty keep the stored ones).
+  ContactInput input = 2;
+}
+
+// SendTestNotificationResponse is the outcome of a test notification.
+message SendTestNotificationResponse {
+  // Whether the channel accepted the notification.
+  bool ok = 1;
+
+  // Why it failed, for display (never contains secrets); empty when ok.
+  string error = 2;
+
+  // The protocol status of the reply (HTTP status, SMTP reply code), if
+  // any.
+  int32 status = 3;
+
+  // How long the send took.
+  google.protobuf.Duration latency = 4;
+}
+
+// DeliveryStatus is where a notification is in the delivery queue.
+enum DeliveryStatus {
+  DELIVERY_STATUS_UNSPECIFIED = 0;
+  // Waiting for its next attempt (next_attempt_at).
+  DELIVERY_STATUS_PENDING = 1;
+  // Being sent.
+  DELIVERY_STATUS_SENDING = 2;
+  // The channel accepted it. Terminal.
+  DELIVERY_STATUS_DELIVERED = 3;
+  // It failed permanently or ran out of attempts. Terminal, but
+  // RetryDelivery queues it again.
+  DELIVERY_STATUS_DEAD = 4;
+}
+
+// Delivery is one notification to one contact.
+message Delivery {
+  // Delivery ID (UUID); also the ID receivers see (webhook-id header).
+  string id = 1;
+
+  // The contact it goes to.
+  string contact_id = 2;
+
+  // What it reports.
+  NotificationEvent event = 3;
+
+  // Where it is in the queue.
+  DeliveryStatus status = 4;
+
+  // Attempts made so far, and the maximum.
+  int32 attempts = 5;
+  int32 max_attempts = 6;
+
+  // When the next attempt is due (PENDING only).
+  google.protobuf.Timestamp next_attempt_at = 7;
+
+  // When the last attempt started; unset before the first.
+  google.protobuf.Timestamp last_attempt_at = 8;
+
+  // When the channel accepted it; unset unless DELIVERED.
+  google.protobuf.Timestamp delivered_at = 9;
+
+  // When it was planned.
+  google.protobuf.Timestamp created_at = 10;
+
+  // Why the last attempt failed (never contains secrets); empty if none
+  // did.
+  string last_error = 11;
+
+  // The notification's title.
+  string title = 12;
+
+  // The job it reports, if any.
+  string job_id = 13;
+
+  // The schedule it reports on, if any (cleared when the schedule is
+  // deleted).
+  string schedule_id = 14;
+
+  reserved 15 to 29;
+}
+
+// ListDeliveriesRequest filters and pages the delivery log.
+message ListDeliveriesRequest {
+  // Only deliveries to this contact; empty means all of the caller's
+  // contacts.
+  string contact_id = 1;
+
+  // Only deliveries in one of these statuses; empty means all.
+  repeated DeliveryStatus statuses = 2;
+
+  // Maximum number of deliveries to return: 1 to 500, 0 means 50.
+  int32 page_size = 3;
+
+  // next_page_token of the previous response; empty for the first page.
+  string page_token = 4;
+}
+
+// ListDeliveriesResponse is one page of deliveries, newest first.
+message ListDeliveriesResponse {
+  repeated Delivery deliveries = 1;
+
+  // Token for the next page; empty on the last page.
+  string next_page_token = 2;
+}
+
+// RetryDeliveryRequest names the delivery to retry.
+message RetryDeliveryRequest {
+  string delivery_id = 1;
+}
+
+// RetryDeliveryResponse returns the delivery, queued again.
+message RetryDeliveryResponse {
+  Delivery delivery = 1;
+}

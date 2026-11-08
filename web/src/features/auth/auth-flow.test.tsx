@@ -71,8 +71,8 @@ describe("auth flow", () => {
   it("lets a signed-in user through and away from /login", async () => {
     const { transport } = api({ signedIn: true });
     const { router } = renderApp("/login", transport);
-    await waitFor(() => expect(router.state.location.pathname).toBe("/jobs"));
-    expect(await screen.findByRole("heading", { name: "Jobs" })).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
   });
 
   it("only redirects to same-origin paths", () => {

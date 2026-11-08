@@ -16,6 +16,7 @@ import (
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
 )
@@ -38,8 +39,11 @@ type jobHandler struct {
 	// remotes names the jobs' remotes (Job.remotes); nil leaves the
 	// references without names.
 	remotes RemoteNames
-	errs    errorMapper
-	log     *slog.Logger
+	// schedules names the jobs' schedules (Job.schedule); nil leaves it
+	// unset (schedule_id is still set).
+	schedules ScheduleNames
+	errs      errorMapper
+	log       *slog.Logger
 	// base ends all watch streams when done (server shutdown).
 	base context.Context
 	// watchMax bounds a WatchJob stream; keepalive is the idle time after
@@ -63,11 +67,15 @@ func (h *jobHandler) job(ctx context.Context, j jobs.Job) (*syncrv1.Job, error) 
 	return out[0], nil
 }
 
-// protoJobs converts js with their remote references (one Names lookup for
-// all) and, where the job's status calls for them (see pickStats), the live
-// counters.
+// protoJobs converts js with their remote and schedule references (one
+// Names lookup each for all) and, where the job's status calls for them
+// (see pickStats), the live counters.
 func (h *jobHandler) protoJobs(ctx context.Context, js []jobs.Job) ([]*syncrv1.Job, error) {
 	refs, err := h.remoteRefs(ctx, js)
+	if err != nil {
+		return nil, err
+	}
+	scheds, err := h.scheduleRefs(ctx, js)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +96,9 @@ func (h *jobHandler) protoJobs(ctx context.Context, js []jobs.Job) ([]*syncrv1.J
 			// Only the job's definition or output is affected; the rest is
 			// still worth showing.
 			h.log.WarnContext(ctx, "job definition or output is not decodable", "job_id", j.ID.String(), "error", err.Error())
+		}
+		if ref, ok := scheds[j.ScheduleID]; ok && !j.ScheduleID.IsZero() {
+			msg.Schedule = &syncrv1.JobScheduleRef{Id: ref.ID.String(), Name: ref.Name}
 		}
 		out = append(out, msg)
 	}
@@ -113,6 +124,28 @@ func (h *jobHandler) remoteRefs(ctx context.Context, js []jobs.Job) (map[domain.
 	refs, err := h.remotes.Names(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("name the remotes of jobs: %w", err)
+	}
+	return refs, nil
+}
+
+// scheduleRefs looks up the schedules of js; a deleted schedule has no
+// reference (its jobs' schedule_id is cleared anyway).
+func (h *jobHandler) scheduleRefs(ctx context.Context, js []jobs.Job) (map[domain.ScheduleID]schedules.Ref, error) {
+	if h.schedules == nil {
+		return nil, nil
+	}
+	var ids []domain.ScheduleID
+	for _, j := range js {
+		if !j.ScheduleID.IsZero() && !slices.Contains(ids, j.ScheduleID) {
+			ids = append(ids, j.ScheduleID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	refs, err := h.schedules.Names(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("name the schedules of jobs: %w", err)
 	}
 	return refs, nil
 }
@@ -199,6 +232,13 @@ func (h *jobHandler) ListJobs(ctx context.Context, req *connect.Request[syncrv1.
 			return nil, invalidField("remote_id", "is not a valid ID")
 		}
 		f.RemoteID = id
+	}
+	if m.GetScheduleId() != "" {
+		id, err := domain.ParseScheduleID(m.GetScheduleId())
+		if err != nil || id.IsZero() {
+			return nil, invalidField("schedule_id", "is not a valid ID")
+		}
+		f.ScheduleID = id
 	}
 	for _, s := range m.GetStatuses() {
 		st, err := jobStatusFromProto(s)

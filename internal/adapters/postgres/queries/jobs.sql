@@ -8,7 +8,7 @@ INSERT INTO jobs (
     created_at, queued_at, dispatched_at, started_at, finished_at, requeues,
     stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks,
     stat_deletes, stat_renames, stat_errors, stat_elapsed_ns,
-    error_code, error_message, warnings, exit_code, output, version
+    error_code, error_message, warnings, exit_code, output, version, schedule_id
 )
 SELECT
     sqlc.arg(id)::uuid, sqlc.arg(worker_id)::uuid, sqlc.arg(owner_id)::uuid, sqlc.arg(kind)::text,
@@ -21,7 +21,8 @@ SELECT
     sqlc.arg(stat_total_files)::bigint, sqlc.arg(stat_checks)::bigint, sqlc.arg(stat_deletes)::bigint,
     sqlc.arg(stat_renames)::bigint, sqlc.arg(stat_errors)::bigint, sqlc.arg(stat_elapsed_ns)::bigint,
     sqlc.arg(error_code)::text, sqlc.arg(error_message)::text, sqlc.arg(warnings)::text[],
-    sqlc.arg(exit_code)::integer, sqlc.narg(output)::bytea, sqlc.arg(version)::bigint
+    sqlc.arg(exit_code)::integer, sqlc.narg(output)::bytea, sqlc.arg(version)::bigint,
+    sqlc.narg(schedule_id)::uuid
 WHERE EXISTS (
     SELECT 1 FROM workers WHERE workers.id = sqlc.arg(worker_id)::uuid AND workers.removed_at IS NULL FOR SHARE
 );
@@ -80,7 +81,7 @@ RETURNING *;
 -- limit. query is a LIKE pattern body the caller escaped with backslashes,
 -- so it matches as a plain substring of search_text (a pg_trgm index is
 -- deferred). The owner filter matches jobs_owner_idx, the remote filter
--- job_remotes_remote_idx.
+-- job_remotes_remote_idx, the schedule filter jobs_schedule_idx.
 SELECT * FROM jobs
 WHERE (sqlc.narg(owner_id)::uuid IS NULL OR owner_id = sqlc.narg(owner_id)::uuid)
   AND (sqlc.narg(worker_id)::uuid IS NULL OR worker_id = sqlc.narg(worker_id)::uuid)
@@ -90,6 +91,7 @@ WHERE (sqlc.narg(owner_id)::uuid IS NULL OR owner_id = sqlc.narg(owner_id)::uuid
       SELECT 1 FROM job_remotes
       WHERE job_remotes.job_id = jobs.id AND job_remotes.remote_id = sqlc.narg(remote_id)::uuid
   ))
+  AND (sqlc.narg(schedule_id)::uuid IS NULL OR schedule_id = sqlc.narg(schedule_id)::uuid)
   AND (sqlc.narg(query)::text IS NULL OR search_text LIKE '%' || sqlc.narg(query)::text || '%' ESCAPE '\')
   AND (sqlc.narg(created_after)::timestamptz IS NULL OR created_at >= sqlc.narg(created_after)::timestamptz)
   AND (sqlc.narg(created_before)::timestamptz IS NULL OR created_at < sqlc.narg(created_before)::timestamptz)

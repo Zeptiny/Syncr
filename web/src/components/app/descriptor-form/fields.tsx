@@ -1,4 +1,4 @@
-import { Eye, EyeOff, KeyRound, Plus, Trash2, Undo2 } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Plus, Trash2, Undo2, WandSparkles } from "lucide-react";
 import { useState } from "react";
 import {
   Controller,
@@ -27,7 +27,7 @@ import { cn } from "@/lib/utils";
 
 import { PathInput } from "../path-input";
 import { RemotePicker } from "../remote-picker";
-import { emptyMember, type DescriptorValues } from "./schema";
+import { emptyMember, type DescriptorValues, type FieldValues } from "./schema";
 
 /** FieldProps is shared by the descriptor field components. */
 export interface FieldProps {
@@ -41,7 +41,7 @@ function isOptional(field: BackendField): boolean {
   return !field.required && !field.defaultValue;
 }
 
-function errorAt(errors: FieldErrors<DescriptorValues>, path: string): string | undefined {
+function errorAt(errors: FieldErrors<FieldValues>, path: string): string | undefined {
   return (get(errors, path) as FieldError | undefined)?.message;
 }
 
@@ -89,7 +89,7 @@ export function FieldShell({
 }
 
 function useFieldState(field: BackendField, idPrefix: string) {
-  const form = useFormContext<DescriptorValues>();
+  const form = useFormContext<FieldValues>();
   const path = `values.${field.name}` as const;
   const error = errorAt(form.formState.errors, path);
   const id = `${idPrefix}-${field.name}`;
@@ -224,15 +224,17 @@ export function EnumField({ field, idPrefix }: FieldProps) {
 
 /** SecretFieldProps adds whether the stored remote has the secret. */
 export interface SecretFieldProps extends FieldProps {
-  /** isSet is true when editing a remote that already stores this secret. */
+  /** isSet is true when editing a remote or contact that already stores this secret. */
   isSet?: boolean;
+  /** generate, when given, offers a "Generate" button that fills in a new value. */
+  generate?: () => string;
 }
 
 /**
  * SecretField edits a write-only secret. When the remote already stores it,
  * an empty input keeps it; optional secrets can be cleared.
  */
-export function SecretField({ field, idPrefix, isSet }: SecretFieldProps) {
+export function SecretField({ field, idPrefix, isSet, generate }: SecretFieldProps) {
   const { form, path, error, id, describedBy } = useFieldState(field, idPrefix);
   const [reveal, setReveal] = useState(false);
   const clear = form.watch("clearSecrets");
@@ -245,8 +247,23 @@ export function SecretField({ field, idPrefix, isSet }: SecretFieldProps) {
   const placeholder = isSet ? "Set. Leave empty to keep it." : field.placeholder;
   const multiline = field.kind === FieldKind.TEXT;
 
+  const generateButton = generate && !cleared && (
+    <Button
+      type="button"
+      variant="ghost"
+      size="xs"
+      onClick={() => {
+        form.setValue(path, generate(), { shouldDirty: true, shouldValidate: true });
+        setReveal(true);
+      }}
+    >
+      <WandSparkles aria-hidden />
+      Generate
+    </Button>
+  );
   const aside = isSet ? (
     <span className="flex items-center gap-2">
+      {generateButton}
       {!cleared && (
         <span className="inline-flex items-center gap-1 rounded-full bg-success-soft px-2 py-0.5 text-[11px] font-medium text-success">
           <KeyRound className="size-3" aria-hidden />
@@ -272,7 +289,9 @@ export function SecretField({ field, idPrefix, isSet }: SecretFieldProps) {
           </Button>
         ))}
     </span>
-  ) : undefined;
+  ) : (
+    generateButton || undefined
+  );
 
   return (
     <FieldShell

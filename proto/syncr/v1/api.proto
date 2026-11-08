@@ -113,6 +113,15 @@ service WorkerAdminService {
   rpc RemoveWorker(RemoveWorkerRequest) returns (RemoveWorkerResponse) {
     option idempotency_level = IDEMPOTENT;
   }
+
+  // SetWorkerLabels replaces a worker's labels, which schedules target by
+  // label (ScheduleTarget.worker_label). Labels are lower-cased,
+  // deduplicated and sorted; each matches ^[a-z0-9][a-z0-9_.-]{0,31}$ and a
+  // worker has at most 16. Labels are managed by admins, never reported by
+  // workers, so a worker cannot attract other users' jobs.
+  rpc SetWorkerLabels(SetWorkerLabelsRequest) returns (SetWorkerLabelsResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
 }
 
 // Worker is an enrolled or registered worker. Secrets are never returned.
@@ -146,7 +155,11 @@ message Worker {
   // until the worker has connected once.
   WorkerInfo info = 9;
 
-  reserved 10 to 19;
+  // Labels set by an admin (SetWorkerLabels), sorted. Schedules may target
+  // any worker with a label.
+  repeated string labels = 10;
+
+  reserved 11 to 19;
 }
 
 // WorkerStatus is a worker's connection status.
@@ -283,8 +296,11 @@ message RegisterPassiveWorkerResponse {
   Worker worker = 1;
 }
 
-// ListWorkersRequest is empty; reserved for future filters.
-message ListWorkersRequest {}
+// ListWorkersRequest filters the worker list.
+message ListWorkersRequest {
+  // Only workers with this label; empty means all.
+  string label = 1;
+}
 
 // ListWorkersResponse lists workers by name.
 message ListWorkersResponse {
@@ -320,6 +336,20 @@ message RemoveWorkerRequest {
 
 // RemoveWorkerResponse is empty.
 message RemoveWorkerResponse {}
+
+// SetWorkerLabelsRequest replaces a worker's labels.
+message SetWorkerLabelsRequest {
+  string worker_id = 1;
+
+  // The new labels; empty removes them all. Case is ignored and duplicates
+  // are dropped.
+  repeated string labels = 2;
+}
+
+// SetWorkerLabelsResponse returns the worker with its new labels.
+message SetWorkerLabelsResponse {
+  Worker worker = 1;
+}
 
 // ---------------------------------------------------------------------------
 // Jobs
@@ -438,7 +468,24 @@ message Job {
   // been deleted).
   repeated JobRemoteRef remotes = 18;
 
-  reserved 19 to 29;
+  // The schedule that launched the job; empty for a job run by hand. It is
+  // cleared when the schedule is deleted.
+  string schedule_id = 19;
+
+  // The schedule that launched the job, for display; unset for a job run by
+  // hand or whose schedule was deleted.
+  JobScheduleRef schedule = 20;
+
+  reserved 21 to 29;
+}
+
+// JobScheduleRef names the schedule that launched a job.
+message JobScheduleRef {
+  // Schedule ID (UUID).
+  string id = 1;
+
+  // The schedule's name.
+  string name = 2;
 }
 
 // JobRemoteRef names a remote a job refers to.
@@ -583,6 +630,9 @@ message ListJobsRequest {
   // Admins only: list every user's jobs instead of their own. Ignored for
   // other users.
   bool all_users = 10;
+
+  // Only jobs launched by this schedule; empty means any.
+  string schedule_id = 11;
 }
 
 // ListJobsResponse is one page of jobs, newest first.

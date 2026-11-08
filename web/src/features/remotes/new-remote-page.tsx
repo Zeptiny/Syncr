@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 
-import { DescriptorForm } from "@/components/app/descriptor-form";
+import { RemoteForm } from "@/components/app/descriptor-form";
 import { ErrorState } from "@/components/app/error-state";
 import { PageHeader } from "@/components/app/page-header";
 import { Panel } from "@/components/app/panel";
@@ -79,7 +79,7 @@ export function NewRemotePage({ type }: { type?: string }) {
         }
       />
       <Panel className="max-w-4xl">
-        <DescriptorForm
+        <RemoteForm
           backend={chosen}
           remotes={remotes.data?.remotes ?? []}
           backends={backends}

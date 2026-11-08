@@ -6,11 +6,21 @@ import { useMemo } from "react";
 
 import { DataTable } from "@/components/app/data-table";
 import { EmptyState } from "@/components/app/empty-state";
+import { FilterBar } from "@/components/app/filter-bar";
+import { LabelChips } from "@/components/app/label-editor";
 import { PageHeader } from "@/components/app/page-header";
 import { RelativeTime } from "@/components/app/relative-time";
 import { StatusBadge } from "@/components/app/status-badge";
 import { sortWorkers } from "@/lib/workers";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { WorkerAdminService, type Worker } from "@/gen/syncr/v1/api_pb";
 import { useSession } from "@/hooks/use-session";
 import { tsDate } from "@/lib/format";
@@ -28,11 +38,20 @@ export function toolVersion(w: Worker, tool: string): string | undefined {
   return w.info?.tools.find((t) => t.name === tool)?.version;
 }
 
-/** WorkersPage lists the workers with their status. */
-export function WorkersPage() {
+const ANY = "__any__";
+
+/** WorkersPage lists the workers with their status and labels. */
+export function WorkersPage({ label }: { label?: string }) {
   const { isAdmin } = useSession();
   const navigate = useNavigate();
-  const q = useQuery(WorkerAdminService.method.listWorkers, {}, { refetchInterval: 10_000 });
+  const q = useQuery(
+    WorkerAdminService.method.listWorkers,
+    { label: label ?? "" },
+    { refetchInterval: 10_000, placeholderData: (prev) => prev },
+  );
+  // The label choices come from every worker, not just the filtered ones.
+  const all = useQuery(WorkerAdminService.method.listWorkers, {}, { refetchInterval: 30_000 });
+  const labels = [...new Set((all.data?.workers ?? []).flatMap((w) => w.labels))].sort();
   const columns = useMemo(
     () => [
       col.accessor("name", {
@@ -55,6 +74,15 @@ export function WorkersPage() {
       col.accessor("mode", {
         header: "Mode",
         cell: (c) => <span className="text-[13px]">{workerModeLabel(c.getValue())}</span>,
+      }),
+      col.accessor("labels", {
+        header: "Labels",
+        cell: (c) => (
+          <LabelChips
+            labels={c.getValue()}
+            empty={<span className="text-[13px] text-muted-foreground">–</span>}
+          />
+        ),
       }),
       col.display({
         id: "platform",
@@ -103,6 +131,36 @@ export function WorkersPage() {
           )
         }
       />
+      {(labels.length > 0 || label) && (
+        <FilterBar
+          active={!!label}
+          onClear={() => void navigate({ to: "/workers", search: {}, replace: true })}
+        >
+          <Select
+            value={label ?? ANY}
+            onValueChange={(v) =>
+              void navigate({
+                to: "/workers",
+                search: v === ANY ? {} : { label: v },
+                replace: true,
+              })
+            }
+          >
+            <SelectTrigger className="w-full bg-card sm:w-48" aria-label="Label">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ANY}>Any label</SelectItem>
+              <SelectSeparator />
+              {labels.map((l) => (
+                <SelectItem key={l} value={l}>
+                  <span className="font-mono text-[13px]">{l}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </FilterBar>
+      )}
       <DataTable
         aria-label="Workers"
         columns={columns}
@@ -114,18 +172,26 @@ export function WorkersPage() {
         rowLabel={(w) => w.name}
         onRowClick={(w) => void navigate({ to: "/workers/$workerId", params: { workerId: w.id } })}
         empty={
-          <EmptyState
-            icon={Server}
-            title="No workers yet"
-            description="A worker is a small program on each machine that should send or receive files. Install one to run your first job."
-            action={
-              isAdmin && (
-                <Button asChild>
-                  <Link to="/workers/new">Add worker</Link>
-                </Button>
-              )
-            }
-          />
+          label ? (
+            <EmptyState
+              icon={Server}
+              title={`No worker has the label ${label}`}
+              description="An administrator adds labels on a worker's page."
+            />
+          ) : (
+            <EmptyState
+              icon={Server}
+              title="No workers yet"
+              description="A worker is a small program on each machine that should send or receive files. Install one to run your first job."
+              action={
+                isAdmin && (
+                  <Button asChild>
+                    <Link to="/workers/new">Add worker</Link>
+                  </Button>
+                )
+              }
+            />
+          )
         }
       />
     </>

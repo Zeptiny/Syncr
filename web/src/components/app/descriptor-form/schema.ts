@@ -19,13 +19,33 @@ export interface MemberValue {
   mode: string;
 }
 
-/** DescriptorValues is the form state of a remote. */
-export interface DescriptorValues {
-  name: string;
+/**
+ * FieldValues is the part of a form that DescriptorFields edits: every
+ * descriptor field by name, and the stored secrets to clear on save.
+ */
+export interface FieldValues {
   /** values holds every non-members field by name (booleans for BOOL). */
   values: Record<string, string | boolean>;
-  members: MemberValue[];
   /** clearSecrets lists optional secrets to remove on save (edit only). */
+  clearSecrets: string[];
+}
+
+/** DescriptorValues is the form state of a remote. */
+export interface DescriptorValues extends FieldValues {
+  name: string;
+  members: MemberValue[];
+}
+
+/** Stored is what a saved remote or contact already holds. */
+export interface Stored {
+  options: Record<string, string>;
+  secretsSet: string[];
+}
+
+/** FieldsInput is what DescriptorFields contributes to an API input. */
+export interface FieldsInput {
+  options: Record<string, string>;
+  secrets: Record<string, string>;
   clearSecrets: string[];
 }
 
@@ -39,8 +59,8 @@ export interface SchemaContext {
 }
 
 /** formFields are the descriptor's fields other than MEMBERS. */
-export function formFields(backend: Backend): BackendField[] {
-  return backend.fields.filter((f) => f.kind !== FieldKind.MEMBERS);
+export function formFields(descriptor: { fields: BackendField[] }): BackendField[] {
+  return descriptor.fields.filter((f) => f.kind !== FieldKind.MEMBERS);
 }
 
 /** membersField returns the MEMBERS field, if the backend is a union. */
@@ -72,13 +92,93 @@ function fieldSchema(f: BackendField, ctx: SchemaContext): z.ZodType {
 }
 
 /**
+ * fieldsSchema is the zod schema of the descriptor fields' values: required
+ * fields, integers and enums. Stored secrets are not required again.
+ */
+export function fieldsSchema(fields: BackendField[], secretsSet: string[] = []) {
+  const shape: Record<string, z.ZodType> = {};
+  for (const f of fields) {
+    if (f.kind !== FieldKind.MEMBERS) shape[f.name] = fieldSchema(f, { secretsSet });
+  }
+  return z.object(shape);
+}
+
+/**
+ * fieldDefaults returns the initial values of the fields, from what is
+ * stored when editing. Options it lacks take the descriptor default; an
+ * enum value that is not one of its choices starts empty; secrets start
+ * empty (write-only).
+ */
+export function fieldDefaults(
+  fields: BackendField[],
+  stored?: Pick<Stored, "options">,
+): Record<string, string | boolean> {
+  const values: Record<string, string | boolean> = {};
+  for (const f of fields) {
+    if (f.kind === FieldKind.MEMBERS) continue;
+    // A value the stored remote lacks falls back to the descriptor default,
+    // on edit as well as create, so the form shows what the backend uses.
+    const value = stored?.options[f.name] ?? f.defaultValue;
+    if (f.kind === FieldKind.BOOL) {
+      values[f.name] = value === "true";
+    } else if (f.secret) {
+      values[f.name] = "";
+    } else if (f.kind === FieldKind.ENUM) {
+      // A select can only show one of its choices; anything else would be
+      // submitted without the user seeing it, so it starts unchosen.
+      values[f.name] = f.choices.some((c) => c.value === value) ? value : "";
+    } else {
+      values[f.name] = value;
+    }
+  }
+  return values;
+}
+
+/**
+ * fieldsInput converts the field values to options and secrets. Empty
+ * secrets are omitted (on update that keeps the stored value); booleans
+ * are sent only when they differ from the descriptor default.
+ */
+export function fieldsInput(fields: BackendField[], v: FieldValues): FieldsInput {
+  const options: Record<string, string> = {};
+  const secrets: Record<string, string> = {};
+  for (const f of fields) {
+    if (f.kind === FieldKind.MEMBERS) continue;
+    const value = v.values[f.name];
+    if (f.kind === FieldKind.BOOL) {
+      const on = value === true;
+      if (on !== (f.defaultValue === "true")) options[f.name] = String(on);
+      continue;
+    }
+    const s = typeof value === "string" ? value : "";
+    if (f.secret) {
+      if (s !== "" && !v.clearSecrets.includes(f.name)) secrets[f.name] = s;
+      continue;
+    }
+    const out = f.kind === FieldKind.TEXT ? s : s.trim();
+    if (out !== "") options[f.name] = out;
+  }
+  return { options, secrets, clearSecrets: v.clearSecrets };
+}
+
+/**
+ * fieldPath maps an "options.x" or "secrets.x" violation to the form path
+ * of field x; undefined when x is not one of the fields.
+ */
+export function fieldPath(fields: BackendField[], field: string): string | undefined {
+  const opt = /^(?:options|secrets)\.([a-z][a-z0-9_]*)$/.exec(field);
+  if (!opt) return undefined;
+  return fields.some((f) => f.name === opt[1] && f.kind !== FieldKind.MEMBERS)
+    ? `values.${opt[1]}`
+    : undefined;
+}
+
+/**
  * buildSchema derives the zod schema of a backend's form from its
  * descriptor: required fields, integer and enum parsing, and at least two
  * union members. Stored secrets are not required again when editing.
  */
 export function buildSchema(backend: Backend, ctx: SchemaContext = {}) {
-  const shape: Record<string, z.ZodType> = {};
-  for (const f of formFields(backend)) shape[f.name] = fieldSchema(f, ctx);
   const member = z.object({
     remoteId: z.string().min(1, "Choose a remote."),
     path: z.string(),
@@ -87,7 +187,7 @@ export function buildSchema(backend: Backend, ctx: SchemaContext = {}) {
   const mf = membersField(backend);
   return z.object({
     name: z.string().trim().min(1, "Give the remote a name.").max(64, "Use at most 64 characters."),
-    values: z.object(shape),
+    values: fieldsSchema(backend.fields, ctx.secretsSet),
     members: mf
       ? z.array(member).min(mf.required ? 2 : 0, "A union needs at least two members.")
       : z.array(member),
@@ -101,23 +201,7 @@ export function buildSchema(backend: Backend, ctx: SchemaContext = {}) {
  * is not one of its choices starts empty.
  */
 export function defaultValues(backend: Backend, remote?: Remote): DescriptorValues {
-  const values: Record<string, string | boolean> = {};
-  for (const f of formFields(backend)) {
-    // A value the stored remote lacks falls back to the descriptor default,
-    // on edit as well as create, so the form shows what the backend uses.
-    const value = remote?.options[f.name] ?? f.defaultValue;
-    if (f.kind === FieldKind.BOOL) {
-      values[f.name] = value === "true";
-    } else if (f.secret) {
-      values[f.name] = "";
-    } else if (f.kind === FieldKind.ENUM) {
-      // A select can only show one of its choices; anything else would be
-      // submitted without the user seeing it, so it starts unchosen.
-      values[f.name] = f.choices.some((c) => c.value === value) ? value : "";
-    } else {
-      values[f.name] = value;
-    }
-  }
+  const values = fieldDefaults(backend.fields, remote);
   const members: MemberValue[] = remote
     ? remote.members.map((m) => ({
         remoteId: m.remoteId,
@@ -141,29 +225,10 @@ export function emptyMember(): MemberValue {
  * only when they differ from the descriptor default.
  */
 export function toRemoteInput(backend: Backend, v: DescriptorValues): RemoteInputInit {
-  const options: Record<string, string> = {};
-  const secrets: Record<string, string> = {};
-  for (const f of formFields(backend)) {
-    const value = v.values[f.name];
-    if (f.kind === FieldKind.BOOL) {
-      const on = value === true;
-      if (on !== (f.defaultValue === "true")) options[f.name] = String(on);
-      continue;
-    }
-    const s = typeof value === "string" ? value : "";
-    if (f.secret) {
-      if (s !== "" && !v.clearSecrets.includes(f.name)) secrets[f.name] = s;
-      continue;
-    }
-    const out = f.kind === FieldKind.TEXT ? s : s.trim();
-    if (out !== "") options[f.name] = out;
-  }
   return {
     name: v.name.trim(),
     backendType: backend.id,
-    options,
-    secrets,
-    clearSecrets: v.clearSecrets,
+    ...fieldsInput(backend.fields, v),
     members: membersField(backend)
       ? v.members.map((m) => ({ remoteId: m.remoteId, path: m.path.trim(), mode: Number(m.mode) }))
       : [],
@@ -173,9 +238,8 @@ export function toRemoteInput(backend: Backend, v: DescriptorValues): RemoteInpu
 /** formPath maps a server violation field to a form path; undefined if unknown. */
 export function formPath(backend: Backend, field: string): string | undefined {
   if (field === "name") return "name";
-  const opt = /^(?:options|secrets)\.([a-z][a-z0-9_]*)$/.exec(field);
-  if (opt)
-    return formFields(backend).some((f) => f.name === opt[1]) ? `values.${opt[1]}` : undefined;
+  const opt = fieldPath(backend.fields, field);
+  if (opt) return opt;
   if (field === "members" || field === membersField(backend)?.name) return "members.root";
   const mem = /^members\[(\d+)\](?:\.(remote_id|path|mode))?$/.exec(field);
   if (mem) {

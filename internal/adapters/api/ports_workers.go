@@ -17,6 +17,9 @@ type WorkerService interface {
 	List(ctx context.Context, f workers.ListFilter) ([]workers.Worker, error)
 	Get(ctx context.Context, id domain.WorkerID) (workers.Worker, error)
 	Rename(ctx context.Context, id domain.WorkerID, name string) (workers.Worker, error)
+	// SetLabels replaces a worker's labels (normalized by the service; an
+	// invalid one is a *domain.ValidationError on "labels[i]").
+	SetLabels(ctx context.Context, id domain.WorkerID, labels []string) (workers.Worker, error)
 	Remove(ctx context.Context, id domain.WorkerID) error
 	// Status derives a worker's connection status as of now.
 	Status(w workers.Worker) domain.WorkerStatus

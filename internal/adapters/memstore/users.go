@@ -138,6 +138,21 @@ func (s *Store) DeleteUser(_ context.Context, id domain.UserID) error {
 			return fmt.Errorf("user %s owns jobs: %w", id, domain.ErrFailedPrecondition)
 		}
 	}
+	for _, sc := range s.schedules {
+		if sc.OwnerID == id {
+			return fmt.Errorf("user %s owns schedules: %w", id, domain.ErrFailedPrecondition)
+		}
+	}
+	for _, c := range s.contacts {
+		if c.OwnerID == id {
+			return fmt.Errorf("user %s owns contacts: %w", id, domain.ErrFailedPrecondition)
+		}
+	}
+	for _, d := range s.deliveries {
+		if d.OwnerID == id {
+			return fmt.Errorf("user %s owns deliveries: %w", id, domain.ErrFailedPrecondition)
+		}
+	}
 	for h, sess := range s.sessions {
 		if sess.UserID == id {
 			delete(s.sessions, h)
@@ -293,4 +308,32 @@ func (s *Store) TouchAPIToken(_ context.Context, id domain.APITokenID, at time.T
 	t.LastUsedAt = at
 	s.apiTokens[id] = t
 	return nil
+}
+
+// DeleteExpiredAPITokens implements users.APITokenRepository.
+func (s *Store) DeleteExpiredAPITokens(_ context.Context, now time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for id, t := range s.apiTokens {
+		if t.Expired(now) {
+			delete(s.apiTokens, id)
+			n++
+		}
+	}
+	return n, nil
+}
+
+// DeleteUserAPITokens implements users.APITokenRepository.
+func (s *Store) DeleteUserAPITokens(_ context.Context, user domain.UserID) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for id, t := range s.apiTokens {
+		if t.UserID == user {
+			delete(s.apiTokens, id)
+			n++
+		}
+	}
+	return n, nil
 }

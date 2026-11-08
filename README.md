@@ -4,11 +4,11 @@ Self-hosted manager for [rclone](https://rclone.org/) sync jobs and
 [restic](https://restic.net/) backups: one controller with a web UI, any
 number of workers on servers and desktops (Linux first, Windows second).
 
-> **Status: v2 rewrite in progress. Milestone 3 complete: web UI, users,
-> stored remotes and jobs that use them.** Workers enroll and run rclone jobs
-> over the link (active or passive); schedules, restic repositories and
-> notifications come next. The previous Django version lives on `main` (tag
-> `django-final`).
+> **Status: v2 rewrite in progress. Milestone 4 complete: schedules,
+> notifications and the dashboard.** Workers enroll and run rclone jobs over
+> the link (active or passive), by hand or on cron schedules, and contacts on
+> Discord, email or webhooks hear how they went; restic repositories come
+> next. The previous Django version lives on `main` (tag `django-final`).
 
 ## Architecture
 
@@ -48,7 +48,9 @@ Design records: [architecture](docs/adr/0001-architecture.md),
 [runtime wiring and shutdown order](docs/adr/0005-runtime-wiring.md),
 [users and sessions](docs/adr/0006-users-sessions.md),
 [backend registry and remotes](docs/adr/0007-backend-registry-remotes.md),
-[web UI](docs/adr/0008-web-ui.md).
+[web UI](docs/adr/0008-web-ui.md),
+[schedules](docs/adr/0009-schedules.md),
+[notifications](docs/adr/0010-notifications.md).
 
 ## Quick start
 
@@ -109,6 +111,46 @@ syncs or moves between a remote or a worker folder (inside its
 `local_roots`) and another, on a worker you pick; the job page follows its
 progress live.
 
+**5. Schedule jobs.** Under **Schedules, New schedule** pick a cron expression
+(five fields, e.g. `30 2 * * *`, or `@daily`; the form previews the next
+runs) and its time zone, where the jobs run (one worker, or any worker with
+a label, e.g. `nas`: the least busy online one that can run the job), the
+job, and two policies:
+
+- *Missed runs*: when the worker is offline at the scheduled time, **run
+  late** waits for it (up to a limit you choose, or until the next run), and
+  **skip** records the run as missed after five minutes.
+- *Overlap*: when the previous run is still going, **skip** records the new
+  run as missed, **queue** starts it afterwards and **allow** runs both.
+
+Occurrences that pass while the controller is down are not replayed one by
+one: they merge into one run (shown as coalesced). A schedule whose worker
+was removed, whose remote was deleted or whose owner was disabled pauses
+itself and says why; **Run now** works on paused schedules too. Schedule
+times follow the time zone's daylight saving rules: a time that does not
+exist that day runs at the first moment after the gap, and a time that
+happens twice runs once. Admins label workers on the worker page. Schedules
+belong to their owner, like remotes ([ADR 0009](docs/adr/0009-schedules.md)).
+
+**6. Get notified.** Under **Notifications** add contacts: a Discord webhook,
+an email address (your SMTP server, STARTTLS or TLS) or a webhook (JSON,
+signed per [Standard Webhooks](https://www.standardwebhooks.com/), or in
+Slack's format); **Send test** checks one. Link contacts to schedules with
+the events each should hear of (succeeded, failed, interrupted, missed); a
+contact's *manual jobs* events cover the jobs you run by hand. Notifications
+are stored before they are sent and retried with backoff for about an hour;
+each contact's delivery log shows what was sent, what is retrying and why,
+and **Retry** resends a dead one. By default notifications may go to LAN
+addresses but never to loopback, link-local or cloud metadata addresses
+(`notify.network_policy`, see [Configuration](#configuration)); links in
+messages point at `SYNCR_PUBLIC_URL`. Channel setup, the webhook payload and
+signature checking: [notifications](docs/notifications.md).
+
+**The dashboard** (the UI's start page) shows the last 24 hours, 7 or 30
+days: jobs by status and bytes moved over time, the success rate, running and
+queued jobs, missed runs, the next scheduled runs with their worker's state,
+worker health and the recent failures. Admins can switch to all users.
+
 **Scripting the API.** Everything the UI does goes through the Connect API
 ([`proto/syncr/v1/`](proto/syncr/v1/)). For scripts, create a personal API
 token under **Settings, API tokens** (it acts as you, with your role) and
@@ -138,7 +180,7 @@ delete tokens or change the password.
 ## Repository layout
 
 ```
-proto/syncr/v1/           wire contracts (api, auth, users, remotes, link)
+proto/syncr/v1/           wire contracts (api, auth, users, remotes, schedules, notify, dashboard, link)
 gen/go/                   generated protobuf + Connect code (committed)
 web/                      React web UI (Vite, TypeScript); package web embeds web/dist with -tags webui
 cmd/syncr-controller/     controller composition root
@@ -151,6 +193,13 @@ internal/app/workers/     worker registry: enrollment, registration, authenticat
 internal/app/jobs/        job lifecycle: create, cancel, watch, every status change, progress samples
 internal/backend/         backend type registry (fields, validation, rclone mapping); builtin/ has the types
 internal/jobkind/         job kinds: check stored definitions, build worker specs from resolved remotes
+internal/app/schedules/   schedules and their runs: validation, fire and missed-run/overlap policies
+internal/app/contacts/    notification contacts: validation, encrypted secrets, test sends
+internal/app/notifications/ durable notification outbox: planning, delivery with retries, delivery log
+internal/cronexpr/        cron expressions with time-zone and daylight-saving rules
+internal/descriptor/      typed configuration fields shared by backend types and channels
+internal/notify/          notification channel contract, registry, message and rendering
+internal/controller/scheduler/ fires due schedules and launches their runs on workers (restart-safe)
 internal/controller/dispatch/ controller side of the worker link: ingest, commands, reconcile, long polls, passive loop
 internal/controller/dispatch/active/  Connect handlers for active workers (Report, Poll) and enrollment
 internal/controller/dispatch/passive/ pinned HTTPS client and supervisor for passive workers
@@ -163,6 +212,7 @@ internal/adapters/broker/     in-process live job broker (WatchJob)
 internal/adapters/storetest/  contract test suite every store adapter runs
 internal/adapters/secrets/    AES-256-GCM encryption of secrets at rest, with key IDs
 internal/adapters/idgen/      entity ID generators
+internal/adapters/notify/     built-in notification channels: discord, email, webhook
 internal/worker/agent/    runs the controller's commands through the runners; outbox events
 internal/worker/outbox/   event buffer with (epoch, seq), acks and coalescing
 internal/worker/linkcore/ link envelopes for both transports, no networking
@@ -177,7 +227,7 @@ internal/worker/localfs/  local_roots policy for local paths
 internal/worker/rcloneenv/ env-defined rclone remotes (RCLONE_CONFIG_*), secrets handling
 internal/worker/paths/    default data, scratch, cache and tools directories
 internal/worker/config/   worker configuration
-internal/platform/        leaf helpers: config loading, logging, redaction, HTTP server, client IP, rate limits, version
+internal/platform/        leaf helpers: config loading, logging, redaction, HTTP server, client IP, rate limits, network policy (netguard), version
 internal/devseed/         demo data for UI development and screenshots (dev.seed, in-memory store only)
 internal/e2e/             link end-to-end tests in one process; e2e/system runs the real binaries
 deploy/                   Dockerfiles, the quick-start compose file and the dev compose stack
@@ -234,11 +284,14 @@ a random one, for scripted setups and tests.
 **Web UI development.** `make dev-seed` (or
 `SYNCR_DEV_MEMORY_STORE=true SYNCR_DEV_SEED=true SYNCR_SECRETS_KEY=... go run ./cmd/syncr-controller`)
 starts a controller whose in-memory store holds fixed demo data: users
-`admin` / `syncr-demo-admin` and `alice` / `syncr-demo-alice`, four workers
-(online, offline, passive, pending), remotes of every type and about 25 jobs,
-one of which keeps running with live progress. These passwords are public:
-never expose a seeded controller. `dev.seed` is refused without
-`dev.memory_store`. Then run `npm run dev` in `web/`: Vite serves the UI on
+`admin` / `syncr-demo-admin` and `alice` / `syncr-demo-alice`, four labelled
+workers (online, offline, passive, pending; a fifth was removed), remotes of
+every type, a contact of every channel, six schedules with a month of runs
+(missed, coalesced, failed, paused ones among them), about 150 jobs over 30
+days, one of which keeps running with live progress, and their notifications
+in every delivery status. Notification channels only log what they would
+send. These passwords are public: never expose a seeded controller.
+`dev.seed` is refused without `dev.memory_store`. Then run `npm run dev` in `web/`: Vite serves the UI on
 <http://127.0.0.1:5173> and proxies the API to `SYNCR_DEV_API` (default
 `http://127.0.0.1:8080`). `VITE_SYNCR_MOCK=1 npm run dev` uses an in-browser
 mock API instead.
@@ -288,8 +341,10 @@ SYNCR_TEST_RESTIC=.cache/tools/restic/<version>/<os>-<arch>/restic \
   (testcontainers), completes the first-run setup and creates an API token
   through the API, enrolls workers with `syncr-worker setup --no-service` in
   both link modes, runs rclone jobs over stored remotes (local and MinIO)
-  through the API, and kills and restarts the controller and the worker
-  mid-job. It needs the go toolchain, Docker and both tool variables.
+  through the API, kills and restarts the controller and the worker
+  mid-job, and runs a schedule every minute into MinIO with a signed webhook
+  notification, across a worker outage. It needs the go toolchain, Docker
+  and both tool variables.
 - CI runs both flavors: `integration-linux` (with Docker) and
   `integration-windows` (local-only).
 
@@ -335,6 +390,15 @@ database:
   url: ""                    # SYNCR_DATABASE_URL: postgres://user:password@host:5432/syncr?sslmode=require
   max_conns: 10              # SYNCR_DATABASE_MAX_CONNS: connection pool size
   connect_timeout: 10s       # SYNCR_DATABASE_CONNECT_TIMEOUT
+schedules:
+  tick: 10s                  # SYNCR_SCHEDULES_TICK: scheduler pass interval (1s to 5m; saves and finished jobs wake it earlier)
+notify:
+  network_policy: private    # SYNCR_NOTIFY_NETWORK_POLICY: private (no loopback, link-local, metadata), public (no private networks either), any
+  allowed_networks: []       # SYNCR_NOTIFY_ALLOWED_NETWORKS: CIDRs/IPs allowed anyway (comma-separated), e.g. 127.0.0.1 for a local relay
+  max_attempts: 8            # SYNCR_NOTIFY_MAX_ATTEMPTS: tries per notification (backoff 30s doubling to 1h, about an hour in all)
+  concurrency: 4             # SYNCR_NOTIFY_CONCURRENCY: notifications sent at once
+  send_timeout: 15s          # SYNCR_NOTIFY_SEND_TIMEOUT: one send or test send (1s to 1m)
+  retention: 720h            # SYNCR_NOTIFY_RETENTION: how long the delivery log keeps sent and dead notifications
 dev:
   memory_store: false        # SYNCR_DEV_MEMORY_STORE: demos/tests only, instead of database.url; data is lost on exit
   seed: false                # SYNCR_DEV_SEED: demo data with public passwords (needs memory_store); never expose it
@@ -350,6 +414,13 @@ and `http.client_ip_header` and `http.trusted_proxies` so the login and
 enrollment rate limits see clients, not the proxy. The controller refuses a
 `public_url` workers could not use (plain http except on loopback) and warns
 at start when session cookies would not be Secure.
+
+Notification targets are checked against `notify.network_policy` at
+connect time (the address actually connected to, so DNS names cannot get
+around it), redirects are not followed, and proxies (`HTTPS_PROXY`) are not
+used for notifications. Links in messages use `http.public_url`. The binary
+embeds the time zone database, so schedule time zones work in the distroless
+image and on Windows.
 
 `api.admin_token` (`SYNCR_ADMIN_TOKEN`) of Milestone 2 is gone: it is ignored
 with a warning. Create a personal API token in the UI instead.

@@ -6,15 +6,14 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
-	"strconv"
+
+	"github.com/Zeptiny/Syncr/internal/descriptor"
 )
 
 var (
 	// idRe matches type IDs (a valid rclone backend name, no "_" so that it
 	// can never look like an rclone alias suffix).
 	idRe = regexp.MustCompile(`^[a-z][a-z0-9]{0,63}$`)
-	// fieldRe matches field names.
-	fieldRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 	// rcloneRe matches rclone option names (as the worker accepts them).
 	rcloneRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
@@ -64,17 +63,14 @@ func (r *Registry) Types() []Type { return slices.Clone(r.sorted) }
 //   - the ID matches ^[a-z][a-z0-9]{0,63}$ and the label is not empty;
 //   - capabilities are consistent: a union is neither local nor a union
 //     member;
-//   - field names are unique and match ^[a-z][a-z0-9_]{0,63}$, labels are
-//     not empty and kinds are valid;
+//   - the fields pass descriptor.CheckShape (names, labels, kinds, enum
+//     choices, defaults, no secret default, no required advanced field),
+//     with KindMembers as an extra kind;
 //   - rclone names are valid rclone option names (or NotRclone) and no two
 //     fields map to the same one;
-//   - an enum field has choices with unique, non-empty values and labels,
-//     and only enum fields have choices;
-//   - a default parses as its field's kind; secret and members fields have
-//     no default;
-//   - Obscure implies Secret; no field is both Required and Advanced;
-//   - a members field appears only in union types, at most once, and is not
-//     secret; a union type has exactly one.
+//   - Obscure implies Secret;
+//   - a members field appears only in union types, at most once, and has
+//     no secret flag, default or choices; a union type has exactly one.
 //
 // The behavior of Validate and ToRclone is checked by the contract suite
 // (internal/backend/backendtest).
@@ -94,35 +90,23 @@ func CheckDescriptor(t Type) error {
 		return fail("a union type cannot be local or a union member")
 	}
 
-	names := map[string]bool{}
+	fields := t.Fields()
+	shape := make([]descriptor.Field, len(fields))
+	for i, f := range fields {
+		shape[i] = f.Descriptor()
+	}
+	var errs []error
+	if err := descriptor.CheckShape(shape, descriptor.Kind(KindMembers)); err != nil {
+		errs = append(errs, fmt.Errorf("type %q: %w", id, err))
+	}
 	rcloneNames := map[string]string{}
 	members := 0
-	var errs []error
-	for i, f := range t.Fields() {
+	for i, f := range fields {
 		ferr := func(format string, args ...any) {
 			errs = append(errs, fail("field %d (%q): %s", i, f.Name, fmt.Sprintf(format, args...)))
 		}
-		switch {
-		case !fieldRe.MatchString(f.Name):
-			ferr("name must match %s", fieldRe)
-		case names[f.Name]:
-			ferr("name is used twice")
-		}
-		names[f.Name] = true
-		if f.Label == "" {
-			ferr("label is empty")
-		}
-		if !f.Kind.Valid() {
-			ferr("unknown kind %q", f.Kind)
-		}
 		if f.Obscure && !f.Secret {
 			ferr("only secret fields can be obscured")
-		}
-		if f.Required && f.Advanced {
-			ferr("a required field cannot be advanced")
-		}
-		if f.Secret && f.Default != "" {
-			ferr("a secret field cannot have a default")
 		}
 		if f.Kind == KindMembers {
 			members++
@@ -140,14 +124,6 @@ func CheckDescriptor(t Type) error {
 			}
 			rcloneNames[name] = f.Name
 		}
-		if err := checkChoices(f); err != nil {
-			ferr("%v", err)
-		}
-		if f.Default != "" {
-			if msg := checkValue(f, f.Default); msg != "" {
-				ferr("default %s", msg)
-			}
-		}
 	}
 	switch {
 	case members > 1:
@@ -158,29 +134,4 @@ func CheckDescriptor(t Type) error {
 		errs = append(errs, fail("is a union but has no members field"))
 	}
 	return errors.Join(errs...)
-}
-
-// checkChoices checks an enum field's choices (and that other kinds have
-// none).
-func checkChoices(f Field) error {
-	if f.Kind != KindEnum {
-		if len(f.Choices) > 0 {
-			return errors.New("only enum fields have choices")
-		}
-		return nil
-	}
-	if len(f.Choices) == 0 {
-		return errors.New("an enum field needs choices")
-	}
-	seen := map[string]bool{}
-	for i, c := range f.Choices {
-		switch {
-		case c.Value == "" || c.Label == "":
-			return errors.New("choice " + strconv.Itoa(i) + " has an empty value or label")
-		case seen[c.Value]:
-			return fmt.Errorf("choice value %q is used twice", c.Value)
-		}
-		seen[c.Value] = true
-	}
-	return nil
 }

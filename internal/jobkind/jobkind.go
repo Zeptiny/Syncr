@@ -90,6 +90,12 @@ type Kind interface {
 	// is missing from remotes). Error messages never contain option or
 	// secret values.
 	Build(def *syncrv1.JobDefinition, remotes map[domain.RemoteID]Remote) (*syncrv1.JobSpec, error)
+	// Describe returns a one-line description of the definition for
+	// people, as the web UI's jobs list shows it, e.g. "Copy Photos → B2
+	// offsite". names holds the display names of the remotes it refers
+	// to; a remote missing from names is "Unknown remote". It never fails:
+	// a definition it cannot describe gets a generic description.
+	Describe(def *syncrv1.JobDefinition, names map[domain.RemoteID]string) string
 }
 
 // Builtin returns the built-in kinds: the rclone transfer (Transfer).
@@ -150,6 +156,16 @@ func (r *Registry) Build(def *syncrv1.JobDefinition, remotes map[domain.RemoteID
 		return nil, err
 	}
 	return k.Build(def, remotes)
+}
+
+// Describe describes def with its kind (see Kind.Describe). A definition
+// of no registered kind is described by its kind name ("" if it has none).
+func (r *Registry) Describe(def *syncrv1.JobDefinition, names map[domain.RemoteID]string) string {
+	k, err := r.kindOf(def)
+	if err != nil {
+		return KindOf(def)
+	}
+	return k.Describe(def, names)
 }
 
 // kindOf returns the registered kind of def's operation.

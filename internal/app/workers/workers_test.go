@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -264,6 +265,7 @@ func TestSecretIsBoundToItsWorker(t *testing.T) {
 	wb, _ := e.store.GetWorker(ctx, b.Worker.ID)
 	forged := wb
 	forged.ID = domain.NewWorkerID()
+	forged.Name = "forged" // names are unique among live workers
 	if err := e.store.CreateWorker(ctx, forged); err != nil {
 		t.Fatal(err)
 	}
@@ -450,5 +452,115 @@ func TestSetInfoClampsAndIgnoresReplacedEpochs(t *testing.T) {
 	}
 	if got, _ := e.svc.Get(ctx, w.ID); got.Info.Version == "old" {
 		t.Error("a replaced epoch overwrote the info")
+	}
+}
+
+func TestEnrollSuffixesTakenNames(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	first := e.enroll(t, "nas-01")
+	tests := []struct{ requested, want string }{
+		{"NAS-01", "NAS-01-2"},
+		{"nas-01", "nas-01-3"},
+		{"nas-01-2", "nas-01-2-2"}, // "NAS-01-2" is taken case-insensitively
+		{strings.Repeat("x", 64), strings.Repeat("x", 64)},
+		{strings.Repeat("x", 64), strings.Repeat("x", 62) + "-2"},
+		{strings.Repeat("é", 64), strings.Repeat("é", 64)},
+		{strings.Repeat("é", 64), strings.Repeat("é", 62) + "-2"},
+	}
+	for _, tt := range tests {
+		if got := e.enroll(t, tt.requested).Worker.Name; got != tt.want {
+			t.Errorf("Enroll(%q) named the worker %q, want %q", tt.requested, got, tt.want)
+		}
+	}
+	// The stored names match, and a removed worker's name is free again.
+	if err := e.svc.Remove(ctx, first.Worker.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.enroll(t, "nas-01").Worker.Name; got != "nas-01" {
+		t.Errorf("Enroll after removing nas-01 named the worker %q", got)
+	}
+}
+
+func TestRenameAndRegisterPassiveRejectTakenNames(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	a := e.enroll(t, "office-pc")
+	b := e.enroll(t, "nas-01")
+	if _, err := e.svc.Rename(ctx, b.Worker.ID, " Office-PC "); !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Errorf("Rename to a taken name: %v, want ErrAlreadyExists", err)
+	}
+	if w, err := e.svc.Rename(ctx, a.Worker.ID, "OFFICE-PC"); err != nil || w.Name != "OFFICE-PC" {
+		t.Errorf("Rename to its own name in another case = (%q, %v)", w.Name, err)
+	}
+	_, err := e.svc.RegisterPassive(ctx, workers.PassiveParams{
+		Name: "nas-01", URL: "https://nas.example:7443", CertFingerprint: fingerprint, Secret: strings.Repeat("s", 40),
+	})
+	if !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Errorf("RegisterPassive with a taken name: %v, want ErrAlreadyExists", err)
+	}
+}
+
+func TestSetLabels(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	a := e.enroll(t, "nas-01").Worker
+	b := e.enroll(t, "office-pc").Worker
+
+	w, err := e.svc.SetLabels(ctx, a.ID, []string{"NAS", "linux", "nas", "offsite.eu-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"linux", "nas", "offsite.eu-1"}; !slices.Equal(w.Labels, want) {
+		t.Errorf("labels = %q, want %q", w.Labels, want)
+	}
+	if _, err := e.svc.SetLabels(ctx, b.ID, []string{"desktop", "nas"}); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := e.svc.List(ctx, workers.ListFilter{Label: "nas"})
+	if err != nil || len(ws) != 2 {
+		t.Fatalf("List(label nas) = (%d workers, %v)", len(ws), err)
+	}
+	if ws, _ := e.svc.List(ctx, workers.ListFilter{Label: "desktop"}); len(ws) != 1 || ws[0].ID != b.ID {
+		t.Errorf("List(label desktop) = %v", ws)
+	}
+
+	tooMany := make([]string, domain.MaxLabels+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("l%d", i)
+	}
+	for _, tt := range []struct {
+		labels []string
+		field  string
+	}{
+		{[]string{"ok", "-bad"}, "labels[1]"},
+		{[]string{"has space"}, "labels[0]"},
+		{[]string{strings.Repeat("a", 33)}, "labels[0]"},
+		{tooMany, "labels"},
+	} {
+		_, err := e.svc.SetLabels(ctx, a.ID, tt.labels)
+		var verr *domain.ValidationError
+		if !errors.As(err, &verr) || len(verr.Fields) == 0 || verr.Fields[0].Field != tt.field {
+			t.Errorf("SetLabels(%q) = %v, want a validation error on %s", tt.labels, err, tt.field)
+		}
+	}
+	if w, _ := e.svc.Get(ctx, a.ID); !slices.Equal(w.Labels, []string{"linux", "nas", "offsite.eu-1"}) {
+		t.Errorf("a rejected SetLabels changed the labels: %q", w.Labels)
+	}
+
+	if w, err := e.svc.SetLabels(ctx, a.ID, nil); err != nil || len(w.Labels) != 0 {
+		t.Errorf("clearing labels = (%q, %v)", w.Labels, err)
+	}
+	if _, err := e.svc.SetLabels(ctx, domain.WorkerID{}, nil); !errors.Is(err, domain.ErrInvalidID) {
+		t.Errorf("SetLabels(zero ID) = %v", err)
+	}
+	if err := e.svc.Remove(ctx, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.SetLabels(ctx, b.ID, []string{"x"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("SetLabels(removed) = %v, want ErrNotFound", err)
 	}
 }

@@ -6,7 +6,7 @@ export interface StatCardProps {
   value: React.ReactNode;
   /** sub is a secondary line, e.g. "of 12.4 GiB". */
   sub?: React.ReactNode;
-  tone?: "default" | "live" | "danger";
+  tone?: "default" | "live" | "danger" | "warning" | "success";
   className?: string;
 }
 
@@ -20,6 +20,8 @@ export function StatCard({ label, value, sub, tone = "default", className }: Sta
           "tabular mt-1 truncate text-xl leading-7 font-semibold tracking-[-0.01em]",
           tone === "live" && "text-live",
           tone === "danger" && "text-danger",
+          tone === "warning" && "text-warning",
+          tone === "success" && "text-success",
         )}
       >
         {value}

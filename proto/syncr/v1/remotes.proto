@@ -48,7 +48,10 @@ message Backend {
   reserved 6 to 15;
 }
 
-// BackendField describes one configuration field of a backend type.
+// BackendField describes one configuration field of a backend type. It also
+// describes the configuration fields of notification channel types
+// (ChannelType.fields in notify.proto), where "RemoteInput" reads as
+// "ContactInput" and the MEMBERS kind never occurs.
 message BackendField {
   // Key in RemoteInput.options (or secrets, for a secret field).
   string name = 1;

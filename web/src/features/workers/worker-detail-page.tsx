@@ -33,6 +33,7 @@ import { invalidateService } from "@/lib/invalidate";
 import { workerModeLabel } from "@/lib/status";
 import { JobsTable } from "@/features/jobs/jobs-table";
 
+import { WorkerLabelsPanel } from "./worker-labels";
 import { platformLabel } from "./workers-page";
 
 function RenameDialog({
@@ -145,7 +146,7 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
           )
         }
       />
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className="mb-6 grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <Panel title="About this worker">
           <KeyValueList
             items={[
@@ -190,6 +191,7 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
           )}
         </Panel>
       </div>
+      <WorkerLabelsPanel worker={w} canEdit={isAdmin} />
       <h2 className="mt-8 mb-3 text-[15px] font-semibold">Recent jobs</h2>
       <JobsTable
         jobs={jobs.data?.jobs}

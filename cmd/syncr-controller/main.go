@@ -1,7 +1,11 @@
 // Command syncr-controller runs the Syncr controller: the API, the worker
 // link (enrollment, active workers' Report/Poll, the passive supervisor),
-// job dispatch, users and remotes, and the embedded web UI (scheduling
-// arrives in a later milestone).
+// job dispatch, users and remotes, schedules and their scheduler,
+// notifications (contacts and the delivery outbox), the dashboard, and the
+// embedded web UI.
+//
+// The binary embeds the IANA time zone database (time/tzdata), so schedule
+// time zones work on hosts and images without one (distroless, Windows).
 //
 // This package is the composition root: it is the only place that reads the
 // process environment, builds adapters and wires them together (wire.go;
@@ -21,6 +25,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata" // schedules' time zones on hosts without zoneinfo
 
 	controllerconfig "github.com/Zeptiny/Syncr/internal/controller/config"
 	"github.com/Zeptiny/Syncr/internal/platform/config"

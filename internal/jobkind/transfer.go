@@ -1,6 +1,7 @@
 package jobkind
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"slices"
@@ -113,6 +114,34 @@ func (k Transfer) Build(def *syncrv1.JobDefinition, remotes map[domain.RemoteID]
 		op.Options = proto.CloneOf(opts)
 	}
 	return &syncrv1.JobSpec{Remotes: defs, Operation: &syncrv1.JobSpec_RcloneTransfer{RcloneTransfer: op}}, nil
+}
+
+// Describe implements Kind: the mode, then the source and destination, e.g.
+// "Copy Photos → B2 offsite" or "Sync /srv/data → B2 offsite". A location
+// on a remote is the remote's name, one on the worker's filesystem its
+// path ("Worker filesystem" without one).
+func (Transfer) Describe(def *syncrv1.JobDefinition, names map[domain.RemoteID]string) string {
+	tr := def.GetRcloneTransfer()
+	mode := "Transfer"
+	if m, ok := modeName(tr.GetMode()); ok {
+		mode = strings.ToUpper(m[:1]) + m[1:]
+	}
+	return mode + " " + describeLocation(tr.GetSource(), names) + " → " + describeLocation(tr.GetDestination(), names)
+}
+
+// describeLocation names a definition location for people (see
+// Transfer.Describe).
+func describeLocation(loc *syncrv1.JobLocation, names map[domain.RemoteID]string) string {
+	raw := loc.GetRemoteId()
+	if raw == "" {
+		return cmp.Or(loc.GetPath(), "Worker filesystem")
+	}
+	if id, err := domain.ParseRemoteID(raw); err == nil {
+		if name := names[id]; name != "" {
+			return name
+		}
+	}
+	return "Unknown remote"
 }
 
 // modeName returns the lower-case name of a transfer mode, or false if

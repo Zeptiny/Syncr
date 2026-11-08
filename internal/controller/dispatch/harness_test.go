@@ -58,11 +58,15 @@ func (r *recorder) Publish(u jobs.Update) {
 	r.Broker.Publish(u)
 }
 
-func (r *recorder) JobFailed(_ context.Context, j jobs.Job) error {
+// JobFinished records the jobs that ended failed or interrupted, the
+// outcomes the dispatcher tests check.
+func (r *recorder) JobFinished(j jobs.Job) {
+	if j.Status != domain.JobFailed && j.Status != domain.JobInterrupted {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.failed = append(r.failed, j)
-	return nil
 }
 
 // statuses returns the job's published statuses in version order, without

@@ -492,7 +492,8 @@ func TestUsableResolveNames(t *testing.T) {
 	// Display names: any owner, deleted ones included, missing ones omitted.
 	missing := domain.NewRemoteID()
 	refs, err := e.svc.Names(ctx, []domain.RemoteID{bobs.ID, gone.ID, missing})
-	if err != nil || len(refs) != 2 || refs[bobs.ID].Name != "bobs" || !refs[gone.ID].Deleted || refs[gone.ID].Type != "local" {
+	if err != nil || len(refs) != 2 || refs[bobs.ID].Name != "bobs" || refs[bobs.ID].OwnerID != e.bob.UserID ||
+		!refs[gone.ID].Deleted || refs[gone.ID].Type != "local" || refs[gone.ID].OwnerID != e.alice.UserID {
 		t.Errorf("Names = (%+v, %v)", refs, err)
 	}
 
