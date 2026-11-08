@@ -186,12 +186,12 @@ docs/adr/                 architecture decision records
 
 ## Development
 
-Requirements: Go (version from `go.mod`), Node 22 (for the web UI),
+Requirements: Go (version from `go.mod`), Node 26 LTS with its bundled npm
+(for the web UI; `web/.nvmrc` pins it for nvm),
 [buf](https://buf.build/), [golangci-lint](https://golangci-lint.run/) v2,
 Docker (for the dev stack), GNU make (optional: CI does not use it). Install
-the web dependencies with npm 11 (`cd web && npx npm@11.6.2 ci`, which
-`make web` and `make generate` do): the npm 10 bundled with Node 22 rejects
-the lockfile.
+the web dependencies with `cd web && npm ci` (`make web` and `make generate`
+do this).
 
 ```sh
 make help              # list targets

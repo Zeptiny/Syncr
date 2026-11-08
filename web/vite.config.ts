@@ -36,5 +36,9 @@ export default defineConfig({
     include: ["src/**/*.test.{ts,tsx}"],
     css: false,
     restoreMocks: true,
+    // Node 25+ defines its own globalThis.localStorage, which is unusable
+    // without --localstorage-file and shadows jsdom's Storage. Turn it off
+    // in the test workers so the tests use jsdom's.
+    execArgv: ["--no-experimental-webstorage"],
   },
 });

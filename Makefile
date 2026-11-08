@@ -7,10 +7,8 @@ BUF           ?= buf
 SQLC_VERSION  ?= v1.31.1
 SQLC          ?= $(GO) run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 GOLANGCI_LINT ?= golangci-lint
-# npm for installing web/ dependencies: Node 22 bundles npm 10, whose
-# `npm ci` rejects web/package-lock.json (keep in sync with NPM_VERSION in
-# .github/workflows/ci.yml and deploy/Dockerfile.controller).
-NPM_CI        ?= npx --yes npm@11.6.2 ci --no-audit --no-fund
+# Installs web/ dependencies with the npm bundled with Node 26 (web/.nvmrc).
+NPM_CI        ?= npm ci --no-audit --no-fund
 
 BIN_DIR   ?= bin
 BINARIES  := syncr-controller syncr-worker

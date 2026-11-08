@@ -19,9 +19,6 @@ env:
   # Run with `go run` (pinned here and in the Makefile), so no install step is
   # needed and the generated code cannot depend on a stray local version.
   SQLC_VERSION: v1.31.1
-  # npm for web/ (keep in sync with NPM in the Makefile and
-  # deploy/Dockerfile.controller).
-  NPM_VERSION: "11.6.2"
 
 jobs:
   lint:
@@ -58,12 +55,9 @@ jobs:
       # protoc-gen-es (TypeScript) is pinned in web/package.json.
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 26
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: npm ${{ env.NPM_VERSION }}
-        # Node 22 bundles npm 10, whose `npm ci` rejects web/package-lock.json.
-        run: npm install -g "npm@$NPM_VERSION"
       - uses: bufbuild/buf-action@v1
         with:
           version: ${{ env.BUF_VERSION }}
@@ -260,12 +254,9 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 26
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: npm ${{ env.NPM_VERSION }}
-        # Node 22 bundles npm 10, whose `npm ci` rejects web/package-lock.json.
-        run: npm install -g "npm@$NPM_VERSION"
       - run: npm ci
       - name: Route tree is up to date
         run: npm run generate:routes && git diff --exit-code -- src/routeTree.gen.ts

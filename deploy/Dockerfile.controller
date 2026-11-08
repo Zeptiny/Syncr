@@ -9,17 +9,14 @@
 # reverse proxy. deploy/docker-compose.yml runs it with Postgres.
 
 ARG GO_VERSION=1.27.3
-ARG NODE_VERSION=22
-# Node 22 bundles npm 10, whose `npm ci` rejects web/package-lock.json.
-ARG NPM_VERSION=11.6.2
+# Keep in sync with web/.nvmrc and node-version in .github/workflows/ci.yml.
+ARG NODE_VERSION=26
 
 # The web UI (web/dist), platform independent.
 FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS web
 WORKDIR /web
-ARG NPM_VERSION
 COPY web/package.json web/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm install -g "npm@${NPM_VERSION}" \
-    && npm ci --no-audit --no-fund
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY web/ ./
 RUN npm run build
 

@@ -138,5 +138,5 @@ never negative.
 - Adding a backend descriptor in Go is enough for it to appear in the UI.
 - Every new page should be assembled from `src/components/app`; adding a
   one-off table or empty state is a review smell.
-- The CI `web` job (Node 22) checks route-tree drift, types, lint,
+- The CI `web` job (Node 26) checks route-tree drift, types, lint,
   formatting, tests and the build, and hands `web/dist` to the Go build.
