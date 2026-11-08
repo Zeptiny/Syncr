@@ -10,16 +10,31 @@ to the controller and to `github.com` (for the tool downloads).
 
 ## Quick path (one command)
 
-In the controller UI open **Workers, Add worker**; it shows this command with a
-single-use token (the token expires, and works once):
+In the controller's web UI open **Workers, Add worker**. The **Active** tab
+creates a single-use enrollment token (it expires, and works once) and shows
+the install command for each platform and scope. For a Linux system service
+it looks like this:
 
 ```sh
-# 1. put the binary where it will live; the service runs exactly this path
-sudo install -m 0755 syncr-worker /usr/local/bin/syncr-worker
+curl -fsSL "https://github.com/Zeptiny/Syncr/releases/latest/download/syncr-worker_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar -xz syncr-worker \
+  && sudo install -m 0755 syncr-worker /usr/local/bin/syncr-worker \
+  && sudo /usr/local/bin/syncr-worker setup --controller 'https://syncr.example.com' --token 'syncr_et_...'
+```
 
-# 2. enroll and install
+It downloads the release archive (`workers.download_base_url` on the
+controller points it at a mirror), installs the binary where the service
+runs it, and runs setup. The controller URL is its `http.public_url`, or the
+address your browser uses when that is unset. If `syncr-worker` is already
+installed (release archives are published from Milestone 6 on; until then
+build it with `make build`), run only the last line:
+
+```sh
+# put the binary where it will live; the service runs exactly this path
+sudo install -m 0755 syncr-worker /usr/local/bin/syncr-worker
 sudo syncr-worker setup --controller https://syncr.example.com --token syncr_et_...
 ```
+
+The worker shows as online on the **Workers** page within seconds.
 
 Sample output:
 
@@ -86,14 +101,16 @@ Add `--user` to the service commands too: `syncr-worker service status --user`.
 Use this for a server with a reachable port. The worker serves TLS with a
 self-signed certificate; the controller pins its fingerprint.
 
-Register by hand (no controller needed during setup):
+The **Passive** tab of **Workers, Add worker** shows the install command. Or
+set it up by hand (no controller needed during setup):
 
 ```sh
 sudo syncr-worker setup --passive --listen :7443 --advertise-url https://nas.example.com:7443 \
      --tls-name nas.lan --tls-name 192.0.2.10
 ```
 
-It prints the values to paste into **Workers, Add worker, Passive worker**:
+It prints the values to paste into the registration form below the
+commands:
 
 ```
   URL:             https://nas.example.com:7443
@@ -141,7 +158,8 @@ sudo syncr-worker service uninstall
 sudo rm -r /etc/syncr /var/lib/syncr      # optional: config, tools, certificate
 ```
 
-Then delete the worker in the controller UI.
+Then remove the worker in the controller UI (**Workers**, the worker,
+**Remove**; admins only).
 
 ## Where things are
 

@@ -4,12 +4,11 @@ Self-hosted manager for [rclone](https://rclone.org/) sync jobs and
 [restic](https://restic.net/) backups: one controller with a web UI, any
 number of workers on servers and desktops (Linux first, Windows second).
 
-> **Status: v2 rewrite in progress. Milestone 2 complete: workers enroll and
-> run jobs over the link (active or passive); UI next.** Until Milestone 3
-> adds the web UI, users and stored remotes, the controller is driven through
-> its Connect API with a shared admin token, and jobs carry their complete
-> spec (see [Quick start](#quick-start)). The previous Django version lives on
-> `main` (tag `django-final`).
+> **Status: v2 rewrite in progress. Milestone 3 complete: web UI, users,
+> stored remotes and jobs that use them.** Workers enroll and run rclone jobs
+> over the link (active or passive); schedules, restic repositories and
+> notifications come next. The previous Django version lives on `main` (tag
+> `django-final`).
 
 ## Architecture
 
@@ -46,99 +45,118 @@ Design records: [architecture](docs/adr/0001-architecture.md),
 [worker link](docs/adr/0002-worker-link.md),
 [child-process engines](docs/adr/0003-child-process-engines.md),
 [Postgres store](docs/adr/0004-postgres-store.md),
-[runtime wiring and shutdown order](docs/adr/0005-runtime-wiring.md).
+[runtime wiring and shutdown order](docs/adr/0005-runtime-wiring.md),
+[users and sessions](docs/adr/0006-users-sessions.md),
+[backend registry and remotes](docs/adr/0007-backend-registry-remotes.md),
+[web UI](docs/adr/0008-web-ui.md).
 
 ## Quick start
-
-Until the web UI arrives (Milestone 3) the controller is driven with `curl`
-against its Connect JSON API, authenticated with the admin token.
 
 **1. Start the controller and Postgres** (on the server, from a checkout):
 
 ```sh
-cp deploy/.env.example deploy/.env   # fill in POSTGRES_PASSWORD, SYNCR_SECRETS_KEY, SYNCR_ADMIN_TOKEN
+cp deploy/.env.example deploy/.env   # fill in POSTGRES_PASSWORD, SYNCR_SECRETS_KEY (and SYNCR_PUBLIC_URL behind a proxy)
 chmod 600 deploy/.env
 docker compose -f deploy/docker-compose.yml up -d --build --wait
 curl http://127.0.0.1:8080/healthz   # ok
 ```
 
-Back up `SYNCR_SECRETS_KEY`: it encrypts job specs and worker secrets. The
-controller serves plain HTTP on port 8080; workers on other machines need
-HTTPS, so put a TLS-terminating reverse proxy in front of it (read/idle
-timeout above 40 s, request bodies up to 16 MiB) or let the controller serve
-TLS itself (`SYNCR_HTTP_TLS_CERT_FILE`, `SYNCR_HTTP_TLS_KEY_FILE`; see the
-comments in [`deploy/docker-compose.yml`](deploy/docker-compose.yml)).
+Back up `SYNCR_SECRETS_KEY`: it encrypts the stored credentials of remotes
+and workers. The controller serves the web UI and the API with plain HTTP on
+port 8080. Browsers should, and workers on other machines must, reach it over
+HTTPS: put a TLS-terminating reverse proxy in front of it (read/idle timeout
+above 40 s, request bodies up to 16 MiB) and set `SYNCR_PUBLIC_URL` to its
+`https://` address, or let the controller serve TLS itself
+(`SYNCR_HTTP_TLS_CERT_FILE`, `SYNCR_HTTP_TLS_KEY_FILE`; see the comments in
+[`deploy/docker-compose.yml`](deploy/docker-compose.yml)).
 
-**2. Create an enrollment token** (single use, valid for an hour):
+**2. Create the first admin.** Until an account exists, the controller logs
+a one-time setup code at every start:
 
 ```sh
-export SYNCR_ADMIN_TOKEN='<the value from deploy/.env>'
-curl -sS -H "Authorization: Bearer $SYNCR_ADMIN_TOKEN" -H 'Content-Type: application/json' \
-  -d '{}' http://127.0.0.1:8080/syncr.v1.WorkerAdminService/CreateEnrollmentToken
-# {"token":"syncr_et_...", "expiresAt":"..."}
+docker compose -f deploy/docker-compose.yml logs controller | grep setup_code
+# {"level":"WARN","msg":"first-run setup: open the web UI and enter this setup code","setup_code":"7QK2M-XC4PA-..."}
 ```
 
-**3. Set up a worker** on the machine that should run jobs, with the
-`syncr-worker` binary for its platform (see
-[Linux](docs/setup-linux.md), [Windows](docs/setup-windows.md)):
+Open the web UI (`http://127.0.0.1:8080`, or your `SYNCR_PUBLIC_URL`). The
+setup wizard asks for the code, then for the admin's username and password
+(12 characters or more). Admins add more users under **Users**.
+
+**3. Add a worker.** In the UI open **Workers, Add worker**. The **Active**
+tab creates a single-use enrollment token and shows the install command for
+Linux or Windows (system service or per-user). Run it on the machine that
+should run jobs; see [Linux](docs/setup-linux.md) and
+[Windows](docs/setup-windows.md) for the details and the passive mode (the
+controller calls the worker). If `syncr-worker` is already installed, run
+only its last line:
 
 ```sh
-sudo ./syncr-worker setup --controller https://syncr.example.com --token syncr_et_... --local-root /srv/data
+sudo syncr-worker setup --controller https://syncr.example.com --token syncr_et_... --local-root /srv/data
 # On the controller's own machine, plain http on loopback works:
 #   --controller http://127.0.0.1:8080
-# Passive worker (the controller calls it; it needs an open port):
-#   --passive --listen :7443 --advertise-url https://this-host:7443 --controller ... --token ...
 ```
 
 `setup` enrolls the worker, provisions the pinned rclone and restic, installs
 and starts the service (`--no-service` skips that; then run
 `syncr-worker run --config <path>`), and checks the result. The worker shows
-as online within seconds:
+as online within seconds.
+
+**4. Add remotes and run jobs.** Under **Remotes** store your storage
+backends (S3 and compatibles, SFTP, Backblaze B2, WebDAV, local folders of a
+worker, and unions of them). Credentials are encrypted at rest, never shown
+again and only sent to the worker that runs a job. **Jobs, Run job** copies,
+syncs or moves between a remote or a worker folder (inside its
+`local_roots`) and another, on a worker you pick; the job page follows its
+progress live.
+
+**Scripting the API.** Everything the UI does goes through the Connect API
+([`proto/syncr/v1/`](proto/syncr/v1/)). For scripts, create a personal API
+token under **Settings, API tokens** (it acts as you, with your role) and
+send it as a bearer token:
 
 ```sh
-curl -sS -H "Authorization: Bearer $SYNCR_ADMIN_TOKEN" -H 'Content-Type: application/json' \
+export SYNCR_TOKEN='syncr_pat_...'   # shown once when you create it
+curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/json' \
   -d '{}' http://127.0.0.1:8080/syncr.v1.WorkerAdminService/ListWorkers
-# {"workers":[{"id":"01a1a7c0-...", "name":"...", "mode":"WORKER_MODE_ACTIVE", "status":"WORKER_STATUS_ONLINE", ...}]}
-```
+# {"workers":[{"id":"01a1a7c0-...", "name":"nas", "mode":"WORKER_MODE_ACTIVE", "status":"WORKER_STATUS_ONLINE", ...}]}
 
-**4. Run a job** (a copy between two directories under the worker's
-`local_roots`), then follow it:
-
-```sh
-curl -sS -H "Authorization: Bearer $SYNCR_ADMIN_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"workerId":"<worker id>","spec":{"rcloneTransfer":{"mode":"RCLONE_TRANSFER_MODE_COPY",
-       "source":{"path":"/srv/data/photos"},"destination":{"path":"/srv/data/photos-copy"}}}}' \
+curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"workerId":"<worker id>","definition":{"rcloneTransfer":{"mode":"RCLONE_TRANSFER_MODE_COPY",
+       "source":{"path":"/srv/data/photos"},"destination":{"remoteId":"<remote id>","path":"photos"}}}}' \
   http://127.0.0.1:8080/syncr.v1.JobService/RunJob
 # {"job":{"id":"01a1a7c0-...", "status":"JOB_STATUS_QUEUED", ...}}
-
-curl -sS -H "Authorization: Bearer $SYNCR_ADMIN_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"jobId":"<job id>"}' http://127.0.0.1:8080/syncr.v1.JobService/GetJob
-# {"job":{..., "status":"JOB_STATUS_SUCCEEDED", "stats":{"bytes":"3000006", "files":"2", ...}, "exitCode":0}}
 ```
 
-Remotes (S3, SFTP, ...) go into the spec's `remotes` with their options and
-secrets; the spec is stored encrypted and never returned. `JobService.WatchJob`
-streams status changes and live progress (a Connect server stream; use a
-Connect or gRPC client rather than plain `curl`). The messages are in
-[`proto/syncr/v1/api.proto`](proto/syncr/v1/api.proto) and
-[`link.proto`](proto/syncr/v1/link.proto).
+A location is a path on one of your remotes (`remoteId`, path relative to its
+root) or, without `remoteId`, an absolute path on the worker inside its
+`local_roots`. `JobService.WatchJob` streams status changes and live
+progress (a Connect server stream; use a Connect or gRPC client rather than
+plain `curl`). Calls with the browser's session cookie need the
+`X-Syncr-CSRF: 1` header; bearer calls do not. API tokens cannot create or
+delete tokens or change the password.
 
 ## Repository layout
 
 ```
-proto/syncr/v1/           wire contracts (api.proto, link.proto)
+proto/syncr/v1/           wire contracts (api, auth, users, remotes, link)
 gen/go/                   generated protobuf + Connect code (committed)
+web/                      React web UI (Vite, TypeScript); package web embeds web/dist with -tags webui
 cmd/syncr-controller/     controller composition root
 cmd/syncr-worker/         worker composition root and CLI (run, setup, tools, version)
 internal/domain/          entity IDs, job status state machine, worker mode/status, domain errors
 internal/link/            link helpers shared by both sides (job kinds, error codes, auth headers)
+internal/app/users/       accounts, sessions, API tokens, first-run setup
+internal/app/remotes/     stored remotes: validation, encrypted secrets, unions, resolution for dispatch
 internal/app/workers/     worker registry: enrollment, registration, authentication, link state
 internal/app/jobs/        job lifecycle: create, cancel, watch, every status change, progress samples
+internal/backend/         backend type registry (fields, validation, rclone mapping); builtin/ has the types
+internal/jobkind/         job kinds: check stored definitions, build worker specs from resolved remotes
 internal/controller/dispatch/ controller side of the worker link: ingest, commands, reconcile, long polls, passive loop
 internal/controller/dispatch/active/  Connect handlers for active workers (Report, Poll) and enrollment
 internal/controller/dispatch/passive/ pinned HTTPS client and supervisor for passive workers
 internal/controller/config/   controller configuration
-internal/adapters/api/    Connect handlers and health endpoint
+internal/adapters/api/    Connect handlers, access policy, sessions, the web UI handler and health endpoint
+internal/adapters/password/   argon2id password hashing
 internal/adapters/postgres/   Postgres store (pgx, sqlc, goose migrations)
 internal/adapters/memstore/   in-memory repositories (tests, dev.memory_store)
 internal/adapters/broker/     in-process live job broker (WatchJob)
@@ -159,7 +177,8 @@ internal/worker/localfs/  local_roots policy for local paths
 internal/worker/rcloneenv/ env-defined rclone remotes (RCLONE_CONFIG_*), secrets handling
 internal/worker/paths/    default data, scratch, cache and tools directories
 internal/worker/config/   worker configuration
-internal/platform/        leaf helpers: config loading, logging, redaction, HTTP server, client IP, version
+internal/platform/        leaf helpers: config loading, logging, redaction, HTTP server, client IP, rate limits, version
+internal/devseed/         demo data for UI development and screenshots (dev.seed, in-memory store only)
 internal/e2e/             link end-to-end tests in one process; e2e/system runs the real binaries
 deploy/                   Dockerfiles, the quick-start compose file and the dev compose stack
 docs/adr/                 architecture decision records
@@ -167,21 +186,32 @@ docs/adr/                 architecture decision records
 
 ## Development
 
-Requirements: Go (version from `go.mod`), [buf](https://buf.build/),
-[golangci-lint](https://golangci-lint.run/) v2, Docker (for the dev stack),
-GNU make (optional: CI does not use it).
+Requirements: Go (version from `go.mod`), Node 22 (for the web UI),
+[buf](https://buf.build/), [golangci-lint](https://golangci-lint.run/) v2,
+Docker (for the dev stack), GNU make (optional: CI does not use it). Install
+the web dependencies with npm 11 (`cd web && npx npm@11.6.2 ci`, which
+`make web` and `make generate` do): the npm 10 bundled with Node 22 rejects
+the lockfile.
 
 ```sh
 make help              # list targets
-make generate          # buf generate (plugins pinned via `go tool`)
+make generate          # npm ci in web/, buf generate (Go and TypeScript), sqlc
 make lint              # buf lint + golangci-lint (with layering rules)
 make test              # unit tests
 make test-race         # unit tests with the race detector (needs cgo)
 make tools             # fetch the pinned rclone and restic into .cache/tools
 make test-integration  # real rclone/restic (fetched as above), MinIO/SFTP via Docker
-make build             # bin/syncr-controller, bin/syncr-worker (GOOS/GOARCH to cross-compile)
+make web               # build the web UI into web/dist
+make web-check         # typecheck, lint, format-check and test the web UI
+make build             # bin/syncr-controller (with the UI after `make web`), bin/syncr-worker
 make dev-up            # Postgres 17, MinIO and SFTP on 127.0.0.1 (see deploy/docker-compose.dev.yml)
+make dev-seed          # a controller with demo data on the in-memory store (see below)
 ```
+
+The controller embeds the web UI only when built with `-tags webui` after
+`npm run build` in `web/` (that is what `make web build`, CI, the release and
+the Docker image do); a plain `go build` serves a placeholder page, so Go work
+needs no Node.
 
 Run the controller and check it. It needs a secrets key and a database (or,
 for a throw-away demo, the in-memory store):
@@ -189,15 +219,29 @@ for a throw-away demo, the in-memory store):
 ```sh
 make dev-up                       # Postgres on 127.0.0.1:5432
 export SYNCR_SECRETS_KEY=$(openssl rand -base64 32)
-export SYNCR_ADMIN_TOKEN=$(openssl rand -base64 32)
 export SYNCR_DATABASE_URL='postgres://syncr:syncr-dev@127.0.0.1:5432/syncr?sslmode=disable'
-./bin/syncr-controller            # listens on :8080 by default
+./bin/syncr-controller            # listens on :8080; logs the first-run setup code
 # or, without Postgres (everything is lost on exit):
 #   SYNCR_DEV_MEMORY_STORE=true ./bin/syncr-controller   (unset SYNCR_DATABASE_URL)
 curl localhost:8080/healthz
 curl -H 'Content-Type: application/json' -d '{}' \
   localhost:8080/syncr.v1.SystemService/GetInfo
 ```
+
+`SYNCR_SETUP_CODE` presets the setup code (16 or more characters) instead of
+a random one, for scripted setups and tests.
+
+**Web UI development.** `make dev-seed` (or
+`SYNCR_DEV_MEMORY_STORE=true SYNCR_DEV_SEED=true SYNCR_SECRETS_KEY=... go run ./cmd/syncr-controller`)
+starts a controller whose in-memory store holds fixed demo data: users
+`admin` / `syncr-demo-admin` and `alice` / `syncr-demo-alice`, four workers
+(online, offline, passive, pending), remotes of every type and about 25 jobs,
+one of which keeps running with live progress. These passwords are public:
+never expose a seeded controller. `dev.seed` is refused without
+`dev.memory_store`. Then run `npm run dev` in `web/`: Vite serves the UI on
+<http://127.0.0.1:5173> and proxies the API to `SYNCR_DEV_API` (default
+`http://127.0.0.1:8080`). `VITE_SYNCR_MOCK=1 npm run dev` uses an in-browser
+mock API instead.
 
 The worker resolves the pinned rclone and restic, builds its runners and
 starts the link configured by `syncr-worker setup` (an unenrolled worker
@@ -241,10 +285,11 @@ SYNCR_TEST_RESTIC=.cache/tools/restic/<version>/<os>-<arch>/restic \
   there for real.
 - `internal/e2e/system` tests the real binaries (Linux only): it builds
   `syncr-controller` and `syncr-worker`, runs the controller on Postgres
-  (testcontainers), enrolls workers with `syncr-worker setup --no-service`
-  in both link modes, runs rclone and restic (MinIO) jobs through the API, and
-  kills and restarts the controller and the worker mid-job. It needs the go
-  toolchain, Docker and both tool variables.
+  (testcontainers), completes the first-run setup and creates an API token
+  through the API, enrolls workers with `syncr-worker setup --no-service` in
+  both link modes, runs rclone jobs over stored remotes (local and MinIO)
+  through the API, and kills and restarts the controller and the worker
+  mid-job. It needs the go toolchain, Docker and both tool variables.
 - CI runs both flavors: `integration-linux` (with Docker) and
   `integration-windows` (local-only).
 
@@ -267,11 +312,18 @@ http:
   tls_key_file: ""           # SYNCR_HTTP_TLS_KEY_FILE
   client_ip_header: ""       # SYNCR_HTTP_CLIENT_IP_HEADER: e.g. X-Forwarded-For, behind a reverse proxy
   trusted_proxies: []        # SYNCR_HTTP_TRUSTED_PROXIES: CIDRs/IPs allowed to set that header (comma-separated)
+  public_url: ""             # SYNCR_PUBLIC_URL: e.g. https://syncr.example.com behind a proxy (install commands, Secure cookie)
 api:
-  admin_token: ""            # SYNCR_ADMIN_TOKEN: bearer token for the worker and job APIs (32+ chars); unset disables them
   request_timeout: 30s       # SYNCR_API_REQUEST_TIMEOUT
   watch_max_duration: 1h     # SYNCR_API_WATCH_MAX_DURATION: WatchJob streams end after this (clients re-watch)
   watch_keepalive: 30s       # SYNCR_API_WATCH_KEEPALIVE
+auth:
+  cookie_secure: auto        # SYNCR_AUTH_COOKIE_SECURE: auto (TLS or https public_url), always, never
+  session_idle_timeout: 168h # SYNCR_AUTH_SESSION_IDLE_TIMEOUT: a session unused this long ends
+  session_max_age: 720h      # SYNCR_AUTH_SESSION_MAX_AGE: a session ends this long after the login
+  setup_code: ""             # SYNCR_SETUP_CODE: preset first-run setup code (16+ chars); default: random, logged
+workers:
+  download_base_url: https://github.com/Zeptiny/Syncr/releases/latest/download  # SYNCR_WORKERS_DOWNLOAD_BASE_URL (install commands)
 log:
   level: info                # SYNCR_LOG_LEVEL: debug, info, warn, error
   format: text               # SYNCR_LOG_FORMAT: text or json
@@ -285,6 +337,7 @@ database:
   connect_timeout: 10s       # SYNCR_DATABASE_CONNECT_TIMEOUT
 dev:
   memory_store: false        # SYNCR_DEV_MEMORY_STORE: demos/tests only, instead of database.url; data is lost on exit
+  seed: false                # SYNCR_DEV_SEED: demo data with public passwords (needs memory_store); never expose it
 ```
 
 The controller refuses to start without `secrets.key` and without either
@@ -292,9 +345,14 @@ The controller refuses to start without `secrets.key` and without either
 calls the `/healthz` of the controller configured the same way (for
 container health checks; the image has no shell). Behind a reverse proxy, the
 proxy's read/idle timeout must exceed 40 s (workers long-poll for 25 s) and it
-must accept request bodies of 16 MiB; set `http.client_ip_header` and
-`http.trusted_proxies` so the enrollment rate limit sees clients, not the
-proxy.
+must accept request bodies of 16 MiB; set `http.public_url` to its https URL,
+and `http.client_ip_header` and `http.trusted_proxies` so the login and
+enrollment rate limits see clients, not the proxy. The controller refuses a
+`public_url` workers could not use (plain http except on loopback) and warns
+at start when session cookies would not be Secure.
+
+`api.admin_token` (`SYNCR_ADMIN_TOKEN`) of Milestone 2 is gone: it is ignored
+with a warning. Create a personal API token in the UI instead.
 
 The database URL contains the password; it is never logged or printed. The
 Postgres store applies its embedded schema migrations under an advisory lock,
@@ -302,8 +360,9 @@ so several controllers can start at once. For local
 development, `make dev-up` starts Postgres with the credentials from
 `deploy/docker-compose.dev.yml`.
 
-The secrets key encrypts job specs and worker secrets at rest. Back it up:
-without it, stored secrets cannot be read.
+The secrets key encrypts the credentials of remotes and workers at rest. Back
+it up: without it, stored secrets cannot be read (jobs using such a remote
+fail with an internal error instead of retrying).
 
 The worker accepts the same `log` section plus `data_dir`, `local_roots`,
 `tools`, job settings and the `link` section `syncr-worker setup` writes; see
@@ -312,7 +371,7 @@ The worker accepts the same `log` section plus `data_dir`, `local_roots`,
 ### Images
 
 ```sh
-docker build -f deploy/Dockerfile.controller -t syncr-controller .   # distroless, non-root, HEALTHCHECK via -healthcheck
+docker build -f deploy/Dockerfile.controller -t syncr-controller .   # web UI embedded, distroless, non-root, HEALTHCHECK via -healthcheck
 docker build -f deploy/Dockerfile.worker -t syncr-worker .           # Debian slim, rclone v1.75.2, restic 0.19.1, non-root
 ```
 

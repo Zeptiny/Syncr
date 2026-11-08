@@ -434,6 +434,8 @@ linters:
             - github.com/Zeptiny/Syncr/internal/domain
             - github.com/Zeptiny/Syncr/internal/app/workers
             - github.com/Zeptiny/Syncr/internal/controller/dispatch
+            # The keyed token bucket of the enrollment rate limit.
+            - github.com/Zeptiny/Syncr/internal/platform/ratelimit
 
         # End-to-end tests of the worker link wire both sides in one process
         # with the in-memory adapters; they hold no production code.

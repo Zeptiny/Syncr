@@ -2,6 +2,8 @@
 .git
 bin
 dist
+# The controller image builds the web UI from web/ (package*.json, src,
+# public, configs); only local installs and builds stay out.
 web/node_modules
 web/dist
 **/*.test

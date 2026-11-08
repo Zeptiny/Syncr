@@ -77,6 +77,29 @@ func TestValidate(t *testing.T) {
 		{"previous key malformed", func(c *Config) {
 			c.Secrets = Secrets{Key: testKey, KeyID: 1, PreviousKeys: []string{testKey}}
 		}, "previous_keys[0]: want <id>:<base64 key>"},
+		{"public url", func(c *Config) { c.HTTP.PublicURL = "https://syncr.example.com" }, ""},
+		{"public url with path", func(c *Config) { c.HTTP.PublicURL = "https://example.com/syncr/" }, ""},
+		{"public url http", func(c *Config) { c.HTTP.PublicURL = "http://127.0.0.1:8080" }, ""},
+		{"public url relative", func(c *Config) { c.HTTP.PublicURL = "syncr.example.com" }, "http.public_url"},
+		{"public url scheme", func(c *Config) { c.HTTP.PublicURL = "ftp://syncr.example.com" }, "http.public_url"},
+		{"public url no host", func(c *Config) { c.HTTP.PublicURL = "https://" }, "has no host"},
+		{"public url query", func(c *Config) { c.HTTP.PublicURL = "https://syncr.example.com/?a=b" }, "query"},
+		{"public url credentials", func(c *Config) { c.HTTP.PublicURL = "https://u:p@syncr.example.com" }, "credentials"},
+		{"cookie always", func(c *Config) { c.Auth.CookieSecure = CookieSecureAlways }, ""},
+		{"cookie never", func(c *Config) { c.Auth.CookieSecure = CookieSecureNever }, ""},
+		{"cookie unknown", func(c *Config) { c.Auth.CookieSecure = "sometimes" }, "auth.cookie_secure"},
+		{"cookie empty", func(c *Config) { c.Auth.CookieSecure = "" }, "auth.cookie_secure"},
+		{"short idle timeout", func(c *Config) { c.Auth.SessionIdleTimeout = time.Second }, "auth.session_idle_timeout"},
+		{"short max age", func(c *Config) { c.Auth.SessionMaxAge = 59 * time.Second }, "auth.session_max_age"},
+		{"setup code", func(c *Config) { c.Auth.SetupCode = "ABCDE-FGHIJ-KLMNO-PQRS2" }, ""},
+		{"setup code 16", func(c *Config) { c.Auth.SetupCode = "abcd-efgh-ijkl-mnop" }, ""},
+		{"setup code short", func(c *Config) { c.Auth.SetupCode = "ABCDE-FGHIJ-KLMNO" }, "at least 16 characters"},
+		{"setup code control", func(c *Config) { c.Auth.SetupCode = "ABCDEFGHIJKLMNOP\x00" }, "control characters"},
+		{"download base url", func(c *Config) { c.Workers.DownloadBaseURL = "https://mirror.example.com/syncr" }, ""},
+		{"download base url empty", func(c *Config) { c.Workers.DownloadBaseURL = "" }, "workers.download_base_url"},
+		{"download base url scheme", func(c *Config) { c.Workers.DownloadBaseURL = "file:///srv" }, "workers.download_base_url"},
+		{"seed with memory store", func(c *Config) { c.Dev.Seed, c.Dev.MemoryStore = true, true }, ""},
+		{"seed without memory store", func(c *Config) { c.Dev.Seed = true }, "dev.seed needs dev.memory_store"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -193,6 +216,62 @@ func TestCheckServe(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSetupCodeErrorsDoNotEchoIt(t *testing.T) {
+	t.Parallel()
+	cfg := Default()
+	cfg.Auth.SetupCode = "SHORT-hunter2"
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a short setup code validated")
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("error echoes the setup code: %v", err)
+	}
+}
+
+func TestLoadAuthAndWorkers(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "controller.yaml")
+	content := "http:\n  public_url: https://from-file.example.com\nauth:\n  cookie_secure: always\n  session_idle_timeout: 12h\n" +
+		"workers:\n  download_base_url: https://mirror.example.com/syncr\ndev:\n  memory_store: true\n  seed: true\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const code = "ABCDE-FGHIJ-KLMNO-PQRS2"
+	env := map[string]string{
+		"SYNCR_PUBLIC_URL": "https://syncr.example.com", "SYNCR_SETUP_CODE": code,
+		"SYNCR_AUTH_SESSION_MAX_AGE": "48h", "SYNCR_DEV_SEED": "false",
+	}
+	cfg := Default()
+	if err := platformconfig.Load(path, func(k string) (string, bool) { v, ok := env[k]; return v, ok }, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTP.PublicURL != "https://syncr.example.com" {
+		t.Errorf("public url = %q", cfg.HTTP.PublicURL)
+	}
+	want := Auth{CookieSecure: CookieSecureAlways, SessionIdleTimeout: 12 * time.Hour, SessionMaxAge: 48 * time.Hour, SetupCode: code}
+	if cfg.Auth != want {
+		t.Errorf("Auth = %+v", cfg.Auth)
+	}
+	if cfg.Workers.DownloadBaseURL != "https://mirror.example.com/syncr" || cfg.Dev.Seed || !cfg.Dev.MemoryStore {
+		t.Errorf("Workers = %+v, Dev = %+v", cfg.Workers, cfg.Dev)
+	}
+	if got := fmt.Sprintf("%v %+v %#v", cfg, cfg, cfg); strings.Contains(got, code) {
+		t.Errorf("config formatting leaks the setup code: %s", got)
+	}
+}
+
+func TestDefaultAuth(t *testing.T) {
+	t.Parallel()
+	cfg := Default()
+	if cfg.Auth.CookieSecure != CookieSecureAuto || cfg.Auth.SessionIdleTimeout != 7*24*time.Hour || cfg.Auth.SessionMaxAge != 30*24*time.Hour || !cfg.Auth.SetupCode.IsZero() {
+		t.Errorf("Auth = %+v", cfg.Auth)
+	}
+	if cfg.Workers.DownloadBaseURL != DefaultDownloadBaseURL || cfg.HTTP.PublicURL != "" || cfg.Dev.Seed {
+		t.Errorf("Workers = %+v, HTTP.PublicURL = %q, Dev = %+v", cfg.Workers, cfg.HTTP.PublicURL, cfg.Dev)
 	}
 }
 

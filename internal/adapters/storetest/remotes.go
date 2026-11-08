@@ -29,21 +29,19 @@ func newRemote(t *testing.T, n int, owner domain.UserID, name string) remotes.Re
 func mustCreateRemote(t *testing.T, s Store, r remotes.Remote) {
 	t.Helper()
 	err := s.CreateRemote(context.Background(), r)
-	skipIfUnsupported(t, err)
 	if err != nil {
 		t.Fatalf("CreateRemote(%s): %v", r.Name, err)
 	}
 }
 
-// requireRemotes creates the users of the test and skips it if the store
-// does not implement the remotes port yet.
+// requireRemotes creates the users of the test and checks that the remotes
+// port works.
 func requireRemotes(t *testing.T, s Store, owners ...domain.UserID) {
 	t.Helper()
 	for _, o := range owners {
 		ensureUser(t, s, o)
 	}
 	_, err := s.ListRemotes(context.Background(), remotes.ListFilter{})
-	skipIfUnsupported(t, err)
 	if err != nil {
 		t.Fatalf("ListRemotes: %v", err)
 	}
