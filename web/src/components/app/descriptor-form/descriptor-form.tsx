@@ -1,24 +1,14 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ChevronRight } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { FormProvider, useForm, type FieldPath, type Resolver } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
-import { FieldKind, type Backend, type BackendField, type Remote } from "@/gen/syncr/v1/remotes_pb";
+import { FieldKind, type Backend, type Remote } from "@/gen/syncr/v1/remotes_pb";
 import { errorMessage, fieldViolations } from "@/lib/errors";
-import { cn } from "@/lib/utils";
 
-import {
-  BoolField,
-  EnumField,
-  FieldShell,
-  IntField,
-  MembersField,
-  SecretField,
-  TextField,
-} from "./fields";
+import { DescriptorFields } from "./descriptor-fields";
+import { FieldShell, MembersField } from "./fields";
 import {
   buildSchema,
   defaultValues,
@@ -29,8 +19,8 @@ import {
   type RemoteInputInit,
 } from "./schema";
 
-/** DescriptorFormProps configures DescriptorForm. */
-export interface DescriptorFormProps {
+/** RemoteFormProps configures RemoteForm. */
+export interface RemoteFormProps {
   backend: Backend;
   /** remote is the stored remote when editing. */
   remote?: Remote;
@@ -48,58 +38,12 @@ export interface DescriptorFormProps {
   footer?: React.ReactNode;
 }
 
-function FieldFor({
-  field,
-  idPrefix,
-  remote,
-  remotes,
-  backends,
-}: {
-  field: BackendField;
-  idPrefix: string;
-  remote?: Remote;
-  remotes: Remote[];
-  backends: Map<string, Backend>;
-}) {
-  if (field.kind === FieldKind.MEMBERS) {
-    return (
-      <MembersField
-        field={field}
-        idPrefix={idPrefix}
-        remotes={remotes}
-        backends={backends}
-        selfId={remote?.id}
-      />
-    );
-  }
-  if (field.secret) {
-    return (
-      <SecretField
-        field={field}
-        idPrefix={idPrefix}
-        isSet={remote?.secretsSet.includes(field.name)}
-      />
-    );
-  }
-  switch (field.kind) {
-    case FieldKind.BOOL:
-      return <BoolField field={field} idPrefix={idPrefix} />;
-    case FieldKind.INT:
-      return <IntField field={field} idPrefix={idPrefix} />;
-    case FieldKind.ENUM:
-      return <EnumField field={field} idPrefix={idPrefix} />;
-    default:
-      return <TextField field={field} idPrefix={idPrefix} />;
-  }
-}
-
 /**
- * DescriptorForm renders a remote's form from its backend descriptor, so a
- * new backend needs no frontend change. Advanced fields are collapsed;
- * secrets are write-only (see SecretField); server field violations land
- * on their fields.
+ * RemoteForm renders a remote's form: its name, the backend descriptor's
+ * fields (DescriptorFields) and, for unions, the members. Server field
+ * violations land on their fields.
  */
-export function DescriptorForm({
+export function RemoteForm({
   backend,
   remote,
   remotes = [],
@@ -108,7 +52,7 @@ export function DescriptorForm({
   submitLabel,
   onCancel,
   footer,
-}: DescriptorFormProps) {
+}: RemoteFormProps) {
   const idPrefix = useId().replaceAll(":", "");
   const schema = useMemo(
     () => buildSchema(backend, { secretsSet: remote?.secretsSet }),
@@ -122,11 +66,8 @@ export function DescriptorForm({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [formError, setFormError] = useState<string | undefined>();
 
-  const all = backend.fields;
-  const basic = all.filter((f) => !f.advanced);
-  const advanced = all.filter((f) => f.advanced);
+  const advanced = backend.fields.filter((f) => f.advanced);
   const errors = form.formState.errors;
-  const advancedHasError = advanced.some((f) => errors.values?.[f.name]);
 
   const submit = form.handleSubmit(async (values) => {
     setFormError(undefined);
@@ -176,68 +117,25 @@ export function DescriptorForm({
               {...form.register("name")}
             />
           </FieldShell>
-          <div className="grid grid-cols-1 gap-x-5 gap-y-5 md:grid-cols-2">
-            {basic.map((f) => (
-              <div
-                key={f.name}
-                className={cn(
-                  (f.kind === FieldKind.TEXT ||
-                    f.kind === FieldKind.MEMBERS ||
-                    f.kind === FieldKind.BOOL) &&
-                    "md:col-span-2",
-                )}
-              >
-                <FieldFor
+          <DescriptorFields
+            descriptor={backend}
+            secretsSet={remote?.secretsSet}
+            idPrefix={idPrefix}
+            openAdvanced={advancedOpen}
+            onOpenAdvancedChange={setAdvancedOpen}
+            renderField={(f) =>
+              f.kind === FieldKind.MEMBERS ? (
+                <MembersField
                   field={f}
                   idPrefix={idPrefix}
-                  remote={remote}
                   remotes={remotes}
                   backends={backends}
+                  selfId={remote?.id}
                 />
-              </div>
-            ))}
-          </div>
+              ) : undefined
+            }
+          />
         </div>
-
-        {advanced.length > 0 && (
-          <Collapsible
-            open={advancedOpen || advancedHasError}
-            onOpenChange={setAdvancedOpen}
-            className="rounded-lg border"
-          >
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left text-[13px] font-medium hover:bg-accent/50"
-              >
-                <ChevronRight
-                  className={cn(
-                    "size-4 transition-transform",
-                    (advancedOpen || advancedHasError) && "rotate-90",
-                  )}
-                  aria-hidden
-                />
-                Advanced options
-                <span className="font-normal text-muted-foreground">{advanced.length}</span>
-              </button>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className="grid grid-cols-1 gap-x-5 gap-y-5 border-t px-4 py-5 md:grid-cols-2">
-                {advanced.map((f) => (
-                  <div key={f.name} className={cn(f.kind === FieldKind.TEXT && "md:col-span-2")}>
-                    <FieldFor
-                      field={f}
-                      idPrefix={idPrefix}
-                      remote={remote}
-                      remotes={remotes}
-                      backends={backends}
-                    />
-                  </div>
-                ))}
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
-        )}
 
         {formError && (
           <p role="alert" className="rounded-md bg-danger-soft px-3 py-2 text-[13px] text-danger">

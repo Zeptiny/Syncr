@@ -8,7 +8,8 @@
 //                           01-setup (default: skipped unless SYNCR_UI_MOCK=1)
 //   SYNCR_UI_USER           sign-in user (default admin)
 //   SYNCR_UI_PASSWORD       sign-in password (default syncr-demo-admin)
-//   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/m3)
+//   SYNCR_SCREENSHOT_SET    m4 (default) or m3: which milestone's shot list
+//   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/<set>)
 //   SYNCR_SCREENSHOT_ONLY   comma-separated shot names to take (default all)
 //   SYNCR_SCREENSHOT_MOBILE 1 to also take 390px-wide shots
 //   SYNCR_SCREENSHOT_FULL   1 to capture whole pages instead of the viewport
@@ -29,7 +30,10 @@ const mock = process.env.SYNCR_UI_MOCK === "1";
 const setupUrl = (process.env.SYNCR_SETUP_URL ?? (mock ? base : "")).replace(/\/$/, "");
 const user = process.env.SYNCR_UI_USER ?? "admin";
 const password = process.env.SYNCR_UI_PASSWORD ?? "syncr-demo-admin";
-const outDir = resolve(process.env.SYNCR_SCREENSHOT_DIR ?? join(here, "../../docs/screenshots/m3"));
+const set = process.env.SYNCR_SCREENSHOT_SET === "m3" ? "m3" : "m4";
+const outDir = resolve(
+  process.env.SYNCR_SCREENSHOT_DIR ?? join(here, `../../docs/screenshots/${set}`),
+);
 const only = process.env.SYNCR_SCREENSHOT_ONLY?.split(",").filter(Boolean);
 const mobile = process.env.SYNCR_SCREENSHOT_MOBILE === "1";
 const fullPage = process.env.SYNCR_SCREENSHOT_FULL === "1";
@@ -76,7 +80,7 @@ async function signIn(page) {
   await page.locator("#username").fill(user);
   await page.locator("#password").fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.waitForURL(/\/jobs/);
+  await page.waitForURL((u) => !u.pathname.startsWith("/login"));
   await settle(page);
 }
 
@@ -92,7 +96,7 @@ async function openRow(page, path, text, { exact = false } = {}) {
   await settle(page);
 }
 
-const shots = [
+const m3Shots = [
   ["03-jobs", async (p) => (await p.goto(`${base}/jobs`), settle(p))],
   [
     "04-job-live",
@@ -152,10 +156,128 @@ const shots = [
   ],
 ];
 
+// scrollTo brings a page section to the top of the viewport.
+async function scrollTo(page, locator, offset = 16) {
+  await locator.first().evaluate((el, off) => {
+    window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - off });
+  }, offset);
+  await page.waitForTimeout(250);
+}
+
+// pickTimezone opens the time zone picker and chooses a zone by search.
+async function pickTimezone(page, search, zone) {
+  await page.locator("#sched-tz").click();
+  await page.getByLabel("Search time zones").fill(search);
+  await page
+    .getByRole("option", { name: new RegExp(zone) })
+    .first()
+    .click();
+}
+
+// The M4 shots. They expect the dev seed of the integration pass (see the
+// track D report): schedules "Nightly photos → B2", "Office docs hourly",
+// "Weekly archive", "Offsite mirror" and a paused one; contacts "Ops
+// Discord", "Admin mail" and "Home Assistant"; worker nas-01 with labels.
+const m4Shots = [
+  ["01-dashboard", async (p) => (await p.goto(`${base}/?range=7d`), settle(p, 900))],
+  ["03-schedules", async (p) => (await p.goto(`${base}/schedules`), settle(p))],
+  [
+    "04-schedule-new-cron",
+    async (p) => {
+      await p.goto(`${base}/schedules/new`);
+      await settle(p);
+      await p.locator("#sched-name").fill("Archive every other month");
+      await pickTimezone(p, "berlin", "Berlin");
+      await p.locator("#sched-cron").fill("30 2 1 */2 *");
+      await settle(p, 900);
+    },
+  ],
+  [
+    "05-schedule-new-policies",
+    async (p) => {
+      await p.goto(`${base}/schedules/new`);
+      await settle(p);
+      await p.getByRole("radio", { name: "Any worker with a label" }).click();
+      await p.locator("#sched-target-label").fill("nas");
+      await p.getByRole("radio", { name: "Wait, then run" }).click();
+      await scrollTo(p, p.getByRole("heading", { name: "Notifications" }), 300);
+      await p.getByRole("combobox", { name: "Notify a contact" }).click();
+      await p.getByRole("option", { name: "Ops Discord" }).click();
+      await settle(p, 300);
+      await scrollTo(p, p.getByRole("heading", { name: "Where it runs" }));
+    },
+  ],
+  [
+    "06-timezone-picker",
+    async (p) => {
+      await p.goto(`${base}/schedules/new`);
+      await settle(p);
+      await scrollTo(p, p.getByRole("heading", { name: "When" }), 96);
+      await p.locator("#sched-tz").click();
+      await p.getByLabel("Search time zones").fill("america");
+      await settle(p, 300);
+    },
+  ],
+  ["07-schedule-detail", async (p) => openRow(p, "/schedules", "Nightly photos")],
+  ["08-notifications", async (p) => (await p.goto(`${base}/notifications`), settle(p))],
+  [
+    "09-contact-discord",
+    async (p) => {
+      await p.goto(`${base}/notifications/new?type=discord`);
+      await settle(p);
+      await p.getByLabel("Name").first().fill("Team Discord");
+      await p
+        .getByLabel("Webhook URL", { exact: true })
+        .fill("https://discord.com/api/webhooks/1290000000000000000/aBcDeFgHiJkLmNoPqRsTuVwXyZ");
+      await p.getByRole("button", { name: /Advanced options/ }).click();
+      await p.getByRole("checkbox", { name: "Failed" }).click();
+      await settle(p, 300);
+    },
+  ],
+  [
+    "10-contact-email-test",
+    async (p) => {
+      await openRow(p, "/notifications", "Admin mail");
+      await p.getByRole("button", { name: "Send test" }).click();
+      await p.getByText(/Test notification sent|was not delivered/).waitFor({ timeout: 20_000 });
+      await settle(p, 300);
+      await scrollTo(p, p.getByRole("button", { name: "Send test" }), 360);
+    },
+  ],
+  [
+    "11-contact-deliveries",
+    async (p) => (await p.goto(`${base}/notifications?tab=deliveries`), settle(p)),
+  ],
+  [
+    "12-worker-labels",
+    async (p) => {
+      await openRow(p, "/workers", "nas-01");
+      await p.getByRole("button", { name: "Edit labels" }).click();
+      await p.locator("#worker-labels").fill("media");
+      await settle(p, 300);
+      await scrollTo(p, p.getByRole("heading", { name: "Labels" }), 260);
+    },
+  ],
+  [
+    "13-jobs-scheduled",
+    async (p) => {
+      await p.goto(`${base}/jobs`);
+      await settle(p);
+      await p.getByRole("combobox", { name: "Schedule" }).click();
+      await p.getByRole("option", { name: "Offsite mirror" }).click();
+      await settle(p);
+    },
+  ],
+];
+
 async function main() {
   await mkdir(outDir, { recursive: true });
   const browser = await chromium.launch({ executablePath, args: ["--no-sandbox"] });
   try {
+    if (set === "m4") {
+      await m4(browser);
+      return;
+    }
     if (setupUrl && wanted("01-setup")) {
       const p = await newPage(browser, { init: mock ? { "syncr.mock.setup": "1" } : undefined });
       await p.goto(`${setupUrl}/setup`);
@@ -176,7 +298,7 @@ async function main() {
     for (const v of variants) {
       const p = await newPage(browser, v);
       await signIn(p);
-      for (const [name, go] of shots) {
+      for (const [name, go] of m3Shots) {
         if (!wanted(name)) continue;
         await go(p);
         await shot(p, name + v.suffix);
@@ -194,6 +316,39 @@ async function main() {
     }
   } finally {
     await browser.close();
+  }
+}
+
+// m4 takes the milestone 4 shots: light at 1440×900, then the dashboard in
+// dark and at phone width (and every shot at 390 px with MOBILE=1).
+async function m4(browser) {
+  const variants = [{ suffix: "", width: 1440, height: 900 }];
+  if (mobile) variants.push({ suffix: "-mobile", width: 390, height: 844 });
+  for (const v of variants) {
+    const p = await newPage(browser, v);
+    await signIn(p);
+    for (const [name, go] of m4Shots) {
+      if (!wanted(name)) continue;
+      await go(p);
+      await shot(p, name + v.suffix);
+    }
+    await p.context().close();
+  }
+  if (wanted("02-dashboard-dark")) {
+    const p = await newPage(browser, { dark: true });
+    await signIn(p);
+    await p.goto(`${base}/?range=7d`);
+    await settle(p, 900);
+    await shot(p, "02-dashboard-dark");
+    await p.context().close();
+  }
+  if (wanted("14-dashboard-mobile") && !mobile) {
+    const p = await newPage(browser, { width: 390, height: 844 });
+    await signIn(p);
+    await p.goto(`${base}/?range=7d`);
+    await settle(p, 900);
+    await shot(p, "14-dashboard-mobile");
+    await p.context().close();
   }
 }
 

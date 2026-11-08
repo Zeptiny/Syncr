@@ -23,6 +23,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { JobService, JobStatus, WorkerAdminService } from "@/gen/syncr/v1/api_pb";
 import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
+import { ScheduleService } from "@/gen/syncr/v1/schedules_pb";
 import { UserService } from "@/gen/syncr/v1/users_pb";
 import { useKeysetPager } from "@/hooks/use-keyset-pager";
 import { useNow } from "@/hooks/use-now";
@@ -30,46 +31,11 @@ import { useSession } from "@/hooks/use-session";
 import { isTerminal, jobStatuses, jobStatusMeta, kindLabel } from "@/lib/status";
 
 import { JobsTable } from "./jobs-table";
-
-/** JobsSearch is the jobs list's URL state. */
-export interface JobsSearch {
-  /** status is a comma-separated list of JobStatus numbers. */
-  status?: string;
-  worker?: string;
-  remote?: string;
-  kind?: string;
-  q?: string;
-  period?: "24h" | "7d" | "30d" | "custom";
-  from?: string;
-  to?: string;
-  all?: boolean;
-}
+import type { JobsSearch } from "./search";
 
 const periods = { "24h": 1, "7d": 7, "30d": 30 } as const;
 const kinds = ["rclone_transfer"];
 const ANY = "__any__";
-
-/** validateJobsSearch parses the URL search params of the jobs list. */
-export function validateJobsSearch(s: Record<string, unknown>): JobsSearch {
-  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
-  const date = (v: unknown) =>
-    typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined;
-  const period = str(s.period);
-  return {
-    status: str(s.status),
-    worker: str(s.worker),
-    remote: str(s.remote),
-    kind: str(s.kind),
-    q: str(s.q),
-    period:
-      period === "24h" || period === "7d" || period === "30d" || period === "custom"
-        ? period
-        : undefined,
-    from: date(s.from),
-    to: date(s.to),
-    all: s.all === true || s.all === "true" ? true : undefined,
-  };
-}
 
 function parseStatuses(s: string | undefined): JobStatus[] {
   if (!s) return [];
@@ -158,6 +124,7 @@ export function JobsPage({ search }: { search: JobsSearch }) {
 
   const workers = useQuery(WorkerAdminService.method.listWorkers, {});
   const remotes = useQuery(RemoteService.method.listRemotes, {});
+  const schedules = useQuery(ScheduleService.method.listSchedules, {});
   const users = useQuery(UserService.method.listUsers, {}, { enabled: allUsers });
   const q = useQuery(
     JobService.method.listJobs,
@@ -165,6 +132,7 @@ export function JobsPage({ search }: { search: JobsSearch }) {
       statuses,
       workerId: search.worker ?? "",
       remoteId: search.remote ?? "",
+      scheduleId: search.schedule ?? "",
       kinds: search.kind ? [search.kind] : [],
       query: search.q ?? "",
       createdAfter: after ? timestampFromDate(after) : undefined,
@@ -192,6 +160,7 @@ export function JobsPage({ search }: { search: JobsSearch }) {
     statuses.length > 0 ||
     !!search.worker ||
     !!search.remote ||
+    !!search.schedule ||
     !!search.kind ||
     !!search.q ||
     !!search.period;
@@ -255,6 +224,26 @@ export function JobsPage({ search }: { search: JobsSearch }) {
                 {r.name}
               </SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={search.schedule ?? ANY}
+          onValueChange={(v) => setSearch({ schedule: v === ANY ? undefined : v })}
+        >
+          <SelectTrigger className="w-[calc(50%-0.25rem)] bg-card sm:w-44" aria-label="Schedule">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ANY}>Any schedule</SelectItem>
+            <SelectSeparator />
+            {(schedules.data?.schedules ?? []).map((sc) => (
+              <SelectItem key={sc.id} value={sc.id}>
+                {sc.name}
+              </SelectItem>
+            ))}
+            {schedules.data?.schedules.length === 0 && (
+              <div className="px-2 py-2 text-[13px] text-muted-foreground">No schedules yet.</div>
+            )}
           </SelectContent>
         </Select>
         <Select

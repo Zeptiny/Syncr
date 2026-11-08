@@ -1,5 +1,7 @@
 import { JobStatus, WorkerStatus } from "@/gen/syncr/v1/api_pb";
 import { JobErrorCode, RcloneTransferMode, WorkerMode } from "@/gen/syncr/v1/link_pb";
+import { DeliveryStatus, NotificationEvent } from "@/gen/syncr/v1/notify_pb";
+import { ScheduleRunStatus } from "@/gen/syncr/v1/schedules_pb";
 
 /** Tone is the colour family of a status. */
 export type Tone = "live" | "success" | "danger" | "warning" | "neutral";
@@ -133,4 +135,123 @@ const errorCodes: Partial<Record<JobErrorCode, string>> = {
 /** errorCodeLabel names a job error code. */
 export function errorCodeLabel(code: JobErrorCode): string {
   return errorCodes[code] ?? "Error";
+}
+
+const runStatus: Record<ScheduleRunStatus, StatusMeta> = {
+  [ScheduleRunStatus.UNSPECIFIED]: { label: "Unknown", tone: "neutral" },
+  [ScheduleRunStatus.PENDING]: { label: "Waiting", tone: "warning" },
+  [ScheduleRunStatus.LAUNCHING]: { label: "Starting", tone: "live", pulse: true },
+  [ScheduleRunStatus.LAUNCHED]: { label: "Launched", tone: "success" },
+  [ScheduleRunStatus.MISSED]: { label: "Missed", tone: "warning" },
+  [ScheduleRunStatus.FAILED]: { label: "Failed", tone: "danger" },
+  [ScheduleRunStatus.CANCELLED]: { label: "Cancelled", tone: "neutral" },
+};
+
+/** scheduleRunStatusMeta returns the label and tone of a schedule run status. */
+export function scheduleRunStatusMeta(status: ScheduleRunStatus): StatusMeta {
+  return runStatus[status] ?? runStatus[ScheduleRunStatus.UNSPECIFIED];
+}
+
+const deliveryStatus: Record<DeliveryStatus, StatusMeta> = {
+  [DeliveryStatus.UNSPECIFIED]: { label: "Unknown", tone: "neutral" },
+  [DeliveryStatus.PENDING]: { label: "Pending", tone: "neutral" },
+  [DeliveryStatus.SENDING]: { label: "Sending", tone: "live", pulse: true },
+  [DeliveryStatus.DELIVERED]: { label: "Delivered", tone: "success" },
+  [DeliveryStatus.DEAD]: { label: "Gave up", tone: "danger" },
+};
+
+/**
+ * deliveryStatusMeta returns the label and tone of a delivery. A pending
+ * delivery that already failed an attempt is shown as retrying.
+ */
+export function deliveryStatusMeta(status: DeliveryStatus, attempts = 0): StatusMeta {
+  if (status === DeliveryStatus.PENDING && attempts > 0)
+    return { label: "Retrying", tone: "warning" };
+  return deliveryStatus[status] ?? deliveryStatus[DeliveryStatus.UNSPECIFIED];
+}
+
+/** The events a schedule link can notify, in the order the UI shows them. */
+export const scheduleEvents: NotificationEvent[] = [
+  NotificationEvent.SUCCEEDED,
+  NotificationEvent.FAILED,
+  NotificationEvent.INTERRUPTED,
+  NotificationEvent.MISSED,
+];
+
+/** The events a contact can get for jobs run by hand (never "missed"). */
+export const manualJobEvents: NotificationEvent[] = [
+  NotificationEvent.SUCCEEDED,
+  NotificationEvent.FAILED,
+  NotificationEvent.INTERRUPTED,
+];
+
+/** The events a new schedule link starts with. */
+export const defaultLinkEvents: NotificationEvent[] = [
+  NotificationEvent.FAILED,
+  NotificationEvent.INTERRUPTED,
+  NotificationEvent.MISSED,
+];
+
+const events: Record<NotificationEvent, { label: string; tone: Tone; help: string }> = {
+  [NotificationEvent.UNSPECIFIED]: { label: "Unknown", tone: "neutral", help: "" },
+  [NotificationEvent.SUCCEEDED]: {
+    label: "Succeeded",
+    tone: "success",
+    help: "The job finished without errors.",
+  },
+  [NotificationEvent.FAILED]: {
+    label: "Failed",
+    tone: "danger",
+    help: "The job failed, or the run could not start.",
+  },
+  [NotificationEvent.INTERRUPTED]: {
+    label: "Interrupted",
+    tone: "warning",
+    help: "The worker stopped or lost the job.",
+  },
+  [NotificationEvent.MISSED]: {
+    label: "Missed",
+    tone: "warning",
+    help: "The run never started: its worker stayed offline, or the last run was still going.",
+  },
+  [NotificationEvent.TEST]: { label: "Test", tone: "neutral", help: "A test notification." },
+};
+
+/** eventMeta describes a notification event. */
+export function eventMeta(e: NotificationEvent): { label: string; tone: Tone; help: string } {
+  return events[e] ?? events[NotificationEvent.UNSPECIFIED];
+}
+
+const runReasons: Record<string, string> = {
+  worker_offline: "The worker was offline",
+  overlap: "The previous run was still going",
+  controller_unavailable: "The controller was down",
+  remote_unavailable: "A remote it uses is gone",
+  invalid_definition: "The job is no longer valid",
+  worker_removed: "Its worker was removed",
+  no_worker_with_label: "No worker has the label",
+  owner_disabled: "The owner's account is disabled",
+  disabled: "The schedule was paused",
+};
+
+/** runReasonLabel explains a schedule run's reason code. */
+export function runReasonLabel(reason: string): string {
+  if (!reason) return "";
+  return runReasons[reason] ?? reason.replaceAll("_", " ");
+}
+
+/** pausedReasonLabel explains why a schedule was paused automatically. */
+export function pausedReasonLabel(reason: string): string {
+  switch (reason) {
+    case "worker_removed":
+      return "Its worker was removed. Choose another worker or a label, then resume it.";
+    case "remote_unavailable":
+      return "A remote it uses was deleted. Edit the job, then resume it.";
+    case "invalid_definition":
+      return "Its job is no longer valid. Edit it, then resume it.";
+    case "owner_disabled":
+      return "Its owner's account was disabled.";
+    default:
+      return reason ? runReasonLabel(reason) + "." : "";
+  }
 }

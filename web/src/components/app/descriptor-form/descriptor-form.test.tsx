@@ -15,8 +15,17 @@ import {
 import * as fx from "@/test/fixtures";
 import { renderWithProviders } from "@/test/render";
 
-import { DescriptorForm } from "./descriptor-form";
-import { buildSchema, defaultValues, formPath, toRemoteInput } from "./schema";
+import { RemoteForm } from "./descriptor-form";
+import {
+  buildSchema,
+  defaultValues,
+  fieldDefaults,
+  fieldPath,
+  fieldsInput,
+  fieldsSchema,
+  formPath,
+  toRemoteInput,
+} from "./schema";
 
 const now = Date.parse("2026-03-12T12:00:00Z");
 const backendMap = new Map(fx.backends.map((b) => [b.id, b]));
@@ -33,7 +42,7 @@ function remoteById(id: string): Remote {
   return r;
 }
 
-describe("DescriptorForm schema", () => {
+describe("RemoteForm schema", () => {
   it("requires fields from the descriptor and keeps stored secrets", () => {
     const s3 = fx.backend("s3");
     const create = buildSchema(s3);
@@ -118,11 +127,11 @@ describe("DescriptorForm schema", () => {
   });
 });
 
-describe("DescriptorForm", () => {
+describe("RemoteForm", () => {
   it("creates an s3 remote from the descriptor", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn().mockResolvedValue(undefined);
-    renderWithProviders(<DescriptorForm backend={fx.backend("s3")} onSubmit={onSubmit} />);
+    renderWithProviders(<RemoteForm backend={fx.backend("s3")} onSubmit={onSubmit} />);
 
     await user.click(screen.getByRole("button", { name: "Create remote" }));
     expect(await screen.findByText("Give the remote a name.")).toBeInTheDocument();
@@ -151,7 +160,7 @@ describe("DescriptorForm", () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     const remote = remoteById(fx.ids.storageBox);
     const { unmount } = renderWithProviders(
-      <DescriptorForm backend={fx.backend("sftp")} remote={remote} onSubmit={onSubmit} />,
+      <RemoteForm backend={fx.backend("sftp")} remote={remote} onSubmit={onSubmit} />,
     );
     const pass = screen.getByLabelText(/^Password/);
     expect(pass).toHaveValue("");
@@ -179,7 +188,7 @@ describe("DescriptorForm", () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderWithProviders(
-      <DescriptorForm
+      <RemoteForm
         backend={fx.backend("sftp")}
         remote={remoteById(fx.ids.storageBox)}
         onSubmit={onSubmit}
@@ -195,7 +204,7 @@ describe("DescriptorForm", () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderWithProviders(
-      <DescriptorForm
+      <RemoteForm
         backend={fx.backend("union")}
         remote={remoteById(fx.ids.pooled)}
         remotes={fx.remotes(now)}
@@ -229,7 +238,7 @@ describe("DescriptorForm", () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     const remote = create(RemoteSchema, { ...remoteById(fx.ids.pooled), options: {} });
     renderWithProviders(
-      <DescriptorForm
+      <RemoteForm
         backend={fx.backend("union")}
         remote={remote}
         remotes={fx.remotes(now)}
@@ -271,7 +280,7 @@ describe("DescriptorForm", () => {
       options: { provider: "Minio", access_key_id: "k" },
     });
     renderWithProviders(
-      <DescriptorForm backend={fx.backend("s3")} remote={remote} onSubmit={onSubmit} />,
+      <RemoteForm backend={fx.backend("s3")} remote={remote} onSubmit={onSubmit} />,
     );
 
     await user.click(screen.getByRole("button", { name: "Save changes" }));
@@ -285,5 +294,55 @@ describe("DescriptorForm", () => {
 
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByText("Name taken")).toBeInTheDocument();
+  });
+});
+
+describe("descriptor helpers with a notification channel", () => {
+  const email = fx.channels.find((c) => c.id === "email")!;
+  const stored = fx.contacts(now).find((c) => c.id === fx.ids.adminMail)!;
+
+  it("fills defaults, from the stored contact when editing", () => {
+    expect(fieldDefaults(email.fields)).toMatchObject({
+      port: "587",
+      security: "starttls",
+      host: "",
+    });
+    expect(fieldDefaults(email.fields, stored)).toMatchObject({
+      host: "smtp.example.net",
+      password: "",
+    });
+  });
+
+  it("requires a secret only when nothing is stored", () => {
+    const webhook = fx.channels.find((c) => c.id === "webhook")!;
+    const values = { ...fieldDefaults(webhook.fields), url: "" };
+    expect(fieldsSchema(webhook.fields).safeParse(values).success).toBe(false);
+    expect(fieldsSchema(webhook.fields, ["url"]).safeParse(values).success).toBe(true);
+  });
+
+  it("emits options, secrets and secrets to clear", () => {
+    const values = { ...fieldDefaults(email.fields, stored), password: "pw", helo_name: " " };
+    expect(fieldsInput(email.fields, { values, clearSecrets: [] })).toEqual({
+      options: {
+        host: "smtp.example.net",
+        port: "587",
+        security: "starttls",
+        username: "syncr@example.net",
+        from: "Syncr <syncr@example.net>",
+        to: "dana@example.net, ops@example.net",
+      },
+      secrets: { password: "pw" },
+      clearSecrets: [],
+    });
+    expect(fieldsInput(email.fields, { values, clearSecrets: ["password"] }).secrets).toEqual({});
+  });
+
+  it.each([
+    ["options.host", "values.host"],
+    ["secrets.password", "values.password"],
+    ["options.nope", undefined],
+    ["name", undefined],
+  ])("maps %s to %s", (field, want) => {
+    expect(fieldPath(email.fields, field)).toBe(want);
   });
 });

@@ -9,7 +9,7 @@ export const Route = createFileRoute("/login")({
   }),
   beforeLoad: async ({ context, search }) => {
     const session = await currentSession(context);
-    if (session?.user) throw redirect({ href: search.redirect ?? "/jobs" });
+    if (session?.user) throw redirect({ href: search.redirect ?? "/" });
     const status = await context.queryClient.fetchQuery(setupStatusOptions(context.transport));
     if (status.setupRequired) throw redirect({ to: "/setup" });
   },

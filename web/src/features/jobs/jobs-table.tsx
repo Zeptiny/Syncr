@@ -1,6 +1,6 @@
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { createColumnHelper } from "@tanstack/react-table";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, CalendarClock } from "lucide-react";
 import { useMemo } from "react";
 
 import { DataTable, type Pager } from "@/components/app/data-table";
@@ -28,7 +28,27 @@ export interface JobsTableProps {
   /** owners, when given, adds an owner column (admin "all users" view). */
   owners?: Map<string, User>;
   hideWorker?: boolean;
+  /** hideSchedule drops the schedule column (e.g. on a schedule's page). */
+  hideSchedule?: boolean;
   empty?: React.ReactNode;
+}
+
+/** ScheduleChip names the schedule that launched a job, linking to it. */
+export function ScheduleChip({ job }: { job: Job }) {
+  if (!job.scheduleId) return <span className="text-[13px] text-muted-foreground">By hand</span>;
+  const name = job.schedule?.name || "Deleted schedule";
+  return (
+    <Link
+      to="/schedules/$scheduleId"
+      params={{ scheduleId: job.scheduleId }}
+      onClick={(e) => e.stopPropagation()}
+      className="inline-flex max-w-44 items-center gap-1.5 rounded-md bg-secondary px-1.5 py-0.5 text-[12.5px] text-secondary-foreground hover:bg-accent"
+      title={name}
+    >
+      <CalendarClock className="size-3.5 shrink-0 text-primary" aria-hidden />
+      <span className="truncate">{name}</span>
+    </Link>
+  );
 }
 
 function Transferred({ job }: { job: Job }) {
@@ -66,6 +86,7 @@ export function JobsTable({
   workers,
   owners,
   hideWorker,
+  hideSchedule,
   empty,
 }: JobsTableProps) {
   const navigate = useNavigate();
@@ -121,6 +142,15 @@ export function JobsTable({
               ),
             }),
           ]),
+      ...(hideSchedule
+        ? []
+        : [
+            col.display({
+              id: "schedule",
+              header: "Schedule",
+              cell: ({ row }) => <ScheduleChip job={row.original} />,
+            }),
+          ]),
       col.display({
         id: "bytes",
         header: "Transferred",
@@ -145,7 +175,7 @@ export function JobsTable({
         meta: { className: "text-right" },
       }),
     ],
-    [workers, owners, hideWorker, now],
+    [workers, owners, hideWorker, hideSchedule, now],
   );
   return (
     <DataTable
