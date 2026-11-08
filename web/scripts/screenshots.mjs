@@ -254,6 +254,7 @@ const m4Shots = [
       await openRow(p, "/workers", "nas-01");
       await p.getByRole("button", { name: "Edit labels" }).click();
       await p.locator("#worker-labels").fill("media");
+      await p.locator("#worker-labels").press("Enter");
       await settle(p, 300);
       await scrollTo(p, p.getByRole("heading", { name: "Labels" }), 260);
     },

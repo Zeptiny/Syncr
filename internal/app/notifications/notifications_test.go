@@ -798,6 +798,33 @@ func TestExpiredLastAttemptIsDead(t *testing.T) {
 	}
 }
 
+func TestLastErrorNamesTheStatusOnce(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		reason string
+		want   string
+	}{
+		{"Discord answered 404 Not Found: the webhook does not exist", "Discord answered 404 Not Found: the webhook does not exist"},
+		{"SMTP 421 4.7.0 too many connections", "SMTP 421 4.7.0 too many connections"},
+		{"Unknown Webhook", "status 404: Unknown Webhook"},
+		{"error 4040 from the proxy", "status 404: error 4040 from the proxy"},
+	} {
+		e := newEnv(t)
+		e.contact(e.alice, "ops", true, domain.EventFailed)
+		e.job(e.alice, domain.JobFailed, domain.ScheduleID{})
+		e.plan()
+		code := 404
+		if strings.HasPrefix(tc.reason, "SMTP") {
+			code = 421
+		}
+		e.ch.setOutcome(func(int, notify.Message) error { return notify.Permanent(code, tc.reason) })
+		e.deliver()
+		if got := e.only().LastError; got != tc.want {
+			t.Errorf("reason %q: last error %q, want %q", tc.reason, got, tc.want)
+		}
+	}
+}
+
 func TestRetryDead(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

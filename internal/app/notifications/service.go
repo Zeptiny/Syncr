@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -476,10 +478,7 @@ func (s *Service) send(ctx context.Context, d Delivery, log *slog.Logger) result
 	case ctx.Err() != nil:
 		return result{interrupted: true, reason: "the controller stopped during the attempt"}
 	case errors.As(err, &serr):
-		reason := cmp.Or(serr.Reason, "the target rejected the notification")
-		if serr.Status != 0 {
-			reason = fmt.Sprintf("status %d: %s", serr.Status, reason)
-		}
+		reason := withStatus(serr.Status, cmp.Or(serr.Reason, "the target rejected the notification"))
 		return result{permanent: serr.Permanent, retryAfter: serr.RetryAfter, status: serr.Status, reason: reason}
 	case errors.Is(sendCtx.Err(), context.DeadlineExceeded):
 		return result{reason: fmt.Sprintf("no answer within %s", s.cfg.SendTimeout)}
@@ -487,6 +486,21 @@ func (s *Service) send(ctx context.Context, d Delivery, log *slog.Logger) result
 		// Only a *SendError is known to be free of secrets.
 		return result{reason: "the notification could not be sent"}
 	}
+}
+
+// withStatus prefixes reason with "status <status>: " unless status is 0
+// or reason already names it (the channels say "Discord answered 404 Not
+// Found: …"), so a stored error never repeats the code.
+func withStatus(status int, reason string) string {
+	if status == 0 {
+		return reason
+	}
+	code := strconv.Itoa(status)
+	isDigit := func(r rune) bool { return r >= '0' && r <= '9' }
+	if slices.Contains(strings.FieldsFunc(reason, func(r rune) bool { return !isDigit(r) }), code) {
+		return reason
+	}
+	return "status " + code + ": " + reason
 }
 
 // backoff returns how long to wait after failed attempt number attempt
