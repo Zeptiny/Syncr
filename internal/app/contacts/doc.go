@@ -24,11 +24,13 @@
 //   - Delete is a hard delete: it removes the contact's schedule links and
 //     its delivery log.
 //
-// # Service (Milestone 4, track B)
+// # Service
 //
 // The Service is constructed as New(Deps{Contacts Repository; Channels
 // *notify.Registry; Cipher Cipher; Limiter Limiter; Clock Clock; IDs
-// IDGenerator; Logger *slog.Logger}, Config). Its methods:
+// IDGenerator; Logger *slog.Logger}, Config{SendTimeout}). The Limiter is
+// dedicated to SendTest, keyed by user ID (TestBurst, then one per
+// TestEvery). Its methods:
 //
 //	// Create validates and stores a new contact of actor.
 //	Create(ctx, actor domain.Actor, in Input) (Contact, error)

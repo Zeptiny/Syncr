@@ -68,7 +68,10 @@ type Clock interface {
 	Now() time.Time
 }
 
-// IDGenerator mints contact IDs (UUIDv7).
+// IDGenerator mints contact IDs (UUIDv7), and the IDs of test
+// notifications (the delivery kind, though they are never stored: receivers
+// see it as the message ID, e.g. the webhook-id header).
 type IDGenerator interface {
 	NewContactID() domain.ContactID
+	NewDeliveryID() domain.DeliveryID
 }

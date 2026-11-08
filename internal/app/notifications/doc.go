@@ -38,7 +38,21 @@
 // dead; Retry queues a dead one again with its attempts reset. Delivered
 // and dead deliveries older than Config.Retention are purged.
 //
-// # Service (Milestone 4, track B)
+// # Delivery outcomes
+//
+//   - Accepted by the channel: delivered (LastError cleared).
+//   - A permanent *notify.SendError, credentials that cannot be decrypted,
+//     an unknown channel type or an unreadable payload: dead at once.
+//   - Anything else is temporary: pending again after the backoff, or dead
+//     once Attempts reached MaxAttempts. Only a *notify.SendError's
+//     sanitized Reason is stored in LastError; other errors could quote the
+//     configuration and are replaced by a generic text.
+//   - The contact was deleted: nothing is recorded (its deliveries went
+//     with it).
+//   - The pass's context ended during the send (shutdown): pending again at
+//     once; the outcome is recorded with a context that is not cancelled.
+//
+// # Service
 //
 // The Service is constructed as New(Deps{Repo Repository; Channels
 // *notify.Registry; Contacts ContactResolver; Clock Clock; IDs IDGenerator;
