@@ -17,7 +17,7 @@ INSERT INTO jobs (
     created_at, queued_at, dispatched_at, started_at, finished_at, requeues,
     stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks,
     stat_deletes, stat_renames, stat_errors, stat_elapsed_ns,
-    error_code, error_message, warnings, exit_code, output, version
+    error_code, error_message, warnings, exit_code, output, version, schedule_id
 )
 SELECT
     $1::uuid, $2::uuid, $3::uuid, $4::text,
@@ -30,7 +30,8 @@ SELECT
     $19::bigint, $20::bigint, $21::bigint,
     $22::bigint, $23::bigint, $24::bigint,
     $25::text, $26::text, $27::text[],
-    $28::integer, $29::bytea, $30::bigint
+    $28::integer, $29::bytea, $30::bigint,
+    $31::uuid
 WHERE EXISTS (
     SELECT 1 FROM workers WHERE workers.id = $2::uuid AND workers.removed_at IS NULL FOR SHARE
 )
@@ -67,6 +68,7 @@ type CreateJobParams struct {
 	ExitCode          int32
 	Output            []byte
 	Version           int64
+	ScheduleID        pgtype.UUID
 }
 
 // Inserts only if the worker exists and is not removed. FOR SHARE makes a
@@ -105,6 +107,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (int64, er
 		arg.ExitCode,
 		arg.Output,
 		arg.Version,
+		arg.ScheduleID,
 	)
 	if err != nil {
 		return 0, err
@@ -113,7 +116,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (int64, er
 }
 
 const getJob = `-- name: GetJob :one
-SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text FROM jobs WHERE id = $1
+SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at FROM jobs WHERE id = $1
 `
 
 func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
@@ -150,6 +153,8 @@ func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
 		&i.OwnerID,
 		&i.Definition,
 		&i.SearchText,
+		&i.ScheduleID,
+		&i.NotifiedAt,
 	)
 	return i, err
 }
@@ -210,7 +215,7 @@ func (q *Queries) JobExists(ctx context.Context, id pgtype.UUID) (bool, error) {
 }
 
 const listJobs = `-- name: ListJobs :many
-SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text FROM jobs
+SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at FROM jobs
 WHERE ($1::uuid IS NULL OR owner_id = $1::uuid)
   AND ($2::uuid IS NULL OR worker_id = $2::uuid)
   AND (cardinality($3::text[]) = 0 OR status = ANY ($3::text[]))
@@ -219,12 +224,13 @@ WHERE ($1::uuid IS NULL OR owner_id = $1::uuid)
       SELECT 1 FROM job_remotes
       WHERE job_remotes.job_id = jobs.id AND job_remotes.remote_id = $5::uuid
   ))
-  AND ($6::text IS NULL OR search_text LIKE '%' || $6::text || '%' ESCAPE '\')
-  AND ($7::timestamptz IS NULL OR created_at >= $7::timestamptz)
-  AND ($8::timestamptz IS NULL OR created_at < $8::timestamptz)
-  AND ($9::uuid IS NULL OR id < $9::uuid)
+  AND ($6::uuid IS NULL OR schedule_id = $6::uuid)
+  AND ($7::text IS NULL OR search_text LIKE '%' || $7::text || '%' ESCAPE '\')
+  AND ($8::timestamptz IS NULL OR created_at >= $8::timestamptz)
+  AND ($9::timestamptz IS NULL OR created_at < $9::timestamptz)
+  AND ($10::uuid IS NULL OR id < $10::uuid)
 ORDER BY id DESC
-LIMIT $10::bigint
+LIMIT $11::bigint
 `
 
 type ListJobsParams struct {
@@ -233,6 +239,7 @@ type ListJobsParams struct {
 	Statuses      []string
 	Kinds         []string
 	RemoteID      pgtype.UUID
+	ScheduleID    pgtype.UUID
 	Query         *string
 	CreatedAfter  pgtype.Timestamptz
 	CreatedBefore pgtype.Timestamptz
@@ -244,7 +251,7 @@ type ListJobsParams struct {
 // limit. query is a LIKE pattern body the caller escaped with backslashes,
 // so it matches as a plain substring of search_text (a pg_trgm index is
 // deferred). The owner filter matches jobs_owner_idx, the remote filter
-// job_remotes_remote_idx.
+// job_remotes_remote_idx, the schedule filter jobs_schedule_idx.
 func (q *Queries) ListJobs(ctx context.Context, arg ListJobsParams) ([]Job, error) {
 	rows, err := q.db.Query(ctx, listJobs,
 		arg.OwnerID,
@@ -252,6 +259,7 @@ func (q *Queries) ListJobs(ctx context.Context, arg ListJobsParams) ([]Job, erro
 		arg.Statuses,
 		arg.Kinds,
 		arg.RemoteID,
+		arg.ScheduleID,
 		arg.Query,
 		arg.CreatedAfter,
 		arg.CreatedBefore,
@@ -296,6 +304,8 @@ func (q *Queries) ListJobs(ctx context.Context, arg ListJobsParams) ([]Job, erro
 			&i.OwnerID,
 			&i.Definition,
 			&i.SearchText,
+			&i.ScheduleID,
+			&i.NotifiedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -308,7 +318,7 @@ func (q *Queries) ListJobs(ctx context.Context, arg ListJobsParams) ([]Job, erro
 }
 
 const listQueuedJobs = `-- name: ListQueuedJobs :many
-SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text FROM jobs
+SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at FROM jobs
 WHERE status = 'queued' AND queued_at < $1::timestamptz
 ORDER BY queued_at, id
 LIMIT $2::bigint
@@ -360,6 +370,8 @@ func (q *Queries) ListQueuedJobs(ctx context.Context, arg ListQueuedJobsParams) 
 			&i.OwnerID,
 			&i.Definition,
 			&i.SearchText,
+			&i.ScheduleID,
+			&i.NotifiedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -372,7 +384,7 @@ func (q *Queries) ListQueuedJobs(ctx context.Context, arg ListQueuedJobsParams) 
 }
 
 const listUnfinishedJobs = `-- name: ListUnfinishedJobs :many
-SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text FROM jobs
+SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at FROM jobs
 WHERE worker_id = $1 AND status IN ('queued', 'dispatched', 'running')
 ORDER BY id
 `
@@ -418,6 +430,8 @@ func (q *Queries) ListUnfinishedJobs(ctx context.Context, workerID pgtype.UUID) 
 			&i.OwnerID,
 			&i.Definition,
 			&i.SearchText,
+			&i.ScheduleID,
+			&i.NotifiedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -455,7 +469,7 @@ UPDATE jobs SET
     output = $22,
     version = version + 1
 WHERE id = $23 AND version = $24
-RETURNING id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text
+RETURNING id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at
 `
 
 type UpdateJobParams struct {
@@ -547,6 +561,8 @@ func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (Job, erro
 		&i.OwnerID,
 		&i.Definition,
 		&i.SearchText,
+		&i.ScheduleID,
+		&i.NotifiedAt,
 	)
 	return i, err
 }

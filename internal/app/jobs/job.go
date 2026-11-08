@@ -29,6 +29,10 @@ type Job struct {
 	// definition's search terms (mode, paths) and the remotes' names at
 	// creation time, lower-cased, one per line.
 	SearchText string
+	// ScheduleID is the schedule that launched the job; zero for a job run
+	// by hand. It never changes, except that deleting the schedule clears
+	// it (the job's history stays).
+	ScheduleID domain.ScheduleID
 
 	// Epoch is the worker epoch that accepted the job; empty while queued.
 	// Dispatched and running jobs always have one.
@@ -145,7 +149,16 @@ type Update struct {
 
 // CreateParams are the inputs of Create. The owner is the actor.
 type CreateParams struct {
-	WorkerID domain.WorkerID
+	// ID is a preset job ID; zero mints a new one. Only the scheduler sets
+	// it: it reserves the ID on its run before creating the job, so a
+	// retried launch creates the job once (Create then fails with
+	// ErrAlreadyExists, which the scheduler counts as success). The API
+	// never sets it.
+	ID domain.JobID
+	// ScheduleID is the schedule launching the job; zero for a job run by
+	// hand. It must exist (ErrNotFound otherwise).
+	ScheduleID domain.ScheduleID
+	WorkerID   domain.WorkerID
 	// Kind is the definition's operation name (the caller derives it from
 	// the definition).
 	Kind string
@@ -175,6 +188,8 @@ type ListFilter struct {
 	Statuses []domain.JobStatus
 	// RemoteID keeps only jobs whose RemoteIDs contain it.
 	RemoteID domain.RemoteID
+	// ScheduleID keeps only jobs launched by this schedule.
+	ScheduleID domain.ScheduleID
 	// Kinds keeps only jobs of one of these kinds.
 	Kinds []string
 	// Query keeps only jobs whose SearchText contains it as a plain
@@ -209,4 +224,43 @@ type Page struct {
 	// Next is the cursor (ListFilter.Before) of the next page; zero on the
 	// last page.
 	Next domain.JobID
+}
+
+// BucketUnit is the size of an activity bucket. The string values are the
+// Postgres date_trunc units.
+type BucketUnit string
+
+// Bucket units.
+const (
+	// BucketHour buckets by hour of the activity's time zone.
+	BucketHour BucketUnit = "hour"
+	// BucketDay buckets by local day (23 to 25 hours across DST changes).
+	BucketDay BucketUnit = "day"
+)
+
+// Valid reports whether u is a known unit.
+func (u BucketUnit) Valid() bool { return u == BucketHour || u == BucketDay }
+
+// ActivityFilter selects the finished jobs Activity counts.
+type ActivityFilter struct {
+	// From and Until bound the jobs' FinishedAt: [From, Until).
+	From, Until time.Time
+	// Unit is the bucket size.
+	Unit BucketUnit
+	// Location is the time zone whose hours or days the buckets follow
+	// (an IANA zone, never time.Local).
+	Location *time.Location
+	// AllUsers counts every user's jobs; only admins may (Activity ignores
+	// it for other actors, as List does).
+	AllUsers bool
+}
+
+// ActivityBucket counts the jobs that finished in one bucket, by terminal
+// status, with the bytes and files they transferred.
+type ActivityBucket struct {
+	// Start is the first instant of the bucket (an hour or a local day in
+	// the filter's Location).
+	Start                                     time.Time
+	Succeeded, Failed, Interrupted, Cancelled int64
+	Bytes, Files                              int64
 }

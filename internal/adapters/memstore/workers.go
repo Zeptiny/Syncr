@@ -4,20 +4,38 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
-// CreateWorker implements workers.Repository.
+// CreateWorker implements workers.Repository. Like the unique index
+// workers_name_key, a live worker's name is unique case-insensitively.
 func (s *Store) CreateWorker(_ context.Context, w workers.Worker) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.workers[w.ID]; ok {
 		return fmt.Errorf("worker %s: %w", w.ID, domain.ErrAlreadyExists)
 	}
+	if !w.Removed() {
+		if err := s.workerNameFreeLocked(w.ID, w.Name); err != nil {
+			return err
+		}
+	}
 	s.workers[w.ID] = cloneWorker(w)
+	return nil
+}
+
+// workerNameFreeLocked returns ErrAlreadyExists if a live worker other
+// than id has name, case-insensitively.
+func (s *Store) workerNameFreeLocked(id domain.WorkerID, name string) error {
+	for _, o := range s.workers {
+		if o.ID != id && !o.Removed() && strings.EqualFold(o.Name, name) {
+			return fmt.Errorf("worker name %q is taken: %w", name, domain.ErrAlreadyExists)
+		}
+	}
 	return nil
 }
 
@@ -38,7 +56,8 @@ func (s *Store) ListWorkers(_ context.Context, f workers.ListFilter) ([]workers.
 	defer s.mu.RUnlock()
 	var out []workers.Worker
 	for _, w := range s.workers {
-		if (f.Mode == "" || w.Mode == f.Mode) && (f.IncludeRemoved || !w.Removed()) {
+		if (f.Mode == "" || w.Mode == f.Mode) && (f.IncludeRemoved || !w.Removed()) &&
+			(f.Label == "" || slices.Contains(w.Labels, f.Label)) {
 			out = append(out, cloneWorker(w))
 		}
 	}
@@ -49,7 +68,21 @@ func (s *Store) ListWorkers(_ context.Context, f workers.ListFilter) ([]workers.
 // RenameWorker implements workers.Repository.
 func (s *Store) RenameWorker(_ context.Context, id domain.WorkerID, name string) (workers.Worker, error) {
 	return s.updateWorker(id, func(w *workers.Worker) error {
+		if err := s.workerNameFreeLocked(id, name); err != nil {
+			return err
+		}
 		w.Name = name
+		return nil
+	})
+}
+
+// SetWorkerLabels implements workers.Repository.
+func (s *Store) SetWorkerLabels(_ context.Context, id domain.WorkerID, labels []string) (workers.Worker, error) {
+	return s.updateWorker(id, func(w *workers.Worker) error {
+		w.Labels = slices.Clone(labels)
+		if len(w.Labels) == 0 {
+			w.Labels = nil
+		}
 		return nil
 	})
 }

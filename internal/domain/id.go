@@ -25,6 +25,9 @@ type (
 	scheduleKind   struct{}
 	jobKind        struct{}
 	apiTokenKind   struct{}
+	contactKind    struct{}
+	runKind        struct{}
+	deliveryKind   struct{}
 )
 
 // Entity IDs.
@@ -43,6 +46,12 @@ type (
 	JobID = ID[jobKind]
 	// APITokenID identifies a user's personal API token.
 	APITokenID = ID[apiTokenKind]
+	// ContactID identifies a notification contact.
+	ContactID = ID[contactKind]
+	// ScheduleRunID identifies one run of a schedule.
+	ScheduleRunID = ID[runKind]
+	// DeliveryID identifies one notification to one contact.
+	DeliveryID = ID[deliveryKind]
 )
 
 // NewUserID returns a new random UserID.
@@ -66,6 +75,15 @@ func NewJobID() JobID { return newID[jobKind]() }
 // NewAPITokenID returns a new random APITokenID.
 func NewAPITokenID() APITokenID { return newID[apiTokenKind]() }
 
+// NewContactID returns a new random ContactID.
+func NewContactID() ContactID { return newID[contactKind]() }
+
+// NewScheduleRunID returns a new random ScheduleRunID.
+func NewScheduleRunID() ScheduleRunID { return newID[runKind]() }
+
+// NewDeliveryID returns a new random DeliveryID.
+func NewDeliveryID() DeliveryID { return newID[deliveryKind]() }
+
 // ParseUserID parses a UserID from its canonical string form.
 func ParseUserID(s string) (UserID, error) { return parseID[userKind](s) }
 
@@ -86,6 +104,15 @@ func ParseJobID(s string) (JobID, error) { return parseID[jobKind](s) }
 
 // ParseAPITokenID parses an APITokenID from its canonical string form.
 func ParseAPITokenID(s string) (APITokenID, error) { return parseID[apiTokenKind](s) }
+
+// ParseContactID parses a ContactID from its canonical string form.
+func ParseContactID(s string) (ContactID, error) { return parseID[contactKind](s) }
+
+// ParseScheduleRunID parses a ScheduleRunID from its canonical string form.
+func ParseScheduleRunID(s string) (ScheduleRunID, error) { return parseID[runKind](s) }
+
+// ParseDeliveryID parses a DeliveryID from its canonical string form.
+func ParseDeliveryID(s string) (DeliveryID, error) { return parseID[deliveryKind](s) }
 
 func newID[K any]() ID[K] { return ID[K]{uuid: uuid.NewV7()} }
 

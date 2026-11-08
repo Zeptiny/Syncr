@@ -32,5 +32,11 @@
 // NewRegistry checks the descriptors' static shape (see CheckDescriptor);
 // internal/backend/backendtest checks their behavior.
 //
-// Allowed dependencies: the standard library and internal/domain.
+// The generic field machinery (kinds, choices, configuration values,
+// CheckFields and the shape checks) lives in internal/descriptor, which
+// notification channels share; this package re-exports it (Choice, Config)
+// and adds the rclone mapping and union members.
+//
+// Allowed dependencies: the standard library, internal/domain and
+// internal/descriptor.
 package backend

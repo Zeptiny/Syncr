@@ -13,7 +13,9 @@
 //     from the API and the dispatcher serialize per job;
 //   - publishes the new job to the live broker, wakes the worker's command
 //     long poll when its commands change (re-queue, cancel request), and
-//     calls the notifier when a job ends failed or interrupted.
+//     tells the notifier when a job reaches a terminal status (it only
+//     wakes the notification planner and the scheduler; notifications are
+//     planned durably from the store).
 //
 // Lifecycle calls are idempotent: a call whose precondition no longer holds
 // (a duplicate event, a lost race, a job already finished) changes nothing
@@ -44,6 +46,21 @@
 // one per Config.SampleInterval per job is stored (rate limiting happens in
 // memory before storage), plus the final counters when the job ends. Rates
 // are derived by readers (delta bytes / delta time).
+//
+// # Schedules and the dashboard (Milestone 4)
+//
+// A job launched by a schedule carries its ScheduleID (ListFilter.ScheduleID
+// lists a schedule's jobs) and may have an ID preset by the scheduler
+// (CreateParams.ID), which makes a retried launch idempotent. The dashboard
+// use cases live in activity.go:
+//
+//	// Activity counts the finished jobs of f by bucket (every bucket of
+//	// [f.From, f.Until), empty ones included): the actor's jobs, or every
+//	// user's for an admin with f.AllUsers.
+//	Activity(ctx, actor domain.Actor, f ActivityFilter) ([]ActivityBucket, error)
+//	// CountUnfinished counts the queued, dispatched and running jobs the
+//	// same way, by status.
+//	CountUnfinished(ctx, actor domain.Actor, allUsers bool) (map[domain.JobStatus]int64, error)
 //
 // Allowed dependencies: the standard library and internal/domain; every
 // other collaborator is a port declared in ports.go.

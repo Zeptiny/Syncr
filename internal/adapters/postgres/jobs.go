@@ -17,8 +17,8 @@ import (
 // CreateJob implements jobs.Repository. The job and its remotes are
 // inserted in one transaction. The job insert is guarded by a WHERE EXISTS
 // on the worker in the same statement, so a missing or removed worker
-// inserts nothing and reports ErrNotFound; a missing owner or remote
-// violates a foreign key (ErrNotFound) and rolls everything back.
+// inserts nothing and reports ErrNotFound; a missing owner, remote or
+// schedule violates a foreign key (ErrNotFound) and rolls everything back.
 func (s *Store) CreateJob(ctx context.Context, j jobs.Job) error {
 	op := fmt.Sprintf("create job %s", j.ID)
 	// Errors are mapped once, below: pgx errors keep their SQLSTATE through
@@ -74,6 +74,7 @@ func createJobParams(j jobs.Job) db.CreateJobParams {
 		ExitCode:          int32(j.ExitCode), //nolint:gosec // G115: a process exit code
 		Output:            j.Output,
 		Version:           j.Version,
+		ScheduleID:        pgOptID(j.ScheduleID),
 	}
 }
 
@@ -189,6 +190,7 @@ func (s *Store) ListJobs(ctx context.Context, f jobs.ListFilter) ([]jobs.Job, er
 		Statuses:      statuses,
 		Kinds:         textArray(f.Kinds),
 		RemoteID:      pgOptID(f.RemoteID),
+		ScheduleID:    pgOptID(f.ScheduleID),
 		Query:         query,
 		CreatedAfter:  pgOptTime(f.CreatedAfter),
 		CreatedBefore: pgOptTime(f.CreatedBefore),

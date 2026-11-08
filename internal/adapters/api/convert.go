@@ -70,6 +70,7 @@ func workerToProto(w workers.Worker, status domain.WorkerStatus) *syncrv1.Worker
 		Url:             w.URL,
 		CertFingerprint: w.CertFingerprint,
 		Info:            workerInfoToProto(w.Info),
+		Labels:          w.Labels,
 	}
 }
 
@@ -196,6 +197,9 @@ func jobToProto(j jobs.Job, stats *jobs.Stats, refs map[domain.RemoteID]remotes.
 	}
 	if !j.OwnerID.IsZero() {
 		out.OwnerId = j.OwnerID.String()
+	}
+	if !j.ScheduleID.IsZero() {
+		out.ScheduleId = j.ScheduleID.String()
 	}
 	for _, id := range j.RemoteIDs {
 		r := refs[id]

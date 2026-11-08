@@ -47,3 +47,18 @@ func TestSequential(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+func TestMilestone4IDs(t *testing.T) {
+	t.Parallel()
+	var g UUIDv7
+	if g.NewScheduleID().IsZero() || g.NewScheduleRunID().IsZero() || g.NewContactID().IsZero() || g.NewDeliveryID().IsZero() {
+		t.Error("zero id")
+	}
+	var s Sequential
+	got := []string{s.NewScheduleID().String(), s.NewScheduleRunID().String(), s.NewContactID().String(), s.NewDeliveryID().String()}
+	for i, id := range got {
+		if want := "00000000-0000-7000-8000-00000000000" + string(rune('1'+i)); id != want {
+			t.Errorf("id %d = %s, want %s", i, id, want)
+		}
+	}
+}

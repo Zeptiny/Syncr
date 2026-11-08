@@ -27,6 +27,11 @@ type Worker struct {
 	// RemovedAt is set when the worker was removed; zero otherwise.
 	RemovedAt time.Time
 
+	// Labels are set by an admin (never reported by the worker), normalized
+	// (domain.NormalizeLabels): lower case, sorted, without duplicates, at
+	// most domain.MaxLabels. Schedules may target any worker with a label.
+	Labels []string
+
 	// Info is what the worker reported in its latest Hello; zero before the
 	// first one.
 	Info Info

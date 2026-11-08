@@ -6,25 +6,30 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Zeptiny/Syncr/internal/descriptor"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
-// Kind is the value type of a field, which also selects its form widget.
-// The string values are stable: they are exposed through the API.
-type Kind string
+// Kind is the value type of a field, which also selects its form widget:
+// the generic descriptor kinds plus KindMembers. The string values are
+// stable: they are exposed through the API.
+//
+// It is a defined type over descriptor.Kind rather than an alias, so that
+// its Valid method can accept KindMembers, which stays backend-only.
+type Kind descriptor.Kind
 
 // Field kinds.
 const (
 	// KindString is single-line text.
-	KindString Kind = "string"
+	KindString = Kind(descriptor.KindString)
 	// KindText is multi-line text (e.g. a PEM key).
-	KindText Kind = "text"
+	KindText = Kind(descriptor.KindText)
 	// KindInt is a base-10 integer.
-	KindInt Kind = "int"
+	KindInt = Kind(descriptor.KindInt)
 	// KindBool is "true" or "false".
-	KindBool Kind = "bool"
+	KindBool = Kind(descriptor.KindBool)
 	// KindEnum is one of the field's Choices.
-	KindEnum Kind = "enum"
+	KindEnum = Kind(descriptor.KindEnum)
 	// KindMembers marks where a union's member list goes in the form. It is
 	// not a configuration value: members are managed by the remotes use
 	// case, and CheckFields and MapFields ignore the field.
@@ -32,13 +37,7 @@ const (
 )
 
 // Valid reports whether k is a known kind.
-func (k Kind) Valid() bool {
-	switch k {
-	case KindString, KindText, KindInt, KindBool, KindEnum, KindMembers:
-		return true
-	}
-	return false
-}
+func (k Kind) Valid() bool { return descriptor.Kind(k).Valid() || k == KindMembers }
 
 // NotRclone as a Field's Rclone name means the field is not an rclone
 // option: the descriptor's ToRclone consumes it itself (e.g. a bucket or
@@ -46,10 +45,7 @@ func (k Kind) Valid() bool {
 const NotRclone = "-"
 
 // Choice is one allowed value of an enum field.
-type Choice struct {
-	Value string
-	Label string
-}
+type Choice = descriptor.Choice
 
 // Field describes one configuration field of a backend type.
 type Field struct {
@@ -85,6 +81,28 @@ type Field struct {
 	Rclone string
 }
 
+// Descriptor returns the generic part of f (without its rclone mapping),
+// as the API serves it. A members field keeps its kind, "members".
+func (f Field) Descriptor() descriptor.Field {
+	return descriptor.Field{
+		Name: f.Name, Label: f.Label, Help: f.Help, Placeholder: f.Placeholder, Default: f.Default,
+		Kind: descriptor.Kind(f.Kind), Required: f.Required, Secret: f.Secret, Advanced: f.Advanced,
+		Choices: slices.Clone(f.Choices),
+	}
+}
+
+// valueFields returns the descriptors of fields without members fields
+// (which are not configuration values).
+func valueFields(fields []Field) []descriptor.Field {
+	out := make([]descriptor.Field, 0, len(fields))
+	for _, f := range fields {
+		if f.Kind != KindMembers {
+			out = append(out, f.Descriptor())
+		}
+	}
+	return out
+}
+
 // RcloneName returns the rclone option the field maps to, or "" if it maps
 // to none (NotRclone, or a members field).
 func (f Field) RcloneName() string {
@@ -115,16 +133,9 @@ type Capabilities struct {
 
 // Config is a remote's configuration as the user entered it, keyed by field
 // name: non-secret values in Options, secret values in Secrets. Union
-// members are not part of it (see internal/app/remotes).
-type Config struct {
-	Options map[string]string
-	Secrets map[string]string
-}
-
-// Clone returns a deep copy of c.
-func (c Config) Clone() Config {
-	return Config{Options: maps.Clone(c.Options), Secrets: maps.Clone(c.Secrets)}
-}
+// members are not part of it (see internal/app/remotes). Its Clone method
+// returns a deep copy.
+type Config = descriptor.Values
 
 // Rclone is a typed rclone remote: what the controller sends to the worker
 // as a RemoteDefinition (minus the alias, which the job builder assigns).
@@ -200,79 +211,15 @@ type Exampler interface {
 	Examples() []Config
 }
 
-// CheckFields checks cfg against fields: every key is a declared field, in
-// the right map (Secrets for secret fields, Options otherwise), every
-// required field has a non-empty value, and non-empty values parse as their
-// kind (int, bool, enum choice; no NUL bytes; no line breaks in string
-// fields). Members fields are ignored. Errors are ordered by field, then by
-// unknown key; their messages never contain values.
+// CheckFields checks cfg against fields (see descriptor.CheckFields): every
+// key is a declared field, in the right map (Secrets for secret fields,
+// Options otherwise), every required field has a non-empty value, and
+// non-empty values parse as their kind (int, bool, enum choice; no NUL
+// bytes; no line breaks in string fields). Members fields are ignored.
+// Errors are ordered by field, then by unknown key; their messages never
+// contain values.
 func CheckFields(fields []Field, cfg Config) []domain.FieldError {
-	var errs []domain.FieldError
-	add := func(path, msg string) { errs = append(errs, domain.FieldError{Field: path, Message: msg}) }
-	byName := make(map[string]Field, len(fields))
-	for _, f := range fields {
-		if f.Kind == KindMembers {
-			continue
-		}
-		byName[f.Name] = f
-		value, path := cfg.Options[f.Name], "options."+f.Name
-		if f.Secret {
-			value, path = cfg.Secrets[f.Name], "secrets."+f.Name
-		}
-		if value == "" {
-			if f.Required {
-				add(path, "is required")
-			}
-			continue
-		}
-		if msg := checkValue(f, value); msg != "" {
-			add(path, msg)
-		}
-	}
-	for _, key := range slices.Sorted(maps.Keys(cfg.Options)) {
-		switch f, ok := byName[key]; {
-		case !ok:
-			add("options."+key, "is not a field of this backend")
-		case f.Secret:
-			add("options."+key, "is a secret; send it in secrets")
-		}
-	}
-	for _, key := range slices.Sorted(maps.Keys(cfg.Secrets)) {
-		switch f, ok := byName[key]; {
-		case !ok:
-			add("secrets."+key, "is not a field of this backend")
-		case !f.Secret:
-			add("secrets."+key, "is not a secret; send it in options")
-		}
-	}
-	return errs
-}
-
-// checkValue checks a non-empty value against f's kind; it returns a message
-// or "".
-func checkValue(f Field, value string) string {
-	if strings.ContainsRune(value, 0) {
-		return "must not contain NUL bytes"
-	}
-	switch f.Kind {
-	case KindString:
-		if strings.ContainsAny(value, "\r\n") {
-			return "must be a single line"
-		}
-	case KindInt:
-		if _, err := strconv.ParseInt(value, 10, 64); err != nil {
-			return "must be a whole number"
-		}
-	case KindBool:
-		if value != "true" && value != "false" {
-			return `must be "true" or "false"`
-		}
-	case KindEnum:
-		if !slices.ContainsFunc(f.Choices, func(c Choice) bool { return c.Value == value }) {
-			return "must be one of the listed choices"
-		}
-	}
-	return ""
+	return descriptor.CheckFields(valueFields(fields), cfg)
 }
 
 // MapFields maps the declared fields of cfg to rclone options and secrets,

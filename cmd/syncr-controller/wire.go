@@ -22,8 +22,11 @@ import (
 	"github.com/Zeptiny/Syncr/internal/adapters/password"
 	"github.com/Zeptiny/Syncr/internal/adapters/postgres"
 	"github.com/Zeptiny/Syncr/internal/adapters/secrets"
+	"github.com/Zeptiny/Syncr/internal/app/contacts"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/notifications"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/backend"
@@ -50,10 +53,14 @@ type store interface {
 	workers.TokenRepository
 	jobs.Repository
 	jobs.SampleRepository
+	jobs.ActivityRepository
 	users.Repository
 	users.SessionRepository
 	users.APITokenRepository
 	remotes.Repository
+	schedules.Repository
+	contacts.Repository
+	notifications.Repository
 }
 
 // openStore opens and migrates the configured store. close releases it.
