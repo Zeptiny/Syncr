@@ -1,0 +1,8 @@
+Scheduled run missed: Office docs hourly
+
+Schedule: Office docs hourly
+Scheduled for: 2026-11-04 02:00:00 UTC
+Reason: worker_offline: office-pc was offline until the deadline
+Merged occurrences: 3
+
+Details: https://syncr.example/schedules/0195f0a4-3b7c-7d1e-9f00-000000000002

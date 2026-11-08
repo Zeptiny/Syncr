@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -27,6 +29,11 @@ type workerAdminHandler struct {
 var _ syncrv1connect.WorkerAdminServiceHandler = (*workerAdminHandler)(nil)
 
 func (h *workerAdminHandler) fail(ctx context.Context, procedure string, err error) error {
+	if errors.Is(err, domain.ErrAlreadyExists) {
+		// Worker names are unique among live workers; say so instead of the
+		// generic "worker already exists".
+		return connect.NewError(connect.CodeAlreadyExists, errors.New("a worker with this name already exists"))
+	}
 	return h.errs.toConnect(ctx, procedure, "worker", err)
 }
 
@@ -107,9 +114,14 @@ func (h *workerAdminHandler) RegisterPassiveWorker(ctx context.Context, req *con
 	return connect.NewResponse(&syncrv1.RegisterPassiveWorkerResponse{Worker: h.worker(w)}), nil
 }
 
-// ListWorkers lists the workers that are not removed, by name.
-func (h *workerAdminHandler) ListWorkers(ctx context.Context, _ *connect.Request[syncrv1.ListWorkersRequest]) (*connect.Response[syncrv1.ListWorkersResponse], error) {
-	ws, err := h.workers.List(ctx, workers.ListFilter{})
+// ListWorkers lists the workers that are not removed, by name; with a
+// label, only those that have it (compared in lower case).
+func (h *workerAdminHandler) ListWorkers(ctx context.Context, req *connect.Request[syncrv1.ListWorkersRequest]) (*connect.Response[syncrv1.ListWorkersResponse], error) {
+	label := strings.ToLower(req.Msg.GetLabel())
+	if label != "" && !domain.ValidLabel(label) {
+		return nil, invalidField("label", "is not a valid label")
+	}
+	ws, err := h.workers.List(ctx, workers.ListFilter{Label: label})
 	if err != nil {
 		return nil, h.fail(ctx, syncrv1connect.WorkerAdminServiceListWorkersProcedure, err)
 	}
@@ -144,6 +156,21 @@ func (h *workerAdminHandler) RenameWorker(ctx context.Context, req *connect.Requ
 		return nil, h.fail(ctx, syncrv1connect.WorkerAdminServiceRenameWorkerProcedure, err)
 	}
 	return connect.NewResponse(&syncrv1.RenameWorkerResponse{Worker: h.worker(w)}), nil
+}
+
+// SetWorkerLabels replaces a worker's labels (admins only, by the policy
+// table). The response has them normalized: lower case, sorted, without
+// duplicates. Invalid labels are a ValidationError naming "labels[i]".
+func (h *workerAdminHandler) SetWorkerLabels(ctx context.Context, req *connect.Request[syncrv1.SetWorkerLabelsRequest]) (*connect.Response[syncrv1.SetWorkerLabelsResponse], error) {
+	id, err := parseWorkerID(req.Msg.GetWorkerId())
+	if err != nil {
+		return nil, err
+	}
+	w, err := h.workers.SetLabels(ctx, id, req.Msg.GetLabels())
+	if err != nil {
+		return nil, h.fail(ctx, syncrv1connect.WorkerAdminServiceSetWorkerLabelsProcedure, err)
+	}
+	return connect.NewResponse(&syncrv1.SetWorkerLabelsResponse{Worker: h.worker(w)}), nil
 }
 
 // RemoveWorker removes a worker and ends its unfinished jobs.

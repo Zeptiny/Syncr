@@ -80,12 +80,12 @@ func (q *Queries) AdvanceWorkerEpoch(ctx context.Context, arg AdvanceWorkerEpoch
 const createWorker = `-- name: CreateWorker :exec
 INSERT INTO workers (
     id, name, mode, url, cert_fingerprint, secret_enc, info,
-    epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at
+    epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at, labels
 ) VALUES (
     $1, $2, $3, $4, $5,
     $6, $7, $8, $9,
     $10, $11, $12, $13,
-    $14
+    $14, $15
 )
 `
 
@@ -104,6 +104,7 @@ type CreateWorkerParams struct {
 	LastSeen        pgtype.Timestamptz
 	CreatedAt       pgtype.Timestamptz
 	RemovedAt       pgtype.Timestamptz
+	Labels          []string
 }
 
 func (q *Queries) CreateWorker(ctx context.Context, arg CreateWorkerParams) error {
@@ -122,6 +123,7 @@ func (q *Queries) CreateWorker(ctx context.Context, arg CreateWorkerParams) erro
 		arg.LastSeen,
 		arg.CreatedAt,
 		arg.RemovedAt,
+		arg.Labels,
 	)
 	return err
 }
@@ -157,16 +159,18 @@ const listWorkers = `-- name: ListWorkers :many
 SELECT id, name, mode, url, cert_fingerprint, secret_enc, info, epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at, labels FROM workers
 WHERE ($1::text = '' OR mode = $1::text)
   AND ($2::boolean OR removed_at IS NULL)
+  AND ($3::text = '' OR $3::text = ANY (labels))
 ORDER BY id
 `
 
 type ListWorkersParams struct {
 	Mode           string
 	IncludeRemoved bool
+	Label          string
 }
 
 func (q *Queries) ListWorkers(ctx context.Context, arg ListWorkersParams) ([]Worker, error) {
-	rows, err := q.db.Query(ctx, listWorkers, arg.Mode, arg.IncludeRemoved)
+	rows, err := q.db.Query(ctx, listWorkers, arg.Mode, arg.IncludeRemoved, arg.Label)
 	if err != nil {
 		return nil, err
 	}
@@ -286,6 +290,40 @@ func (q *Queries) SetWorkerInfo(ctx context.Context, arg SetWorkerInfoParams) (i
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setWorkerLabels = `-- name: SetWorkerLabels :one
+UPDATE workers SET labels = $1
+WHERE id = $2 AND removed_at IS NULL
+RETURNING id, name, mode, url, cert_fingerprint, secret_enc, info, epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at, labels
+`
+
+type SetWorkerLabelsParams struct {
+	Labels []string
+	ID     pgtype.UUID
+}
+
+func (q *Queries) SetWorkerLabels(ctx context.Context, arg SetWorkerLabelsParams) (Worker, error) {
+	row := q.db.QueryRow(ctx, setWorkerLabels, arg.Labels, arg.ID)
+	var i Worker
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Mode,
+		&i.Url,
+		&i.CertFingerprint,
+		&i.SecretEnc,
+		&i.Info,
+		&i.Epoch,
+		&i.EpochStartedAt,
+		&i.PastEpochs,
+		&i.AckSeq,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.RemovedAt,
+		&i.Labels,
+	)
+	return i, err
 }
 
 const touchWorker = `-- name: TouchWorker :execrows

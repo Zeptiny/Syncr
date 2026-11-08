@@ -404,3 +404,75 @@ func TestWorkersPageAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestSetWorkerLabels(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	admin := e.workersClient()
+	id := e.worker.String()
+
+	resp, err := admin.SetWorkerLabels(t.Context(), connect.NewRequest(&syncrv1.SetWorkerLabelsRequest{WorkerId: id, Labels: []string{"NAS", "linux", "nas"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Msg.GetWorker().GetLabels(); strings.Join(got, ",") != "linux,nas" {
+		t.Errorf("labels = %q", got)
+	}
+	got, err := admin.GetWorker(t.Context(), connect.NewRequest(&syncrv1.GetWorkerRequest{WorkerId: id}))
+	if err != nil || strings.Join(got.Msg.GetWorker().GetLabels(), ",") != "linux,nas" {
+		t.Errorf("GetWorker labels = %v, %v", got, err)
+	}
+
+	// Users may list workers by label but not set labels.
+	user := e.workersFor(testUser)
+	_, err = user.SetWorkerLabels(t.Context(), connect.NewRequest(&syncrv1.SetWorkerLabelsRequest{WorkerId: id, Labels: []string{"mine"}}))
+	wantCode(t, err, connect.CodePermissionDenied)
+	other := e.addWorker()
+	for label, want := range map[string]int{"nas": 1, "NAS": 1, "windows": 0, "": 2} {
+		list, err := user.ListWorkers(t.Context(), connect.NewRequest(&syncrv1.ListWorkersRequest{Label: label}))
+		if err != nil || len(list.Msg.GetWorkers()) != want {
+			t.Errorf("ListWorkers(label %q) = %v, %v; want %d workers", label, list, err, want)
+		}
+	}
+	_, err = user.ListWorkers(t.Context(), connect.NewRequest(&syncrv1.ListWorkersRequest{Label: "not a label"}))
+	wantCode(t, err, connect.CodeInvalidArgument)
+
+	// Invalid labels name the field; unknown and removed workers are not
+	// found.
+	_, err = admin.SetWorkerLabels(t.Context(), connect.NewRequest(&syncrv1.SetWorkerLabelsRequest{WorkerId: id, Labels: []string{"ok", "-bad"}}))
+	wantCode(t, err, connect.CodeInvalidArgument)
+	if err == nil || !strings.Contains(err.Error(), "labels[1]") {
+		t.Errorf("message does not name the field: %v", err)
+	}
+	_, err = admin.SetWorkerLabels(t.Context(), connect.NewRequest(&syncrv1.SetWorkerLabelsRequest{WorkerId: "nope"}))
+	wantCode(t, err, connect.CodeInvalidArgument)
+	_, err = admin.SetWorkerLabels(t.Context(), connect.NewRequest(&syncrv1.SetWorkerLabelsRequest{WorkerId: domain.NewWorkerID().String()}))
+	wantCode(t, err, connect.CodeNotFound)
+	if _, err := admin.RemoveWorker(t.Context(), connect.NewRequest(&syncrv1.RemoveWorkerRequest{WorkerId: other.String()})); err != nil {
+		t.Fatal(err)
+	}
+	_, err = admin.SetWorkerLabels(t.Context(), connect.NewRequest(&syncrv1.SetWorkerLabelsRequest{WorkerId: other.String(), Labels: []string{"x"}}))
+	wantCode(t, err, connect.CodeNotFound)
+
+	// No labels clears them.
+	resp, err = admin.SetWorkerLabels(t.Context(), connect.NewRequest(&syncrv1.SetWorkerLabelsRequest{WorkerId: id}))
+	if err != nil || len(resp.Msg.GetWorker().GetLabels()) != 0 {
+		t.Errorf("clear = %v, %v", resp, err)
+	}
+}
+
+func TestWorkerNameTaken(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	c := e.workersClient()
+	second := e.addWorker()
+	_, err := c.RenameWorker(t.Context(), connect.NewRequest(&syncrv1.RenameWorkerRequest{WorkerId: second.String(), Name: "WORKER"}))
+	wantCode(t, err, connect.CodeAlreadyExists)
+	if err == nil || !strings.Contains(err.Error(), "name") {
+		t.Errorf("message does not explain: %v", err)
+	}
+	_, err = c.RegisterPassiveWorker(t.Context(), connect.NewRequest(&syncrv1.RegisterPassiveWorkerRequest{
+		Name: "worker", Url: "https://worker.example:7443", CertFingerprint: testFP, PairingSecret: pairingSecret,
+	}))
+	wantCode(t, err, connect.CodeAlreadyExists)
+}

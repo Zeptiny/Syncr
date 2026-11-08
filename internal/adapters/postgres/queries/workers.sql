@@ -1,12 +1,12 @@
 -- name: CreateWorker :exec
 INSERT INTO workers (
     id, name, mode, url, cert_fingerprint, secret_enc, info,
-    epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at
+    epoch, epoch_started_at, past_epochs, ack_seq, last_seen, created_at, removed_at, labels
 ) VALUES (
     sqlc.arg(id), sqlc.arg(name), sqlc.arg(mode), sqlc.arg(url), sqlc.arg(cert_fingerprint),
     sqlc.arg(secret_enc), sqlc.arg(info), sqlc.arg(epoch), sqlc.arg(epoch_started_at),
     sqlc.arg(past_epochs), sqlc.arg(ack_seq), sqlc.arg(last_seen), sqlc.arg(created_at),
-    sqlc.arg(removed_at)
+    sqlc.arg(removed_at), sqlc.arg(labels)
 );
 
 -- name: GetWorker :one
@@ -21,10 +21,16 @@ SELECT EXISTS (SELECT 1 FROM workers WHERE id = sqlc.arg(id) AND removed_at IS N
 SELECT * FROM workers
 WHERE (sqlc.arg(mode)::text = '' OR mode = sqlc.arg(mode)::text)
   AND (sqlc.arg(include_removed)::boolean OR removed_at IS NULL)
+  AND (sqlc.arg(label)::text = '' OR sqlc.arg(label)::text = ANY (labels))
 ORDER BY id;
 
 -- name: RenameWorker :one
 UPDATE workers SET name = sqlc.arg(name)
+WHERE id = sqlc.arg(id) AND removed_at IS NULL
+RETURNING *;
+
+-- name: SetWorkerLabels :one
+UPDATE workers SET labels = sqlc.arg(labels)
 WHERE id = sqlc.arg(id) AND removed_at IS NULL
 RETURNING *;
 

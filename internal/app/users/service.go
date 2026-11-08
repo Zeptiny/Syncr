@@ -245,7 +245,8 @@ func (s *Service) Create(ctx context.Context, actor domain.Actor, p CreateParams
 // only. p.Version must be the user's current version (ErrConflict
 // otherwise). Removing the last active admin (by demoting or disabling
 // them) is ErrFailedPrecondition. Role changes and disabling revoke the
-// user's sessions.
+// user's sessions; disabling also deletes their API tokens, so enabling
+// the account again does not revive them.
 func (s *Service) Update(ctx context.Context, actor domain.Actor, id domain.UserID, p UpdateParams) (User, error) {
 	const op = "update user"
 	if err := requireAdmin(actor, op); err != nil {
@@ -312,6 +313,11 @@ func (s *Service) Update(ctx context.Context, actor domain.Actor, id domain.User
 	}
 	if stored.Role != cur.Role || (stored.Disabled() && !cur.Disabled()) {
 		if err := s.revokeSessions(ctx, id, nil); err != nil {
+			return User{}, fmt.Errorf("%s %s: stored, but %w", op, id, err)
+		}
+	}
+	if stored.Disabled() && !cur.Disabled() {
+		if err := s.revokeAPITokens(ctx, id); err != nil {
 			return User{}, fmt.Errorf("%s %s: stored, but %w", op, id, err)
 		}
 	}
@@ -388,18 +394,24 @@ func (s *Service) Delete(ctx context.Context, actor domain.Actor, id domain.User
 	return nil
 }
 
-// PurgeExpired deletes the sessions that have expired and any left of
-// disabled users (disabling revokes them; this catches a revocation that
-// failed). It returns how many it deleted. The composition root calls it
-// periodically.
+// PurgeExpired deletes the sessions and API tokens that have expired, and
+// any left of disabled users (disabling revokes them; this catches a
+// revocation that failed). It returns how many it deleted. The composition
+// root calls it periodically.
 func (s *Service) PurgeExpired(ctx context.Context) (int, error) {
-	n, err := s.sessions.DeleteExpiredSessions(ctx, s.clock.Now())
+	now := s.clock.Now()
+	n, err := s.sessions.DeleteExpiredSessions(ctx, now)
 	if err != nil {
 		return 0, fmt.Errorf("purge expired sessions: %w", err)
 	}
+	m, err := s.tokens.DeleteExpiredAPITokens(ctx, now)
+	if err != nil {
+		return n, fmt.Errorf("purge expired api tokens: %w", err)
+	}
+	n += m
 	us, err := s.users.ListUsers(ctx)
 	if err != nil {
-		return n, fmt.Errorf("purge sessions of disabled users: %w", err)
+		return n, fmt.Errorf("purge credentials of disabled users: %w", err)
 	}
 	for _, u := range us {
 		if !u.Disabled() {
@@ -410,8 +422,26 @@ func (s *Service) PurgeExpired(ctx context.Context) (int, error) {
 			return n, fmt.Errorf("purge sessions of disabled user %s: %w", u.ID, err)
 		}
 		n += m
+		if m, err = s.tokens.DeleteUserAPITokens(ctx, u.ID); err != nil {
+			return n, fmt.Errorf("purge api tokens of disabled user %s: %w", u.ID, err)
+		}
+		n += m
 	}
 	return n, nil
+}
+
+// Active reports whether the user exists and is not disabled; the
+// scheduler asks before it launches a schedule's job for its owner.
+// ErrNotFound if the user does not exist.
+func (s *Service) Active(ctx context.Context, id domain.UserID) (bool, error) {
+	if id.IsZero() {
+		return false, fmt.Errorf("user active: %w", domain.ErrInvalidID)
+	}
+	u, err := s.users.GetUser(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("user active %s: %w", id, err)
+	}
+	return !u.Disabled(), nil
 }
 
 // requireAdmin is the use cases' own role check (the API's policy table
@@ -466,6 +496,18 @@ func (s *Service) revokeSessions(ctx context.Context, user domain.UserID, keep *
 	}
 	if n > 0 {
 		s.log.InfoContext(ctx, "user sessions revoked", "user_id", user.String(), "count", n)
+	}
+	return nil
+}
+
+// revokeAPITokens deletes every API token of the user.
+func (s *Service) revokeAPITokens(ctx context.Context, user domain.UserID) error {
+	n, err := s.tokens.DeleteUserAPITokens(ctx, user)
+	if err != nil {
+		return fmt.Errorf("revoke api tokens: %w", err)
+	}
+	if n > 0 {
+		s.log.InfoContext(ctx, "user api tokens revoked", "user_id", user.String(), "count", n)
 	}
 	return nil
 }

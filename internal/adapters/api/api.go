@@ -244,7 +244,7 @@ func mountMilestone4(mux *http.ServeMux, deps Deps, errs errorMapper, disabled f
 	activity, ok := deps.Jobs.(DashboardJobs)
 	if ok && deps.Workers != nil && deps.Schedules != nil {
 		mux.Handle(syncrv1connect.NewDashboardServiceHandler(&dashboardHandler{
-			jobs: deps.Jobs, activity: activity, workers: deps.Workers, schedules: deps.Schedules, errs: errs,
+			jobs: deps.Jobs, activity: activity, workers: deps.Workers, schedules: deps.Schedules, remotes: deps.Remotes, errs: errs,
 		}, opts...))
 	} else {
 		disabled(syncrv1connect.DashboardServiceName)

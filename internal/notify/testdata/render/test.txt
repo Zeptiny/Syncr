@@ -1,0 +1,5 @@
+Syncr test notification
+
+This is a test notification from Syncr. The contact is set up correctly.
+
+Details: https://syncr.example/notifications
