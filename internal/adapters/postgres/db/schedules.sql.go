@@ -1006,8 +1006,8 @@ type SupersedePendingRunParams struct {
 }
 
 // A fire ends the schedule's pending run whose deadline is not after the
-// fire time as missed, before inserting the occurrence's own run: the run
-// may not absorb an occurrence that is due after its deadline.
+// fire time as missed, before merging or inserting the occurrence's run:
+// the run may not absorb an occurrence that is due after its deadline.
 func (q *Queries) SupersedePendingRun(ctx context.Context, arg SupersedePendingRunParams) error {
 	_, err := q.db.Exec(ctx, supersedePendingRun,
 		arg.Reason,

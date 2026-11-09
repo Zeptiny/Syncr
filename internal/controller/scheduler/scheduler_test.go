@@ -146,6 +146,48 @@ func TestOfflineUntilNextIsMissed(t *testing.T) {
 	}
 }
 
+// TestControllerDowntime: the controller was down while occurrences came
+// due. Those whose deadline passed meanwhile are missed with reason
+// controller_unavailable (not worker_offline: the worker was online), and
+// the latest one, still in time, launches.
+func TestControllerDowntime(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	w := e.addWorker(worker{name: "nas", online: true})
+	sc := e.create(e.input("hourly", schedules.Target{WorkerID: w})) // run late, 30 minutes
+	// Down from 12:55 until 15:10: 13:00 and 14:00 passed their deadlines.
+	e.clock.Set(t0.Add(3*time.Hour + 10*time.Minute))
+	e.tick(e.newScheduler(nil, nil))
+	rs := e.runs(sc.ID)
+	if len(rs) != 2 {
+		t.Fatalf("runs = %+v, want a missed one and a launched one", rs)
+	}
+	if r := rs[1]; r.Status != schedules.RunMissed || r.Reason != schedules.ReasonControllerUnavailable ||
+		!r.ScheduledFor.Equal(t0.Add(2*time.Hour)) || r.Coalesced != 1 {
+		t.Errorf("missed run = %+v, want 14:00 (and 13:00), controller unavailable", r)
+	}
+	if r := rs[0]; r.Status != schedules.RunLaunched || !r.ScheduledFor.Equal(t0.Add(3*time.Hour)) || r.Coalesced != 0 {
+		t.Errorf("latest run = %+v, want 15:00 launched", r)
+	}
+	if js := e.jobsOf(sc.ID); len(js) != 1 {
+		t.Errorf("jobs = %d, want 1", len(js))
+	}
+
+	// With skip (five minutes of grace), a fire ten minutes late is missed
+	// as a whole.
+	in := e.input("strict", schedules.Target{WorkerID: w})
+	in.Missed = schedules.MissedPolicy{Action: schedules.MissedSkip}
+	strict := e.create(in) // next 16:00
+	e.clock.Set(t0.Add(4*time.Hour + 10*time.Minute))
+	e.tick(e.newScheduler(nil, nil))
+	if rs := e.runs(strict.ID); len(rs) != 1 || rs[0].Status != schedules.RunMissed || rs[0].Reason != schedules.ReasonControllerUnavailable {
+		t.Errorf("runs = %+v, want 16:00 missed, controller unavailable", rs)
+	}
+	if js := e.jobsOf(strict.ID); len(js) != 0 {
+		t.Errorf("jobs = %d, want none", len(js))
+	}
+}
+
 func TestByLabel(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

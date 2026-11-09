@@ -285,12 +285,27 @@ func (s *Store) AddRun(ctx context.Context, r schedules.Run, merge bool) (schedu
 
 // addRun merges r into its schedule's pending run (if merge and there is
 // one) or inserts it; it returns the ID of the run that holds it. For a
-// fire (f set) only a pending run whose deadline is after the fire time
-// absorbs r, keeping its deadline, and an older one is superseded (ended
-// missed) before r is inserted; a manual request (f nil) extends the
-// pending run's deadline to its own. A missing schedule fails the insert's
-// foreign key (ErrNotFound).
+// fire (f set) a pending run whose deadline is not after the fire time is
+// first superseded (ended missed), f.Earlier is inserted, and a remaining
+// pending run absorbs r keeping its deadline; a manual request (f nil)
+// extends the pending run's deadline to its own. A missing schedule fails
+// the insert's foreign key (ErrNotFound).
 func addRun(ctx context.Context, q *db.Queries, op string, r schedules.Run, merge bool, f *schedules.Fire) (pgtype.UUID, error) {
+	if f != nil {
+		if err := q.SupersedePendingRun(ctx, db.SupersedePendingRunParams{
+			Reason: f.MissedReason, Message: cleanText(f.MissedMessage),
+			UpdatedAt: pgTime(r.CreatedAt), ScheduleID: pgID(r.ScheduleID),
+		}); err != nil {
+			return pgtype.UUID{}, mapErr(op, err)
+		}
+		if f.Earlier != nil {
+			e := *f.Earlier
+			e.ScheduleID = r.ScheduleID
+			if err := insertRun(ctx, q, op, e); err != nil {
+				return pgtype.UUID{}, err
+			}
+		}
+	}
 	if merge {
 		p := db.MergePendingRunParams{
 			AddCoalesced: int32(r.Coalesced), //nolint:gosec // G115: at most schedules.MaxCoalesce per fire
@@ -308,15 +323,15 @@ func addRun(ctx context.Context, q *db.Queries, op string, r schedules.Run, merg
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return pgtype.UUID{}, mapErr(op, err)
 		}
-		if f != nil {
-			if err := q.SupersedePendingRun(ctx, db.SupersedePendingRunParams{
-				Reason: f.MissedReason, Message: cleanText(f.MissedMessage),
-				UpdatedAt: pgTime(r.CreatedAt), ScheduleID: pgID(r.ScheduleID),
-			}); err != nil {
-				return pgtype.UUID{}, mapErr(op, err)
-			}
-		}
 	}
+	if err := insertRun(ctx, q, op, r); err != nil {
+		return pgtype.UUID{}, err
+	}
+	return pgID(r.ID), nil
+}
+
+// insertRun inserts r.
+func insertRun(ctx context.Context, q *db.Queries, op string, r schedules.Run) error {
 	if err := q.InsertRun(ctx, db.InsertRunParams{
 		ID: pgID(r.ID), ScheduleID: pgID(r.ScheduleID), Trigger: r.Trigger,
 		ScheduledFor: pgTime(r.ScheduledFor), Deadline: pgTime(r.Deadline),
@@ -325,9 +340,9 @@ func addRun(ctx context.Context, q *db.Queries, op string, r schedules.Run, merg
 		WorkerID: pgOptID(r.WorkerID), JobID: pgOptID(r.JobID),
 		CreatedAt: pgTime(r.CreatedAt), UpdatedAt: pgTime(r.UpdatedAt),
 	}); err != nil {
-		return pgtype.UUID{}, mapErr(op, err)
+		return mapErr(op, err)
 	}
-	return pgID(r.ID), nil
+	return nil
 }
 
 // GetRun implements schedules.Repository.

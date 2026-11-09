@@ -389,7 +389,9 @@ func TestFireDueCoalescesDowntime(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
-	sc := e.create(e.alice, e.input("hourly")) // next 13:00
+	in := e.input("hourly")
+	in.Missed.MaxDelay = schedules.MaxMaxDelay // no occurrence passes its deadline here
+	sc := e.create(e.alice, in)                // next 13:00
 	if n, err := e.svc.FireDue(ctx); err != nil || n != 0 {
 		t.Fatalf("FireDue(nothing due) = (%d, %v)", n, err)
 	}
@@ -402,7 +404,7 @@ func TestFireDueCoalescesDowntime(t *testing.T) {
 	rs := e.runs(sc.ID)
 	if len(rs) != 1 || !rs[0].ScheduledFor.Equal(t0.Add(5*time.Hour)) || rs[0].Coalesced != 4 ||
 		rs[0].Status != schedules.RunPending || rs[0].Trigger != schedules.TriggerCron ||
-		!rs[0].Deadline.Equal(t0.Add(6*time.Hour)) || !rs[0].CreatedAt.Equal(e.clock.Now()) {
+		!rs[0].Deadline.Equal(t0.Add(5*time.Hour+schedules.MaxMaxDelay)) || !rs[0].CreatedAt.Equal(e.clock.Now()) {
 		t.Errorf("runs = %+v", rs)
 	}
 	got := e.schedule(sc.ID)
@@ -412,18 +414,77 @@ func TestFireDueCoalescesDowntime(t *testing.T) {
 	if n, _ := e.svc.FireDue(ctx); n != 0 {
 		t.Errorf("FireDue(again) fired %d", n)
 	}
-	// The next occurrence is due at the pending run's deadline (18:00): it
-	// supersedes the run, which is missed, instead of moving its deadline.
+	// The next occurrence merges into the still pending run, whose deadline
+	// does not move.
 	e.clock.Set(t0.Add(6 * time.Hour))
 	if n, err := e.svc.FireDue(ctx); err != nil || n != 1 {
 		t.Fatalf("FireDue(next) = (%d, %v)", n, err)
 	}
 	rs = e.runs(sc.ID)
-	if len(rs) != 2 || rs[1].Status != schedules.RunMissed || rs[1].Reason != schedules.ReasonWorkerOffline ||
-		rs[1].Coalesced != 4 || !rs[1].Deadline.Equal(t0.Add(6*time.Hour)) ||
-		rs[0].Status != schedules.RunPending || !rs[0].ScheduledFor.Equal(t0.Add(6*time.Hour)) || rs[0].Coalesced != 0 {
-		t.Errorf("runs = %+v, want 17:00 missed and 18:00 pending", rs)
+	if len(rs) != 1 || rs[0].Coalesced != 5 || !rs[0].Deadline.Equal(t0.Add(5*time.Hour+schedules.MaxMaxDelay)) {
+		t.Errorf("merged run = %+v", rs)
 	}
+}
+
+// TestFireDueAfterDowntime: occurrences whose deadline passed while the
+// controller was down are recorded missed with controller_unavailable
+// (and so is a waiting run whose deadline passed meanwhile), and the ones
+// that may still start are coalesced into the new run.
+func TestFireDueAfterDowntime(t *testing.T) {
+	t.Parallel()
+	t.Run("run late", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t)
+		ctx := context.Background()
+		sc := e.create(e.alice, e.input("hourly")) // next 13:00, one hour late at most
+		e.clock.Set(t0.Add(time.Hour))
+		if n, err := e.svc.FireDue(ctx); err != nil || n != 1 { // 13:00 waits for its worker
+			t.Fatalf("FireDue = (%d, %v)", n, err)
+		}
+		waiting := e.runs(sc.ID)[0]
+		// The controller was down from 13:01 until 17:30.
+		e.clock.Set(t0.Add(5*time.Hour + 30*time.Minute))
+		if n, err := e.svc.FireDue(ctx); err != nil || n != 1 {
+			t.Fatalf("FireDue = (%d, %v)", n, err)
+		}
+		rs := e.runs(sc.ID) // newest first
+		if len(rs) != 3 {
+			t.Fatalf("runs = %+v, want the waiting run, a missed one and the new one", rs)
+		}
+		if r := rs[0]; r.Status != schedules.RunPending || !r.ScheduledFor.Equal(t0.Add(5*time.Hour)) || r.Coalesced != 0 {
+			t.Errorf("new run = %+v, want 17:00 pending", r)
+		}
+		// 14:00 to 16:00 passed their deadlines (the hour after them).
+		if r := rs[1]; r.Status != schedules.RunMissed || r.Reason != schedules.ReasonControllerUnavailable ||
+			!r.ScheduledFor.Equal(t0.Add(4*time.Hour)) || r.Coalesced != 2 || r.Message == "" ||
+			!r.Deadline.Equal(t0.Add(5*time.Hour)) || r.Trigger != schedules.TriggerCron {
+			t.Errorf("missed run = %+v, want 16:00 with two earlier, controller unavailable", r)
+		}
+		if r := rs[2]; r.ID != waiting.ID || r.Status != schedules.RunMissed || r.Reason != schedules.ReasonControllerUnavailable {
+			t.Errorf("waiting run = %+v, want missed, controller unavailable", r)
+		}
+	})
+	t.Run("skip", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t)
+		ctx := context.Background()
+		in := e.input("hourly")
+		in.Missed = schedules.MissedPolicy{Action: schedules.MissedSkip}
+		sc := e.create(e.alice, in)
+		// Down from before 13:00 until 13:10: past the five-minute grace.
+		e.clock.Set(t0.Add(time.Hour + 10*time.Minute))
+		if n, err := e.svc.FireDue(ctx); err != nil || n != 1 {
+			t.Fatalf("FireDue = (%d, %v)", n, err)
+		}
+		rs := e.runs(sc.ID)
+		if len(rs) != 1 || rs[0].Status != schedules.RunMissed || rs[0].Reason != schedules.ReasonControllerUnavailable ||
+			!rs[0].ScheduledFor.Equal(t0.Add(time.Hour)) {
+			t.Errorf("runs = %+v, want 13:00 missed, controller unavailable", rs)
+		}
+		if got := e.schedule(sc.ID); !got.NextRunAt.Equal(t0.Add(2 * time.Hour)) {
+			t.Errorf("next run = %v", got.NextRunAt)
+		}
+	})
 }
 
 // TestFireDueKeepsDeadline: an occurrence merges into a pending run only

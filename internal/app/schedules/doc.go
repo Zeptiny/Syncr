@@ -50,7 +50,9 @@
 //   - Fire, when NextRunAt <= now (PlanFire): (last, n) :=
 //     expr.Latest(NextRunAt - 1ns, now, MaxCoalesce); the run is for last
 //     with Coalesced n - 1, and NewNext = expr.Next(now). Occurrences that
-//     passed while the controller was down are never run one by one.
+//     passed while the controller was down are never run one by one; those
+//     whose deadline had passed when they fired are missed with
+//     ReasonControllerUnavailable instead (FirePlan.Late, LateFor).
 //   - Deadline: run_late is ScheduledFor + MaxDelay, or the next
 //     occurrence after ScheduledFor for MaxDelay 0 (ManualUntilNext if
 //     there is none); skip is ScheduledFor + SkipGrace. A manual run's

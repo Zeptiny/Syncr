@@ -94,6 +94,20 @@ has to handle:
   latest occurrence in `[next_run_at, now]`, the earlier ones counted in
   `coalesced`; `next_run_at` becomes the next occurrence after now.
   Downtime never replays occurrences one by one.
+- **Controller downtime** (`controller_unavailable`): a running scheduler
+  fires an occurrence within a tick, so an occurrence whose deadline has
+  already passed when it fires means the controller was down (or not
+  scheduling) from before that deadline. Such occurrences are missed with
+  `controller_unavailable`: the latest one's run is recorded missed instead
+  of opened, and earlier ones are recorded as one missed run (for the
+  latest of them, the others in `coalesced`) beside the run of those that
+  may still start; a pending run superseded by such a late fire gets the
+  same reason. With "until the next occurrence" every occurrence but the
+  latest is past its deadline after downtime, so the latest runs and the
+  others are reported missed. A pending run whose deadline passes during
+  downtime without a late fire (e.g. no occurrence came due) is still
+  missed as `worker_offline`: no state tells how long the controller was
+  down.
 - **Deadline**: `run_late` waits `max_delay` (at most 7 days), or until the
   next occurrence when it is 0 (so each next occurrence supersedes a run
   still waiting); `skip` allows a 5-minute grace. A manual run counts from

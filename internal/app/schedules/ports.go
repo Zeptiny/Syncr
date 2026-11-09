@@ -84,21 +84,23 @@ type Repository interface {
 	//     UpdatedAt are untouched); otherwise ErrConflict and nothing
 	//     changes (another tick or controller fired it, or the user edited
 	//     or paused it; the caller re-reads on its next tick);
-	//  2. if f.Merge and the schedule has a pending run whose Deadline is
-	//     after f.Run.CreatedAt, that run absorbs the fire: Coalesced +=
-	//     f.Run.Coalesced + 1, UpdatedAt = f.Run.CreatedAt; its Deadline
-	//     is fixed when it opened and does not move. A launching run
-	//     absorbs nothing: its job is being created;
-	//  3. if f.Merge and the schedule has a pending run whose Deadline is
-	//     not after f.Run.CreatedAt, that run is superseded: Status
-	//     missed, Reason f.MissedReason, Message f.MissedMessage, UpdatedAt
-	//     f.Run.CreatedAt; then f.Run is inserted as in 4;
-	//  4. otherwise f.Run is inserted. A pending f.Run while the schedule
+	//  2. if the schedule has a pending run whose Deadline is not after
+	//     f.Run.CreatedAt, that run is superseded: Status missed, Reason
+	//     f.MissedReason, Message f.MissedMessage, UpdatedAt
+	//     f.Run.CreatedAt;
+	//  3. f.Earlier, if set, is inserted (a missed run);
+	//  4. if f.Merge and the schedule has a (remaining) pending run, that
+	//     run absorbs the fire: Coalesced += f.Run.Coalesced + 1, UpdatedAt
+	//     = f.Run.CreatedAt; its Deadline is fixed when it opened and does
+	//     not move. A launching run absorbs nothing: its job is being
+	//     created;
+	//  5. otherwise f.Run is inserted. A pending f.Run while the schedule
 	//     has a pending run violates the one-pending-run rule:
 	//     ErrAlreadyExists, and nothing changes.
 	//
 	// It returns the run that holds the fire (f.Run, or the merged pending
-	// run, whose ID differs). ErrNotFound if the schedule does not exist.
+	// run, whose ID differs). ErrNotFound if the schedule does not exist;
+	// ErrAlreadyExists if a run ID is taken.
 	FireSchedule(ctx context.Context, f Fire) (Run, error)
 
 	// AddRun adds a run outside the cron (RunNow): if merge and the

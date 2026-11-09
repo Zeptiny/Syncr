@@ -345,12 +345,16 @@ type Fire struct {
 	Run Run
 	// Merge merges the fire into the schedule's pending run, if it has one
 	// and its Deadline is after Run.CreatedAt, instead of inserting Run;
-	// the pending run keeps its deadline. A pending run whose Deadline is
-	// not after Run.CreatedAt is superseded instead: it is ended missed
-	// with MissedReason and MissedMessage, and Run is inserted.
+	// the pending run keeps its deadline.
 	Merge bool
-	// MissedReason and MissedMessage end a superseded pending run.
+	// MissedReason and MissedMessage end a pending run whose Deadline is
+	// not after Run.CreatedAt: every fire supersedes it (it is missed) before
+	// Run is merged or inserted.
 	MissedReason, MissedMessage string
+	// Earlier, if set, is a missed run inserted with the fire: earlier
+	// occurrences whose deadline passed before they could fire
+	// (FirePlan.LateFor).
+	Earlier *Run
 }
 
 // Toggle is the change of Repository.SetScheduleEnabled.

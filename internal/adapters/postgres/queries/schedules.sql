@@ -188,8 +188,8 @@ RETURNING id;
 
 -- name: SupersedePendingRun :exec
 -- A fire ends the schedule's pending run whose deadline is not after the
--- fire time as missed, before inserting the occurrence's own run: the run
--- may not absorb an occurrence that is due after its deadline.
+-- fire time as missed, before merging or inserting the occurrence's run:
+-- the run may not absorb an occurrence that is due after its deadline.
 UPDATE schedule_runs SET
     status = 'missed', reason = sqlc.arg(reason)::text, message = sqlc.arg(message)::text,
     updated_at = sqlc.arg(updated_at)::timestamptz

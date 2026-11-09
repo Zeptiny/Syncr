@@ -124,7 +124,9 @@ job, and two policies:
   run as missed, **queue** starts it afterwards and **allow** runs both.
 
 Occurrences that pass while the controller is down are not replayed one by
-one: they merge into one run (shown as coalesced). A schedule whose worker
+one: those that may still start merge into one run (shown as coalesced),
+and those whose missed-run limit has passed are recorded as missed because
+the controller was down. A schedule whose worker
 was removed, whose remote was deleted or whose owner was disabled pauses
 itself and says why; **Run now** works on paused schedules too. Schedule
 times follow the time zone's daylight saving rules: a time that does not

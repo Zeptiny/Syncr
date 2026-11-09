@@ -606,6 +606,41 @@ func testScheduleFireSupersedes(t *testing.T, s Store) {
 	if got, err := s.AddRun(ctx, manual, true); err != nil || got.ID != second.ID || !got.Deadline.Equal(manual.Deadline) {
 		t.Errorf("AddRun(merge) = (%+v, %v)", got, err)
 	}
+
+	// After downtime: a fire that records its run missed (no merge) still
+	// supersedes the pending run past its deadline, and inserts the
+	// earlier occurrences' missed run with it.
+	firedAt := t0().Add(5 * day)
+	late := newRun(t, 4, a.ID, schedules.RunMissed)
+	late.ScheduledFor, late.Reason, late.Coalesced, late.CreatedAt = t0().Add(4*day), schedules.ReasonControllerUnavailable, 1, firedAt
+	earlier := newRun(t, 5, a.ID, schedules.RunMissed)
+	earlier.ScheduledFor, earlier.Reason, earlier.CreatedAt = t0().Add(3*day), schedules.ReasonControllerUnavailable, firedAt
+	f := schedules.Fire{
+		ID: a.ID, ExpectedNext: a.NextRunAt.Add(2 * day), NewNext: a.NextRunAt.Add(6 * day), Run: late,
+		MissedReason: schedules.ReasonControllerUnavailable, MissedMessage: "the controller was down", Earlier: &earlier,
+	}
+	taken := f
+	takenEarlier := earlier
+	takenEarlier.ID = first.ID
+	taken.Earlier = &takenEarlier
+	_, err = s.FireSchedule(ctx, taken)
+	wantErr(t, "FireSchedule(earlier run's id taken)", err, domain.ErrAlreadyExists)
+	if r := mustGetRun(t, s, second.ID); r.Status != schedules.RunPending {
+		t.Errorf("a refused fire superseded the pending run: %+v", r)
+	}
+	if got, err := s.FireSchedule(ctx, f); err != nil || got.ID != late.ID || got.Status != schedules.RunMissed {
+		t.Fatalf("FireSchedule(late) = (%+v, %v)", got, err)
+	}
+	if r := mustGetRun(t, s, second.ID); r.Status != schedules.RunMissed || r.Reason != schedules.ReasonControllerUnavailable {
+		t.Errorf("pending run after the late fire = %+v, want missed (controller unavailable)", r)
+	}
+	if r := mustGetRun(t, s, earlier.ID); r.Status != schedules.RunMissed || r.Reason != schedules.ReasonControllerUnavailable ||
+		!r.ScheduledFor.Equal(earlier.ScheduledFor) {
+		t.Errorf("earlier run = %+v", r)
+	}
+	if got := mustGetSchedule(t, s, a.ID); !got.NextRunAt.Equal(f.NewNext) {
+		t.Errorf("next run after the late fire = %v", got.NextRunAt)
+	}
 }
 
 // testScheduleOnePendingRun: a schedule has at most one pending run, but a

@@ -366,7 +366,8 @@ func (schedTestWaker) Wake() {}
 
 // TestServiceFireDue runs the schedules service's FireDue from two
 // controllers (pools) at once over Postgres, after downtime: each due
-// schedule fires once, with the missed occurrences coalesced.
+// schedule fires once, with the occurrences past their deadline recorded
+// missed in one run.
 func TestServiceFireDue(t *testing.T) {
 	t.Parallel()
 	a, b := twoStores(t)
@@ -415,7 +416,11 @@ func TestServiceFireDue(t *testing.T) {
 	}
 	for _, id := range ids {
 		rs, err := a.ListRuns(ctx, schedules.RunFilter{ScheduleID: id, Limit: -1})
-		if err != nil || len(rs) != 1 || rs[0].Coalesced != 4 || !rs[0].ScheduledFor.Equal(schedT0.Add(5*time.Hour)) {
+		// Until the next occurrence: 13:00 to 16:00 passed their deadlines
+		// while the controller was down (one missed run), 17:00 waits.
+		if err != nil || len(rs) != 2 || rs[0].Coalesced != 0 || !rs[0].ScheduledFor.Equal(schedT0.Add(5*time.Hour)) ||
+			rs[0].Status != schedules.RunPending || rs[1].Status != schedules.RunMissed || rs[1].Coalesced != 3 ||
+			rs[1].Reason != schedules.ReasonControllerUnavailable || !rs[1].ScheduledFor.Equal(schedT0.Add(4*time.Hour)) {
 			t.Errorf("schedule %s: runs = (%+v, %v)", id, rs, err)
 		}
 		if sc, _ := a.GetSchedule(ctx, id); !sc.NextRunAt.Equal(schedT0.Add(6 * time.Hour)) {

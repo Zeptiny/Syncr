@@ -20,7 +20,8 @@ func mustExpr(t *testing.T, expr, tz string) *cronexpr.Expr {
 func TestPlanFireCoalesces(t *testing.T) {
 	t.Parallel()
 	hourly := mustExpr(t, "0 * * * *", "UTC")
-	late := schedules.MissedPolicy{Action: schedules.MissedRunLate}
+	// Long enough for no occurrence to pass its deadline (TestPlanFireLate).
+	late := schedules.MissedPolicy{Action: schedules.MissedRunLate, MaxDelay: schedules.MaxMaxDelay}
 	at := func(h, m int) time.Time { return time.Date(2026, 11, 4, h, m, 0, 0, time.UTC) }
 	tests := []struct {
 		name          string
@@ -50,12 +51,58 @@ func TestPlanFireCoalesces(t *testing.T) {
 	}
 	for _, tt := range tests {
 		p := schedules.PlanFire(tt.e, tt.next, tt.now, late, schedules.OverlapSkip, false)
-		if !p.ScheduledFor.Equal(tt.wantScheduled) || p.Coalesced != tt.wantCoalesced || !p.NewNext.Equal(tt.wantNext) || p.Skip {
+		if !p.ScheduledFor.Equal(tt.wantScheduled) || p.Coalesced != tt.wantCoalesced || !p.NewNext.Equal(tt.wantNext) || p.Skip ||
+			p.Late || !p.LateFor.IsZero() {
 			t.Errorf("%s: PlanFire = %+v, want scheduled %v, coalesced %d, next %v", tt.name, p, tt.wantScheduled, tt.wantCoalesced, tt.wantNext)
 		}
-		// "Until next": the deadline is the next occurrence after the run's.
-		if !p.Deadline.Equal(tt.e.Next(p.ScheduledFor)) {
-			t.Errorf("%s: deadline %v, want the next occurrence", tt.name, p.Deadline)
+		if !p.Deadline.Equal(p.ScheduledFor.Add(late.MaxDelay)) {
+			t.Errorf("%s: deadline %v, want the scheduled time + max delay", tt.name, p.Deadline)
+		}
+	}
+}
+
+// TestPlanFireLate: occurrences whose deadline passed before they fired
+// (the controller was down past it) are missed (controller unavailable):
+// the whole fire (Late) or the earlier ones (LateFor), never the ones that
+// may still start.
+func TestPlanFireLate(t *testing.T) {
+	t.Parallel()
+	hourly := mustExpr(t, "0 * * * *", "UTC")
+	at := func(h, m int) time.Time { return time.Date(2026, 11, 4, h, m, 0, 0, time.UTC) }
+	untilNext := schedules.MissedPolicy{Action: schedules.MissedRunLate}
+	twoHours := schedules.MissedPolicy{Action: schedules.MissedRunLate, MaxDelay: 2 * time.Hour}
+	skip := schedules.MissedPolicy{Action: schedules.MissedSkip}
+	tests := []struct {
+		name          string
+		missed        schedules.MissedPolicy
+		next, now     time.Time
+		late          bool
+		lateFor       time.Time // zero: none
+		lateCoalesced int
+		coalesced     int
+	}{
+		{"on time", untilNext, at(10, 0), at(10, 0), false, time.Time{}, 0, 0},
+		// Until the next occurrence: every occurrence but the latest is
+		// past its deadline (the occurrence after it).
+		{"until next, down 09:30-15:30", untilNext, at(10, 0), at(15, 30), false, at(14, 0), 4, 0},
+		{"until next, one occurrence", untilNext, at(10, 0), at(10, 30), false, time.Time{}, 0, 0},
+		// At 11:00 sharp the 10:00 run may still start (its deadline is
+		// now): it is coalesced, not missed.
+		{"until next, at the deadline", untilNext, at(10, 0), at(11, 0), false, time.Time{}, 0, 1},
+		// Two hours: 10:00 to 13:00 are past their deadline at 15:30, 14:00
+		// and 15:00 may still start.
+		{"two hours", twoHours, at(10, 0), at(15, 30), false, at(13, 0), 3, 1},
+		{"two hours, short downtime", twoHours, at(10, 0), at(11, 30), false, time.Time{}, 0, 1},
+		// Skip: five minutes of grace.
+		{"skip, within the grace", skip, at(10, 0), at(10, 4), false, time.Time{}, 0, 0},
+		{"skip, down past the grace", skip, at(10, 0), at(10, 6), true, time.Time{}, 0, 0},
+		{"skip, down for hours", skip, at(10, 0), at(15, 30), true, time.Time{}, 0, 5},
+	}
+	for _, tt := range tests {
+		p := schedules.PlanFire(hourly, tt.next, tt.now, tt.missed, schedules.OverlapSkip, false)
+		if p.Late != tt.late || !p.LateFor.Equal(tt.lateFor) || p.LateCoalesced != tt.lateCoalesced || p.Coalesced != tt.coalesced {
+			t.Errorf("%s: PlanFire = %+v, want late %v, late for %v (+%d), coalesced %d",
+				tt.name, p, tt.late, tt.lateFor, tt.lateCoalesced, tt.coalesced)
 		}
 	}
 }

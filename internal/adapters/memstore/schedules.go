@@ -310,47 +310,77 @@ func checkRun(r schedules.Run) error {
 }
 
 // insertRunLocked inserts r (or merges it into the pending run) for a
-// schedule that exists, as the Postgres addRun does: for a fire (f set)
-// only a pending run whose deadline is after the fire time absorbs r,
-// keeping its deadline, and an older one is superseded (missed) before r
-// is inserted; a manual request (f nil) extends the pending run's
+// schedule that exists, as the Postgres addRun does: for a fire (f set) a
+// pending run whose deadline is not after the fire time is superseded
+// (missed), f.Earlier is inserted, and a remaining pending run absorbs r
+// keeping its deadline; a manual request (f nil) extends the pending run's
 // deadline. It changes nothing on error.
 func (s *Store) insertRunLocked(r schedules.Run, merge bool, f *schedules.Fire) (schedules.Run, error) {
 	open, hasOpen := s.pendingRunLocked(r.ScheduleID)
-	superseded := false
-	if merge && hasOpen {
-		if f == nil || open.Deadline.After(r.CreatedAt) {
-			open.Coalesced += r.Coalesced + 1
-			if f == nil && r.Deadline.After(open.Deadline) {
-				open.Deadline = r.Deadline
-			}
-			open.UpdatedAt = r.CreatedAt
-			s.runs[open.ID] = open
-			return open, nil
+	// A fire supersedes a pending run whose deadline has come.
+	superseded := f != nil && hasOpen && !open.Deadline.After(r.CreatedAt)
+	if superseded {
+		hasOpen = false
+	}
+	var earlier *schedules.Run
+	if f != nil && f.Earlier != nil {
+		e := *f.Earlier
+		e.ScheduleID, e.JobStatus = r.ScheduleID, ""
+		if err := s.checkNewRunLocked(e, open, hasOpen); err != nil {
+			return schedules.Run{}, err
 		}
-		superseded, hasOpen = true, false
+		earlier = &e
 	}
-	if _, ok := s.runs[r.ID]; ok {
-		return schedules.Run{}, fmt.Errorf("run %s: %w", r.ID, domain.ErrAlreadyExists)
-	}
-	if err := checkRun(r); err != nil {
-		return schedules.Run{}, err
-	}
-	if r.Status == schedules.RunPending && hasOpen {
-		return schedules.Run{}, fmt.Errorf("schedule %s has the pending run %s: %w", r.ScheduleID, open.ID, domain.ErrAlreadyExists)
-	}
-	if !r.WorkerID.IsZero() {
-		if _, ok := s.workers[r.WorkerID]; !ok {
-			return schedules.Run{}, fmt.Errorf("worker %s of run %s: %w", r.WorkerID, r.ID, domain.ErrNotFound)
+	merging := merge && hasOpen
+	if !merging {
+		if err := s.checkNewRunLocked(r, open, hasOpen); err != nil {
+			return schedules.Run{}, err
+		}
+		if earlier != nil && earlier.ID == r.ID {
+			return schedules.Run{}, fmt.Errorf("run %s: %w", r.ID, domain.ErrAlreadyExists)
 		}
 	}
+	// Nothing fails from here on.
 	if superseded {
 		open.Status, open.Reason, open.Message, open.UpdatedAt = schedules.RunMissed, f.MissedReason, f.MissedMessage, r.CreatedAt
 		s.runs[open.ID] = open
 	}
+	if earlier != nil {
+		s.runs[earlier.ID] = *earlier
+	}
+	if merging {
+		open.Coalesced += r.Coalesced + 1
+		if f == nil && r.Deadline.After(open.Deadline) {
+			open.Deadline = r.Deadline
+		}
+		open.UpdatedAt = r.CreatedAt
+		s.runs[open.ID] = open
+		return open, nil
+	}
 	r.JobStatus = ""
 	s.runs[r.ID] = r
 	return r, nil
+}
+
+// checkNewRunLocked enforces the primary key, CHECK constraints, foreign
+// keys and one-pending-run index for inserting r beside the schedule's
+// pending run open (if hasOpen).
+func (s *Store) checkNewRunLocked(r, open schedules.Run, hasOpen bool) error {
+	if _, ok := s.runs[r.ID]; ok {
+		return fmt.Errorf("run %s: %w", r.ID, domain.ErrAlreadyExists)
+	}
+	if err := checkRun(r); err != nil {
+		return err
+	}
+	if r.Status == schedules.RunPending && hasOpen {
+		return fmt.Errorf("schedule %s has the pending run %s: %w", r.ScheduleID, open.ID, domain.ErrAlreadyExists)
+	}
+	if !r.WorkerID.IsZero() {
+		if _, ok := s.workers[r.WorkerID]; !ok {
+			return fmt.Errorf("worker %s of run %s: %w", r.WorkerID, r.ID, domain.ErrNotFound)
+		}
+	}
+	return nil
 }
 
 // withJobStatusLocked fills in r.JobStatus from the jobs.
