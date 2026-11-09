@@ -156,8 +156,9 @@ ORDER BY next_run_at, id
 LIMIT sqlc.narg(row_limit)::bigint;
 
 -- name: InsertRun :exec
--- An open run while the schedule has one violates schedule_runs_one_open_key;
--- a missing schedule or worker a foreign key.
+-- A pending run while the schedule has one violates
+-- schedule_runs_one_pending_key; a missing schedule or worker a foreign
+-- key.
 INSERT INTO schedule_runs (
     id, schedule_id, trigger, scheduled_for, deadline, coalesced, status, reason, message,
     worker_id, job_id, created_at, updated_at
@@ -169,19 +170,21 @@ INSERT INTO schedule_runs (
     sqlc.arg(created_at)::timestamptz, sqlc.arg(updated_at)::timestamptz
 );
 
--- name: MergeOpenRun :one
--- Merges an occurrence (or a manual request) into the schedule's open run,
--- if it has one (at most one: schedule_runs_one_open_key).
+-- name: MergePendingRun :one
+-- Merges an occurrence (or a manual request) into the schedule's pending
+-- run, if it has one (at most one: schedule_runs_one_pending_key). A
+-- launching run is past its launch and absorbs nothing.
 UPDATE schedule_runs SET
     coalesced = coalesced + sqlc.arg(add_coalesced)::integer + 1,
     deadline = GREATEST(deadline, sqlc.arg(deadline)::timestamptz),
     updated_at = sqlc.arg(updated_at)::timestamptz
-WHERE schedule_id = sqlc.arg(schedule_id)::uuid AND status IN ('pending', 'launching')
+WHERE schedule_id = sqlc.arg(schedule_id)::uuid AND status = 'pending'
 RETURNING id;
 
 -- name: UpdateRunStatus :one
 -- The compare-and-swap of a run's status; zero (NULL) worker and job IDs
--- keep the stored ones.
+-- keep the stored ones. A run back to pending while another one is
+-- violates schedule_runs_one_pending_key.
 UPDATE schedule_runs SET
     status = sqlc.arg(to_status)::text,
     reason = sqlc.arg(reason)::text,
@@ -196,7 +199,7 @@ RETURNING schedule_id;
 SELECT EXISTS (SELECT 1 FROM schedule_runs WHERE id = sqlc.arg(id)::uuid);
 
 -- name: CancelOpenRun :exec
--- Pausing a schedule cancels its open run (without a notification: only
+-- Pausing a schedule cancels its open runs (without a notification: only
 -- missed and failed runs notify).
 UPDATE schedule_runs SET status = 'cancelled', reason = 'disabled', message = '', updated_at = sqlc.arg(updated_at)::timestamptz
 WHERE schedule_id = sqlc.arg(schedule_id)::uuid AND status IN ('pending', 'launching');

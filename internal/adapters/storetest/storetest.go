@@ -116,6 +116,7 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 		{"ScheduleFireCAS", testScheduleFireCAS},
 		{"ScheduleFireRace", testScheduleFireRace},
 		{"ScheduleMergeOpenRun", testScheduleMergeOpenRun},
+		{"ScheduleOnePendingRun", testScheduleOnePendingRun},
 		{"ScheduleRunCAS", testScheduleRunCAS},
 		{"ScheduleHasActiveRun", testScheduleHasActiveRun},
 		{"ScheduleLists", testScheduleLists},

@@ -91,7 +91,7 @@ func (s *Service) fire(ctx context.Context, sc Schedule, now time.Time) (bool, e
 	case errors.Is(err, domain.ErrAlreadyExists):
 		// A manual run was opened between the merge and the insert: the
 		// next tick merges into it.
-		s.log.DebugContext(ctx, "schedule fire raced an open run; retrying on the next tick", "schedule_id", sc.ID.String())
+		s.log.DebugContext(ctx, "schedule fire raced a pending run; retrying on the next tick", "schedule_id", sc.ID.String())
 		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("fire schedule %s: %w", sc.ID, err)

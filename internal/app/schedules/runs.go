@@ -22,7 +22,7 @@ const (
 // RunNow adds a manual run of one of actor's schedules, deadline counted
 // from now (ManualDeadline), on the same terms as a cron run: it waits for
 // its worker and for an active run (overlap queue), and merges into the
-// open run if there is one (the result is then that run). A paused
+// pending run if there is one (the result is then that run). A paused
 // schedule may run now too. ErrFailedPrecondition if the overlap policy is
 // skip and a run of the schedule is active.
 func (s *Service) RunNow(ctx context.Context, actor domain.Actor, id domain.ScheduleID) (Run, error) {
@@ -50,7 +50,7 @@ func (s *Service) RunNow(ctx context.Context, actor domain.Actor, id domain.Sche
 		ScheduledFor: now, Deadline: ManualDeadline(e, sc.Missed, now),
 		Status: RunPending, CreatedAt: now, UpdatedAt: now,
 	}
-	// An open run created between AddRun's merge and its insert makes the
+	// A pending run created between AddRun's merge and its insert makes the
 	// insert fail; the next attempt merges into it.
 	for attempt := 0; ; attempt++ {
 		stored, err := s.repo.AddRun(ctx, r, true)

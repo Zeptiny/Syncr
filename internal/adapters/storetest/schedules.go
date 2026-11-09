@@ -548,6 +548,82 @@ func testScheduleMergeOpenRun(t *testing.T, s Store) {
 	wantErr(t, "AddRun(launched without a job)", err, domain.ErrInvalidArgument)
 }
 
+// testScheduleOnePendingRun: a schedule has at most one pending run, but a
+// launching run absorbs no fire: an occurrence due while a run launches
+// opens a pending run of its own.
+func testScheduleOnePendingRun(t *testing.T, s Store) {
+	ctx := context.Background()
+	alice := userID(t, 1)
+	requireSchedules(t, s, alice)
+	w := newWorker(t, 1)
+	mustCreateWorker(t, s, w)
+	a := newSchedule(t, 1, alice, "Nightly", w.ID)
+	mustCreateSchedule(t, s, a)
+	day := 24 * time.Hour
+	at := t0().Add(time.Minute)
+	launch := func(r schedules.Run, job int) schedules.Run {
+		t.Helper()
+		got, err := s.UpdateRun(ctx, schedules.RunUpdate{
+			ID: r.ID, From: schedules.RunPending, To: schedules.RunLaunching, WorkerID: w.ID, JobID: jobID(t, job), At: at,
+		})
+		if err != nil {
+			t.Fatalf("UpdateRun(launching): %v", err)
+		}
+		return got
+	}
+
+	first, err := s.FireSchedule(ctx, schedules.Fire{
+		ID: a.ID, ExpectedNext: a.NextRunAt, NewNext: a.NextRunAt.Add(day), Run: newRun(t, 1, a.ID, schedules.RunPending), Merge: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first = launch(first, 1)
+	// The next occurrence fires while the first run launches: a new run.
+	second := newRun(t, 2, a.ID, schedules.RunPending)
+	second.CreatedAt = t0().Add(day)
+	got, err := s.FireSchedule(ctx, schedules.Fire{
+		ID: a.ID, ExpectedNext: a.NextRunAt.Add(day), NewNext: a.NextRunAt.Add(2 * day), Run: second, Merge: true,
+	})
+	if err != nil || got.ID != second.ID || got.Status != schedules.RunPending || got.Coalesced != 0 {
+		t.Fatalf("FireSchedule while a run launches = (%+v, %v), want the new pending run", got, err)
+	}
+	if r := mustGetRun(t, s, first.ID); r.Status != schedules.RunLaunching || r.Coalesced != 0 {
+		t.Errorf("the launching run absorbed the fire: %+v", r)
+	}
+	// A manual request merges into the pending run, not the launching one.
+	manual := newRun(t, 3, a.ID, schedules.RunPending)
+	manual.Trigger = schedules.TriggerManual
+	if got, err := s.AddRun(ctx, manual, true); err != nil || got.ID != second.ID || got.Coalesced != 1 {
+		t.Errorf("AddRun(merge) = (%+v, %v), want merged into the pending run", got, err)
+	}
+	// Still at most one pending run.
+	_, err = s.AddRun(ctx, newRun(t, 4, a.ID, schedules.RunPending), false)
+	wantErr(t, "AddRun(second pending run)", err, domain.ErrAlreadyExists)
+	_, err = s.UpdateRun(ctx, schedules.RunUpdate{ID: first.ID, From: schedules.RunLaunching, To: schedules.RunPending, At: at})
+	wantErr(t, "UpdateRun(launching -> pending beside a pending run)", err, domain.ErrAlreadyExists)
+	if r := mustGetRun(t, s, first.ID); r.Status != schedules.RunLaunching {
+		t.Errorf("a refused update changed the run: %+v", r)
+	}
+	// Several runs may launch at once (overlap allow).
+	launch(mustGetRun(t, s, second.ID), 2)
+	open, err := s.ListOpenRuns(ctx, -1)
+	if err != nil || !slices.Equal(runIDs(open), []domain.ScheduleRunID{first.ID, second.ID}) {
+		t.Errorf("ListOpenRuns = (%v, %v), want both launching runs", runIDs(open), err)
+	}
+	third := mustAddRun(t, s, newRun(t, 5, a.ID, schedules.RunPending))
+
+	// Pausing cancels every open run.
+	if _, err := s.SetScheduleEnabled(ctx, a.ID, schedules.Toggle{Enabled: false, At: at}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []domain.ScheduleRunID{first.ID, second.ID, third.ID} {
+		if r := mustGetRun(t, s, id); r.Status != schedules.RunCancelled || r.Reason != schedules.ReasonDisabled {
+			t.Errorf("run %s after pausing = %+v", id, r)
+		}
+	}
+}
+
 func testScheduleRunCAS(t *testing.T, s Store) {
 	ctx := context.Background()
 	alice := userID(t, 1)

@@ -24,15 +24,17 @@
 //     scheduled job notifies its schedule's contacts only, never the
 //     contacts' JobEvents.
 //   - SetEnabled needs no version: pausing sets NextRunAt to zero and
-//     cancels the open run (no notification); resuming clears PausedReason
+//     cancels the open runs (no notification); resuming clears PausedReason
 //     and sets NextRunAt to the next occurrence after now. Saving
 //     recomputes NextRunAt only when Cron, Timezone or Enabled changed.
 //   - Runs that cannot launch for a permanent reason (worker removed,
 //     definition no longer valid, a remote gone, owner disabled) fail and
 //     pause the schedule with PausedReason set (EndRun with pause).
-//   - A schedule has at most one open run (pending or launching): a later
-//     occurrence is merged into it (Coalesced, the later deadline), so a
-//     desktop that slept runs once when it wakes up.
+//   - A schedule has at most one pending run: a later occurrence is merged
+//     into it (Coalesced, the later deadline), so a desktop that slept
+//     runs once when it wakes up. A launching run absorbs nothing: an
+//     occurrence due meanwhile opens its own pending run, which the overlap
+//     policy holds or launches.
 //
 // # Policies (policy.go)
 //

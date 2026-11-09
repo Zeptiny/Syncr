@@ -73,10 +73,15 @@ has to handle:
   is NotFound. Admins see the resulting jobs through `ListJobs.all_users`.
 - Each occurrence becomes a **run**: `pending` (waiting for its worker or an
   active run), `launching` (its job ID reserved), then `launched`, `missed`,
-  `failed` or `cancelled`. **A schedule has at most one open run** (pending
-  or launching; a unique partial index): a later occurrence is merged into
-  it (`coalesced + 1`, the later deadline), so a desktop that slept through
-  three nights runs once when it wakes (anacron-style).
+  `failed` or `cancelled`. **A schedule has at most one pending run** (a
+  unique partial index; migration 00005 narrowed it from one open run): a
+  later occurrence is merged into it (`coalesced + 1`, the later deadline),
+  so a desktop that slept through three nights runs once when it wakes
+  (anacron-style). A launching run absorbs nothing, since its job is
+  already decided: an occurrence due while a run launches opens a pending
+  run of its own, which the overlap policy then records missed (skip, as
+  the launching run is active), holds (queue) or launches alongside
+  (allow).
 - **Fire** (pure, `PlanFire`): when `next_run_at <= now`, one run for the
   latest occurrence in `[next_run_at, now]`, the earlier ones counted in
   `coalesced`; `next_run_at` becomes the next occurrence after now.
@@ -114,7 +119,7 @@ application locks or leader election:
 
 1. A fire is a compare-and-swap on `next_run_at` in one transaction with
    the run's merge or insert.
-2. The one-open-run index makes a second open run impossible.
+2. The one-pending-run index makes a second pending run impossible.
 3. The launch has two phases: `pending -> launching` is a compare-and-swap
    that reserves a job ID on the run, then `jobs.Create` with that preset
    ID (idempotent: AlreadyExists counts as success), then `launching ->
@@ -130,10 +135,11 @@ with `schedule_id` cleared.
 ### Postgres
 
 `schedules`, `schedule_remotes`, `schedule_contacts` and `schedule_runs`
-(migration 00003). Every port method is one statement or one transaction:
+(migration 00003; 00005 makes the one-open-run index one pending run).
+Every port method is one statement or one transaction:
 `FireSchedule` is the CAS plus the merge or insert; `UpdateRun` is a CAS on
 the status plus the optional auto-pause; `UpdateSchedule` locks the row
-(`FOR UPDATE`) to decide the version check and whether the open run must be
+(`FOR UPDATE`) to decide the version check and whether the open runs must be
 cancelled. Every transaction that writes a schedule's runs locks the
 schedule row first, then the runs (`UpdateRun` and `AddRun` lock the
 schedule before touching a run), so an auto-pause racing a user's pause

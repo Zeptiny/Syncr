@@ -34,9 +34,9 @@ type pass struct {
 
 // launchOpen decides every open run, oldest first.
 func (s *Scheduler) launchOpen(ctx context.Context) error {
-	// A schedule has at most one open run, so this is bounded by the
-	// number of schedules; listing them all lets no waiting run starve
-	// the ones behind it.
+	// A schedule has at most one pending run (and launching ones only
+	// briefly), so this is bounded by the number of schedules; listing
+	// them all lets no waiting run starve the ones behind it.
 	runs, err := s.schedules.OpenRuns(ctx, -1)
 	if err != nil {
 		return err
@@ -197,8 +197,17 @@ func (s *Scheduler) create(ctx context.Context, p *pass, sc schedules.Schedule, 
 		return s.end(ctx, r, schedules.RunFailed, schedules.ReasonRemoteUnavailable,
 			"a remote of the job was deleted or is not the owner's; edit the schedule and resume it", true)
 	case errors.Is(err, jobs.ErrUnknownWorker):
-		// The worker went away since the decision: decide again.
-		return s.end(ctx, r, schedules.RunPending, "", "", false)
+		// The worker went away since the decision: decide again, unless a
+		// later occurrence opened a pending run meanwhile, which takes over.
+		_, err := s.schedules.EndRun(ctx, r, schedules.RunPending, "", "", false)
+		if errors.Is(err, domain.ErrAlreadyExists) {
+			return s.end(ctx, r, schedules.RunFailed, schedules.ReasonWorkerRemoved,
+				"the run's worker was removed while it launched; a later run of the schedule is pending", false)
+		}
+		if err == nil || errors.Is(err, domain.ErrConflict) || errors.Is(err, domain.ErrNotFound) {
+			return nil
+		}
+		return err
 	case errors.Is(err, domain.ErrInvalidArgument), errors.Is(err, domain.ErrInvalidID):
 		return s.end(ctx, r, schedules.RunFailed, schedules.ReasonInvalidDefinition, clip(err.Error()), true)
 	default:

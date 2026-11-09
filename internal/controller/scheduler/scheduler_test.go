@@ -346,6 +346,51 @@ func TestOverlapQueueWaits(t *testing.T) {
 	}
 }
 
+// TestOccurrenceWhileLaunching: an occurrence due while the previous run
+// is still launching is not merged into it (that run's job is already
+// decided): it opens a run of its own, which waits for the active run
+// (overlap queue) and then launches.
+func TestOccurrenceWhileLaunching(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	w := e.addWorker(worker{name: "nas", online: true})
+	in := e.input("queued", schedules.Target{WorkerID: w})
+	in.Overlap = schedules.OverlapQueue
+	sc := e.create(in)
+	flaky := &faultyJobs{Jobs: e.jobs, failCreate: errInjected}
+	s := e.newScheduler(flaky, nil)
+	failingTick := func() {
+		t.Helper()
+		e.heartbeat()
+		if err := s.Tick(context.Background()); !errors.Is(err, errInjected) {
+			t.Fatalf("Tick = %v, want the injected failure", err)
+		}
+	}
+	e.clock.Set(t0.Add(time.Hour))
+	failingTick() // 13:00 is launching: its job could not be created yet
+	e.clock.Set(t0.Add(2 * time.Hour))
+	failingTick() // 14:00 fires while 13:00 is still launching
+	rs := e.runs(sc.ID)
+	if len(rs) != 2 || rs[0].Status != schedules.RunPending || !rs[0].ScheduledFor.Equal(t0.Add(2*time.Hour)) ||
+		rs[1].Status != schedules.RunLaunching || rs[1].Coalesced != 0 {
+		t.Fatalf("runs = %+v, want 14:00 pending beside 13:00 launching", rs)
+	}
+	flaky.mu.Lock()
+	flaky.failCreate = nil
+	flaky.mu.Unlock()
+	e.tick(s)
+	js := e.jobsOf(sc.ID)
+	if len(js) != 1 || e.runs(sc.ID)[0].Status != schedules.RunPending {
+		t.Fatalf("after the launch: jobs %+v, runs %+v; want 14:00 waiting behind the job", js, e.runs(sc.ID))
+	}
+	e.finish(js[0])
+	e.tick(s)
+	r := e.runs(sc.ID)[0]
+	if js := e.jobsOf(sc.ID); len(js) != 2 || r.Status != schedules.RunLaunched || r.JobID != js[0].ID {
+		t.Errorf("after the first job finished: run %+v, jobs %+v; want the 14:00 job", r, js)
+	}
+}
+
 func TestOverlapAllowLaunchesAlongside(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
@@ -445,6 +490,43 @@ func TestWorkerGoneDuringLaunch(t *testing.T) {
 	e.tick(e.newScheduler(nil, nil))
 	if r2 := e.onlyRun(sc.ID); r2.Status != schedules.RunLaunched || r2.JobID != r.JobID {
 		t.Errorf("run = %+v, want launched with job %s", r2, r.JobID)
+	}
+}
+
+// TestWorkerGoneBesideAPendingRun: a launch whose worker went away cannot
+// go back to pending while a later occurrence's run is pending (one
+// pending run per schedule): it fails, and the later run takes over.
+func TestWorkerGoneBesideAPendingRun(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	w := e.addWorker(worker{name: "nas", online: true})
+	in := e.input("queued", schedules.Target{WorkerID: w})
+	in.Overlap = schedules.OverlapQueue
+	sc := e.create(in)
+	flaky := &faultyJobs{Jobs: e.jobs, failCreate: errInjected}
+	s := e.newScheduler(flaky, nil)
+	for _, at := range []time.Duration{time.Hour, 2 * time.Hour} {
+		e.clock.Set(t0.Add(at))
+		e.heartbeat()
+		if err := s.Tick(context.Background()); !errors.Is(err, errInjected) {
+			t.Fatalf("Tick = %v", err)
+		}
+	}
+	flaky.mu.Lock()
+	flaky.failCreate = jobs.ErrUnknownWorker
+	flaky.mu.Unlock()
+	e.tick(s)
+	rs := e.runs(sc.ID)
+	if len(rs) != 2 || rs[1].Status != schedules.RunFailed || rs[1].Reason != schedules.ReasonWorkerRemoved ||
+		rs[0].Status != schedules.RunPending {
+		t.Fatalf("runs = %+v, want 13:00 failed and 14:00 pending", rs)
+	}
+	if !e.schedule(sc.ID).Enabled {
+		t.Error("the schedule was paused")
+	}
+	e.tick(e.newScheduler(nil, nil))
+	if r := e.runs(sc.ID)[0]; r.Status != schedules.RunLaunched || len(e.jobsOf(sc.ID)) != 1 {
+		t.Errorf("14:00 = %+v, want launched", r)
 	}
 }
 

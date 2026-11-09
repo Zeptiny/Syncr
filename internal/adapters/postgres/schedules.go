@@ -29,9 +29,10 @@ var _ schedules.Repository = (*Store)(nil)
 //     row lock, then re-evaluates the WHERE on the new row and matches
 //     nothing (ErrConflict). The run is merged or inserted in the same
 //     transaction, so a lost fire leaves no run behind.
-//   - The unique partial index schedule_runs_one_open_key allows one open
-//     (pending or launching) run per schedule: an insert that would open a
-//     second one fails (ErrAlreadyExists) and rolls its transaction back.
+//   - The unique partial index schedule_runs_one_pending_key allows one
+//     pending run per schedule: an insert (or an update back to pending)
+//     that would make a second one fails (ErrAlreadyExists) and rolls its
+//     transaction back.
 //   - UpdateRun is a compare-and-swap on the run's status, so exactly one
 //     of several concurrent pending -> launching updates reserves its job
 //     ID.
@@ -282,12 +283,12 @@ func (s *Store) AddRun(ctx context.Context, r schedules.Run, merge bool) (schedu
 	return out, nil
 }
 
-// addRun merges r into its schedule's open run (if merge and there is one)
-// or inserts it; it returns the ID of the run that holds it. A missing
-// schedule fails the insert's foreign key (ErrNotFound).
+// addRun merges r into its schedule's pending run (if merge and there is
+// one) or inserts it; it returns the ID of the run that holds it. A
+// missing schedule fails the insert's foreign key (ErrNotFound).
 func addRun(ctx context.Context, q *db.Queries, op string, r schedules.Run, merge bool) (pgtype.UUID, error) {
 	if merge {
-		id, err := q.MergeOpenRun(ctx, db.MergeOpenRunParams{
+		id, err := q.MergePendingRun(ctx, db.MergePendingRunParams{
 			AddCoalesced: int32(r.Coalesced), //nolint:gosec // G115: at most schedules.MaxCoalesce per fire
 			Deadline:     pgTime(r.Deadline), UpdatedAt: pgTime(r.CreatedAt), ScheduleID: pgID(r.ScheduleID),
 		})

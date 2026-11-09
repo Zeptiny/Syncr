@@ -153,7 +153,7 @@ func (s RunStatus) Valid() bool {
 }
 
 // Open reports whether s is pending or launching. A schedule has at most
-// one open run.
+// one pending run (and any number of launching ones).
 func (s RunStatus) Open() bool { return s == RunPending || s == RunLaunching }
 
 // Run triggers.
@@ -335,7 +335,7 @@ type Fire struct {
 	// LastFiredAt). A terminal run (missed, reason overlap) is always
 	// inserted.
 	Run Run
-	// Merge merges the fire into the schedule's open run, if it has one,
+	// Merge merges the fire into the schedule's pending run, if it has one,
 	// instead of inserting Run.
 	Merge bool
 }

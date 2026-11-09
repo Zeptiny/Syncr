@@ -16,7 +16,8 @@ import (
 // This file implements schedules.Repository with the semantics of the
 // Postgres schema (migration 00003): the foreign keys of schedules,
 // schedule_remotes and schedule_contacts, the CHECK constraints, the
-// case-insensitive name index and the one-open-run index of schedule_runs.
+// case-insensitive name index and the one-pending-run index of
+// schedule_runs (migration 00005).
 
 func cloneSchedule(s schedules.Schedule) schedules.Schedule {
 	s.Definition = slices.Clone(s.Definition)
@@ -211,18 +212,21 @@ func (s *Store) SetScheduleEnabled(_ context.Context, id domain.ScheduleID, t sc
 	return cloneSchedule(sc), nil
 }
 
-// cancelOpenRunLocked cancels the schedule's open run, if any.
+// cancelOpenRunLocked cancels the schedule's open runs, if any.
 func (s *Store) cancelOpenRunLocked(id domain.ScheduleID, at time.Time) {
-	if r, ok := s.openRunLocked(id); ok {
-		r.Status, r.Reason, r.Message, r.UpdatedAt = schedules.RunCancelled, schedules.ReasonDisabled, "", at
-		s.runs[r.ID] = r
+	for _, r := range s.runs {
+		if r.ScheduleID == id && r.Status.Open() {
+			r.Status, r.Reason, r.Message, r.UpdatedAt = schedules.RunCancelled, schedules.ReasonDisabled, "", at
+			s.runs[r.ID] = r
+		}
 	}
 }
 
-// openRunLocked returns the schedule's pending or launching run.
-func (s *Store) openRunLocked(id domain.ScheduleID) (schedules.Run, bool) {
+// pendingRunLocked returns the schedule's pending run (at most one, as
+// the index schedule_runs_one_pending_key allows).
+func (s *Store) pendingRunLocked(id domain.ScheduleID) (schedules.Run, bool) {
 	for _, r := range s.runs {
-		if r.ScheduleID == id && r.Status.Open() {
+		if r.ScheduleID == id && r.Status == schedules.RunPending {
 			return r, true
 		}
 	}
@@ -298,10 +302,10 @@ func checkRun(r schedules.Run) error {
 	return nil
 }
 
-// insertRunLocked inserts r (or merges it into the open run) for a
+// insertRunLocked inserts r (or merges it into the pending run) for a
 // schedule that exists. It changes nothing on error.
 func (s *Store) insertRunLocked(r schedules.Run, merge bool) (schedules.Run, error) {
-	open, hasOpen := s.openRunLocked(r.ScheduleID)
+	open, hasOpen := s.pendingRunLocked(r.ScheduleID)
 	if merge && hasOpen {
 		open.Coalesced += r.Coalesced + 1
 		if r.Deadline.After(open.Deadline) {
@@ -317,8 +321,8 @@ func (s *Store) insertRunLocked(r schedules.Run, merge bool) (schedules.Run, err
 	if err := checkRun(r); err != nil {
 		return schedules.Run{}, err
 	}
-	if r.Status.Open() && hasOpen {
-		return schedules.Run{}, fmt.Errorf("schedule %s has the open run %s: %w", r.ScheduleID, open.ID, domain.ErrAlreadyExists)
+	if r.Status == schedules.RunPending && hasOpen {
+		return schedules.Run{}, fmt.Errorf("schedule %s has the pending run %s: %w", r.ScheduleID, open.ID, domain.ErrAlreadyExists)
 	}
 	if !r.WorkerID.IsZero() {
 		if _, ok := s.workers[r.WorkerID]; !ok {
@@ -432,9 +436,9 @@ func (s *Store) UpdateRun(_ context.Context, u schedules.RunUpdate) (schedules.R
 			return schedules.Run{}, fmt.Errorf("worker %s of run %s: %w", next.WorkerID, u.ID, domain.ErrNotFound)
 		}
 	}
-	if next.Status.Open() {
-		if open, ok := s.openRunLocked(r.ScheduleID); ok && open.ID != r.ID {
-			return schedules.Run{}, fmt.Errorf("schedule %s has the open run %s: %w", r.ScheduleID, open.ID, domain.ErrAlreadyExists)
+	if next.Status == schedules.RunPending {
+		if open, ok := s.pendingRunLocked(r.ScheduleID); ok && open.ID != r.ID {
+			return schedules.Run{}, fmt.Errorf("schedule %s has the pending run %s: %w", r.ScheduleID, open.ID, domain.ErrAlreadyExists)
 		}
 	}
 	s.runs[u.ID] = next

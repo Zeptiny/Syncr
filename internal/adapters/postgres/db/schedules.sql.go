@@ -50,7 +50,7 @@ type CancelOpenRunParams struct {
 	ScheduleID pgtype.UUID
 }
 
-// Pausing a schedule cancels its open run (without a notification: only
+// Pausing a schedule cancels its open runs (without a notification: only
 // missed and failed runs notify).
 func (q *Queries) CancelOpenRun(ctx context.Context, arg CancelOpenRunParams) error {
 	_, err := q.db.Exec(ctx, cancelOpenRun, arg.UpdatedAt, arg.ScheduleID)
@@ -351,8 +351,9 @@ type InsertRunParams struct {
 	UpdatedAt    pgtype.Timestamptz
 }
 
-// An open run while the schedule has one violates schedule_runs_one_open_key;
-// a missing schedule or worker a foreign key.
+// A pending run while the schedule has one violates
+// schedule_runs_one_pending_key; a missing schedule or worker a foreign
+// key.
 func (q *Queries) InsertRun(ctx context.Context, arg InsertRunParams) error {
 	_, err := q.db.Exec(ctx, insertRun,
 		arg.ID,
@@ -849,26 +850,27 @@ func (q *Queries) LockScheduleRow(ctx context.Context, id pgtype.UUID) (pgtype.U
 	return id_2, err
 }
 
-const mergeOpenRun = `-- name: MergeOpenRun :one
+const mergePendingRun = `-- name: MergePendingRun :one
 UPDATE schedule_runs SET
     coalesced = coalesced + $1::integer + 1,
     deadline = GREATEST(deadline, $2::timestamptz),
     updated_at = $3::timestamptz
-WHERE schedule_id = $4::uuid AND status IN ('pending', 'launching')
+WHERE schedule_id = $4::uuid AND status = 'pending'
 RETURNING id
 `
 
-type MergeOpenRunParams struct {
+type MergePendingRunParams struct {
 	AddCoalesced int32
 	Deadline     pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
 	ScheduleID   pgtype.UUID
 }
 
-// Merges an occurrence (or a manual request) into the schedule's open run,
-// if it has one (at most one: schedule_runs_one_open_key).
-func (q *Queries) MergeOpenRun(ctx context.Context, arg MergeOpenRunParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, mergeOpenRun,
+// Merges an occurrence (or a manual request) into the schedule's pending
+// run, if it has one (at most one: schedule_runs_one_pending_key). A
+// launching run is past its launch and absorbs nothing.
+func (q *Queries) MergePendingRun(ctx context.Context, arg MergePendingRunParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, mergePendingRun,
 		arg.AddCoalesced,
 		arg.Deadline,
 		arg.UpdatedAt,
@@ -999,7 +1001,8 @@ type UpdateRunStatusParams struct {
 }
 
 // The compare-and-swap of a run's status; zero (NULL) worker and job IDs
-// keep the stored ones.
+// keep the stored ones. A run back to pending while another one is
+// violates schedule_runs_one_pending_key.
 func (q *Queries) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, updateRunStatus,
 		arg.ToStatus,
