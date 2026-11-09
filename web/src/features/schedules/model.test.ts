@@ -179,3 +179,21 @@ describe("schedule form model", () => {
     expect(rest).toEqual(["something: else"]);
   });
 });
+
+describe("missed-run policy keeps fractional seconds", () => {
+  it("round-trips a max_delay that is not a whole number of seconds", () => {
+    for (const [seconds, nanos] of [
+      [90n, 500_000_000],
+      [1n, 100_000_000],
+      [0n, 1],
+      [604800n, 999_999_999],
+    ] as const) {
+      const proto = create(MissedRunPolicySchema, {
+        action: MissedRunAction.RUN_LATE,
+        maxDelay: { seconds, nanos },
+      });
+      const back = create(MissedRunPolicySchema, missedToProto(missedFromProto(proto)));
+      expect(back.maxDelay).toMatchObject({ seconds, nanos });
+    }
+  });
+});

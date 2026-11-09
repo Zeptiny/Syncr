@@ -1,10 +1,19 @@
 import type { MessageInitShape } from "@bufbuild/protobuf";
-import { durationFromMs } from "@bufbuild/protobuf/wkt";
 
 import type { Location } from "@/components/app/location-editor";
 import type { FieldViolation, JobDefinition, JobDefinitionSchema } from "@/gen/syncr/v1/api_pb";
 import { FilterAction, RcloneTransferMode } from "@/gen/syncr/v1/link_pb";
-import { durationSeconds, toNumber } from "@/lib/format";
+import { toNumber } from "@/lib/format";
+
+import {
+  bytesToQuantity,
+  durationToQuantity,
+  isDecimal,
+  quantityToBytes,
+  quantityToDuration,
+  type ByteUnit,
+  type DurationUnit,
+} from "./units";
 
 /** Compare is how a transfer decides that a file changed. */
 export type Compare = "default" | "checksum" | "size";
@@ -19,7 +28,9 @@ export interface DefinitionState {
   destination: Location;
   transfers: string;
   checkers: string;
-  bwlimitMiB: string;
+  /** bwlimit is the bandwidth limit as typed, in bwlimitUnit per second. */
+  bwlimit: string;
+  bwlimitUnit: ByteUnit;
   dryRun: boolean;
   compare: Compare;
   ignoreExisting: boolean;
@@ -28,8 +39,10 @@ export interface DefinitionState {
   deleteEmptySrcDirs: boolean;
   trackRenames: boolean;
   fastList: boolean;
-  maxTransferGiB: string;
-  maxDurationMin: string;
+  maxTransfer: string;
+  maxTransferUnit: ByteUnit;
+  maxDuration: string;
+  maxDurationUnit: DurationUnit;
   retries: string;
   lowLevelRetries: string;
   filters: { action: FilterAction; pattern: string }[];
@@ -40,9 +53,6 @@ export type DefinitionErrors = Partial<
   Record<"sourceRemote" | "sourcePath" | "destRemote" | "destPath" | "options", string>
 >;
 
-const MiB = 1024 ** 2;
-const GiB = 1024 ** 3;
-
 /** emptyDefinition is a blank copy definition. */
 export function emptyDefinition(): DefinitionState {
   return {
@@ -51,7 +61,8 @@ export function emptyDefinition(): DefinitionState {
     destination: { remoteId: "", path: "" },
     transfers: "",
     checkers: "",
-    bwlimitMiB: "",
+    bwlimit: "",
+    bwlimitUnit: "MiB",
     dryRun: false,
     compare: "default",
     ignoreExisting: false,
@@ -60,16 +71,17 @@ export function emptyDefinition(): DefinitionState {
     deleteEmptySrcDirs: false,
     trackRenames: false,
     fastList: false,
-    maxTransferGiB: "",
-    maxDurationMin: "",
+    maxTransfer: "",
+    maxTransferUnit: "GiB",
+    maxDuration: "",
+    maxDurationUnit: "min",
     retries: "",
     lowLevelRetries: "",
     filters: [],
   };
 }
 
-const num = (v: number | bigint | undefined, scale = 1) =>
-  v === undefined ? "" : String(Math.round((toNumber(v) / scale) * 100) / 100);
+const num = (v: number | bigint | undefined) => (v === undefined ? "" : String(toNumber(v)));
 
 /** definitionState fills the form from a stored definition (a job or a schedule). */
 export function definitionState(def: JobDefinition | undefined): DefinitionState {
@@ -78,6 +90,9 @@ export function definitionState(def: JobDefinition | undefined): DefinitionState
   if (op?.case !== "rcloneTransfer") return base;
   const t = op.value;
   const o = t.options;
+  const bw = bytesToQuantity(o?.bandwidthLimitBytesPerSecond, "MiB");
+  const maxTransfer = bytesToQuantity(o?.maxTransferBytes, "GiB");
+  const maxDuration = durationToQuantity(o?.maxDuration, "min");
   return {
     ...base,
     mode: t.mode || RcloneTransferMode.COPY,
@@ -85,7 +100,8 @@ export function definitionState(def: JobDefinition | undefined): DefinitionState
     destination: { remoteId: t.destination?.remoteId ?? "", path: t.destination?.path ?? "" },
     transfers: num(o?.transfers),
     checkers: num(o?.checkers),
-    bwlimitMiB: num(o?.bandwidthLimitBytesPerSecond, MiB),
+    bwlimit: bw.text,
+    bwlimitUnit: bw.unit,
     dryRun: o?.dryRun ?? false,
     compare: o?.checksum ? "checksum" : o?.sizeOnly ? "size" : "default",
     ignoreExisting: o?.ignoreExisting ?? false,
@@ -94,8 +110,10 @@ export function definitionState(def: JobDefinition | undefined): DefinitionState
     deleteEmptySrcDirs: o?.deleteEmptySrcDirs ?? false,
     trackRenames: o?.trackRenames ?? false,
     fastList: o?.fastList ?? false,
-    maxTransferGiB: num(o?.maxTransferBytes, GiB),
-    maxDurationMin: o?.maxDuration ? String(durationSeconds(o.maxDuration) / 60) : "",
+    maxTransfer: maxTransfer.text,
+    maxTransferUnit: maxTransfer.unit,
+    maxDuration: maxDuration.text,
+    maxDurationUnit: maxDuration.unit,
     retries: num(o?.retries),
     lowLevelRetries: num(o?.lowLevelRetries),
     filters: (o?.filters ?? []).map((f) => ({ action: f.action, pattern: f.pattern })),
@@ -124,10 +142,10 @@ export function validateDefinition(s: DefinitionState): DefinitionErrors {
     e.destPath = "The destination is the same as the source.";
   }
   const ints = [s.transfers, s.checkers, s.retries, s.lowLevelRetries];
-  const decimals = [s.bwlimitMiB, s.maxTransferGiB, s.maxDurationMin];
+  const decimals = [s.bwlimit, s.maxTransfer, s.maxDuration];
   if (
     ints.some((v) => v !== "" && !/^\d+$/.test(v)) ||
-    decimals.some((v) => v !== "" && !(Number(v) >= 0))
+    decimals.some((v) => v !== "" && !isDecimal(v))
   ) {
     e.options = "Numbers must be zero or more.";
   }
@@ -135,8 +153,6 @@ export function validateDefinition(s: DefinitionState): DefinitionErrors {
 }
 
 const optInt = (v: string) => (v === "" ? undefined : Number(v));
-const optBig = (v: string, scale: number) =>
-  v === "" ? undefined : BigInt(Math.round(Number(v) * scale));
 
 /** toDefinition builds the JobDefinition the API takes. */
 export function toDefinition(s: DefinitionState): MessageInitShape<typeof JobDefinitionSchema> {
@@ -151,7 +167,7 @@ export function toDefinition(s: DefinitionState): MessageInitShape<typeof JobDef
         options: {
           transfers: optInt(s.transfers),
           checkers: optInt(s.checkers),
-          bandwidthLimitBytesPerSecond: optBig(s.bwlimitMiB, MiB),
+          bandwidthLimitBytesPerSecond: quantityToBytes({ text: s.bwlimit, unit: s.bwlimitUnit }),
           dryRun: s.dryRun,
           checksum: s.compare === "checksum",
           sizeOnly: s.compare === "size",
@@ -161,9 +177,8 @@ export function toDefinition(s: DefinitionState): MessageInitShape<typeof JobDef
           deleteEmptySrcDirs: mode === RcloneTransferMode.MOVE && s.deleteEmptySrcDirs,
           trackRenames: mode === RcloneTransferMode.SYNC && s.trackRenames,
           fastList: s.fastList,
-          maxTransferBytes: optBig(s.maxTransferGiB, GiB),
-          maxDuration:
-            s.maxDurationMin === "" ? undefined : durationFromMs(Number(s.maxDurationMin) * 60_000),
+          maxTransferBytes: quantityToBytes({ text: s.maxTransfer, unit: s.maxTransferUnit }),
+          maxDuration: quantityToDuration({ text: s.maxDuration, unit: s.maxDurationUnit }),
           retries: optInt(s.retries),
           lowLevelRetries: optInt(s.lowLevelRetries),
           filters: s.filters

@@ -1,5 +1,4 @@
 import type { MessageInitShape } from "@bufbuild/protobuf";
-import { durationFromMs } from "@bufbuild/protobuf/wkt";
 
 import type { Job, Worker } from "@/gen/syncr/v1/api_pb";
 import type { NotificationEvent } from "@/gen/syncr/v1/notify_pb";
@@ -13,7 +12,7 @@ import {
   type ScheduleTarget,
 } from "@/gen/syncr/v1/schedules_pb";
 import { fieldViolations } from "@/lib/errors";
-import { durationSeconds, formatDuration } from "@/lib/format";
+import { durationFromSeconds, durationSeconds, formatDuration } from "@/lib/format";
 import { browserTimeZone } from "@/lib/timezones";
 
 import {
@@ -60,7 +59,7 @@ export function withinLabel(seconds: number): string {
 export function missedFromProto(p: MissedRunPolicy | undefined): MissedState {
   return {
     action: p?.action === MissedRunAction.SKIP ? "skip" : "run_late",
-    within: Math.round(durationSeconds(p?.maxDelay)),
+    within: durationSeconds(p?.maxDelay),
   };
 }
 
@@ -69,7 +68,7 @@ export function missedToProto(m: MissedState): MessageInitShape<typeof MissedRun
   if (m.action === "skip") return { action: MissedRunAction.SKIP };
   return {
     action: MissedRunAction.RUN_LATE,
-    maxDelay: m.within > 0 ? durationFromMs(m.within * 1000) : undefined,
+    maxDelay: m.within > 0 ? durationFromSeconds(m.within) : undefined,
   };
 }
 
