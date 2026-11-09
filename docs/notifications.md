@@ -95,7 +95,10 @@ and network errors are retried.
 | Authorization header | Advanced, optional; sent as is, e.g. `Bearer <token>`. |
 
 Replies: any 2xx is success. 408, 425, 429 and 5xx are retried (honoring
-`Retry-After`). Redirects and other 4xx fail permanently.
+`Retry-After`). Redirects and other 4xx fail permanently. A short excerpt of
+the receiver's reply is kept in the delivery log; the URL, its path, query and
+user info, the signing secret and the authorization header are removed from
+it, even when the receiver echoes them (many answer "no route for <path>").
 
 ### Request
 

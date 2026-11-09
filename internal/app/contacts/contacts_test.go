@@ -657,6 +657,21 @@ func TestSendTestFailures(t *testing.T) {
 	noSecrets(t, "the log", e.logs.String())
 }
 
+// A channel that quotes the path of the secret URL in its reason is caught
+// by the service's own redaction.
+func TestSendTestRedactsSecretsFromReasons(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	c := e.mustCreate(t, e.alice, fakeInput("Ops"))
+	e.ch.fail = notify.Permanent(404, `no route for "POST /secret-url-token-0001" (Bearer secret-token-value-0002)`)
+	res, err := e.svc.SendTest(context.Background(), e.alice, c.ID, nil)
+	if err != nil || res.OK {
+		t.Fatalf("SendTest = (%+v, %v)", res, err)
+	}
+	noSecrets(t, "the reason", res.Reason)
+	noSecrets(t, "the log", e.logs.String())
+}
+
 func TestSendTestRateLimited(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

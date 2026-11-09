@@ -122,7 +122,17 @@ migration marks all earlier history as notified).
 - **Last error.** Only a `SendError`'s sanitized reason (with the status)
   reaches `last_error` and the logs. Any other error could quote the
   configuration, such as a `*url.Error` with a token, and is replaced by a
-  generic text.
+  generic text. The excerpt of a receiver's reply that a reason quotes is
+  redacted first: each channel builds a `notify.Redactor` per send from the
+  contact's configuration and removes the destination's secrets from the
+  whole body before it is cut. It matches ignoring case, in the forms a
+  receiver echoes them (URL-escaped or not, JSON-escaped, `\/`, HTML
+  escapes, base64, an authorization header without its scheme), and for a
+  URL its user info, path (with or without the leading slash), long or
+  digit-bearing path segments, query and query values. n8n, for one, answers
+  a deactivated workflow with `The requested webhook "POST <path>" is not
+  registered`. The outbox and `SendTest` apply a redactor to every reason as
+  a safety net.
 - **Manual retry.** `RetryDelivery` queues a dead delivery again with its
   attempts reset.
 - **Retention.** Delivered and dead deliveries are purged after

@@ -308,7 +308,7 @@ func (c *Channel) Send(ctx context.Context, cfg descriptor.Values, msg notify.Me
 	if err != nil {
 		return err
 	}
-	return classify(resp, c.now())
+	return classify(resp, c.now(), notify.NewRedactor(cfg))
 }
 
 // errorBody is Discord's JSON error reply.
@@ -318,14 +318,17 @@ type errorBody struct {
 	RetryAfter float64 `json:"retry_after"`
 }
 
-func classify(resp sendutil.Response, now time.Time) error {
+// classify maps Discord's reply to nil or a *notify.SendError. Discord's
+// error message is redacted with r (the webhook URL carries the token in
+// its path) before it is quoted.
+func classify(resp sendutil.Response, now time.Time, r *notify.Redactor) error {
 	st := resp.Status
 	if st >= 200 && st < 300 {
 		return nil
 	}
 	var eb errorBody
 	_ = json.Unmarshal(resp.Body, &eb)
-	detail := sendutil.Snippet([]byte(eb.Message))
+	detail := sendutil.Snippet([]byte(eb.Message), r)
 	switch {
 	case st == http.StatusTooManyRequests:
 		retry := sendutil.RetryAfter(resp.Header, now)

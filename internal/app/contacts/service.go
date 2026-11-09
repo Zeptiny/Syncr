@@ -346,6 +346,8 @@ func (s *Service) SendTest(ctx context.Context, actor domain.Actor, id domain.Co
 			return TestResult{}, fmt.Errorf("send test notification: %w", cerr)
 		}
 		res.Reason, res.Status = failureReason(err, errors.Is(sendCtx.Err(), context.DeadlineExceeded), s.cfg.SendTimeout)
+		// A safety net: the channel redacted the reply already.
+		res.Reason = notify.NewRedactor(cfg).Redact(res.Reason)
 	}
 	s.log.InfoContext(ctx, "test notification sent", "contact_id", optID(id), "owner_id", actor.UserID.String(),
 		"channel_type", ch.ID(), "ok", res.OK, "status", res.Status, "reason", res.Reason)

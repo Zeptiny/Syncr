@@ -826,6 +826,27 @@ func TestMaxAttemptsIsDead(t *testing.T) {
 	}
 }
 
+// A channel that quotes the secret URL's path in its reason is caught by
+// the service's own redaction before the reason is stored or logged.
+func TestSecretsAreRedactedFromStoredReasons(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.contact(e.alice, "ops", true, domain.EventFailed)
+	e.job(e.alice, domain.JobFailed, domain.ScheduleID{})
+	e.plan()
+	e.ch.setOutcome(func(int, notify.Message) error {
+		return notify.Permanent(404, `The requested webhook "POST secret-hook-token-0001" is not registered`)
+	})
+	e.deliver()
+	d := e.only()
+	if d.Status != notifications.StatusDead || strings.Contains(d.LastError, "secret-hook-token") || !strings.Contains(d.LastError, "not registered") {
+		t.Errorf("delivery = %+v", d)
+	}
+	if strings.Contains(e.logs.String(), "secret-hook-token") {
+		t.Error("the log contains the contact's secret")
+	}
+}
+
 func TestExpiredLeaseIsReclaimed(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, withConfig(func(c *notifications.Config) { c.MaxAttempts = 2 }))

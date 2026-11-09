@@ -283,7 +283,7 @@ func (c *Channel) Send(ctx context.Context, cfg descriptor.Values, msg notify.Me
 		return notify.Permanent(0, "the message cannot be encoded")
 	}
 	if err := c.send(ctx, p, data); err != nil {
-		return classify(err)
+		return classify(err, redactor(cfg, p))
 	}
 	return nil
 }
@@ -378,8 +378,9 @@ func (c *Channel) send(ctx context.Context, p config, data []byte) error {
 	return nil
 }
 
-// classify maps a send failure to a *notify.SendError.
-func classify(err error) error {
+// classify maps a send failure to a *notify.SendError. A server's reply is
+// quoted only after r redacted the credentials from it.
+func classify(err error, r *notify.Redactor) error {
 	var tp *textproto.Error
 	switch {
 	case errors.Is(err, errNoSTARTTLS):
@@ -390,7 +391,7 @@ func classify(err error) error {
 		return notify.Permanent(0, "the SMTP server sent an unexpected LOGIN challenge")
 	case errors.As(err, &tp):
 		reason := fmt.Sprintf("%s answered %d", what, tp.Code)
-		if s := sendutil.Snippet([]byte(tp.Msg)); s != "" {
+		if s := sendutil.Snippet([]byte(tp.Msg), r); s != "" {
 			reason += ": " + s
 		}
 		if tp.Code >= 500 {
@@ -403,6 +404,17 @@ func classify(err error) error {
 		return notify.Temporary(0, "the SMTP server did not answer with TLS; check the port and security", 0)
 	}
 	return sendutil.TransportError(err, what)
+}
+
+// redactor returns the Redactor of a send: the secrets, the user name
+// (servers name it in authentication failures) and the PLAIN credentials
+// blob, which a server may echo base64-encoded.
+func redactor(cfg descriptor.Values, p config) *notify.Redactor {
+	extra := []string{p.username}
+	if p.username != "" && p.password != "" {
+		extra = append(extra, "\x00"+p.username+"\x00"+p.password)
+	}
+	return notify.NewRedactor(cfg, extra...)
 }
 
 // errLoginChallenge is an unexpected challenge of the LOGIN mechanism.

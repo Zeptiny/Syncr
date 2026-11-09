@@ -247,21 +247,24 @@ func (c *Channel) Send(ctx context.Context, cfg descriptor.Values, msg notify.Me
 	if err != nil {
 		return err
 	}
-	return Classify(resp, c.now())
+	return Classify(resp, c.now(), notify.NewRedactor(cfg))
 }
 
-// Classify maps a webhook reply to nil or a *notify.SendError.
-func Classify(resp sendutil.Response, now time.Time) error {
+// Classify maps a webhook reply to nil or a *notify.SendError. The excerpt
+// of the reply's body that goes into the reason is redacted with r (the
+// destination's secrets, see notify.NewRedactor; may be nil): receivers
+// often echo the request path, which holds the webhook's token.
+func Classify(resp sendutil.Response, now time.Time, r *notify.Redactor) error {
 	st := resp.Status
 	switch {
 	case st >= 200 && st < 300:
 		return nil
 	case st == http.StatusRequestTimeout || st == http.StatusTooEarly || st == http.StatusTooManyRequests || st >= 500:
-		return notify.Temporary(st, sendutil.StatusReason(what, st, sendutil.Snippet(resp.Body)), sendutil.RetryAfter(resp.Header, now))
+		return notify.Temporary(st, sendutil.StatusReason(what, st, sendutil.Snippet(resp.Body, r)), sendutil.RetryAfter(resp.Header, now))
 	case st >= 300 && st < 400:
 		return notify.Permanent(st, sendutil.StatusReason(what, st, "redirects are not followed; use the final URL"))
 	default:
-		return notify.Permanent(st, sendutil.StatusReason(what, st, sendutil.Snippet(resp.Body)))
+		return notify.Permanent(st, sendutil.StatusReason(what, st, sendutil.Snippet(resp.Body, r)))
 	}
 }
 

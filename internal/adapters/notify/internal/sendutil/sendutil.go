@@ -109,12 +109,15 @@ func isTimeout(err error) bool {
 }
 
 // Snippet returns a short, sanitized excerpt of a reply body for a reason:
-// one line, URLs replaced, at most MaxSnippetRunes runes; "" for none.
-func Snippet(b []byte) string {
+// one line, URLs replaced, at most MaxSnippetRunes runes; "" for none. The
+// destination's secrets are redacted (r may be nil) from the whole body
+// before it is cut, so a receiver that echoes the request path, a header or
+// the signing secret leaks neither all of it nor a truncated part.
+func Snippet(b []byte, r *notify.Redactor) string {
 	if !utf8.Valid(b) {
 		return ""
 	}
-	s := notify.SanitizeReason(string(b))
+	s := notify.SanitizeReason(string(r.RedactBytes(b)))
 	if utf8.RuneCountInString(s) > MaxSnippetRunes {
 		r := []rune(s)
 		s = string(r[:MaxSnippetRunes-1]) + "…"

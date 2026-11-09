@@ -67,13 +67,13 @@ func TestRetryAfter(t *testing.T) {
 func TestSnippet(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("x", 500)
-	if got := sendutil.Snippet([]byte(long)); len([]rune(got)) != sendutil.MaxSnippetRunes {
+	if got := sendutil.Snippet([]byte(long), nil); len([]rune(got)) != sendutil.MaxSnippetRunes {
 		t.Errorf("Snippet(500 x) has %d runes", len([]rune(got)))
 	}
-	if got := sendutil.Snippet([]byte("see https://evil.example/token\nnow")); got != "see <url> now" {
+	if got := sendutil.Snippet([]byte("see https://evil.example/token\nnow"), nil); got != "see <url> now" {
 		t.Errorf("Snippet = %q", got)
 	}
-	if got := sendutil.Snippet([]byte{0xff, 0xfe}); got != "" {
+	if got := sendutil.Snippet([]byte{0xff, 0xfe}, nil); got != "" {
 		t.Errorf("Snippet(binary) = %q", got)
 	}
 	if got := sendutil.StatusReason("the webhook", http.StatusServiceUnavailable, ""); got != fmt.Sprintf("the webhook answered 503 %s", http.StatusText(http.StatusServiceUnavailable)) {

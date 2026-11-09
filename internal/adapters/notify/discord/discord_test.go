@@ -210,6 +210,39 @@ func TestReplies(t *testing.T) {
 	}
 }
 
+// TestErrorMessagesEchoingTheWebhookKeepTheTokenOut: the token is the last
+// segment of the webhook URL; a reply that quotes the request must not put
+// it into the reason.
+func TestErrorMessagesEchoingTheWebhookKeepTheTokenOut(t *testing.T) {
+	t.Parallel()
+	for name, echo := range map[string]func(r request) string{
+		"path":      func(r request) string { return "Invalid webhook at " + r.path },
+		"id/token":  func(r request) string { return "Unknown webhook " + strings.TrimPrefix(r.path, "/api/webhooks/") },
+		"lowercase": func(r request) string { return "Unknown path " + strings.ToLower(r.path) },
+		"escaped":   func(r request) string { return strings.ReplaceAll(r.path, "/", `\/`) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var f *fakeDiscord
+			f, ch := newFake(t, func(w http.ResponseWriter) {
+				got := f.requests()
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]any{"message": echo(got[len(got)-1]), "code": 50027})
+			})
+			err := ch.Send(context.Background(), conf(webhookURL, ""), notifytest.SampleMessage())
+			var serr *notify.SendError
+			if !errors.As(err, &serr) || serr.Status != http.StatusBadRequest {
+				t.Fatalf("Send = %v, want a 400 SendError", err)
+			}
+			for _, secret := range []string{"tok-EN_secret-42", "tok-en_secret-42", "123456789012345678"} {
+				if strings.Contains(serr.Reason, secret) {
+					t.Errorf("reason %q contains %q", serr.Reason, secret)
+				}
+			}
+		})
+	}
+}
+
 func TestValidate(t *testing.T) {
 	t.Parallel()
 	ch := discord.New(http.DefaultClient)

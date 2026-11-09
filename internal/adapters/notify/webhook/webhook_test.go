@@ -259,6 +259,66 @@ func TestReplies(t *testing.T) {
 	}
 }
 
+// TestReplyEchoingTheRequestKeepsSecretsOut: receivers such as n8n answer
+// 404 with the request path in the body. The path is the webhook's token,
+// so it must not reach the reason (which is stored, shown and logged),
+// whatever form the receiver echoes it in.
+func TestReplyEchoingTheRequestKeepsSecretsOut(t *testing.T) {
+	t.Parallel()
+	const (
+		token  = "Xk9fA2-secret-Path_7731"
+		bearer = "Bearer echoed-bearer-token-81"
+		query  = "qs-token-5521"
+		sign   = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+	)
+	echoes := map[string]func(r *http.Request) string{
+		"n8n": func(r *http.Request) string {
+			return `{"code":404,"message":"The requested webhook \"POST ` + strings.TrimPrefix(r.URL.Path, "/") + `\" is not registered."}`
+		},
+		"path": func(r *http.Request) string { return "no route for " + r.URL.EscapedPath() },
+		"lowercased": func(r *http.Request) string {
+			return "no route for " + strings.ToLower(r.URL.Path)
+		},
+		"php json": func(r *http.Request) string {
+			return `{"error":"` + strings.ReplaceAll(r.URL.Path, "/", `\/`) + `"}`
+		},
+		"request line and query": func(r *http.Request) string { return "bad request: POST " + r.RequestURI },
+		"headers": func(r *http.Request) string {
+			return "Authorization: " + r.Header.Get("Authorization") + " sig " + r.Header.Get("webhook-signature") + " key " + sign
+		},
+		"authorization token only": func(r *http.Request) string {
+			return "invalid token " + strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		},
+	}
+	for name, echo := range echoes {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = io.WriteString(w, echo(r))
+			}))
+			defer s.Close()
+			ch := webhook.New(client(t, s))
+			c := cfg(s.URL+"/webhook/"+token+"?key="+query, map[string]string{
+				webhook.FieldAuthorization: bearer, webhook.FieldSigningSecret: sign,
+			}, "")
+			err := ch.Send(context.Background(), c, notifytest.SampleMessage())
+			var serr *notify.SendError
+			if !errors.As(err, &serr) || serr.Status != http.StatusNotFound {
+				t.Fatalf("Send = %v, want a 404 SendError", err)
+			}
+			for _, secret := range []string{token, strings.ToLower(token), query, "echoed-bearer-token-81", "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw", "/webhook/"} {
+				if strings.Contains(serr.Reason, secret) || strings.Contains(serr.Error(), secret) {
+					t.Errorf("reason %q contains %q", serr.Reason, secret)
+				}
+			}
+			if !strings.Contains(serr.Reason, "answered 404") {
+				t.Errorf("reason %q lost the status", serr.Reason)
+			}
+		})
+	}
+}
+
 func TestSlackFormat(t *testing.T) {
 	t.Parallel()
 	s := newServer(t)

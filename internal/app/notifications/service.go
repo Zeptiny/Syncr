@@ -481,6 +481,7 @@ func (s *Service) send(ctx context.Context, d Delivery, log *slog.Logger) result
 	}
 	msg.ID = d.ID.String()
 
+	red := notify.NewRedactor(cfg)
 	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
 	defer cancel()
 	err = ch.Send(sendCtx, cfg, msg)
@@ -492,6 +493,9 @@ func (s *Service) send(ctx context.Context, d Delivery, log *slog.Logger) result
 		return result{interrupted: true, reason: "the controller stopped during the attempt"}
 	case errors.As(err, &serr):
 		reason := withStatus(serr.Status, cmp.Or(serr.Reason, "the target rejected the notification"))
+		// The channel redacted the reply; this is the safety net for what it
+		// did not think of.
+		reason = red.Redact(reason)
 		return result{permanent: serr.Permanent, retryAfter: serr.RetryAfter, status: serr.Status, reason: reason}
 	case errors.Is(sendCtx.Err(), context.DeadlineExceeded):
 		return result{reason: fmt.Sprintf("no answer within %s", s.cfg.SendTimeout)}
