@@ -30,6 +30,19 @@ export function forgetSession(client: QueryClient): void {
   client.removeQueries({ queryKey: sessionKey });
 }
 
+/**
+ * endSession is the one place that runs when a session ends, whatever the
+ * reason (sign out, UNAUTHENTICATED from any call, or the login page opening
+ * on a stale cache). It cancels in-flight queries and empties the query and
+ * mutation caches, so nothing one user loaded (jobs, remotes, contacts, typed
+ * passwords) can be shown to the next. Live streams are tied to mounted
+ * components and stop when the router leaves the page.
+ */
+export function endSession(client: QueryClient): void {
+  void client.cancelQueries();
+  client.clear();
+}
+
 /** Session is the signed-in user as the UI needs it. */
 export interface Session {
   user: User | undefined;

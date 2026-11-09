@@ -1,12 +1,16 @@
 import { Code, ConnectError } from "@connectrpc/connect";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { QueryClient } from "@tanstack/react-query";
+import { createMemoryHistory } from "@tanstack/react-router";
+import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { WorkerAdminService, JobService } from "@/gen/syncr/v1/api_pb";
 import { AuthMethod, AuthService, SetupService } from "@/gen/syncr/v1/auth_pb";
 import { BackendService, RemoteService } from "@/gen/syncr/v1/remotes_pb";
 import * as fx from "@/test/fixtures";
+import { App, createApp } from "@/router";
 import { mockTransport, renderApp } from "@/test/render";
 
 import { safeRedirect } from "./guard";
@@ -30,12 +34,27 @@ function api(opts: { signedIn: boolean; setupRequired?: boolean }) {
         return { user: fx.users(now)[0] };
       },
     });
-    service(JobService, { listJobs: () => ({ jobs: fx.jobs(now).slice(0, 3) }) });
+    const authed =
+      <T,>(v: T) =>
+      () => {
+        if (!state.signedIn) throw new ConnectError("no session", Code.Unauthenticated);
+        return v;
+      };
+    service(JobService, { listJobs: authed({ jobs: fx.jobs(now).slice(0, 3) }) });
     service(WorkerAdminService, { listWorkers: () => ({ workers: fx.workers(now) }) });
     service(RemoteService, { listRemotes: () => ({ remotes: fx.remotes(now) }) });
     service(BackendService, { listBackends: () => ({ backends: fx.backends }) });
   });
   return { transport, state };
+}
+
+/** servicesCached lists the services that have a query in the cache. */
+function servicesCached(client: QueryClient): string[] {
+  return client
+    .getQueryCache()
+    .getAll()
+    .map((q) => (q.queryKey[1] as { serviceName?: string } | undefined)?.serviceName ?? "")
+    .map((n) => n.split(".").pop() ?? "");
 }
 
 describe("auth flow", () => {
@@ -73,6 +92,45 @@ describe("auth flow", () => {
     const { router } = renderApp("/login", transport);
     await waitFor(() => expect(router.state.location.pathname).toBe("/"));
     expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
+  });
+
+  it("forgets everything cached when the session expires", async () => {
+    const { transport, state } = api({ signedIn: true });
+    const { router, queryClient } = renderApp("/jobs", transport);
+    expect(await screen.findByRole("heading", { name: "Jobs" })).toBeInTheDocument();
+    await waitFor(() => expect(servicesCached(queryClient)).toContain("JobService"));
+
+    // The session expires; the next refetch fails with UNAUTHENTICATED.
+    state.signedIn = false;
+    await queryClient.invalidateQueries();
+    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
+    expect(router.state.location.search).toEqual({ redirect: "/jobs" });
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    await waitFor(() => expect(servicesCached(queryClient)).not.toContain("JobService"));
+    expect(servicesCached(queryClient)).not.toContain("WorkerAdminService");
+    expect(servicesCached(queryClient)).not.toContain("RemoteService");
+  });
+
+  it("drops a stale cache when the login page opens", async () => {
+    const { transport } = api({ signedIn: false });
+    const app = createApp(transport, createMemoryHistory({ initialEntries: ["/login"] }));
+    app.queryClient.setQueryData(["previous-user"], { jobs: ["secret"] });
+    render(<App {...app} />);
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    await waitFor(() => expect(app.queryClient.getQueryData(["previous-user"])).toBeUndefined());
+  });
+
+  it("clears the cache when someone signs in", async () => {
+    const user = userEvent.setup();
+    const { transport } = api({ signedIn: false });
+    const { queryClient } = renderApp("/login", transport);
+    await screen.findByRole("heading", { name: "Sign in" });
+    queryClient.setQueryData(["late"], 1);
+    await user.type(screen.getByLabelText("Username"), "admin");
+    await user.type(screen.getByLabelText("Password"), "syncr-demo-admin");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
+    expect(queryClient.getQueryData(["late"])).toBeUndefined();
   });
 
   it("only redirects to same-origin paths", () => {

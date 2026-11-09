@@ -5,7 +5,7 @@ import { createRouter, RouterProvider, type RouterHistory } from "@tanstack/reac
 
 import { NotFound, RouteError } from "@/components/app/route-states";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { forgetSession } from "@/hooks/use-session";
+import { endSession } from "@/hooks/use-session";
 import { createQueryClient } from "@/lib/query-client";
 import { ThemeProvider } from "@/lib/theme";
 import { routeTree } from "@/routeTree.gen";
@@ -48,7 +48,7 @@ export function createApp(transport: Transport, history?: RouterHistory) {
   // The handler runs only after a query fails, by when router is set.
   const queryClient = createQueryClient({
     onUnauthenticated: (client) => {
-      forgetSession(client);
+      endSession(client);
       const loc = router.state.location;
       if (loc.pathname === "/login" || loc.pathname === "/setup") return;
       void router.navigate({ to: "/login", search: { redirect: loc.href } });
