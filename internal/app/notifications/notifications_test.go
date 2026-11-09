@@ -1048,9 +1048,94 @@ func TestDeliverInterruptedByShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The outcome is recorded despite the cancelled context, for a prompt
-	// retry.
-	if d := e.only(); d.Status != notifications.StatusPending || d.Attempts != 1 || !d.NextAttemptAt.Equal(t0) || d.LastError == "" {
+	// retry. The attempt is given back: our shutdown is not a failure of
+	// the target.
+	if d := e.only(); d.Status != notifications.StatusPending || d.Attempts != 0 || !d.NextAttemptAt.Equal(t0) || d.LastError == "" {
 		t.Errorf("an interrupted attempt = %+v", d)
+	}
+}
+
+// shutdownDuringAttempt claims the delivery and cancels the pass while the
+// send is in flight.
+func shutdownDuringAttempt(t *testing.T, e *env) {
+	t.Helper()
+	e.ch.block, e.ch.sent = true, make(chan notify.Message, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.svc.DeliverDue(ctx)
+		done <- err
+	}()
+	<-e.ch.sent
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	e.ch.block, e.ch.sent = false, nil
+}
+
+// An attempt cut short by the controller's own shutdown must not end the
+// delivery, even when it was the last one allowed: nothing was wrong with
+// the notification, so the next start sends it.
+func TestShutdownOnTheLastAttemptDoesNotKillTheDelivery(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, withConfig(func(c *notifications.Config) { c.MaxAttempts = 2 }))
+	e.contact(e.alice, "ops", true, domain.EventFailed)
+	e.job(e.alice, domain.JobFailed, domain.ScheduleID{})
+	e.plan()
+
+	e.ch.setOutcome(func(int, notify.Message) error { return notify.Temporary(503, "unavailable", 0) })
+	e.deliver() // attempt 1 fails
+	e.clock.Set(e.only().NextAttemptAt)
+
+	shutdownDuringAttempt(t, e) // attempt 2, the last, is interrupted
+	d := e.only()
+	if d.Status != notifications.StatusPending || d.Attempts != 1 || !d.NextAttemptAt.Equal(e.clock.Now()) {
+		t.Fatalf("after the interrupted last attempt: %+v", d)
+	}
+
+	// The next start sends it, and the budget is intact.
+	e.ch.setOutcome(func(int, notify.Message) error { return nil })
+	if e.deliver() != 1 {
+		t.Fatal("the interrupted delivery was not retried at once")
+	}
+	if d := e.only(); d.Status != notifications.StatusDelivered || d.Attempts != 2 {
+		t.Errorf("after the retry: %+v", d)
+	}
+}
+
+// A receiver that does not answer within the send timeout is a failed
+// attempt, unlike our own shutdown.
+func TestReceiverTimeoutOnTheLastAttemptIsDead(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, withConfig(func(c *notifications.Config) { c.MaxAttempts = 1; c.SendTimeout = 20 * time.Millisecond }))
+	e.contact(e.alice, "ops", true, domain.EventFailed)
+	e.job(e.alice, domain.JobFailed, domain.ScheduleID{})
+	e.plan()
+	e.ch.block = true
+	e.deliver()
+	if d := e.only(); d.Status != notifications.StatusDead || d.Attempts != 1 {
+		t.Errorf("after a receiver timeout on the last attempt: %+v", d)
+	}
+}
+
+// A reply the target gave counts even when the shutdown came right after.
+func TestReplyBeforeShutdownCounts(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, withConfig(func(c *notifications.Config) { c.MaxAttempts = 1 }))
+	e.contact(e.alice, "ops", true, domain.EventFailed)
+	e.job(e.alice, domain.JobFailed, domain.ScheduleID{})
+	e.plan()
+	ctx, cancel := context.WithCancel(context.Background())
+	e.ch.setOutcome(func(int, notify.Message) error {
+		cancel()
+		return notify.Permanent(404, "not found")
+	})
+	if _, err := e.svc.DeliverDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d := e.only(); d.Status != notifications.StatusDead || d.Attempts != 1 {
+		t.Errorf("after a 404 during shutdown: %+v", d)
 	}
 }
 

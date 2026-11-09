@@ -143,6 +143,11 @@ type Completion struct {
 	// compare-and-swap on it, so a deliverer whose lease expired and was
 	// reclaimed cannot overwrite the newer attempt.
 	Attempts int
+	// Release gives the attempt back: the stored Attempts is decremented, so
+	// the attempt does not count against the budget. For an attempt cut
+	// short by the deliverer's own shutdown, which says nothing about the
+	// target; only valid with StatusPending.
+	Release bool
 	// Status is delivered, pending (retry at NextAttemptAt) or dead.
 	Status        Status
 	NextAttemptAt time.Time

@@ -117,8 +117,15 @@ migration marks all earlier history as notified).
   the delivery is dead. An attempt whose lease expired counts. If the
   reclaimed claim exceeds the limit, the delivery is dead without another
   send.
-- **Shutdown.** An attempt interrupted by shutdown is recorded, with a
-  context that is not cancelled, as pending again at once.
+- **Shutdown.** An attempt interrupted by the controller's own shutdown is
+  recorded, with a context that is not cancelled, as pending again at once,
+  and the attempt is given back (`Completion.Release` decrements
+  `attempts`): it does not count against the budget, so an interruption on
+  the last allowed attempt does not make the delivery dead. A receiver's
+  timeout is not an interruption (the send's own deadline fired, not the
+  pass's context) and counts, and so does a reply the target gave just
+  before the shutdown. The interrupted send may have reached the target, so
+  the retry can duplicate it, like any lease expiry.
 - **Last error.** Only a `SendError`'s sanitized reason (with the status)
   reaches `last_error` and the logs. Any other error could quote the
   configuration, such as a `*url.Error` with a token, and is replaced by a

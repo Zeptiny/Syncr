@@ -254,6 +254,9 @@ func (s *Store) CompleteDelivery(_ context.Context, c notifications.Completion) 
 	if !ok {
 		return notifications.Delivery{}, fmt.Errorf("delivery %s: %w", c.ID, domain.ErrNotFound)
 	}
+	if c.Release && c.Status != notifications.StatusPending {
+		return notifications.Delivery{}, fmt.Errorf("complete delivery %s: %w: only a pending delivery can release its attempt", c.ID, domain.ErrInvalidArgument)
+	}
 	if d.Status != notifications.StatusSending || d.Attempts != c.Attempts {
 		return notifications.Delivery{}, fmt.Errorf("delivery %s is %s after %d attempts, not sending after %d: %w",
 			c.ID, d.Status, d.Attempts, c.Attempts, domain.ErrConflict)
@@ -268,6 +271,9 @@ func (s *Store) CompleteDelivery(_ context.Context, c notifications.Completion) 
 		return notifications.Delivery{}, fmt.Errorf("complete delivery %s: %w: status %q", c.ID, domain.ErrInvalidArgument, c.Status)
 	}
 	d.Status, d.LastError, d.LeaseUntil = c.Status, c.LastError, time.Time{}
+	if c.Release {
+		d.Attempts--
+	}
 	s.deliveries[c.ID] = d
 	return cloneDelivery(d), nil
 }

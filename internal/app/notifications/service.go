@@ -422,11 +422,13 @@ func (s *Service) attempt(ctx context.Context, d Delivery) {
 	switch {
 	case r.delivered:
 		c.Status, c.LastError = StatusDelivered, ""
+	case r.interrupted:
+		// Our own shutdown, not the target's fault: whatever attempt this
+		// was, even the last one, it does not count. Give it back and retry
+		// as soon as a deliverer runs again.
+		c.Status, c.NextAttemptAt, c.Release = StatusPending, now, true
 	case r.permanent || d.Attempts >= d.MaxAttempts:
 		c.Status = StatusDead
-	case r.interrupted:
-		// Not the target's fault: retry as soon as a deliverer runs again.
-		c.Status, c.NextAttemptAt = StatusPending, now
 	default:
 		c.Status, c.NextAttemptAt = StatusPending, now.Add(s.backoff(d.Attempts, r.retryAfter))
 	}
@@ -489,7 +491,10 @@ func (s *Service) send(ctx context.Context, d Delivery, log *slog.Logger) result
 	switch {
 	case err == nil:
 		return result{delivered: true}
-	case ctx.Err() != nil:
+	case ctx.Err() != nil && !(errors.As(err, &serr) && serr.Status != 0):
+		// Our own shutdown cut the send short (a receiver's timeout is the
+		// send context's, not ours). A reply the target gave counts even if
+		// the shutdown came right after it.
 		return result{interrupted: true, reason: "the controller stopped during the attempt"}
 	case errors.As(err, &serr):
 		reason := withStatus(serr.Status, cmp.Or(serr.Reason, "the target rejected the notification"))
