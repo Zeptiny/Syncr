@@ -77,6 +77,50 @@ func (q *Queries) LatestJobSample(ctx context.Context, jobID pgtype.UUID) (JobSa
 	return i, err
 }
 
+const latestJobSamples = `-- name: LatestJobSamples :many
+SELECT s.job_id, s.t, s.bytes, s.total_bytes, s.files, s.total_files, s.checks,
+       s.deletes, s.renames, s.errors, s.elapsed_ns
+FROM unnest($1::uuid[]) AS ids (job_id)
+CROSS JOIN LATERAL (
+    SELECT job_id, t, bytes, total_bytes, files, total_files, checks, deletes, renames, errors, elapsed_ns FROM job_samples js WHERE js.job_id = ids.job_id ORDER BY js.t DESC LIMIT 1
+) s
+`
+
+// The latest sample of each job in job_ids that has one: one primary key
+// probe per job (LIMIT 1 under the lateral join), however many samples a
+// job has.
+func (q *Queries) LatestJobSamples(ctx context.Context, jobIds []pgtype.UUID) ([]JobSample, error) {
+	rows, err := q.db.Query(ctx, latestJobSamples, jobIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []JobSample{}
+	for rows.Next() {
+		var i JobSample
+		if err := rows.Scan(
+			&i.JobID,
+			&i.T,
+			&i.Bytes,
+			&i.TotalBytes,
+			&i.Files,
+			&i.TotalFiles,
+			&i.Checks,
+			&i.Deletes,
+			&i.Renames,
+			&i.Errors,
+			&i.ElapsedNs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listJobSamples = `-- name: ListJobSamples :many
 SELECT job_id, t, bytes, total_bytes, files, total_files, checks, deletes, renames, errors, elapsed_ns FROM job_samples WHERE job_id = $1 ORDER BY t
 `

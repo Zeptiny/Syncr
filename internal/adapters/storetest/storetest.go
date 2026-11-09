@@ -86,6 +86,7 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 		{"JobQueryIsLiteral", testJobQueryIsLiteral},
 		{"JobRemotes", testJobRemotes},
 		{"Samples", testSamples},
+		{"LatestSamples", testLatestSamples},
 		{"NoAliasing", testNoAliasing},
 
 		{"UserCreateGetList", testUserCreateGetList},
@@ -964,6 +965,51 @@ func testSamples(t *testing.T, s Store) {
 		t.Errorf("LatestJobSample = (%+v, %v, %v)", latest, ok, err)
 	}
 	wantErr(t, "AppendJobSample(missing job)", s.AppendJobSample(ctx, jobs.Sample{JobID: jobID(t, 9), Time: t0()}), domain.ErrNotFound)
+}
+
+// testLatestSamples: LatestJobSamples agrees with LatestJobSample for
+// every job, whatever the order of the samples.
+func testLatestSamples(t *testing.T, s Store) {
+	ctx := context.Background()
+	w := newWorker(t, 1)
+	mustCreateWorker(t, s, w)
+	var ids []domain.JobID
+	for n := 1; n <= 4; n++ {
+		j := newJob(t, n, w.ID)
+		mustCreateJob(t, s, j)
+		ids = append(ids, j.ID)
+		// Job n has n-1 samples (job 1 none), stored out of order.
+		for sec := n - 1; sec >= 1; sec-- {
+			smp := jobs.Sample{JobID: j.ID, Time: t0().Add(time.Duration(sec) * time.Second), Stats: jobs.Stats{Bytes: int64(n*100 + sec)}}
+			if err := s.AppendJobSample(ctx, smp); err != nil {
+				t.Fatalf("AppendJobSample: %v", err)
+			}
+		}
+	}
+	if got, err := s.LatestJobSamples(ctx, nil); err != nil || len(got) != 0 {
+		t.Errorf("LatestJobSamples(none) = (%v, %v)", got, err)
+	}
+	query := append(slices.Clone(ids), ids[2], jobID(t, 99)) // a repeated and an unknown job
+	got, err := s.LatestJobSamples(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Errorf("LatestJobSamples returned %d jobs, want 3 (jobs 2-4)", len(got))
+	}
+	for _, id := range append(ids, jobID(t, 99)) {
+		want, wantOK, err := s.LatestJobSample(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		smp, ok := got[id]
+		if ok != wantOK || !smp.Time.Equal(want.Time) || smp.Stats != want.Stats || (ok && smp.JobID != id) {
+			t.Errorf("LatestJobSamples[%s] = (%+v, %v), want (%+v, %v)", id, smp, ok, want, wantOK)
+		}
+	}
+	if smp := got[ids[3]]; smp.Stats.Bytes != 403 || !smp.Time.Equal(t0().Add(3*time.Second)) {
+		t.Errorf("latest sample of job 4 = %+v, want the one at 3s", smp)
+	}
 }
 
 func testNoAliasing(t *testing.T, s Store) {

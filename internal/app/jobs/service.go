@@ -203,6 +203,20 @@ func (s *Service) LatestSample(ctx context.Context, id domain.JobID) (Sample, bo
 	return smp, ok, nil
 }
 
+// LatestSamples is LatestSample for several jobs in one store query, keyed
+// by job ID (jobs without samples are absent). Like LatestSample it does
+// not check access.
+func (s *Service) LatestSamples(ctx context.Context, ids []domain.JobID) (map[domain.JobID]Sample, error) {
+	if len(ids) == 0 {
+		return map[domain.JobID]Sample{}, nil
+	}
+	smps, err := s.samples.LatestJobSamples(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("latest samples of %d jobs: %w", len(ids), err)
+	}
+	return smps, nil
+}
+
 // Samples returns the stored progress samples of a job the actor may see,
 // oldest first.
 func (s *Service) Samples(ctx context.Context, actor domain.Actor, id domain.JobID) ([]Sample, error) {

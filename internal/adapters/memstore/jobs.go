@@ -176,6 +176,19 @@ func (s *Store) LatestJobSample(_ context.Context, id domain.JobID) (jobs.Sample
 	return list[len(list)-1], true, nil
 }
 
+// LatestJobSamples implements jobs.SampleRepository.
+func (s *Store) LatestJobSamples(_ context.Context, ids []domain.JobID) (map[domain.JobID]jobs.Sample, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[domain.JobID]jobs.Sample, len(ids))
+	for _, id := range ids {
+		if list := s.samples[id]; len(list) > 0 {
+			out[id] = list[len(list)-1]
+		}
+	}
+	return out, nil
+}
+
 // ListJobSamples implements jobs.SampleRepository.
 func (s *Store) ListJobSamples(_ context.Context, id domain.JobID) ([]jobs.Sample, error) {
 	s.mu.RLock()

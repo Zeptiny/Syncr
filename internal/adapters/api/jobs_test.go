@@ -239,6 +239,80 @@ func TestInterruptedJobKeepsLastSample(t *testing.T) {
 	}
 }
 
+// countingJobs counts the LatestSamples lookups of the handler.
+type countingJobs struct {
+	JobService
+	mu    sync.Mutex
+	calls [][]domain.JobID
+}
+
+func (c *countingJobs) LatestSamples(ctx context.Context, ids []domain.JobID) (map[domain.JobID]jobs.Sample, error) {
+	c.mu.Lock()
+	c.calls = append(c.calls, slices.Clone(ids))
+	c.mu.Unlock()
+	return c.JobService.LatestSamples(ctx, ids)
+}
+
+func TestListJobsReadsLatestSamplesInOneLookup(t *testing.T) {
+	t.Parallel()
+	counter := &countingJobs{}
+	e := newEnv(t, func(d *Deps) { counter.JobService = d.Jobs; d.Jobs = counter })
+	ctx := t.Context()
+	progress := func(j *syncrv1.Job, bytes int64) {
+		t.Helper()
+		if _, err := e.jsvc.RecordProgress(ctx, e.worker, e.jobID(j), testEpoch, jobs.Sample{
+			Time: e.clock.Now(), Stats: jobs.Stats{Bytes: bytes},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queued := e.runJob()
+	running := e.runJob()
+	e.startRunning(running)
+	progress(running, 10)
+	idle := e.runJob() // running, no samples yet
+	e.startRunning(idle)
+	interrupted := e.runJob()
+	e.startRunning(interrupted)
+	progress(interrupted, 20)
+	if _, _, err := e.jsvc.Interrupt(ctx, e.worker, e.jobID(interrupted), testEpoch, jobs.JobError{Code: jobs.CodeWorkerLost}); err != nil {
+		t.Fatal(err)
+	}
+	done := e.runJob()
+	e.startRunning(done)
+	progress(done, 30)
+	if _, _, err := e.jsvc.Finish(ctx, e.worker, e.jobID(done), testEpoch, jobs.Outcome{Status: domain.JobSucceeded, Stats: jobs.Stats{Bytes: 33}}); err != nil {
+		t.Fatal(err)
+	}
+
+	counter.mu.Lock()
+	counter.calls = nil
+	counter.mu.Unlock()
+	resp, err := e.jobsClient().ListJobs(ctx, connect.NewRequest(&syncrv1.ListJobsRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]*syncrv1.JobStats{}
+	for _, j := range resp.Msg.GetJobs() {
+		got[j.GetId()] = j.GetStats()
+	}
+	for _, tt := range []struct {
+		job   *syncrv1.Job
+		stats bool
+		bytes int64
+	}{{queued, false, 0}, {running, true, 10}, {idle, false, 0}, {interrupted, true, 20}, {done, true, 33}} {
+		st, ok := got[tt.job.GetId()]
+		if !ok || (st != nil) != tt.stats || st.GetBytes() != tt.bytes {
+			t.Errorf("job %s: stats = %v (listed %v), want bytes %d", tt.job.GetId(), st, ok, tt.bytes)
+		}
+	}
+	counter.mu.Lock()
+	defer counter.mu.Unlock()
+	if len(counter.calls) != 1 || len(counter.calls[0]) != 3 {
+		t.Errorf("LatestSamples calls = %v, want one for the running, idle and interrupted jobs", counter.calls)
+	}
+}
+
 func TestCancelJob(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

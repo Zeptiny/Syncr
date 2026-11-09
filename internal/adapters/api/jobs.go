@@ -69,7 +69,7 @@ func (h *jobHandler) job(ctx context.Context, j jobs.Job) (*syncrv1.Job, error) 
 
 // protoJobs converts js with their remote and schedule references (one
 // Names lookup each for all) and, where the job's status calls for them
-// (see pickStats), the live counters.
+// (see pickStats), the live counters (one LatestSamples lookup for all).
 func (h *jobHandler) protoJobs(ctx context.Context, js []jobs.Job) ([]*syncrv1.Job, error) {
 	refs, err := h.remoteRefs(ctx, js)
 	if err != nil {
@@ -79,17 +79,23 @@ func (h *jobHandler) protoJobs(ctx context.Context, js []jobs.Job) ([]*syncrv1.J
 	if err != nil {
 		return nil, err
 	}
+	var sampled []domain.JobID
+	for _, j := range js {
+		if _, needSample := pickStats(j); needSample {
+			sampled = append(sampled, j.ID)
+		}
+	}
+	var latest map[domain.JobID]jobs.Sample
+	if len(sampled) > 0 {
+		if latest, err = h.jobs.LatestSamples(ctx, sampled); err != nil {
+			return nil, err
+		}
+	}
 	out := make([]*syncrv1.Job, 0, len(js))
 	for _, j := range js {
 		stats, needSample := pickStats(j)
-		if needSample {
-			smp, ok, err := h.jobs.LatestSample(ctx, j.ID)
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				stats = &smp.Stats
-			}
+		if smp, ok := latest[j.ID]; needSample && ok {
+			stats = &smp.Stats
 		}
 		msg, err := jobToProto(j, stats, refs)
 		if err != nil {
