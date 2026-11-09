@@ -140,6 +140,19 @@ migration marks all earlier history as notified).
   a deactivated workflow with `The requested webhook "POST <path>" is not
   registered`. The outbox and `SendTest` apply a redactor to every reason as
   a safety net.
+- **Who sees the reason.** Every signed-in user can create contacts and
+  test them, and the default `private` network policy allows LAN
+  addresses, so detailed reasons would make the controller a scanner and
+  an oracle for internal services (open or closed ports, TLS details, HTTP
+  statuses and bodies, timing). A `SendError` is therefore shown in full
+  only to administrators, who control the network policy, unless the
+  channel marked it `Public` (our own validation; every Discord failure,
+  because the destination is a fixed public host). Other users get
+  `notify.GenericReason` without status or latency in the `SendTest` result,
+  and as `last_error` of their deliveries (the outbox asks an
+  `AdminChecker` for the owner's role when a send fails, and treats an
+  unknown role as a user). The detail still goes to the controller's log.
+  A channel that does not set `Public` is safe by default.
 - **Manual retry.** `RetryDelivery` queues a dead delivery again with its
   attempts reset.
 - **Retention.** Delivered and dead deliveries are purged after

@@ -225,7 +225,7 @@ func (c *Channel) Send(ctx context.Context, cfg descriptor.Values, msg notify.Me
 	}
 	body, err := Body(cfg.Options[FieldFormat], msg)
 	if err != nil {
-		return notify.Permanent(0, "the message cannot be encoded")
+		return notify.Public(notify.Permanent(0, "the message cannot be encoded"))
 	}
 	ts := c.now().Unix()
 	h := http.Header{}
@@ -236,7 +236,7 @@ func (c *Channel) Send(ctx context.Context, cfg descriptor.Values, msg notify.Me
 	if s := cfg.Secrets[FieldSigningSecret]; s != "" {
 		key, bad := signingKey(s)
 		if bad != "" {
-			return notify.Permanent(0, "the signing secret "+bad)
+			return notify.Public(notify.Permanent(0, "the signing secret "+bad))
 		}
 		h.Set("webhook-signature", Sign(key, msg.ID, ts, body))
 	}

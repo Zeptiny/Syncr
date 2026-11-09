@@ -281,8 +281,14 @@ func cut(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
-// Send implements notify.Channel.
+// Send implements notify.Channel. Every failure is Public: the destination
+// is always Discord (Validate only accepts its hosts), so a failure reveals
+// nothing about the controller's network.
 func (c *Channel) Send(ctx context.Context, cfg descriptor.Values, msg notify.Message) error {
+	return notify.Public(c.send(ctx, cfg, msg))
+}
+
+func (c *Channel) send(ctx context.Context, cfg descriptor.Values, msg notify.Message) error {
 	if err := ctx.Err(); err != nil {
 		return sendutil.TransportError(err, what)
 	}

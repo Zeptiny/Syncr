@@ -625,9 +625,21 @@ func TestSendTestFailures(t *testing.T) {
 	c := e.mustCreate(t, e.alice, fakeInput("Ops"))
 
 	e.ch.fail = notify.Permanent(404, "unknown room at <url>")
-	res, err := e.svc.SendTest(ctx, e.alice, c.ID, nil)
+	ac := e.mustCreate(t, e.admin, fakeInput("Admin ops"))
+	res, err := e.svc.SendTest(ctx, e.admin, ac.ID, nil)
 	if err != nil || res.OK || res.Status != 404 || res.Reason != "unknown room at <url>" {
-		t.Errorf("SendTest(permanent) = (%+v, %v)", res, err)
+		t.Errorf("SendTest(permanent, admin) = (%+v, %v)", res, err)
+	}
+	// Other users are not told what the destination answered.
+	res, err = e.svc.SendTest(ctx, e.alice, c.ID, nil)
+	if err != nil || res.OK || res.Status != 0 || res.Reason != notify.GenericReason || res.Latency != 0 {
+		t.Errorf("SendTest(permanent, user) = (%+v, %v)", res, err)
+	}
+	// Failures that say nothing about the destination stay readable.
+	e.ch.fail = notify.Public(notify.Permanent(0, "the email configuration is not valid"))
+	res, err = e.svc.SendTest(ctx, e.alice, c.ID, nil)
+	if err != nil || res.OK || res.Reason != "the email configuration is not valid" {
+		t.Errorf("SendTest(public, user) = (%+v, %v)", res, err)
 	}
 	// An error that is not a SendError could quote the configuration: it
 	// is never shown.
@@ -662,10 +674,11 @@ func TestSendTestFailures(t *testing.T) {
 func TestSendTestRedactsSecretsFromReasons(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	c := e.mustCreate(t, e.alice, fakeInput("Ops"))
+	// An administrator sees reasons, so the redaction is what is tested.
+	c := e.mustCreate(t, e.admin, fakeInput("Ops"))
 	e.ch.fail = notify.Permanent(404, `no route for "POST /secret-url-token-0001" (Bearer secret-token-value-0002)`)
-	res, err := e.svc.SendTest(context.Background(), e.alice, c.ID, nil)
-	if err != nil || res.OK {
+	res, err := e.svc.SendTest(context.Background(), e.admin, c.ID, nil)
+	if err != nil || res.OK || !strings.Contains(res.Reason, "no route") {
 		t.Fatalf("SendTest = (%+v, %v)", res, err)
 	}
 	noSecrets(t, "the reason", res.Reason)

@@ -57,7 +57,7 @@ func Post(ctx context.Context, client *http.Client, url string, header http.Head
 	if err != nil {
 		// The configuration passed Validate, so this is a URL Go cannot
 		// send to; never quote it.
-		return Response{}, notify.Permanent(0, what+" URL cannot be used")
+		return Response{}, notify.Public(notify.Permanent(0, what+" URL cannot be used"))
 	}
 	for k, vs := range header {
 		req.Header[k] = vs
@@ -90,7 +90,7 @@ func TransportError(err error, what string) error {
 	case errors.Is(err, netguard.ErrDenied):
 		return notify.Permanent(0, what+" address is not allowed by the notification network policy (notify.network_policy)")
 	case errors.Is(err, context.Canceled):
-		return notify.Temporary(0, "the send was cancelled", 0)
+		return notify.Public(notify.Temporary(0, "the send was cancelled", 0))
 	case errors.Is(err, context.DeadlineExceeded) || isTimeout(err):
 		return notify.Temporary(0, "the connection to "+what+" timed out", 0)
 	case errors.As(err, &dnsErr):

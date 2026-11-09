@@ -319,6 +319,32 @@ func TestReplyEchoingTheRequestKeepsSecretsOut(t *testing.T) {
 	}
 }
 
+// Only users with network rights may see what a destination answered, so
+// replies and network failures are not Public; our own validation is.
+func TestOnlyOwnFailuresArePublic(t *testing.T) {
+	t.Parallel()
+	s := newServer(t, http.StatusNotFound)
+	ch := webhook.New(client(t, s.Server))
+	isPublic := func(err error) bool {
+		var serr *notify.SendError
+		if !errors.As(err, &serr) {
+			t.Fatalf("%v is not a SendError", err)
+		}
+		return serr.Public
+	}
+	if isPublic(ch.Send(context.Background(), cfg(s.URL+"/x", nil, ""), notifytest.SampleMessage())) {
+		t.Error("a 404 reply is Public")
+	}
+	s.Close() // the port is closed now
+	if isPublic(ch.Send(context.Background(), cfg(s.URL+"/x", nil, ""), notifytest.SampleMessage())) {
+		t.Error("a connection failure is Public")
+	}
+	bad := cfg(s.URL+"/x", map[string]string{webhook.FieldSigningSecret: "whsec_!!"}, "")
+	if !isPublic(ch.Send(context.Background(), bad, notifytest.SampleMessage())) {
+		t.Error("an invalid signing secret is not Public")
+	}
+}
+
 func TestSlackFormat(t *testing.T) {
 	t.Parallel()
 	s := newServer(t)

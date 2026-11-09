@@ -124,8 +124,28 @@ func (r *resolver) ResolveChannel(ctx context.Context, id domain.ContactID) (str
 	return r.inner.ResolveChannel(ctx, id)
 }
 
+// adminFake answers notifications.AdminChecker for every owner.
+type adminFake struct {
+	mu    sync.Mutex
+	admin bool
+	err   error
+}
+
+func (a *adminFake) IsAdmin(context.Context, domain.UserID) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.admin, a.err
+}
+
+func (a *adminFake) set(admin bool, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.admin, a.err = admin, err
+}
+
 type env struct {
 	t        *testing.T
+	admins   *adminFake
 	svc      *notifications.Service
 	contacts *contacts.Service
 	store    *memstore.Store
@@ -162,7 +182,7 @@ func newEnv(t *testing.T, opts ...option) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, store: memstore.New(), clock: clock.NewFake(t0), ids: &idgen.Sequential{}, ch: &fakeChannel{}, logs: &bytes.Buffer{}}
+	e := &env{t: t, store: memstore.New(), clock: clock.NewFake(t0), ids: &idgen.Sequential{}, ch: &fakeChannel{}, logs: &bytes.Buffer{}, admins: &adminFake{admin: true}}
 	reg, err := notify.NewRegistry(e.ch)
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +213,7 @@ func newEnv(t *testing.T, opts ...option) *env {
 	}
 	e.resolver = &resolver{inner: e.contacts}
 	deps := notifications.Deps{
-		Repo: e.store, Channels: reg, Contacts: e.resolver, Clock: e.clock, IDs: e.ids, Random: zeroReader{},
+		Repo: e.store, Channels: reg, Contacts: e.resolver, Admins: e.admins, Clock: e.clock, IDs: e.ids, Random: zeroReader{},
 		PublicURL: "https://syncr.example/", Logger: logger,
 	}
 	cfg := notifications.Config{SendTimeout: time.Second}
@@ -844,6 +864,47 @@ func TestSecretsAreRedactedFromStoredReasons(t *testing.T) {
 	}
 	if strings.Contains(e.logs.String(), "secret-hook-token") {
 		t.Error("the log contains the contact's secret")
+	}
+}
+
+// The delivery log shows reasons to the contact's owner. What a destination
+// or the network answered is shown to administrators only: any user can
+// create a contact, so it would turn the controller into a port scanner.
+func TestReasonsHideNetworkDetailsFromUsers(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		admin    bool
+		lookup   error
+		err      error
+		want     string
+		wantLog  string
+		wantDead bool
+	}{
+		{"user, target reply", false, nil, notify.Permanent(404, "no route for /hooks"), notify.GenericReason, "no route for /hooks", true},
+		{"user, network error", false, nil, notify.Temporary(0, "the connection to the webhook timed out", 0), notify.GenericReason, "timed out", false},
+		{"user, public failure", false, nil, notify.Public(notify.Permanent(0, "the email configuration is not valid")), "the email configuration is not valid", "", true},
+		{"admin", true, nil, notify.Permanent(404, "no route for /hooks"), "status 404: no route for /hooks", "no route for /hooks", true},
+		{"role lookup fails", true, errors.New("db down"), notify.Permanent(404, "no route for /hooks"), notify.GenericReason, "no route for /hooks", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			e.admins.set(tc.admin, tc.lookup)
+			e.contact(e.alice, "ops", true, domain.EventFailed)
+			e.job(e.alice, domain.JobFailed, domain.ScheduleID{})
+			e.plan()
+			e.ch.setOutcome(func(int, notify.Message) error { return tc.err })
+			e.deliver()
+			d := e.only()
+			if d.LastError != tc.want || (d.Status == notifications.StatusDead) != tc.wantDead {
+				t.Errorf("delivery = %q (%s), want %q", d.LastError, d.Status, tc.want)
+			}
+			// The detail goes to the log, which only operators read.
+			if tc.wantLog != "" && !strings.Contains(e.logs.String(), tc.wantLog) {
+				t.Errorf("the log lacks %q: %s", tc.wantLog, e.logs.String())
+			}
+		})
 	}
 }
 

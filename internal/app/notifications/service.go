@@ -62,6 +62,12 @@ type Deps struct {
 	// Contacts resolves a delivery's contact at send time
 	// (*contacts.Service).
 	Contacts ContactResolver
+	// Admins tells whether a delivery's owner is an administrator. Only
+	// administrators are shown what a destination or the network answered
+	// (see notify.SendError.Public); everybody else gets
+	// notify.GenericReason in the delivery log. Nil means nobody is an
+	// administrator.
+	Admins AdminChecker
 	// Jobs describes the reported jobs (notify.JobInfo.Description, the
 	// title of a job without a schedule); nil means jobs are not described
 	// (titles name their kind).
@@ -84,6 +90,7 @@ type Service struct {
 	repo      Repository
 	channels  *notify.Registry
 	contacts  ContactResolver
+	admins    AdminChecker
 	jobs      JobDescriber
 	clock     Clock
 	ids       IDGenerator
@@ -128,7 +135,7 @@ func New(d Deps, cfg Config) (*Service, error) {
 		random = crand.Reader
 	}
 	return &Service{
-		repo: d.Repo, channels: d.Channels, contacts: d.Contacts, jobs: d.Jobs, clock: d.Clock, ids: d.IDs,
+		repo: d.Repo, channels: d.Channels, contacts: d.Contacts, admins: d.Admins, jobs: d.Jobs, clock: d.Clock, ids: d.IDs,
 		publicURL: strings.TrimRight(d.PublicURL, "/"), log: log, cfg: cfg, random: random,
 		wake: make(chan struct{}, 1),
 	}, nil
@@ -397,8 +404,12 @@ type result struct {
 	permanent   bool
 	retryAfter  time.Duration
 	status      int
-	// reason is the LastError of a failed attempt; never a secret.
+	// reason is the LastError of a failed attempt; never a secret. It is
+	// what the owner is shown: detail, or notify.GenericReason when the
+	// owner may not see the network details.
 	reason string
+	// detail, if set, is the full reason for the log (never a secret).
+	detail string
 }
 
 // attempt sends one claimed delivery and records the outcome.
@@ -450,9 +461,9 @@ func (s *Service) attempt(ctx context.Context, d Delivery) {
 	case StatusDelivered:
 		log.InfoContext(ctx, "notification delivered")
 	case StatusDead:
-		log.WarnContext(ctx, "notification failed for good", "status", r.status, "reason", r.reason)
+		log.WarnContext(ctx, "notification failed for good", "status", r.status, "reason", cmp.Or(r.detail, r.reason))
 	default:
-		log.WarnContext(ctx, "notification attempt failed; retrying", "status", r.status, "reason", r.reason,
+		log.WarnContext(ctx, "notification attempt failed; retrying", "status", r.status, "reason", cmp.Or(r.detail, r.reason),
 			"next_attempt_at", c.NextAttemptAt.Format(time.RFC3339))
 	}
 }
@@ -488,10 +499,12 @@ func (s *Service) send(ctx context.Context, d Delivery, log *slog.Logger) result
 	defer cancel()
 	err = ch.Send(sendCtx, cfg, msg)
 	var serr *notify.SendError
+	// answered: the target replied, whatever our context did afterwards.
+	answered := errors.As(err, &serr) && serr.Status != 0
 	switch {
 	case err == nil:
 		return result{delivered: true}
-	case ctx.Err() != nil && !(errors.As(err, &serr) && serr.Status != 0):
+	case ctx.Err() != nil && !answered:
 		// Our own shutdown cut the send short (a receiver's timeout is the
 		// send context's, not ours). A reply the target gave counts even if
 		// the shutdown came right after it.
@@ -501,13 +514,38 @@ func (s *Service) send(ctx context.Context, d Delivery, log *slog.Logger) result
 		// The channel redacted the reply; this is the safety net for what it
 		// did not think of.
 		reason = red.Redact(reason)
-		return result{permanent: serr.Permanent, retryAfter: serr.RetryAfter, status: serr.Status, reason: reason}
+		r := result{permanent: serr.Permanent, retryAfter: serr.RetryAfter, status: serr.Status, reason: reason, detail: reason}
+		if !serr.Public && !s.isAdmin(ctx, d.OwnerID, log) {
+			// What a destination answered (refused, filtered, TLS or HTTP
+			// details) would let any user probe the controller's network
+			// through a contact, and the delivery log shows reasons to the
+			// owner. Administrators control the network policy and see it.
+			r.reason = notify.GenericReason
+		}
+		return r
 	case errors.Is(sendCtx.Err(), context.DeadlineExceeded):
 		return result{reason: fmt.Sprintf("no answer within %s", s.cfg.SendTimeout)}
 	default:
 		// Only a *SendError is known to be free of secrets.
 		return result{reason: "the notification could not be sent"}
 	}
+}
+
+// isAdmin reports whether owner is an administrator; false when unknown.
+func (s *Service) isAdmin(ctx context.Context, owner domain.UserID, log *slog.Logger) bool {
+	if s.admins == nil {
+		return false
+	}
+	// The send is over; the answer must not depend on a shutdown that came
+	// meanwhile.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), completeTimeout)
+	defer cancel()
+	admin, err := s.admins.IsAdmin(ctx, owner)
+	if err != nil {
+		log.ErrorContext(ctx, "cannot look up a contact owner's role", "error", err.Error())
+		return false
+	}
+	return admin
 }
 
 // withStatus prefixes reason with "status <status>: " unless status is 0

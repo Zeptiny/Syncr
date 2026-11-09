@@ -243,6 +243,18 @@ func TestErrorMessagesEchoingTheWebhookKeepTheTokenOut(t *testing.T) {
 	}
 }
 
+// The destination is always Discord, so its failures say nothing about the
+// controller's network and are shown to every user.
+func TestFailuresArePublic(t *testing.T) {
+	t.Parallel()
+	_, ch := newFake(t, func(w http.ResponseWriter) { w.WriteHeader(http.StatusNotFound) })
+	err := ch.Send(context.Background(), conf(webhookURL, ""), notifytest.SampleMessage())
+	var serr *notify.SendError
+	if !errors.As(err, &serr) || !serr.Public {
+		t.Errorf("Send = %v, want a Public SendError", err)
+	}
+}
+
 func TestValidate(t *testing.T) {
 	t.Parallel()
 	ch := discord.New(http.DefaultClient)

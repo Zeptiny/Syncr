@@ -273,14 +273,14 @@ func (c *Channel) Send(ctx context.Context, cfg descriptor.Values, msg notify.Me
 	var v domain.Validation
 	p := c.parse(cfg, &v)
 	if v.Err() != nil || p.host == "" || p.from == nil || len(p.to) == 0 {
-		return notify.Permanent(0, "the email configuration is not valid")
+		return notify.Public(notify.Permanent(0, "the email configuration is not valid"))
 	}
 	if msg.Title == "" {
 		msg.Title = notify.Title(msg)
 	}
 	data, err := BuildMessage(msg, p.from, p.to, c.now())
 	if err != nil {
-		return notify.Permanent(0, "the message cannot be encoded")
+		return notify.Public(notify.Permanent(0, "the message cannot be encoded"))
 	}
 	if err := c.send(ctx, p, data); err != nil {
 		return classify(err, redactor(cfg, p))
