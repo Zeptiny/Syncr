@@ -61,7 +61,7 @@ type CreateRepositoryParams struct {
 	Version       int64
 }
 
-// Restic repositories and their snapshot cache (migration 00005). Written by
+// Restic repositories and their snapshot cache (migration 00007). Written by
 // the contracts step (Milestone 5); the Go adapter (restic.go) is Track C's,
 // which may tune these queries but not add or remove :copyfrom queries.
 // Inserts a live repository that is not deleting (the statistics and the
