@@ -121,6 +121,12 @@ The config file holds secrets: setup restricts it to `SYSTEM` and
 it fails. To run `syncr-worker run` by hand against a system config, use an
 elevated terminal.
 
+The `Syncr` folder is restricted the same way, without inheriting from
+`%ProgramData%` (where every user may create files): the service runs the tools
+in it as `LocalSystem`. If the folder already exists, setup checks who owns it
+and who can change it before using it; see
+[worker-config.md](worker-config.md#secrets).
+
 ## Troubleshooting
 
 - **`installing a system service needs elevated rights`**: start PowerShell with
@@ -138,5 +144,19 @@ elevated terminal.
   `syncr-worker.exe tools fetch --dir C:\ProgramData\Syncr\tools`.
 - **Antivirus quarantines `rclone.exe`/`restic.exe`**: allow the folder
   `...\Syncr\tools`.
+- **`... is owned by ..., not by SYSTEM, Administrators or the account running
+  this`**: another account created the folder (or a file in it) before setup
+  ran, possibly to plant programs the service would run. Check what it
+  contains and delete it, or take it over as an administrator with
+  `takeown /F <folder> /A /R` and `icacls <folder> /reset /T`, then run setup
+  again.
+- **`... can be changed by ..., who could then tamper with the worker's
+  files`**: the folder setup should use is shared with other accounts and holds
+  more than the worker's files, so setup will not restrict it. Choose a folder
+  of its own with `--data-dir` (or `--config`).
+- **`warning: ... The service runs syncr-worker.exe from there with full
+  rights`**: other accounts can replace the binary or add files next to it.
+  Move it to `C:\Program Files\Syncr` and run setup (or `service install`)
+  again from there.
 - **The task does not start after logon**: check it in Task Scheduler
   (`syncr-worker`, "Last Run Result") and read `worker.log`.

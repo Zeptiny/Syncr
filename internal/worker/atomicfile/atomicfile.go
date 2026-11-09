@@ -9,6 +9,10 @@
 // before the data is written; if the ACL cannot be built, the file is written
 // with the permissions it inherits and Result says so.
 //
+// MkdirPrivate prepares the directories such files live in, so that only
+// trusted accounts can change them, and Exposure reports who else can change
+// an existing file or directory.
+//
 // Allowed dependencies: the standard library and golang.org/x/sys.
 package atomicfile
 

@@ -203,6 +203,15 @@ Then remove the worker in the controller UI (**Workers**, the worker,
 - **`the service did not stay running`**: read the log with `journalctl -u syncr-worker -n 50`.
   A missing tool shows as `required tools are not available`; fix with
   `sudo syncr-worker tools fetch --dir /var/lib/syncr/tools`.
+- **`every user can write to ...`**: setup will not keep the worker's data,
+  tools or config in a directory anyone can change. Remove that permission
+  (`chmod o-w`) or choose another directory with `--data-dir` / `--config`. A
+  directory owned by another account, or writable by its group, only gets a
+  warning (it may belong to a dedicated service account).
+- **`warning: ... The service runs syncr-worker from there with full rights`**:
+  other accounts can replace the binary (or add files next to it, where it
+  looks for rclone and restic). Install it with
+  `sudo install -m 0755 syncr-worker /usr/local/bin/` and run setup from there.
 - **No internet access**: place `rclone` and `restic` of the pinned versions
   next to `syncr-worker` (or set `SYNCR_RCLONE_PATH` / `SYNCR_RESTIC_PATH` when
   running setup) and run setup again.

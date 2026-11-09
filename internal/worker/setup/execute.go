@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -48,6 +49,7 @@ func (s *Setup) execute(ctx context.Context, p *plan) (*Result, error) {
 		}
 		s.printf("    %s %s (%s) %s\n", t.Name, t.Version, t.Source, t.Path)
 	}
+	s.checkPrograms(p, tools)
 
 	// 3. CA and certificate. They are only prepared here and written with
 	// the config: an existing setup (--force) keeps working on its old files
@@ -124,30 +126,117 @@ func scopeFlag(p *plan) string {
 	return ""
 }
 
-// prepareDirs creates the data and config directories, failing early with
-// advice when the rights are missing.
+// prepareDirs creates the data directory, and the tools and config
+// directories where they are not inside it, so that only the worker's
+// accounts can change them: the service runs the tools in them with full
+// rights and trusts the config (see atomicfile.MkdirPrivate). It fails early
+// with advice when the rights are missing or an existing directory cannot be
+// trusted.
 func (s *Setup) prepareDirs(p *plan) error {
 	configPerm := fs.FileMode(0o755)
 	if p.scope == service.ScopeUser {
 		configPerm = 0o700
 	}
-	for _, d := range []struct {
+	configDir := filepath.Dir(p.configPath)
+	type dir struct {
 		path string
 		perm fs.FileMode
-	}{
-		{p.dataDir, 0o700},
-		{filepath.Dir(p.configPath), configPerm},
-	} {
-		if err := os.MkdirAll(d.path, d.perm); err != nil {
-			if errors.Is(err, fs.ErrPermission) {
-				return fmt.Errorf("cannot create %s: %w\nSetting up for the whole machine needs root (Linux) or Administrator (Windows) rights. "+
-					"Run the command with sudo or from an elevated terminal, or add --user to set up for your account only, "+
-					"or choose directories you own with --data-dir and --config", d.path, err)
-			}
-			return fmt.Errorf("create %s: %w", d.path, err)
+		// own lists what the directory holds when it is the worker's
+		// alone; nil for a directory that may be shared.
+		own  []string
+		hint string
+	}
+	dirs := []dir{{p.dataDir, 0o700, []string{"tools", "tls", "scratch", "cache", "logs", filepath.Base(p.configPath)}, "choose another one with --data-dir"}}
+	if !within(p.dataDir, p.toolsDir) {
+		dirs = append(dirs, dir{p.toolsDir, 0o755, []string{"rclone", "restic"}, "point SYNCR_TOOLS_DIR at a directory of the worker's own, or unset it"})
+	}
+	if !within(p.dataDir, configDir) {
+		dirs = append(dirs, dir{configDir, configPerm, nil, "choose another location with --config"})
+	}
+	for _, d := range dirs {
+		res, err := atomicfile.MkdirPrivate(d.path, atomicfile.DirOptions{
+			Perm:               d.perm,
+			IncludeCurrentUser: p.scope == service.ScopeUser,
+			Reprotect:          d.own != nil && onlyEntries(d.path, d.own),
+		})
+		if errors.Is(err, fs.ErrPermission) {
+			return fmt.Errorf("cannot create %s: %w\nSetting up for the whole machine needs root (Linux) or Administrator (Windows) rights. "+
+				"Run the command with sudo or from an elevated terminal, or add --user to set up for your account only, "+
+				"or choose directories you own with --data-dir and --config", d.path, err)
+		}
+		if err != nil {
+			return fmt.Errorf("prepare %s: %w\nTo use another directory, %s", d.path, err, d.hint)
+		}
+		for _, w := range res.Warnings {
+			s.printf("    warning: %s\n", w)
+		}
+	}
+	// Inside the data directory, the config directory inherits its
+	// protection.
+	if within(p.dataDir, configDir) {
+		if err := os.MkdirAll(configDir, configPerm); err != nil {
+			return fmt.Errorf("create %s: %w", configDir, err)
 		}
 	}
 	return nil
+}
+
+// onlyEntries reports whether dir is missing or holds nothing but the named
+// entries and hidden ones (the worker's temporary and lock files): whether
+// setup may treat it as the worker's own and restrict it.
+func onlyEntries(dir string, names []string) bool {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !slices.Contains(names, e.Name()) && !strings.HasPrefix(e.Name(), ".") {
+			return false
+		}
+	}
+	return true
+}
+
+// checkPrograms warns about the programs a system service will run (the
+// worker, and tools that are not managed in the protected tools directory)
+// when other accounts can replace them or put files next to them: whatever
+// is there runs with the service's full rights. Setup cannot move them, so
+// it only says so.
+func (s *Setup) checkPrograms(p *plan, tools []ToolStatus) {
+	if p.scope != service.ScopeSystem {
+		return
+	}
+	programs := []string{p.spec.Executable}
+	for _, t := range tools {
+		if t.Source != "managed" {
+			programs = append(programs, t.Path)
+		}
+	}
+	where := "for example /usr/local/bin (sudo install -m 0755 ...)"
+	if s.System.GOOS == "windows" {
+		where = `for example C:\Program Files\Syncr`
+	}
+	checked := map[string]bool{}
+	for _, program := range programs {
+		for _, target := range []string{program, filepath.Dir(program)} {
+			if checked[target] {
+				continue
+			}
+			checked[target] = true
+			problems, err := atomicfile.Exposure(target)
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+			case err != nil:
+				s.printf("    warning: cannot check who may change %s: %v\n", target, err)
+			case len(problems) > 0:
+				s.printf("    warning: %s: %s. The service runs %s from there with full rights, so whoever can change it can run their own code with those rights; "+
+					"keep it where only administrators can change it, %s\n", target, strings.Join(problems, "; "), filepath.Base(program), where)
+			}
+		}
+	}
 }
 
 // stagedFiles are written by writeStaged together with the config, once the

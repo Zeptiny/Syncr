@@ -5,7 +5,8 @@
 // before the single-use enrollment token is spent):
 //
 //  1. validate the request and the machine (paths, rights, existing setup);
-//  2. create the directories and provision the pinned rclone and restic;
+//  2. create the directories (only the worker's accounts may change them)
+//     and provision the pinned rclone and restic;
 //  3. passive mode: create the self-signed certificate (in memory);
 //  4. enroll with the controller (unless registering by hand);
 //  5. write the certificate, the controller CA copy and the configuration

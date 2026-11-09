@@ -915,6 +915,99 @@ func TestUnwritableDirectoriesFailBeforeEnrolling(t *testing.T) {
 	}
 }
 
+// TestUntrustedDataDirFailsBeforeEnrolling: a data directory that another
+// account prepared (here: one every user may write to) would let it plant
+// the tools or the config the service trusts. Setup refuses it before the
+// token is spent. (Windows has its own test of owners and ACLs.)
+func TestUntrustedDataDirFailsBeforeEnrolling(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits")
+	}
+	c := newFakeController(t)
+	r := newRig(t)
+	if err := os.Mkdir(r.data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(r.data, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	_, err := r.run(r.activeOptions(c))
+	if err == nil {
+		t.Fatal("setup accepted a world-writable data directory")
+	}
+	mustContain(t, "error", err.Error(), r.data, "every user can write", "--data-dir")
+	if len(c.seen()) != 0 || len(r.tools.dirs) != 0 {
+		t.Error("enrolled or provisioned tools in an untrusted directory")
+	}
+	r.assertNothingWritten()
+}
+
+func TestProgramsOthersCanChangeAreReported(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits; Windows ACLs are covered in atomicfile")
+	}
+	for _, tt := range []struct {
+		name string
+		mode os.FileMode
+		user bool
+		warn bool
+	}{
+		{"private binary", 0o755, false, false},
+		{"binary every user can write", 0o777, false, true},
+		{"user service", 0o777, true, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := newFakeController(t)
+			r := newRig(t)
+			bin := filepath.Join(r.dir, "bin", "syncr-worker")
+			if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(bin, nil, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(bin, tt.mode); err != nil {
+				t.Fatal(err)
+			}
+			r.setup.System.Executable = func() (string, error) { return bin, nil }
+			o := r.activeOptions(c)
+			o.User = tt.user
+			r.mustRun(o)
+			out := r.out.String()
+			got := strings.Contains(out, "warning: "+bin+":") && strings.Contains(out, "every user can write to it")
+			if got != tt.warn {
+				t.Errorf("warning shown = %v, want %v:\n%s", got, tt.warn, r.out)
+			}
+		})
+	}
+}
+
+func TestOnlyEntries(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	own := []string{"tools", "tls"}
+	if !onlyEntries(filepath.Join(dir, "missing"), own) || !onlyEntries(dir, own) {
+		t.Error("a missing or empty directory is the worker's to take")
+	}
+	for _, name := range []string{"tools", ".worker.yaml.123.tmp"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !onlyEntries(dir, own) {
+		t.Error("the worker's own entries and hidden files are accepted")
+	}
+	if err := os.Mkdir(filepath.Join(dir, "Documents"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if onlyEntries(dir, own) {
+		t.Error("a directory with other content was taken as the worker's own")
+	}
+}
+
 func TestOptionValidation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

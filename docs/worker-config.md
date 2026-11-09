@@ -125,12 +125,37 @@ file, so the file must be private:
 - Linux: setup writes it with mode `0600` (owner only), atomically, in a
   directory of mode `0755` (system) or `0700` (user). The private key of a
   generated certificate is `0600` too.
-- Windows: setup restricts the file's ACL to `SYSTEM` and `Administrators`
-  (and, for `--user` installs, the installing user), without inheriting from
-  the parent folder. This is best effort: if the ACL cannot be set, setup
-  prints a warning and you should restrict the file yourself. Because the
-  `Administrators` entry only applies to an elevated token, run
+- Windows: setup creates the file with an ACL limited to `SYSTEM` and
+  `Administrators` (and, for `--user` installs, the installing user), not
+  inherited from the parent folder, already on the temporary file it writes
+  before renaming it into place. This is best effort: if the ACL cannot be
+  built, setup prints a warning and you should restrict the file yourself.
+  Because the `Administrators` entry only applies to an elevated token, run
   `syncr-worker run` by hand from an elevated terminal for a system install.
+
+The directories matter as much as the files: the service runs the tools in
+`<data_dir>/tools` and trusts the config, so whoever can change those
+directories can run code with the worker's rights. Setup therefore prepares
+the data directory, and the tools and config directories where they are not
+inside it:
+
+- Windows: a directory setup creates (and any missing parent) gets the same
+  private ACL, inherited by everything inside. An existing one must be a real
+  directory (not a link or junction) owned by `SYSTEM`, `Administrators`,
+  `TrustedInstaller` or the account running setup; otherwise setup stops and
+  says so, since another account may have created it in advance. If other
+  accounts can change an existing directory, setup restricts it when it holds
+  only the worker's files (and every file in it has one of those owners), and
+  refuses it otherwise, before contacting the controller.
+- Linux: directories are created as before. An existing one that every user
+  may write to (without the sticky bit) is refused; one owned by another
+  account or writable by its group is reported as a warning.
+
+For a system install, setup also warns when other accounts can change the
+`syncr-worker` binary, the directory it is in, or an rclone or restic binary
+that is not in the managed tools directory, because the service runs them
+with full rights. Keep them where only administrators can change them, such
+as `C:\Program Files\Syncr` or `/usr/local/bin`.
 
 In memory the secrets are `redact.Secret` values: printing or logging the
 loaded configuration (with `%v`, `%+v`, slog text or JSON) shows `[redacted]`,
