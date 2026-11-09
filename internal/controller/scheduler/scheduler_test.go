@@ -112,6 +112,40 @@ func TestPastDeadlineIsMissed(t *testing.T) {
 	}
 }
 
+// TestOfflineUntilNextIsMissed: with run_late "until the next occurrence"
+// and a worker offline for good, each run is missed when the next
+// occurrence is due (the fire does not move its deadline), so the misses
+// are recorded and notified; the latest occurrence waits.
+func TestOfflineUntilNextIsMissed(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	w := e.addWorker(worker{name: "desktop"})
+	in := e.input("daily", schedules.Target{WorkerID: w})
+	in.Cron, in.Missed = "0 13 * * *", schedules.MissedPolicy{Action: schedules.MissedRunLate}
+	sc := e.create(in)
+	s := e.newScheduler(nil, nil)
+	for day := range 3 {
+		e.clock.Set(t0.Add(time.Hour + time.Duration(day)*24*time.Hour))
+		e.tick(s)
+		e.clock.Advance(time.Minute)
+		e.tick(s)
+	}
+	rs := e.runs(sc.ID) // newest first
+	if len(rs) != 3 || rs[0].Status != schedules.RunPending {
+		t.Fatalf("runs = %+v, want two missed and the latest pending", rs)
+	}
+	for _, r := range rs[1:] {
+		if r.Status != schedules.RunMissed || r.Reason != schedules.ReasonWorkerOffline || r.Coalesced != 0 || r.Message == "" {
+			t.Errorf("run = %+v, want missed (worker offline)", r)
+		}
+	}
+	e.online(w)
+	e.tick(s)
+	if js := e.jobsOf(sc.ID); len(js) != 1 || e.runs(sc.ID)[0].Status != schedules.RunLaunched {
+		t.Errorf("after the worker came back: jobs %d, runs %+v", len(js), e.runs(sc.ID))
+	}
+}
+
 func TestByLabel(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

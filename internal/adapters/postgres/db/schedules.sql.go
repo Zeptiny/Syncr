@@ -856,25 +856,32 @@ UPDATE schedule_runs SET
     deadline = GREATEST(deadline, $2::timestamptz),
     updated_at = $3::timestamptz
 WHERE schedule_id = $4::uuid AND status = 'pending'
+  AND ($5::timestamptz IS NULL OR deadline > $5::timestamptz)
 RETURNING id
 `
 
 type MergePendingRunParams struct {
 	AddCoalesced int32
-	Deadline     pgtype.Timestamptz
+	ExtendTo     pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
 	ScheduleID   pgtype.UUID
+	OpenAfter    pgtype.Timestamptz
 }
 
 // Merges an occurrence (or a manual request) into the schedule's pending
 // run, if it has one (at most one: schedule_runs_one_pending_key). A
-// launching run is past its launch and absorbs nothing.
+// launching run is past its launch and absorbs nothing. A fire passes
+// open_after (the fire time): only a run whose deadline is after it
+// absorbs the occurrence, and its deadline stays. A manual request passes
+// extend_to (its own deadline) instead: the run may then wait that long
+// (GREATEST ignores a NULL).
 func (q *Queries) MergePendingRun(ctx context.Context, arg MergePendingRunParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, mergePendingRun,
 		arg.AddCoalesced,
-		arg.Deadline,
+		arg.ExtendTo,
 		arg.UpdatedAt,
 		arg.ScheduleID,
+		arg.OpenAfter,
 	)
 	var id pgtype.UUID
 	err := row.Scan(&id)
@@ -975,6 +982,34 @@ func (q *Queries) SetScheduleEnabled(ctx context.Context, arg SetScheduleEnabled
 		&i.Version,
 	)
 	return i, err
+}
+
+const supersedePendingRun = `-- name: SupersedePendingRun :exec
+UPDATE schedule_runs SET
+    status = 'missed', reason = $1::text, message = $2::text,
+    updated_at = $3::timestamptz
+WHERE schedule_id = $4::uuid AND status = 'pending'
+  AND deadline <= $3::timestamptz
+`
+
+type SupersedePendingRunParams struct {
+	Reason     string
+	Message    string
+	UpdatedAt  pgtype.Timestamptz
+	ScheduleID pgtype.UUID
+}
+
+// A fire ends the schedule's pending run whose deadline is not after the
+// fire time as missed, before inserting the occurrence's own run: the run
+// may not absorb an occurrence that is due after its deadline.
+func (q *Queries) SupersedePendingRun(ctx context.Context, arg SupersedePendingRunParams) error {
+	_, err := q.db.Exec(ctx, supersedePendingRun,
+		arg.Reason,
+		arg.Message,
+		arg.UpdatedAt,
+		arg.ScheduleID,
+	)
+	return err
 }
 
 const updateRunStatus = `-- name: UpdateRunStatus :one

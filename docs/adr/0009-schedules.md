@@ -75,9 +75,17 @@ has to handle:
   active run), `launching` (its job ID reserved), then `launched`, `missed`,
   `failed` or `cancelled`. **A schedule has at most one pending run** (a
   unique partial index; migration 00005 narrowed it from one open run): a
-  later occurrence is merged into it (`coalesced + 1`, the later deadline),
-  so a desktop that slept through three nights runs once when it wakes
-  (anacron-style). A launching run absorbs nothing, since its job is
+  later occurrence due before the run's deadline is merged into it
+  (`coalesced + 1`), so a desktop that slept through three nights runs
+  once when it wakes (anacron-style, within the deadline). The deadline is
+  fixed when the run opens and a merge never moves it: an occurrence due
+  at or after it supersedes the run, which is missed (and notified) with
+  the reason the scheduler would give at its deadline, and opens a run of
+  its own. Otherwise a run would absorb every next occurrence and never be
+  missed, e.g. with "until the next occurrence" or a `max_delay` longer
+  than the period and a worker that stays offline. A manual request that
+  merges into the pending run extends its deadline to the request's own
+  (it asked to run now). A launching run absorbs nothing, since its job is
   already decided: an occurrence due while a run launches opens a pending
   run of its own, which the overlap policy then records missed (skip, as
   the launching run is active), holds (queue) or launches alongside
@@ -87,8 +95,9 @@ has to handle:
   `coalesced`; `next_run_at` becomes the next occurrence after now.
   Downtime never replays occurrences one by one.
 - **Deadline**: `run_late` waits `max_delay` (at most 7 days), or until the
-  next occurrence when it is 0; `skip` allows a 5-minute grace. A manual run
-  counts from the request.
+  next occurrence when it is 0 (so each next occurrence supersedes a run
+  still waiting); `skip` allows a 5-minute grace. A manual run counts from
+  the request.
 - **Overlap**: `skip` (default) records the occurrence as `missed`
   (`overlap`) while a run is active (launching, or its job queued,
   dispatched or running); `queue` waits for it; `allow` runs alongside.

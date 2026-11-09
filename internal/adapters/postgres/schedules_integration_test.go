@@ -86,9 +86,11 @@ func TestFireScheduleRaceAcrossPools(t *testing.T) {
 				s = b
 			}
 			wg.Go(func() {
+				r := pendingRun(sc, cur.NextRunAt)
+				r.Deadline = r.ScheduledFor.Add(3 * time.Hour) // the later fires merge into the first run
 				_, err := s.FireSchedule(ctx, schedules.Fire{
 					ID: sc.ID, ExpectedNext: cur.NextRunAt, NewNext: cur.NextRunAt.Add(time.Hour),
-					Run: pendingRun(sc, cur.NextRunAt), Merge: true,
+					Run: r, Merge: true,
 				})
 				switch {
 				case err == nil:

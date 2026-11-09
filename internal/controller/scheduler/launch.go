@@ -89,7 +89,7 @@ func (s *Scheduler) decide(ctx context.Context, p *pass, sc schedules.Schedule, 
 	}
 	if p.now.After(r.Deadline) {
 		reason := schedules.MissedReason(sc.Overlap, active)
-		return s.end(ctx, r, schedules.RunMissed, reason, missedMessage(sc, reason), false)
+		return s.end(ctx, r, schedules.RunMissed, reason, schedules.MissedMessage(sc, reason), false)
 	}
 	if active {
 		return nil // waits for the active run
@@ -291,18 +291,6 @@ func pick(cands []candidate) (candidate, bool) {
 		return cmp.Or(cmp.Compare(a.Busy, b.Busy), cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)),
 			cmp.Compare(a.ID.String(), b.ID.String()))
 	}), true
-}
-
-// missedMessage explains a missed run.
-func missedMessage(sc schedules.Schedule, reason string) string {
-	switch {
-	case reason == schedules.ReasonOverlap:
-		return "an earlier run of the schedule was still active at the deadline"
-	case sc.Target.Label != "":
-		return fmt.Sprintf("no online worker with the label %q took the run before its deadline", sc.Target.Label)
-	default:
-		return "the worker was offline until the run's deadline"
-	}
 }
 
 // clip bounds a stored message.

@@ -412,14 +412,71 @@ func TestFireDueCoalescesDowntime(t *testing.T) {
 	if n, _ := e.svc.FireDue(ctx); n != 0 {
 		t.Errorf("FireDue(again) fired %d", n)
 	}
-	// The next occurrence merges into the still open run.
+	// The next occurrence is due at the pending run's deadline (18:00): it
+	// supersedes the run, which is missed, instead of moving its deadline.
 	e.clock.Set(t0.Add(6 * time.Hour))
 	if n, err := e.svc.FireDue(ctx); err != nil || n != 1 {
 		t.Fatalf("FireDue(next) = (%d, %v)", n, err)
 	}
 	rs = e.runs(sc.ID)
-	if len(rs) != 1 || rs[0].Coalesced != 5 || !rs[0].Deadline.Equal(t0.Add(7*time.Hour)) {
-		t.Errorf("merged run = %+v", rs)
+	if len(rs) != 2 || rs[1].Status != schedules.RunMissed || rs[1].Reason != schedules.ReasonWorkerOffline ||
+		rs[1].Coalesced != 4 || !rs[1].Deadline.Equal(t0.Add(6*time.Hour)) ||
+		rs[0].Status != schedules.RunPending || !rs[0].ScheduledFor.Equal(t0.Add(6*time.Hour)) || rs[0].Coalesced != 0 {
+		t.Errorf("runs = %+v, want 17:00 missed and 18:00 pending", rs)
+	}
+}
+
+// TestFireDueKeepsDeadline: an occurrence merges into a pending run only
+// before the run's deadline, which it does not move, so a run whose worker
+// stays offline is missed (and notified) at its deadline even though
+// later occurrences keep coming; "until the next occurrence" runs are
+// superseded by each next occurrence.
+func TestFireDueKeepsDeadline(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name     string
+		maxDelay time.Duration
+		// merges is how many later occurrences each run absorbs.
+		merges int
+	}{
+		{"until next", 0, 0},
+		{"longer than the period", 150 * time.Minute, 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			ctx := context.Background()
+			in := e.input("hourly")
+			in.Missed.MaxDelay = tt.maxDelay
+			sc := e.create(e.alice, in) // next 13:00
+			for h := 1; h <= 7; h++ {
+				e.clock.Set(t0.Add(time.Duration(h) * time.Hour))
+				if n, err := e.svc.FireDue(ctx); err != nil || n != 1 {
+					t.Fatalf("FireDue at %d:00 = (%d, %v)", 12+h, n, err)
+				}
+			}
+			rs := e.runs(sc.ID) // newest first
+			pending := 0
+			for _, r := range rs {
+				switch r.Status {
+				case schedules.RunPending:
+					pending++
+				case schedules.RunMissed:
+					if r.Reason != schedules.ReasonWorkerOffline || r.Coalesced != tt.merges ||
+						r.Deadline.After(r.UpdatedAt) {
+						t.Errorf("missed run = %+v, want %d merged and missed at its deadline", r, tt.merges)
+					}
+				default:
+					t.Errorf("run = %+v", r)
+				}
+				if r.Deadline.After(r.ScheduledFor.Add(max(tt.maxDelay, time.Hour))) {
+					t.Errorf("run %+v: its deadline moved", r)
+				}
+			}
+			if pending != 1 || len(rs) < 3 {
+				t.Errorf("runs = %+v, want missed runs and one pending", rs)
+			}
+		})
 	}
 }
 
@@ -453,7 +510,8 @@ func TestFireDueOverlapMatrix(t *testing.T) {
 			e := newEnv(t)
 			ctx := context.Background()
 			in := e.input("s")
-			in.Overlap = tt.overlap
+			// The open (manual, 12:00) run may still wait at the 13:00 fire.
+			in.Overlap, in.Missed.MaxDelay = tt.overlap, 2*time.Hour
 			sc := e.create(e.alice, in)
 			var pre []domain.ScheduleRunID
 			switch tt.state {

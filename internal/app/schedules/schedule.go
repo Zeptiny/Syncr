@@ -335,9 +335,14 @@ type Fire struct {
 	// LastFiredAt). A terminal run (missed, reason overlap) is always
 	// inserted.
 	Run Run
-	// Merge merges the fire into the schedule's pending run, if it has one,
-	// instead of inserting Run.
+	// Merge merges the fire into the schedule's pending run, if it has one
+	// and its Deadline is after Run.CreatedAt, instead of inserting Run;
+	// the pending run keeps its deadline. A pending run whose Deadline is
+	// not after Run.CreatedAt is superseded instead: it is ended missed
+	// with MissedReason and MissedMessage, and Run is inserted.
 	Merge bool
+	// MissedReason and MissedMessage end a superseded pending run.
+	MissedReason, MissedMessage string
 }
 
 // Toggle is the change of Repository.SetScheduleEnabled.

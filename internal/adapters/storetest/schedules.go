@@ -482,27 +482,29 @@ func testScheduleMergeOpenRun(t *testing.T, s Store) {
 		return s.FireSchedule(ctx, schedules.Fire{ID: a.ID, ExpectedNext: expected, NewNext: expected.Add(day), Run: r, Merge: merge})
 	}
 	first := newRun(t, 1, a.ID, schedules.RunPending)
+	first.Deadline = t0().Add(3 * day)
 	if _, err := fire(a.NextRunAt, first, true); err != nil {
 		t.Fatal(err)
 	}
-	// A later occurrence merges into the open run.
+	// A later occurrence, due before the pending run's deadline, merges
+	// into it; the deadline was fixed when the run opened.
 	second := newRun(t, 2, a.ID, schedules.RunPending)
-	second.Coalesced, second.Deadline, second.CreatedAt = 2, t0().Add(30*time.Hour), t0().Add(day)
+	second.Coalesced, second.Deadline, second.CreatedAt = 2, t0().Add(4*day), t0().Add(day)
 	merged, err := fire(a.NextRunAt.Add(day), second, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if merged.ID != first.ID || merged.Coalesced != 3 || !merged.Deadline.Equal(second.Deadline) ||
+	if merged.ID != first.ID || merged.Coalesced != 3 || !merged.Deadline.Equal(first.Deadline) ||
 		!merged.UpdatedAt.Equal(second.CreatedAt) || !merged.ScheduledFor.Equal(first.ScheduledFor) {
-		t.Errorf("merged run = %+v", merged)
+		t.Errorf("merged run = %+v, want the first run's deadline", merged)
 	}
 	if _, err := s.GetRun(ctx, second.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("the merged run was stored too: %v", err)
 	}
-	// An earlier deadline does not shorten the open run's.
+	// An earlier deadline does not shorten the pending run's.
 	third := newRun(t, 3, a.ID, schedules.RunPending)
 	third.Deadline = t0()
-	if merged, err = fire(a.NextRunAt.Add(2*day), third, true); err != nil || !merged.Deadline.Equal(second.Deadline) || merged.Coalesced != 4 {
+	if merged, err = fire(a.NextRunAt.Add(2*day), third, true); err != nil || !merged.Deadline.Equal(first.Deadline) || merged.Coalesced != 4 {
 		t.Errorf("merge with an earlier deadline = (%+v, %v)", merged, err)
 	}
 	// Without merge, a second open run violates the one-open-run rule and
@@ -527,8 +529,10 @@ func testScheduleMergeOpenRun(t *testing.T, s Store) {
 	manual.Trigger = schedules.TriggerManual
 	_, err = s.AddRun(ctx, manual, false)
 	wantErr(t, "AddRun(second open run)", err, domain.ErrAlreadyExists)
-	if got, err := s.AddRun(ctx, manual, true); err != nil || got.ID != first.ID || got.Coalesced != 5 {
-		t.Errorf("AddRun(merge) = (%+v, %v)", got, err)
+	// A manual request may wait as long as its own deadline allows.
+	manual.Deadline = t0().Add(10 * day)
+	if got, err := s.AddRun(ctx, manual, true); err != nil || got.ID != first.ID || got.Coalesced != 5 || !got.Deadline.Equal(manual.Deadline) {
+		t.Errorf("AddRun(merge) = (%+v, %v), want merged with the manual deadline", got, err)
 	}
 	if got := mustGetSchedule(t, s, a.ID); !got.NextRunAt.Equal(before.NextRunAt) || !got.LastFiredAt.Equal(before.LastFiredAt) {
 		t.Error("AddRun changed the fire state")
@@ -546,6 +550,61 @@ func testScheduleMergeOpenRun(t *testing.T, s Store) {
 	noJob := newRun(t, 9, a.ID, schedules.RunLaunched)
 	_, err = s.AddRun(ctx, noJob, false)
 	wantErr(t, "AddRun(launched without a job)", err, domain.ErrInvalidArgument)
+}
+
+// testScheduleFireSupersedes: an occurrence due at or after the pending
+// run's deadline does not merge into it (that would move the deadline on
+// forever): the pending run is missed with the fire's reason and the
+// occurrence opens its own run.
+func testScheduleFireSupersedes(t *testing.T, s Store) {
+	ctx := context.Background()
+	alice := userID(t, 1)
+	requireSchedules(t, s, alice)
+	w := newWorker(t, 1)
+	mustCreateWorker(t, s, w)
+	a := newSchedule(t, 1, alice, "Nightly", w.ID)
+	mustCreateSchedule(t, s, a)
+	day := 24 * time.Hour
+	fire := func(expected time.Time, r schedules.Run) (schedules.Run, error) {
+		return s.FireSchedule(ctx, schedules.Fire{
+			ID: a.ID, ExpectedNext: expected, NewNext: expected.Add(day), Run: r, Merge: true,
+			MissedReason: schedules.ReasonWorkerOffline, MissedMessage: "the worker was offline",
+		})
+	}
+	// "Until the next occurrence": the deadline is the next fire's time.
+	first := newRun(t, 1, a.ID, schedules.RunPending)
+	first.Deadline = t0().Add(day)
+	if _, err := fire(a.NextRunAt, first); err != nil {
+		t.Fatal(err)
+	}
+	second := newRun(t, 2, a.ID, schedules.RunPending)
+	second.ScheduledFor, second.Deadline, second.CreatedAt, second.UpdatedAt = t0().Add(day), t0().Add(2*day), t0().Add(day), t0().Add(day)
+	got, err := fire(a.NextRunAt.Add(day), second)
+	if err != nil || got.ID != second.ID || got.Status != schedules.RunPending || got.Coalesced != 0 || !got.Deadline.Equal(second.Deadline) {
+		t.Fatalf("FireSchedule at the pending run's deadline = (%+v, %v), want the new run", got, err)
+	}
+	if r := mustGetRun(t, s, first.ID); r.Status != schedules.RunMissed || r.Reason != schedules.ReasonWorkerOffline ||
+		r.Message != "the worker was offline" || !r.UpdatedAt.Equal(second.CreatedAt) || r.Coalesced != 0 {
+		t.Errorf("superseded run = %+v, want missed (worker offline)", r)
+	}
+	// A refused insert supersedes nothing.
+	dup := newRun(t, 1, a.ID, schedules.RunPending) // the first run's ID
+	dup.CreatedAt = t0().Add(3 * day)
+	_, err = fire(a.NextRunAt.Add(2*day), dup)
+	wantErr(t, "FireSchedule(duplicate run id)", err, domain.ErrAlreadyExists)
+	if r := mustGetRun(t, s, second.ID); r.Status != schedules.RunPending {
+		t.Errorf("a refused fire superseded the pending run: %+v", r)
+	}
+	if got := mustGetSchedule(t, s, a.ID); !got.NextRunAt.Equal(a.NextRunAt.Add(2 * day)) {
+		t.Errorf("a refused fire moved the next run to %v", got.NextRunAt)
+	}
+	// A manual request merges into a pending run past its deadline (it
+	// asks to run now), extending the deadline.
+	manual := newRun(t, 3, a.ID, schedules.RunPending)
+	manual.Trigger, manual.CreatedAt, manual.Deadline = schedules.TriggerManual, t0().Add(3*day), t0().Add(4*day)
+	if got, err := s.AddRun(ctx, manual, true); err != nil || got.ID != second.ID || !got.Deadline.Equal(manual.Deadline) {
+		t.Errorf("AddRun(merge) = (%+v, %v)", got, err)
+	}
 }
 
 // testScheduleOnePendingRun: a schedule has at most one pending run, but a

@@ -249,7 +249,7 @@ func (s *Store) FireSchedule(ctx context.Context, f schedules.Fire) (schedules.R
 		}
 		r := f.Run
 		r.ScheduleID = f.ID
-		id, err := addRun(ctx, q, op, r, f.Merge)
+		id, err := addRun(ctx, q, op, r, f.Merge, &f)
 		if err != nil {
 			return err
 		}
@@ -270,7 +270,7 @@ func (s *Store) AddRun(ctx context.Context, r schedules.Run, merge bool) (schedu
 		if _, err := q.LockScheduleRow(ctx, pgID(r.ScheduleID)); err != nil {
 			return mapErr(op, err) // no row: ErrNotFound
 		}
-		id, err := addRun(ctx, q, op, r, merge)
+		id, err := addRun(ctx, q, op, r, merge, nil)
 		if err != nil {
 			return err
 		}
@@ -284,19 +284,37 @@ func (s *Store) AddRun(ctx context.Context, r schedules.Run, merge bool) (schedu
 }
 
 // addRun merges r into its schedule's pending run (if merge and there is
-// one) or inserts it; it returns the ID of the run that holds it. A
-// missing schedule fails the insert's foreign key (ErrNotFound).
-func addRun(ctx context.Context, q *db.Queries, op string, r schedules.Run, merge bool) (pgtype.UUID, error) {
+// one) or inserts it; it returns the ID of the run that holds it. For a
+// fire (f set) only a pending run whose deadline is after the fire time
+// absorbs r, keeping its deadline, and an older one is superseded (ended
+// missed) before r is inserted; a manual request (f nil) extends the
+// pending run's deadline to its own. A missing schedule fails the insert's
+// foreign key (ErrNotFound).
+func addRun(ctx context.Context, q *db.Queries, op string, r schedules.Run, merge bool, f *schedules.Fire) (pgtype.UUID, error) {
 	if merge {
-		id, err := q.MergePendingRun(ctx, db.MergePendingRunParams{
+		p := db.MergePendingRunParams{
 			AddCoalesced: int32(r.Coalesced), //nolint:gosec // G115: at most schedules.MaxCoalesce per fire
-			Deadline:     pgTime(r.Deadline), UpdatedAt: pgTime(r.CreatedAt), ScheduleID: pgID(r.ScheduleID),
-		})
+			UpdatedAt:    pgTime(r.CreatedAt), ScheduleID: pgID(r.ScheduleID),
+		}
+		if f != nil {
+			p.OpenAfter = pgTime(r.CreatedAt)
+		} else {
+			p.ExtendTo = pgTime(r.Deadline)
+		}
+		id, err := q.MergePendingRun(ctx, p)
 		if err == nil {
 			return id, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return pgtype.UUID{}, mapErr(op, err)
+		}
+		if f != nil {
+			if err := q.SupersedePendingRun(ctx, db.SupersedePendingRunParams{
+				Reason: f.MissedReason, Message: cleanText(f.MissedMessage),
+				UpdatedAt: pgTime(r.CreatedAt), ScheduleID: pgID(r.ScheduleID),
+			}); err != nil {
+				return pgtype.UUID{}, mapErr(op, err)
+			}
 		}
 	}
 	if err := q.InsertRun(ctx, db.InsertRunParams{

@@ -162,7 +162,8 @@ letters, digits, `-`, `_` and `.`. A schedule targeting a label picks the
 least busy online worker that has it and can run the job. A schedule's run
 waits for an offline worker as its missed-run policy says, so a machine
 that is switched off at night catches up when it is back (several missed
-occurrences merge into one run). A worker shows as offline about 45
+occurrences merge into one run while it may still wait; once its wait
+limit has passed it is recorded as missed). A worker shows as offline about 45
 seconds after its last contact; a run that comes due before that is still
 queued on it, and fails if the worker does not pick it up within 15
 minutes.

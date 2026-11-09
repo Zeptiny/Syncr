@@ -30,11 +30,16 @@
 //   - Runs that cannot launch for a permanent reason (worker removed,
 //     definition no longer valid, a remote gone, owner disabled) fail and
 //     pause the schedule with PausedReason set (EndRun with pause).
-//   - A schedule has at most one pending run: a later occurrence is merged
-//     into it (Coalesced, the later deadline), so a desktop that slept
-//     runs once when it wakes up. A launching run absorbs nothing: an
-//     occurrence due meanwhile opens its own pending run, which the overlap
-//     policy holds or launches.
+//   - A schedule has at most one pending run: a later occurrence due
+//     before its deadline is merged into it (Coalesced), so a desktop that
+//     slept runs once when it wakes up. The run's deadline is fixed when it
+//     opens: an occurrence due at or after it supersedes the run (missed,
+//     MissedReason) and opens its own, so a worker that stays offline
+//     produces missed runs instead of one run waiting forever. A manual
+//     request merging into the pending run extends its deadline to the
+//     request's own. A launching run absorbs nothing: an occurrence due
+//     meanwhile opens its own pending run, which the overlap policy holds
+//     or launches.
 //
 // # Policies (policy.go)
 //

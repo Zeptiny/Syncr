@@ -303,17 +303,25 @@ func checkRun(r schedules.Run) error {
 }
 
 // insertRunLocked inserts r (or merges it into the pending run) for a
-// schedule that exists. It changes nothing on error.
-func (s *Store) insertRunLocked(r schedules.Run, merge bool) (schedules.Run, error) {
+// schedule that exists, as the Postgres addRun does: for a fire (f set)
+// only a pending run whose deadline is after the fire time absorbs r,
+// keeping its deadline, and an older one is superseded (missed) before r
+// is inserted; a manual request (f nil) extends the pending run's
+// deadline. It changes nothing on error.
+func (s *Store) insertRunLocked(r schedules.Run, merge bool, f *schedules.Fire) (schedules.Run, error) {
 	open, hasOpen := s.pendingRunLocked(r.ScheduleID)
+	superseded := false
 	if merge && hasOpen {
-		open.Coalesced += r.Coalesced + 1
-		if r.Deadline.After(open.Deadline) {
-			open.Deadline = r.Deadline
+		if f == nil || open.Deadline.After(r.CreatedAt) {
+			open.Coalesced += r.Coalesced + 1
+			if f == nil && r.Deadline.After(open.Deadline) {
+				open.Deadline = r.Deadline
+			}
+			open.UpdatedAt = r.CreatedAt
+			s.runs[open.ID] = open
+			return open, nil
 		}
-		open.UpdatedAt = r.CreatedAt
-		s.runs[open.ID] = open
-		return open, nil
+		superseded, hasOpen = true, false
 	}
 	if _, ok := s.runs[r.ID]; ok {
 		return schedules.Run{}, fmt.Errorf("run %s: %w", r.ID, domain.ErrAlreadyExists)
@@ -328,6 +336,10 @@ func (s *Store) insertRunLocked(r schedules.Run, merge bool) (schedules.Run, err
 		if _, ok := s.workers[r.WorkerID]; !ok {
 			return schedules.Run{}, fmt.Errorf("worker %s of run %s: %w", r.WorkerID, r.ID, domain.ErrNotFound)
 		}
+	}
+	if superseded {
+		open.Status, open.Reason, open.Message, open.UpdatedAt = schedules.RunMissed, f.MissedReason, f.MissedMessage, r.CreatedAt
+		s.runs[open.ID] = open
 	}
 	r.JobStatus = ""
 	s.runs[r.ID] = r
@@ -356,7 +368,7 @@ func (s *Store) FireSchedule(_ context.Context, f schedules.Fire) (schedules.Run
 	}
 	r := f.Run
 	r.ScheduleID = f.ID
-	stored, err := s.insertRunLocked(r, f.Merge)
+	stored, err := s.insertRunLocked(r, f.Merge, &f)
 	if err != nil {
 		return schedules.Run{}, err
 	}
@@ -372,7 +384,7 @@ func (s *Store) AddRun(_ context.Context, r schedules.Run, merge bool) (schedule
 	if _, ok := s.schedules[r.ScheduleID]; !ok {
 		return schedules.Run{}, fmt.Errorf("schedule %s: %w", r.ScheduleID, domain.ErrNotFound)
 	}
-	stored, err := s.insertRunLocked(r, merge)
+	stored, err := s.insertRunLocked(r, merge, nil)
 	if err != nil {
 		return schedules.Run{}, err
 	}

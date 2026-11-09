@@ -173,13 +173,28 @@ INSERT INTO schedule_runs (
 -- name: MergePendingRun :one
 -- Merges an occurrence (or a manual request) into the schedule's pending
 -- run, if it has one (at most one: schedule_runs_one_pending_key). A
--- launching run is past its launch and absorbs nothing.
+-- launching run is past its launch and absorbs nothing. A fire passes
+-- open_after (the fire time): only a run whose deadline is after it
+-- absorbs the occurrence, and its deadline stays. A manual request passes
+-- extend_to (its own deadline) instead: the run may then wait that long
+-- (GREATEST ignores a NULL).
 UPDATE schedule_runs SET
     coalesced = coalesced + sqlc.arg(add_coalesced)::integer + 1,
-    deadline = GREATEST(deadline, sqlc.arg(deadline)::timestamptz),
+    deadline = GREATEST(deadline, sqlc.narg(extend_to)::timestamptz),
     updated_at = sqlc.arg(updated_at)::timestamptz
 WHERE schedule_id = sqlc.arg(schedule_id)::uuid AND status = 'pending'
+  AND (sqlc.narg(open_after)::timestamptz IS NULL OR deadline > sqlc.narg(open_after)::timestamptz)
 RETURNING id;
+
+-- name: SupersedePendingRun :exec
+-- A fire ends the schedule's pending run whose deadline is not after the
+-- fire time as missed, before inserting the occurrence's own run: the run
+-- may not absorb an occurrence that is due after its deadline.
+UPDATE schedule_runs SET
+    status = 'missed', reason = sqlc.arg(reason)::text, message = sqlc.arg(message)::text,
+    updated_at = sqlc.arg(updated_at)::timestamptz
+WHERE schedule_id = sqlc.arg(schedule_id)::uuid AND status = 'pending'
+  AND deadline <= sqlc.arg(updated_at)::timestamptz;
 
 -- name: UpdateRunStatus :one
 -- The compare-and-swap of a run's status; zero (NULL) worker and job IDs

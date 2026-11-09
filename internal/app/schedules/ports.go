@@ -82,11 +82,16 @@ type Repository interface {
 	//     UpdatedAt are untouched); otherwise ErrConflict and nothing
 	//     changes (another tick or controller fired it, or the user edited
 	//     or paused it; the caller re-reads on its next tick);
-	//  2. if f.Merge and the schedule has a pending run, that run absorbs
-	//     the fire: Coalesced += f.Run.Coalesced + 1, Deadline =
-	//     max(Deadline, f.Run.Deadline), UpdatedAt = f.Run.CreatedAt. A
-	//     launching run absorbs nothing: its job is being created;
-	//  3. otherwise f.Run is inserted. A pending f.Run while the schedule
+	//  2. if f.Merge and the schedule has a pending run whose Deadline is
+	//     after f.Run.CreatedAt, that run absorbs the fire: Coalesced +=
+	//     f.Run.Coalesced + 1, UpdatedAt = f.Run.CreatedAt; its Deadline
+	//     is fixed when it opened and does not move. A launching run
+	//     absorbs nothing: its job is being created;
+	//  3. if f.Merge and the schedule has a pending run whose Deadline is
+	//     not after f.Run.CreatedAt, that run is superseded: Status
+	//     missed, Reason f.MissedReason, Message f.MissedMessage, UpdatedAt
+	//     f.Run.CreatedAt; then f.Run is inserted as in 4;
+	//  4. otherwise f.Run is inserted. A pending f.Run while the schedule
 	//     has a pending run violates the one-pending-run rule:
 	//     ErrAlreadyExists, and nothing changes.
 	//
@@ -95,8 +100,9 @@ type Repository interface {
 	FireSchedule(ctx context.Context, f Fire) (Run, error)
 
 	// AddRun adds a run outside the cron (RunNow): if merge and the
-	// schedule has a pending run, that run absorbs r as in FireSchedule
-	// (Coalesced + r.Coalesced + 1, the later deadline) and is returned;
+	// schedule has a pending run, that run absorbs r (Coalesced +
+	// r.Coalesced + 1, Deadline = max(Deadline, r.Deadline): a manual
+	// request may wait as long as its own policy allows) and is returned;
 	// otherwise r is inserted and returned. The schedule's fire state is
 	// untouched. ErrNotFound if the schedule does not exist;
 	// ErrAlreadyExists if r.ID is taken or r is pending while another run

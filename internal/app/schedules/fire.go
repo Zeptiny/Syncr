@@ -65,13 +65,16 @@ func (s *Service) fire(ctx context.Context, sc Schedule, now time.Time) (bool, e
 		}
 		return false, nil
 	}
+	// Whether a run is active decides an overlap skip and why a pending run
+	// that this fire supersedes was missed.
 	active := false
-	if sc.Overlap.orDefault() == OverlapSkip {
+	if WaitsForActive(sc.Overlap) {
 		if active, err = s.repo.HasActiveRun(ctx, sc.ID); err != nil {
 			return false, fmt.Errorf("fire schedule %s: %w", sc.ID, err)
 		}
 	}
 	plan := PlanFire(e, sc.NextRunAt, now, sc.Missed, sc.Overlap, active)
+	missedReason := MissedReason(sc.Overlap, active)
 	run := Run{
 		ID: s.ids.NewScheduleRunID(), ScheduleID: sc.ID, Trigger: TriggerCron,
 		ScheduledFor: plan.ScheduledFor, Deadline: plan.Deadline, Coalesced: plan.Coalesced,
@@ -82,6 +85,7 @@ func (s *Service) fire(ctx context.Context, sc Schedule, now time.Time) (bool, e
 	}
 	stored, err := s.repo.FireSchedule(ctx, Fire{
 		ID: sc.ID, ExpectedNext: sc.NextRunAt, NewNext: plan.NewNext, Run: run, Merge: !plan.Skip,
+		MissedReason: missedReason, MissedMessage: MissedMessage(sc, missedReason),
 	})
 	switch {
 	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrNotFound):

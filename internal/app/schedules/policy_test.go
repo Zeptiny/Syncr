@@ -133,6 +133,25 @@ func TestOverlapMatrix(t *testing.T) {
 	}
 }
 
+func TestMissedMessage(t *testing.T) {
+	t.Parallel()
+	byWorker := schedules.Schedule{Target: schedules.Target{Label: ""}}
+	byLabel := schedules.Schedule{Target: schedules.Target{Label: "nas"}}
+	for _, tt := range []struct {
+		sc     schedules.Schedule
+		reason string
+		want   string
+	}{
+		{byWorker, schedules.ReasonWorkerOffline, "the worker was offline until the run's deadline"},
+		{byLabel, schedules.ReasonWorkerOffline, `no online worker with the label "nas" took the run before its deadline`},
+		{byLabel, schedules.ReasonOverlap, "an earlier run of the schedule was still active at the deadline"},
+	} {
+		if got := schedules.MissedMessage(tt.sc, tt.reason); got != tt.want {
+			t.Errorf("MissedMessage(%q, %q) = %q, want %q", tt.sc.Target.Label, tt.reason, got, tt.want)
+		}
+	}
+}
+
 func TestAutoPauseReasons(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

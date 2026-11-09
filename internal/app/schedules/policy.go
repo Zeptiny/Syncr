@@ -1,6 +1,7 @@
 package schedules
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/Zeptiny/Syncr/internal/cronexpr"
@@ -94,6 +95,19 @@ func MissedReason(overlap Overlap, active bool) string {
 		return ReasonOverlap
 	}
 	return ReasonWorkerOffline
+}
+
+// MissedMessage explains a run missed for reason (MissedReason) to the
+// user.
+func MissedMessage(sc Schedule, reason string) string {
+	switch {
+	case reason == ReasonOverlap:
+		return "an earlier run of the schedule was still active at the deadline"
+	case sc.Target.Label != "":
+		return fmt.Sprintf("no online worker with the label %q took the run before its deadline", sc.Target.Label)
+	default:
+		return "the worker was offline until the run's deadline"
+	}
 }
 
 // AutoPauses reports whether a run that failed for reason pauses its
