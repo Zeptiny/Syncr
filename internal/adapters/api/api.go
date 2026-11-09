@@ -18,6 +18,10 @@
 // Without an authenticator only the public SystemService, /healthz and the
 // web UI are served (fail closed) and a warning is logged.
 //
+// Streaming calls are authenticated again every Deps.StreamReauthInterval
+// while they are open, ending with Unauthenticated or PermissionDenied once
+// the caller's credentials or access are gone (streamauth.go).
+//
 // WatchJob streams extend their connection's read and write deadlines (to
 // Deps.WatchMaxDuration plus a grace period), so the composition root may set
 // http.Server ReadTimeout and WriteTimeout for ordinary calls without cutting
@@ -127,6 +131,10 @@ type Deps struct {
 	// WatchKeepalive is the idle time after which WatchJob repeats the last
 	// job message (default 30s).
 	WatchKeepalive time.Duration
+	// StreamReauthInterval is how often an open stream (WatchJob) is
+	// authenticated again, so revoked credentials, disabled users and lost
+	// access end it (default 30s).
+	StreamReauthInterval time.Duration
 }
 
 // NewHandler returns the controller's HTTP handler: the Connect services
@@ -139,11 +147,13 @@ func NewHandler(deps Deps) http.Handler {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	// The guard runs first, so unauthenticated calls cost nothing.
+	guard := newGuard(deps.Auth, logger)
+	guard.reauth = cmp.Or(deps.StreamReauthInterval, defaultStreamReauth)
 	opts := []connect.HandlerOption{
 		connect.WithRecover(recoverHandler(logger)),
 		connect.WithReadMaxBytes(maxRequestBytes),
 		connect.WithInterceptors(
-			newGuard(deps.Auth, logger),
+			guard,
 			unaryTimeout(cmp.Or(deps.RequestTimeout, defaultRequestTimeout)),
 		),
 	}

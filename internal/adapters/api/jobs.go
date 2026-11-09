@@ -319,7 +319,10 @@ func (h *jobHandler) CancelJob(ctx context.Context, req *connect.Request[syncrv1
 //   - the client goes away (nothing is sent, the stream is just released);
 //   - the watch duration limit is reached (DeadlineExceeded; the client
 //     watches again, and the first message is the then current job);
-//   - the controller shuts down (Unavailable).
+//   - the controller shuts down (Unavailable);
+//   - the caller's session or token stops working, the user is disabled
+//     (Unauthenticated) or no longer sees the job (PermissionDenied): the
+//     guard re-authenticates the stream periodically (streamauth.go).
 //
 // A slow client does not hold the job pipeline back: the broker coalesces
 // progress samples per subscriber, so the handler only ever blocks its own
@@ -331,6 +334,19 @@ func (h *jobHandler) WatchJob(ctx context.Context, req *connect.Request[syncrv1.
 	if err != nil {
 		return err
 	}
+	// While the stream is open, the guard re-authenticates the caller; the
+	// refreshed actor must still see the job (an admin may have lost the
+	// role).
+	onReauth(ctx, func(ctx context.Context, c Caller) error {
+		_, err := h.jobs.Get(ctx, c.Actor, id)
+		if errors.Is(err, domain.ErrNotFound) {
+			return connect.NewError(connect.CodePermissionDenied, errors.New("access to the job was revoked"))
+		}
+		if err != nil {
+			return h.fail(ctx, procedure, err)
+		}
+		return nil
+	})
 
 	wctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
