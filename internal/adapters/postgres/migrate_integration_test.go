@@ -5,7 +5,9 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -266,14 +268,32 @@ func TestMigrateSchedulesNotificationsDown(t *testing.T) {
 	owner := seedUser(t, s)
 	const insertWorker = `INSERT INTO workers (id, name, mode, secret_enc, info, created_at, removed_at)
 		VALUES ($1, $2, 'active', '\x00', '{}', now(), $3)`
-	ids := []string{"00000000-0000-7000-8000-000000000001", "00000000-0000-7000-8000-000000000002", "00000000-0000-7000-8000-000000000003"}
-	for i, id := range ids {
+	// UUIDv7 IDs of the same millisecond (equal timestamp bits, so equal
+	// first 12 hex digits), in creation order. Among them: three live
+	// duplicates, a removed one, a live name equal to the first suffix the
+	// duplicates would get, and duplicates of the maximum length.
+	long := strings.Repeat("x", 64)
+	workers := []struct {
+		name, want string
+		removed    bool
+	}{
+		{name: "nas", want: "nas"},
+		{name: "NAS", want: "NAS-3"}, // "nas-2" is taken by a live worker
+		{name: "nas", want: "nas", removed: true},
+		{name: "Nas", want: "Nas-4"}, // "NAS-3" was taken by the rename above
+		{name: "nas-2", want: "nas-2"},
+		{name: long, want: long},
+		{name: strings.ToUpper(long), want: strings.ToUpper(long[:62]) + "-2"},
+	}
+	ids := make([]string, len(workers))
+	for i, w := range workers {
+		ids[i] = fmt.Sprintf("0193a1b2-c3d4-7abc-8def-%012x", i+1)
 		var removed *time.Time
-		if i == 2 {
+		if w.removed {
 			now := time.Now()
 			removed = &now
 		}
-		if _, err := s.pool.Exec(ctx, insertWorker, id, []string{"nas", "NAS", "nas"}[i], removed); err != nil {
+		if _, err := s.pool.Exec(ctx, insertWorker, ids[i], w.name, removed); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -308,8 +328,10 @@ func TestMigrateSchedulesNotificationsDown(t *testing.T) {
 		names[id] = name
 	}
 	rows.Close()
-	if names[ids[0]] != "nas" || names[ids[1]] != "NAS-00000000" || names[ids[2]] != "nas" {
-		t.Errorf("worker names after up = %v, want the later live duplicate suffixed", names)
+	for i, w := range workers {
+		if got := names[ids[i]]; got != w.want {
+			t.Errorf("worker %d (%q) is named %q after up, want %q", i+1, w.name, got, w.want)
+		}
 	}
 	var notified, pending int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE notified_at IS NOT NULL), count(*) FILTER (WHERE notified_at IS NULL) FROM jobs`).
