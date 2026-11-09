@@ -323,19 +323,62 @@ func requeue(j *Job, now time.Time) error {
 	return nil
 }
 
+// The sample rate limiter (Service.lastStored).
+//
+// An entry only throttles storage: without one, the job's next sample is
+// stored, which costs one extra row and nothing else (samples are
+// idempotent by time). So an entry is needed only while its job runs and
+// keeps reporting, and it is dropped when the job finishes (published) or,
+// whatever else happens (a sample stored concurrently with the job's end,
+// a job whose end this process never sees), once it has gone unused for
+// staleSampleAfter. That bounds the map by the jobs reporting progress
+// within that time.
+
+// staleSampleAfter is how long an unused rate limiter entry is kept, at
+// least twice Config.SampleInterval.
+const staleSampleAfter = 10 * time.Minute
+
+// lastSample is a rate limiter entry.
+type lastSample struct {
+	// at is the Time of the job's last stored sample (worker clock).
+	at time.Time
+	// used is when the entry was last used (controller clock).
+	used time.Time
+}
+
 // due reports whether a sample taken at t should be stored.
 func (s *Service) due(id domain.JobID, t time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	last, ok := s.lastStored[id]
-	return !ok || t.Sub(last) >= s.cfg.SampleInterval
+	if ok {
+		last.used = s.clock.Now()
+		s.lastStored[id] = last
+	}
+	return !ok || t.Sub(last.at) >= s.cfg.SampleInterval
 }
 
+// stored records that the sample taken at t was stored, and drops stale
+// entries at most once per staleSampleAfter.
 func (s *Service) stored(id domain.JobID, t time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if t.After(s.lastStored[id]) {
-		s.lastStored[id] = t
+	now := s.clock.Now()
+	last := s.lastStored[id]
+	if t.After(last.at) {
+		last.at = t
+	}
+	last.used = now
+	s.lastStored[id] = last
+	stale := max(staleSampleAfter, 2*s.cfg.SampleInterval)
+	if now.Sub(s.lastPrune) < stale {
+		return
+	}
+	s.lastPrune = now
+	for id, e := range s.lastStored {
+		if now.Sub(e.used) >= stale {
+			delete(s.lastStored, id)
+		}
 	}
 }
 

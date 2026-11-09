@@ -703,6 +703,100 @@ func TestProgressIsRateLimitedBeforeStorage(t *testing.T) {
 	}
 }
 
+// hookedSamples calls before ahead of every AppendJobSample.
+type hookedSamples struct {
+	jobs.SampleRepository
+	before func()
+}
+
+func (h hookedSamples) AppendJobSample(ctx context.Context, s jobs.Sample) error {
+	if h.before != nil {
+		h.before()
+	}
+	return h.SampleRepository.AppendJobSample(ctx, s)
+}
+
+// TestSampleRateLimiterIsBounded: the rate limiter keeps an entry per job
+// only while the job reports progress. It drops it when the job finishes
+// and, whatever else happened (here a sample stored while the job
+// finished, or a job that never ends), once it went unused for ten
+// minutes, so it cannot grow over the process lifetime. Dropping an entry
+// costs at most one extra stored sample.
+func TestSampleRateLimiterIsBounded(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	var finishing *jobs.Job
+	samples := &hookedSamples{SampleRepository: e.store}
+	svc, err := jobs.New(jobs.Deps{
+		Jobs: e.store, Samples: samples, Clock: e.clock, IDs: &idgen.Sequential{},
+		Broker: e.rec, Notifier: e.rec, Waker: e.rec,
+	}, jobs.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.svc = svc
+	sample := func(id domain.JobID) {
+		t.Helper()
+		if ok, err := svc.RecordProgress(ctx, e.worker, id, epoch, jobs.Sample{Time: e.clock.Now()}); !ok || err != nil {
+			t.Fatalf("RecordProgress = (%v, %v)", ok, err)
+		}
+	}
+
+	// Finishing drops the entry.
+	a := e.at(t, domain.JobRunning)
+	sample(a.ID)
+	if n := jobs.ThrottledJobs(svc); n != 1 {
+		t.Fatalf("entries = %d, want 1", n)
+	}
+	if _, _, err := svc.Finish(ctx, e.worker, a.ID, epoch, jobs.Outcome{Status: domain.JobSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	if n := jobs.ThrottledJobs(svc); n != 0 {
+		t.Errorf("entries after the job finished = %d", n)
+	}
+
+	// A sample stored while its job finishes leaves an entry behind; a job
+	// that never finishes keeps one.
+	b := e.at(t, domain.JobRunning)
+	finishing = &b
+	samples.before = func() {
+		if j := finishing; j != nil {
+			finishing = nil
+			if _, _, err := svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobFailed}); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	sample(b.ID)
+	samples.before = nil
+	forever := e.at(t, domain.JobRunning)
+	sample(forever.ID)
+	if n := jobs.ThrottledJobs(svc); n != 2 {
+		t.Fatalf("entries = %d, want 2 (a leftover and a job that never finishes)", n)
+	}
+
+	// Ten minutes later both are gone; a job still reporting keeps its own.
+	c := e.at(t, domain.JobRunning)
+	for range 10 {
+		e.clock.Advance(time.Minute)
+		sample(c.ID)
+	}
+	if n := jobs.ThrottledJobs(svc); n != 1 {
+		t.Errorf("entries after ten minutes = %d, want 1 (the job still reporting)", n)
+	}
+	// The dropped entry costs at most one extra sample: forever's next
+	// sample is stored, the one after it is throttled again.
+	before, _ := svc.Samples(ctx, e.owner, forever.ID)
+	sample(forever.ID)
+	e.clock.Advance(time.Second)
+	sample(forever.ID)
+	after, _ := svc.Samples(ctx, e.owner, forever.ID)
+	if len(after) != len(before)+1 {
+		t.Errorf("samples of the job whose entry was dropped: %d -> %d, want one more", len(before), len(after))
+	}
+}
+
 func TestWatch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

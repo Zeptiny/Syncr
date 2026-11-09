@@ -66,8 +66,11 @@ type Service struct {
 	cfg      Config
 
 	mu sync.Mutex
-	// lastStored is the Time of the last stored sample per running job.
-	lastStored map[domain.JobID]time.Time
+	// lastStored is the last stored sample per running job, for the rate
+	// limiter; it is bounded (see staleSampleAfter). lastPrune is when
+	// stale entries were last dropped.
+	lastStored map[domain.JobID]lastSample
+	lastPrune  time.Time
 }
 
 // maxAttempts bounds the optimistic update retries of one change.
@@ -93,7 +96,7 @@ func New(d Deps, cfg Config) (*Service, error) {
 		repo: d.Jobs, samples: d.Samples, clock: d.Clock, ids: d.IDs,
 		broker: d.Broker, notifier: d.Notifier, waker: d.Waker, remotes: d.Remotes, activity: d.Activity,
 		log: log, cfg: cfg,
-		lastStored: make(map[domain.JobID]time.Time),
+		lastStored: make(map[domain.JobID]lastSample), lastPrune: d.Clock.Now(),
 	}, nil
 }
 
