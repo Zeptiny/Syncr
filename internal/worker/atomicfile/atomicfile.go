@@ -4,8 +4,10 @@
 // Write creates a temporary file next to the destination, restricts it,
 // writes and syncs the data, and renames it into place. On Windows, where
 // permission bits mean little, restricted files get an ACL limited to SYSTEM
-// and Administrators (plus the current user on request); this is best effort
-// and reported through Result rather than failing the write.
+// and Administrators (plus the current user on request). The ACL is part of
+// the temporary file from its creation, so no other account can open it
+// before the data is written; if the ACL cannot be built, the file is written
+// with the permissions it inherits and Result says so.
 //
 // Allowed dependencies: the standard library and golang.org/x/sys.
 package atomicfile
@@ -47,10 +49,11 @@ func Write(path string, data []byte, opts Options) (res Result, err error) {
 	if dir == "" {
 		dir = "."
 	}
-	tmp, err := os.CreateTemp(dir, "."+base+".*.tmp")
+	tmp, aclWarning, err := createTemp(dir, base, opts)
 	if err != nil {
 		return Result{}, fmt.Errorf("create temporary file for %s: %w", path, err)
 	}
+	res.ACLWarning = aclWarning
 	tmpName := tmp.Name()
 	defer func() {
 		if err != nil {
@@ -59,13 +62,10 @@ func Write(path string, data []byte, opts Options) (res Result, err error) {
 		}
 	}()
 
-	// Windows cannot represent most modes; the ACL below protects the file
-	// there.
+	// Windows cannot represent most modes; the ACL set by createTemp
+	// protects the file there.
 	if cerr := tmp.Chmod(perm); cerr != nil && !isWindows() {
 		return Result{}, fmt.Errorf("set permissions of %s: %w", path, cerr)
-	}
-	if opts.RestrictACL {
-		res.ACLWarning = restrictACL(tmpName, opts.IncludeCurrentUser)
 	}
 	if _, err = tmp.Write(data); err != nil {
 		return Result{}, fmt.Errorf("write %s: %w", path, err)
@@ -82,3 +82,6 @@ func Write(path string, data []byte, opts Options) (res Result, err error) {
 	syncDir(dir)
 	return res, nil
 }
+
+// tempPattern is the os.CreateTemp pattern of Write's temporary files.
+func tempPattern(base string) string { return "." + base + ".*.tmp" }
