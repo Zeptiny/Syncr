@@ -173,15 +173,16 @@ func (f *fakeServices) Info(spec service.Spec) service.Info {
 }
 
 type fakeTools struct {
-	mu      sync.Mutex
+	mu sync.Mutex
+	// dirs are the tools directories Provision was given.
 	dirs    []string
 	err     error
 	reports []ToolStatus
 }
 
-func (f *fakeTools) Provision(_ context.Context, dataDir string, progress func(string)) ([]ToolStatus, error) {
+func (f *fakeTools) Provision(_ context.Context, toolsDir string, progress func(string)) ([]ToolStatus, error) {
 	f.mu.Lock()
-	f.dirs = append(f.dirs, dataDir)
+	f.dirs = append(f.dirs, toolsDir)
 	f.mu.Unlock()
 	progress("resolving rclone and restic")
 	if f.err != nil {
@@ -191,8 +192,8 @@ func (f *fakeTools) Provision(_ context.Context, dataDir string, progress func(s
 		return f.reports, nil
 	}
 	return []ToolStatus{
-		{Name: "rclone", Version: "1.70.0", Source: "managed", Path: filepath.Join(dataDir, "tools", "rclone")},
-		{Name: "restic", Version: "0.18.0", Source: "managed", Path: filepath.Join(dataDir, "tools", "restic")},
+		{Name: "rclone", Version: "1.70.0", Source: "managed", Path: filepath.Join(toolsDir, "rclone", "1.70.0", "rclone")},
+		{Name: "restic", Version: "0.18.0", Source: "managed", Path: filepath.Join(toolsDir, "restic", "0.18.0", "restic")},
 	}, nil
 }
 
@@ -343,8 +344,11 @@ func TestActiveSetupEndToEnd(t *testing.T) {
 	if want := []string{"preflight", "install", "start"}; !equalPrefixed(r.svc.called(), want) {
 		t.Errorf("service calls = %v, want %v in order", r.svc.called(), want)
 	}
-	if len(r.tools.dirs) != 1 || r.tools.dirs[0] != r.data {
-		t.Errorf("tools provisioned in %v", r.tools.dirs)
+	if want := filepath.Join(r.data, "tools"); len(r.tools.dirs) != 1 || r.tools.dirs[0] != want {
+		t.Errorf("tools provisioned in %v, want %s", r.tools.dirs, want)
+	}
+	if cfg.Tools.Dir != "" {
+		t.Errorf("tools.dir = %q: the default follows data_dir and is not written", cfg.Tools.Dir)
 	}
 	if res.WorkerID != enrolledID || res.Service != service.StateRunning || len(res.Tools) != 2 {
 		t.Errorf("result = %+v", res)
@@ -1104,11 +1108,71 @@ func TestExplicitToolPathsAreWrittenToTheConfig(t *testing.T) {
 	rclone := filepath.Join(r.dir, "bin", "rclone")
 	r.tools.reports = []ToolStatus{
 		{Name: "rclone", Version: "1", Source: "configured", Path: rclone},
-		{Name: "restic", Version: "2", Source: "managed", Path: "/managed/restic"},
+		{Name: "restic", Version: "2", Source: "managed", Path: filepath.Join(r.data, "tools", "restic")},
 	}
 	r.mustRun(r.activeOptions(c))
 	cfg := r.loadConfig()
 	if cfg.Tools.RclonePath != rclone || cfg.Tools.ResticPath != "" {
 		t.Errorf("tools = %+v: only explicitly configured binaries belong in the config", cfg.Tools)
 	}
+}
+
+// TestCustomToolsDirIsWrittenToTheConfig: tools that setup installs into a
+// directory other than <data dir>/tools (SYNCR_TOOLS_DIR) must be found by
+// the service, which runs without that environment.
+func TestCustomToolsDirIsWrittenToTheConfig(t *testing.T) {
+	t.Parallel()
+	c := newFakeController(t)
+	r := newRig(t)
+	o := r.activeOptions(c)
+	o.ToolsDir = filepath.Join(r.dir, "opt", "tools")
+	r.mustRun(o)
+	if len(r.tools.dirs) != 1 || r.tools.dirs[0] != o.ToolsDir {
+		t.Errorf("tools provisioned in %v, want %s", r.tools.dirs, o.ToolsDir)
+	}
+	if got := r.loadConfig().Tools.Dir; got != o.ToolsDir {
+		t.Errorf("tools.dir = %q, want %q", got, o.ToolsDir)
+	}
+	mustContain(t, "output", r.out.String(), "ok    rclone 1.70.0 available")
+
+	// The dry run names the directory too.
+	r2 := newRig(t)
+	o2 := r2.activeOptions(c)
+	o2.ToolsDir, o2.DryRun = o.ToolsDir, true
+	if _, err := r2.run(o2); err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, "plan", r2.out.String(), "provision the pinned rclone and restic under "+o.ToolsDir)
+}
+
+// TestSelfCheckFindsToolsWhereTheServiceLooks: a managed tool outside the
+// directory the service resolves from the config would be missing when the
+// service starts, so the self-check fails instead of reporting it available.
+func TestSelfCheckFindsToolsWhereTheServiceLooks(t *testing.T) {
+	t.Parallel()
+	c := newFakeController(t)
+	r := newRig(t)
+	elsewhere := filepath.Join(r.dir, "elsewhere", "rclone")
+	r.tools.reports = []ToolStatus{
+		{Name: "rclone", Version: "1", Source: "managed", Path: elsewhere},
+		{Name: "restic", Version: "2", Source: "managed", Path: filepath.Join(r.data, "tools", "restic")},
+	}
+	_, err := r.run(r.activeOptions(c))
+	if err == nil {
+		t.Fatal("the self-check accepted a tool the service cannot find")
+	}
+	mustContain(t, "error", err.Error(), "self-check", elsewhere, filepath.Join(r.data, "tools"), "service restart")
+}
+
+func TestSelfCheckWarnsAboutToolsFromThePath(t *testing.T) {
+	t.Parallel()
+	c := newFakeController(t)
+	r := newRig(t)
+	onPath := filepath.Join(r.dir, "home", "bin", "rclone")
+	r.tools.reports = []ToolStatus{
+		{Name: "rclone", Version: "1", Source: "path", Path: onPath},
+		{Name: "restic", Version: "2", Source: "managed", Path: filepath.Join(r.data, "tools", "restic")},
+	}
+	r.mustRun(r.activeOptions(c))
+	mustContain(t, "output", r.out.String(), "warn  rclone 1 was found on the PATH", onPath, "tools.rclone_path", "ok    restic 2 available")
 }

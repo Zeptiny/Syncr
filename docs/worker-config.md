@@ -160,6 +160,14 @@ fix it. Inspect the sources with `syncr-worker tools status`.
 `<SYNCR_DATA_DIR or the default data dir>/tools`. A `data_dir` or `tools.dir`
 set only in the YAML file is not visible to them: pass `--dir` for those.
 
+`syncr-worker setup` installs missing tools into `SYNCR_TOOLS_DIR` when it is
+set, else into `<data_dir>/tools`, and writes what the service needs to find
+them again: always `data_dir`, `tools.dir` when it is not `<data_dir>/tools`,
+and `tools.rclone_path` / `tools.restic_path` for binaries given with
+`SYNCR_RCLONE_PATH` / `SYNCR_RESTIC_PATH`. Its self-check fails if a managed
+tool is not where the service will look, and warns about a tool found only on
+the setup shell's `PATH` (the service may run with another one).
+
 ## Child process limits
 
 Tool output is read line by line; the worker allows lines up to 32 MiB because

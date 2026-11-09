@@ -88,9 +88,12 @@ func (s *cmdServices) Info(service.Spec) service.Info {
 
 type cmdTools struct{}
 
-func (cmdTools) Provision(_ context.Context, _ string, progress func(string)) ([]setup.ToolStatus, error) {
+func (cmdTools) Provision(_ context.Context, toolsDir string, progress func(string)) ([]setup.ToolStatus, error) {
 	progress("fake tools")
-	return []setup.ToolStatus{{Name: "rclone", Version: "1", Source: "managed", Path: "/r"}, {Name: "restic", Version: "2", Source: "managed", Path: "/s"}}, nil
+	return []setup.ToolStatus{
+		{Name: "rclone", Version: "1", Source: "managed", Path: filepath.Join(toolsDir, "rclone")},
+		{Name: "restic", Version: "2", Source: "managed", Path: filepath.Join(toolsDir, "restic")},
+	}, nil
 }
 
 type setupFixture struct {
@@ -161,6 +164,25 @@ func TestSetupCommandActive(t *testing.T) {
 	}
 	if !strings.Contains(stderr2.String(), "already set up") || !strings.Contains(stderr2.String(), "--force") {
 		t.Errorf("stderr = %s", stderr2)
+	}
+}
+
+// TestSetupCommandWritesTheToolsDir: tools installed under $SYNCR_TOOLS_DIR
+// during setup must be found by the service, which runs without it.
+func TestSetupCommandWritesTheToolsDir(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	toolsDir := filepath.Join(dir, "shared-tools")
+	f, e, stdout, stderr := newSetupFixture(t, map[string]string{tokenEnv: "wtok_x", toolsDirEnv: toolsDir})
+	if code := run(t.Context(), f.args("--controller", "https://syncr.example.com"), e); code != exitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout(), stderr())
+	}
+	cfg := workerconfig.Default()
+	if err := platformconfig.Load(filepath.Join(f.dir, "worker.yaml"), nil, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tools.Dir != toolsDir {
+		t.Errorf("tools.dir = %q, want %q", cfg.Tools.Dir, toolsDir)
 	}
 }
 

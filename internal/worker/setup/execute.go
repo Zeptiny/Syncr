@@ -15,6 +15,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/platform/redact"
 	"github.com/Zeptiny/Syncr/internal/worker/atomicfile"
 	"github.com/Zeptiny/Syncr/internal/worker/config"
+	"github.com/Zeptiny/Syncr/internal/worker/paths"
 	"github.com/Zeptiny/Syncr/internal/worker/service"
 	"github.com/Zeptiny/Syncr/internal/worker/tlscert"
 )
@@ -33,7 +34,7 @@ func (s *Setup) execute(ctx context.Context, p *plan) (*Result, error) {
 
 	// 2. Tools.
 	s.step("Provisioning rclone and restic (pinned versions, checksum-verified)")
-	tools, err := s.Tools.Provision(ctx, p.dataDir, func(msg string) { s.printf("    %s\n", msg) })
+	tools, err := s.Tools.Provision(ctx, p.toolsDir, func(msg string) { s.printf("    %s\n", msg) })
 	if err != nil {
 		return nil, fmt.Errorf("provision the tools: %w\n"+
 			"The pinned binaries are downloaded from GitHub over HTTPS. If this machine has no internet access, "+
@@ -296,8 +297,22 @@ func (s *Setup) selfCheck(ctx context.Context, p *plan, res *Result) (service.St
 		return service.StateNotInstalled, fmt.Errorf("self-check: the configuration does not load: %w", err)
 	}
 	ok("configuration %s is valid (link mode: %s)", p.configPath, loaded.Link.Mode)
+	// The tools must be where the service, which has none of setup's
+	// environment, will look for them.
+	serviceTools := loaded.Tools.Dir
+	if serviceTools == "" {
+		serviceTools = paths.ToolsDir(loaded.DataDir)
+	}
 	for _, t := range res.Tools {
-		ok("%s %s available", t.Name, t.Version)
+		switch {
+		case t.Source == "managed" && !within(serviceTools, t.Path):
+			return service.StateNotInstalled, fmt.Errorf("self-check: %s was installed at %s, but the service looks for managed tools in %s", t.Name, t.Path, serviceTools)
+		case t.Source == "path":
+			warn("%s %s was found on the PATH of this shell (%s); the service may run with another PATH. "+
+				"Set tools.%s_path in %s, or install it with: syncr-worker tools fetch --dir %s", t.Name, t.Version, t.Path, t.Name, p.configPath, serviceTools)
+		default:
+			ok("%s %s available", t.Name, t.Version)
+		}
 	}
 
 	state := service.StateNotInstalled
@@ -321,6 +336,12 @@ func (s *Setup) selfCheck(ctx context.Context, p *plan, res *Result) (service.St
 		}
 	}
 	return state, nil
+}
+
+// within reports whether path lies inside dir.
+func within(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // maxProbeWait bounds how long the self-check waits for a passive worker's

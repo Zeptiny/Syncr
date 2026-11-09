@@ -70,6 +70,10 @@ type Options struct {
 	// DataDir and ConfigPath override the platform defaults.
 	DataDir    string
 	ConfigPath string
+	// ToolsDir overrides the managed tools directory (<data dir>/tools).
+	// The service runs without setup's environment, so a non-default value
+	// is written to the config (tools.dir).
+	ToolsDir string
 
 	// User installs for the current user only (no root or Administrator).
 	User bool
@@ -96,10 +100,12 @@ type ToolStatus struct {
 	Name, Version, Source, Path string
 }
 
-// ToolProvisioner makes the pinned rclone and restic available under dataDir
-// (downloading and verifying them if missing) and reports each tool.
+// ToolProvisioner makes the pinned rclone and restic available, installing a
+// missing one into the managed tools directory toolsDir (downloaded and
+// verified), and reports each tool. It must use toolsDir and no other
+// managed directory: that is the one written to the config for the service.
 type ToolProvisioner interface {
-	Provision(ctx context.Context, dataDir string, progress func(msg string)) ([]ToolStatus, error)
+	Provision(ctx context.Context, toolsDir string, progress func(msg string)) ([]ToolStatus, error)
 }
 
 // TLSProbe connects to a passive worker's listener and returns the
@@ -180,6 +186,7 @@ type plan struct {
 	name       string
 	dataDir    string
 	configPath string
+	toolsDir   string // the managed tools directory, as the service resolves it
 	tlsDir     string
 	certPath   string
 	keyPath    string
@@ -258,6 +265,9 @@ func (s *Setup) plan(ctx context.Context, opts Options) (*plan, error) {
 	}
 	if p.configPath, err = filepath.Abs(p.configPath); err != nil {
 		return nil, fmt.Errorf("find the config file location: %w (use --config)", err)
+	}
+	if p.toolsDir = opts.ToolsDir; p.toolsDir == "" {
+		p.toolsDir = paths.ToolsDir(p.dataDir)
 	}
 	p.tlsDir = filepath.Join(p.dataDir, "tls")
 	if opts.CAFile != "" {
@@ -367,7 +377,7 @@ func (s *Setup) validateOptions(opts *Options) error {
 	// setup runs in now.
 	for flag, p := range map[string]*string{
 		"--data-dir": &opts.DataDir, "--config": &opts.ConfigPath, "--ca-file": &opts.CAFile,
-		"--tls-cert": &opts.TLSCertFile, "--tls-key": &opts.TLSKeyFile,
+		"--tls-cert": &opts.TLSCertFile, "--tls-key": &opts.TLSKeyFile, "SYNCR_TOOLS_DIR": &opts.ToolsDir,
 	} {
 		if *p == "" {
 			continue
@@ -455,6 +465,12 @@ func (s *Setup) buildConfig(p *plan, workerID string, secret redact.Secret) conf
 	cfg := config.Default()
 	cfg.DataDir = p.dataDir
 	cfg.LocalRoots = p.opts.LocalRoots
+	// The default follows data_dir; anything else (SYNCR_TOOLS_DIR during
+	// setup) must be spelled out for the service, which has no such
+	// environment.
+	if p.toolsDir != paths.ToolsDir(p.dataDir) {
+		cfg.Tools.Dir = p.toolsDir
+	}
 	cfg.Tools.RclonePath = p.toolPaths["rclone"]
 	cfg.Tools.ResticPath = p.toolPaths["restic"]
 	l := &cfg.Link
@@ -486,7 +502,7 @@ func (s *Setup) printPlan(p *plan) {
 	}
 	info := s.Services.Info(p.spec)
 	do("create %s (data) and %s (config)", p.dataDir, filepath.Dir(p.configPath))
-	do("provision the pinned rclone and restic under %s (download and verify what is missing)", filepath.Join(p.dataDir, "tools"))
+	do("provision the pinned rclone and restic under %s (download and verify what is missing)", p.toolsDir)
 	if p.opts.Mode == config.LinkPassive {
 		switch {
 		case p.ownCert:
