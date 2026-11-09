@@ -14,16 +14,16 @@ import (
 //	 ▲ │            │
 //	 │ │            ├──► succeeded | failed | cancelled | interrupted
 //	 │ │            │
-//	 └─┼────────────┘  (re-queued: the worker restarted before starting it)
+//	 └─┼────────────┘  (re-queued: the worker restarted or shut down before starting it)
 //	   │
 //	   └──► failed | cancelled
 //
 // A dispatched job may finish without ever being observed running: the
 // worker's result can be the first event the controller ingests. A
 // dispatched job goes back to queued when its worker process restarts (new
-// epoch) before starting it, because nothing ran yet; a running job is never
-// re-queued (it becomes interrupted instead). Terminal statuses never
-// change; a retry is a new job.
+// epoch) or shuts down before starting it, because nothing ran yet; a
+// running job is never re-queued (it becomes interrupted instead). Terminal
+// statuses never change; a retry is a new job.
 type JobStatus string
 
 // Job statuses.

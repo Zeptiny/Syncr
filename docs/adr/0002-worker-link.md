@@ -72,6 +72,12 @@ snapshot (carried by every Report/Pull and consistent with its events; its
 - jobs the worker still holds that the controller considers finished or does
   not know are cancelled.
 
+The same holds without a restart when a worker shuts down gracefully: a
+CANCELLED result nobody asked for (`WORKER_SHUTDOWN`) interrupts a job that
+started, but a job that never started (no `JobStarted` before its result)
+goes back to `queued`, without a notification, for the worker's next
+process.
+
 The full rule tables live in the package documentation of
 `internal/controller/dispatch`. A job that stays queued longer than the
 dispatch timeout (worker offline) fails with `DISPATCH_TIMEOUT`.

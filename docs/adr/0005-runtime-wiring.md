@@ -137,10 +137,13 @@ logged and bounded so the whole stays under the 20 s a service manager allows:
    whenever a Pull returned events, since only the next Pull acknowledges
    them.
 
-The controller turns those results into `interrupted` (`worker_shutdown`).
+The controller turns the results of jobs that had started into
+`interrupted` (`worker_shutdown`). Jobs that never started (they waited in
+the worker's local queue) go back to the controller's queue, without a
+notification, and the worker's next process runs them, as after a crash.
 If the flush does not finish, nothing is lost for good: the next worker
-process has a new epoch and the controller's reconcile interrupts the jobs
-(`worker_restarted`).
+process has a new epoch and the controller's reconcile interrupts the
+running jobs (`worker_restarted`) and re-queues the others.
 
 ## Consequences
 

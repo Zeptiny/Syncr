@@ -354,6 +354,11 @@ func TestCancelRequestThenWorkerOutcome(t *testing.T) {
 			got, _, err := e.svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobCancelled})
 			return got, err
 		}, domain.JobCancelled, jobs.CodeCancelled},
+		{"cancelled result before it started", domain.JobDispatched, func(e *env, j jobs.Job) (jobs.Job, error) {
+			got, _, err := e.svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobCancelled,
+				Error: jobs.JobError{Code: jobs.CodeWorkerShutdown, Message: "job cancelled because the worker is shutting down"}})
+			return got, err
+		}, domain.JobCancelled, jobs.CodeWorkerShutdown},
 		{"worker finished first", domain.JobRunning, func(e *env, j jobs.Job) (jobs.Job, error) {
 			got, _, err := e.svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobSucceeded})
 			return got, err
@@ -460,6 +465,56 @@ func TestUnrequestedCancelIsInterrupted(t *testing.T) {
 		if len(e.rec.failed) != 1 {
 			t.Errorf("code %q: notifier calls = %d", code, len(e.rec.failed))
 		}
+	}
+}
+
+// TestUnstartedJobStoppedByTheWorkerIsRequeued: a job the worker gives
+// back without having started it (its JobResult is CANCELLED without a
+// cancel request, e.g. it was waiting in the queue of a worker that shuts
+// down) ran nowhere, so it goes back to the queue instead of ending
+// interrupted, and nobody is notified.
+func TestUnstartedJobStoppedByTheWorkerIsRequeued(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	shutdown := jobs.Outcome{Status: domain.JobCancelled, ExitCode: -1,
+		Error: jobs.JobError{Code: jobs.CodeWorkerShutdown, Message: "job cancelled because the worker is shutting down"}}
+	for _, from := range []domain.JobStatus{domain.JobQueued, domain.JobDispatched} {
+		e := newEnv(t)
+		j := e.at(t, from) // queued: the worker's ack has not arrived yet
+		e.clock.Advance(time.Minute)
+		wakes := len(e.rec.wakes)
+		got, changed, err := e.svc.Finish(ctx, e.worker, j.ID, epoch, shutdown)
+		if err != nil || !changed || got.Status != domain.JobQueued || got.Epoch != "" || got.Requeues != 1 ||
+			!got.QueuedAt.Equal(e.clock.Now()) || !got.DispatchedAt.IsZero() || !got.FinishedAt.IsZero() || !got.Error.IsZero() {
+			t.Errorf("from %s: Finish = (%+v, %v, %v), want re-queued", from, got, changed, err)
+		}
+		if len(e.rec.finished) != 0 {
+			t.Errorf("from %s: notifier called for a re-queued job", from)
+		}
+		if len(e.rec.wakes) == wakes {
+			t.Errorf("from %s: re-queue did not wake the worker", from)
+		}
+		if smp, ok, _ := e.svc.LatestSample(ctx, j.ID); ok {
+			t.Errorf("from %s: a re-queued job got a final sample %+v", from, smp)
+		}
+		// The worker's next process (another epoch) takes it.
+		if got, _, err := e.svc.MarkRunning(ctx, e.worker, j.ID, "epoch-2", time.Time{}); err != nil || got.Status != domain.JobRunning {
+			t.Errorf("from %s: MarkRunning after the re-queue = (%s, %v)", from, got.Status, err)
+		}
+	}
+
+	// A result with a start time comes from a job that ran: interrupted.
+	e := newEnv(t)
+	j := e.at(t, domain.JobDispatched)
+	started := shutdown
+	started.StartedAt = e.clock.Now()
+	if got, _, err := e.svc.Finish(ctx, e.worker, j.ID, epoch, started); err != nil || got.Status != domain.JobInterrupted || got.Error.Code != jobs.CodeWorkerShutdown {
+		t.Errorf("started without JobStarted: (%s, %+v, %v), want interrupted", got.Status, got.Error, err)
+	}
+	// Results of another epoch change nothing.
+	o := e.at(t, domain.JobDispatched)
+	if _, changed, err := e.svc.Finish(ctx, e.worker, o.ID, "epoch-2", shutdown); changed || err != nil {
+		t.Errorf("another epoch's result: changed %v, err %v", changed, err)
 	}
 }
 

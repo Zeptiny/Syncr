@@ -116,8 +116,12 @@ func (s *Service) RecordProgress(ctx context.Context, workerID domain.WorkerID, 
 // must be terminal) with the outcome's details. The final counters are
 // also stored as the job's last sample.
 //
-// A cancelled outcome counts as cancelled only if a cancel was requested;
-// otherwise the worker stopped the job on its own (shutdown) and it is
+// A cancelled outcome counts as cancelled only if a cancel was requested.
+// Otherwise the worker stopped the job on its own (it is shutting down):
+// a job that never started (still dispatched, so no JobStarted came before
+// the result, and the result has no start time) goes back to the queue
+// like the jobs a restarted worker never started (Requeue): nothing ran, so
+// it does not finish and nobody is notified. A job that started is
 // recorded as interrupted with code worker_shutdown. The decision is made
 // atomically with the update, so a concurrent Cancel cannot be missed.
 func (s *Service) Finish(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, o Outcome) (Job, bool, error) {
@@ -134,11 +138,14 @@ func (s *Service) Finish(ctx context.Context, workerID domain.WorkerID, id domai
 		}
 		to, e := o.Status, o.Error
 		if to == domain.JobCancelled {
-			if j.CancelRequested() {
+			switch {
+			case j.CancelRequested():
 				if e.IsZero() || e.Code == CodeUnspecified {
 					e.Code = CodeCancelled
 				}
-			} else {
+			case j.Status == domain.JobDispatched && o.StartedAt.IsZero():
+				return true, requeue(j, now)
+			default:
 				to = domain.JobInterrupted
 				e.Code = CodeWorkerShutdown
 				if e.Message == "" {
@@ -162,6 +169,11 @@ func (s *Service) Finish(ctx context.Context, workerID domain.WorkerID, id domai
 	if err != nil {
 		return Job{}, false, fmt.Errorf("finish job %s: %w", id, err)
 	}
+	if changed && j.Status == domain.JobQueued {
+		s.log.InfoContext(ctx, "job re-queued: the worker stopped without starting it", "job_id", id.String(),
+			"worker_id", workerID.String(), "requeues", j.Requeues)
+		return j, changed, nil
+	}
 	if changed && !j.StartedAt.IsZero() {
 		final := Sample{JobID: id, Time: j.FinishedAt, Stats: j.Stats}
 		if err := s.samples.AppendJobSample(ctx, final); err != nil {
@@ -184,14 +196,7 @@ func (s *Service) Requeue(ctx context.Context, workerID domain.WorkerID, id doma
 		if j.CancelRequested() {
 			return true, finish(j, domain.JobCancelled, now, JobError{Code: CodeCancelled, Message: "cancelled before the worker started it"})
 		}
-		if err := setStatus(j, domain.JobQueued); err != nil {
-			return false, err
-		}
-		j.Epoch = ""
-		j.QueuedAt = now
-		j.DispatchedAt = time.Time{}
-		j.Requeues++
-		return true, nil
+		return true, requeue(j, now)
 	})
 	if err != nil {
 		return Job{}, false, fmt.Errorf("requeue job %s: %w", id, err)
@@ -251,6 +256,20 @@ func (s *Service) ReleaseWorkerJobs(ctx context.Context, workerID domain.WorkerI
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+// requeue moves a dispatched job that never started back to the queue at
+// now: the dispatcher derives a StartJob for it again, and the dispatch
+// timeout starts over.
+func requeue(j *Job, now time.Time) error {
+	if err := setStatus(j, domain.JobQueued); err != nil {
+		return err
+	}
+	j.Epoch = ""
+	j.QueuedAt = now
+	j.DispatchedAt = time.Time{}
+	j.Requeues++
+	return nil
 }
 
 // due reports whether a sample taken at t should be stored.

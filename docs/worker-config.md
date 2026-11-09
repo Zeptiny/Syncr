@@ -109,11 +109,13 @@ On stop (service stop, Ctrl-C, SIGTERM) the worker cancels its running jobs
 (rclone and restic get 10 s to exit, then they are killed), reports them as
 cancelled by the shutdown (the controller shows them `interrupted`, code
 `worker_shutdown`), and gives the controller up to 5 s to collect those
-results. The whole stop stays under 20 s, the time a service
-manager allows. If the worker dies instead (crash, SIGKILL, out of memory),
-its rclone and restic processes are killed with it (on Linux and Windows; on
-other systems they finish or fail on their own), and the controller marks its
-running jobs `interrupted` (`worker_restarted`) when it comes back.
+results. Jobs still waiting in the worker's queue never started, so the
+controller queues them again for the worker's next start. The whole stop
+stays under 20 s, the time a service manager allows. If the worker dies
+instead (crash, SIGKILL, out of memory), its rclone and restic processes are
+killed with it (on Linux and Windows; on other systems they finish or fail on
+their own), and the controller marks its running jobs `interrupted`
+(`worker_restarted`) when it comes back.
 
 ### Secrets
 

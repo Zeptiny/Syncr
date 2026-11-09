@@ -443,8 +443,9 @@ enum JobResultStatus {
   // The job could not be run or the tool reported a failure.
   JOB_RESULT_STATUS_FAILED = 2;
   // The job was stopped by a CancelJob command or worker shutdown. The
-  // controller records CANCELLED if a cancel was requested and INTERRUPTED
-  // otherwise.
+  // controller records CANCELLED if a cancel was requested; otherwise it
+  // queues the job again if it never started (no JobStarted, no
+  // started_at) and records INTERRUPTED if it did.
   JOB_RESULT_STATUS_CANCELLED = 3;
 }
 
@@ -497,9 +498,10 @@ enum JobErrorCode {
   // CANCELLED).
   JOB_ERROR_CODE_CANCELLED = 13;
   // The job was stopped because the worker is shutting down (JobResult
-  // status CANCELLED). The controller records the job as INTERRUPTED unless
-  // a cancel had been requested; it also uses this code for a CANCELLED
-  // result without a code that nobody asked for.
+  // status CANCELLED). Unless a cancel had been requested, the controller
+  // queues a job that never started again and records one that started as
+  // INTERRUPTED; it also uses this code for a CANCELLED result without a
+  // code that nobody asked for.
   JOB_ERROR_CODE_WORKER_SHUTDOWN = 14;
 
   // Codes 20 and up are set by the controller, never by workers.

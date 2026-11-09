@@ -1610,7 +1610,7 @@ type Job struct {
 	// When the job reached its terminal status; unset until then.
 	FinishedAt *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
 	// How often the job went back to the queue because its worker restarted
-	// before starting it.
+	// or shut down before starting it.
 	Requeues int32 `protobuf:"varint,10,opt,name=requeues,proto3" json:"requeues,omitempty"`
 	// Cumulative counters: the final ones for a finished job, the latest
 	// stored sample while it runs, unset before.

@@ -51,11 +51,22 @@
 //	               SUCCEEDED                               succeeded, with warnings and output
 //	               FAILED                                  failed (notifier called)
 //	               CANCELLED, cancel requested             cancelled
-//	               CANCELLED, no cancel requested          interrupted, worker_shutdown (notifier called)
+//	               CANCELLED, no cancel requested,         not terminal: queued again (requeues+1, StartJob
+//	                 job never started (see below)           derived again; not notified)
+//	               CANCELLED, no cancel requested,         interrupted, worker_shutdown (notifier called)
+//	                 job started
 //	               unknown status                          failed, internal
 //	JobResult    terminal                                ignored
 //	any job      unknown, malformed or another worker's  skipped and acknowledged (logged)
 //	unknown type -                                       skipped and acknowledged (newer worker)
+//
+// A worker stops jobs without a cancel request only when it shuts down. A
+// job it never started is still dispatched when its result arrives (a
+// JobStarted always comes first and is never dropped) and the result has
+// no start time: nothing ran, so it goes back to the queue like a job of a
+// restarted worker (see the epoch rules) and the worker's next process
+// receives it. A shutting-down worker does not acknowledge StartJob, so a
+// job sent to it meanwhile stays queued.
 //
 // # Acks
 //

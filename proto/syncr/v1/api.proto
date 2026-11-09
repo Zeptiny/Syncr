@@ -437,7 +437,7 @@ message Job {
   google.protobuf.Timestamp finished_at = 9;
 
   // How often the job went back to the queue because its worker restarted
-  // before starting it.
+  // or shut down before starting it.
   int32 requeues = 10;
 
   // Cumulative counters: the final ones for a finished job, the latest

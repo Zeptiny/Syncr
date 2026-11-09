@@ -463,6 +463,74 @@ func TestJobResultMapping(t *testing.T) {
 	}
 }
 
+// TestShutdownGivesBackUnstartedJobs: a worker that shuts down reports the
+// jobs waiting in its local queue CANCELLED (WORKER_SHUTDOWN) without a
+// JobStarted. They ran nowhere, so they go back to the queue, as after a
+// crash, instead of ending interrupted with a notification each; the
+// running job is interrupted; a job with a cancel request ends cancelled.
+// The worker's next process receives the re-queued jobs.
+func TestShutdownGivesBackUnstartedJobs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	wid := e.enroll("w")
+	running, waiting, asked := e.run(wid), e.run(wid), e.run(wid)
+	unacked := e.run(wid)
+	w := e.newFakeWorker(wid)
+	w.poll()
+	w.acks = w.acks[:3] // the ack of unacked is still in flight
+	w.start(running.ID.String())
+	w.report()
+	if _, err := e.jobs.Cancel(ctx, testActor(), asked.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	shutdown := &syncrv1.JobError{Code: syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_SHUTDOWN, Message: "job cancelled because the worker is shutting down"}
+	for _, j := range []jobs.Job{running, waiting, asked, unacked} {
+		w.finish(j.ID.String(), syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED, shutdown)
+	}
+	w.acks = nil
+	w.report()
+
+	for _, tc := range []struct {
+		job      jobs.Job
+		status   domain.JobStatus
+		code     string
+		requeues int
+	}{
+		{running, domain.JobInterrupted, jobs.CodeWorkerShutdown, 0},
+		{waiting, domain.JobQueued, "", 1},
+		{asked, domain.JobCancelled, jobs.CodeWorkerShutdown, 0},
+		{unacked, domain.JobQueued, "", 1},
+	} {
+		got := e.job(tc.job.ID)
+		if got.Status != tc.status || got.Error.Code != tc.code || got.Requeues != tc.requeues || (tc.status == domain.JobQueued && got.Epoch != "") {
+			t.Errorf("job %s = %s %q requeues %d epoch %q, want %s %q requeues %d",
+				tc.job.ID, got.Status, got.Error.Code, got.Requeues, got.Epoch, tc.status, tc.code, tc.requeues)
+		}
+	}
+	if n := e.rec.failures(); n != 1 {
+		t.Errorf("notifier calls = %d, want 1 (the running job)", n)
+	}
+
+	// The worker's next process receives the re-queued jobs and runs them.
+	w.restart()
+	cmds := w.poll()
+	var ids []string
+	for _, c := range cmds {
+		ids = append(ids, c.GetStartJob().GetJobId())
+	}
+	if !slices.Equal(ids, []string{waiting.ID.String(), unacked.ID.String()}) {
+		t.Fatalf("StartJobs after the restart = %v", ids)
+	}
+	w.start(waiting.ID.String())
+	w.finish(waiting.ID.String(), syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED, nil)
+	w.report()
+	if got := e.job(waiting.ID); got.Status != domain.JobSucceeded || got.Epoch != w.epoch {
+		t.Errorf("re-queued job = %s by %q", got.Status, got.Epoch)
+	}
+}
+
 func TestStaleEpochIsRejected(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
