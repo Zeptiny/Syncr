@@ -282,6 +282,51 @@ func TestServiceCommands(t *testing.T) {
 	}
 }
 
+// TestRelativePathsReachTheServiceAbsolute runs `setup` and `service install`
+// with relative --config and --data-dir: the service starts elsewhere, so it
+// must be given absolute paths. Not parallel: it changes the working
+// directory.
+func TestRelativePathsReachTheServiceAbsolute(t *testing.T) {
+	f, e, stdout, stderr := newSetupFixture(t, map[string]string{tokenEnv: "wtok_x"})
+	t.Chdir(f.dir)
+	cfg := filepath.Join(f.dir, "worker.yaml")
+	if code := run(t.Context(), []string{"setup", "--controller", "https://syncr.example.com", "--config", "worker.yaml", "--data-dir", "data"}, e); code != exitOK {
+		t.Fatalf("setup: exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout(), stderr())
+	}
+	loaded := workerconfig.Default()
+	if err := platformconfig.Load(cfg, nil, &loaded); err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(loaded.DataDir) || filepath.Base(loaded.DataDir) != "data" {
+		t.Errorf("data_dir = %q, want an absolute path", loaded.DataDir)
+	}
+
+	e2, _, stderr2 := testEnv(nil)
+	e2.setup = e.setup
+	if code := run(t.Context(), []string{"service", "install", "--config", "worker.yaml", "--data-dir", "data"}, e2); code != exitOK {
+		t.Fatalf("service install: exit %d, %s", code, stderr2)
+	}
+
+	f.services.mu.Lock()
+	calls := append([]string(nil), f.services.calls...)
+	f.services.mu.Unlock()
+	var installs []string
+	for _, c := range calls {
+		if strings.HasPrefix(c, "install ") {
+			installs = append(installs, c)
+		}
+	}
+	if len(installs) != 2 {
+		t.Fatalf("install calls = %q, want one from setup and one from service install", installs)
+	}
+	for _, c := range installs {
+		got := strings.TrimPrefix(c, "install run --config ")
+		if !filepath.IsAbs(got) || filepath.Base(got) != "worker.yaml" {
+			t.Errorf("service installed with --config %q, want an absolute path", got)
+		}
+	}
+}
+
 // fakeHost stands in for a service manager that started the process.
 type fakeHost struct {
 	mu     sync.Mutex

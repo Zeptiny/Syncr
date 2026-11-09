@@ -65,14 +65,37 @@ func TestSpecValidate(t *testing.T) {
 	if err := bad.validate("linux"); err == nil {
 		t.Error("name with a space accepted")
 	}
-	win := good
-	win.Executable = `C:\Program Files\Syncr\syncr-worker.exe`
+	win := NewSpec("windows", ScopeSystem, `C:\Program Files\Syncr\syncr-worker.exe`, `C:\ProgramData\Syncr\worker.yaml`, `C:\ProgramData\Syncr`, "")
 	if err := win.validate("windows"); err != nil {
 		t.Errorf("windows path rejected: %v", err)
 	}
 	win.Executable = "/opt/syncr-worker"
 	if err := win.validate("windows"); err == nil {
 		t.Error("unix path accepted on windows")
+	}
+
+	// The service starts in another directory than the installer ran in,
+	// so every path it is given must be absolute.
+	for _, tt := range []struct {
+		name string
+		spec Spec
+		want string
+	}{
+		{"relative config", NewSpec("linux", ScopeSystem, "/opt/syncr-worker", "worker.yaml", "/var/lib/syncr", ""), `--config "worker.yaml"`},
+		{"relative working directory", NewSpec("linux", ScopeSystem, "/opt/syncr-worker", "/etc/syncr/worker.yaml", "data", ""), `working directory "data"`},
+		{"relative log file", NewSpec("windows", ScopeUser, `C:\w.exe`, `C:\c.yaml`, `C:\d`, `logs\worker.log`), `--log-file "logs\\worker.log"`},
+		{"unix config on windows", NewSpec("windows", ScopeSystem, `C:\w.exe`, "/etc/syncr/worker.yaml", `C:\d`, ""), "--config"},
+	} {
+		goos := "linux"
+		if strings.HasPrefix(tt.spec.Executable, `C:`) {
+			goos = "windows"
+		}
+		if err := tt.spec.validate(goos); err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), "not an absolute path") {
+			t.Errorf("%s: err = %v, want it to name %s", tt.name, err, tt.want)
+		}
+	}
+	if err := NewSpec("windows", ScopeUser, `C:\w.exe`, `C:\c.yaml`, `C:\d`, `C:\d\logs\worker.log`).validate("windows"); err != nil {
+		t.Errorf("absolute windows user spec rejected: %v", err)
 	}
 }
 

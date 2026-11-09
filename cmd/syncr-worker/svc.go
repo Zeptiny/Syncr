@@ -77,6 +77,14 @@ func serviceCmd(ctx context.Context, e *env, args []string) error {
 			return fmt.Errorf("find the data directory (use --data-dir): %w", err)
 		}
 	}
+	// The service starts in a directory of its own, not this one.
+	var err error
+	if cfgPath, err = filepath.Abs(cfgPath); err != nil {
+		return fmt.Errorf("--config %q: %w", cfgPath, err)
+	}
+	if dir, err = filepath.Abs(dir); err != nil {
+		return fmt.Errorf("--data-dir %q: %w", dir, err)
+	}
 	exe, err := e.setup.exe()
 	if err != nil {
 		return fmt.Errorf("find the worker executable: %w", err)

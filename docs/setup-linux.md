@@ -66,7 +66,7 @@ Useful flags (all optional):
 | `--name NAME` | display name (default: the host name) |
 | `--local-root PATH` | a directory jobs may read and write; repeat for several. Without one, jobs cannot touch local files |
 | `--ca-file FILE` | PEM CA (or self-signed certificate) of the controller |
-| `--data-dir DIR`, `--config FILE` | override `/var/lib/syncr` and `/etc/syncr/worker.yaml` |
+| `--data-dir DIR`, `--config FILE` | override `/var/lib/syncr` and `/etc/syncr/worker.yaml` (relative paths are resolved against the current directory, and the service gets the absolute ones) |
 | `--no-service` | write the config only; run the worker yourself |
 | `--dry-run` | print the plan, change nothing |
 | `--force` | replace an existing setup (new enrollment, new certificate) |

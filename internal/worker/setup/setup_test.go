@@ -99,7 +99,9 @@ func (c *fakeController) seen() []*syncrv1.EnrollRequest {
 type fakeServices struct {
 	mu    sync.Mutex
 	calls []string
-	state service.State
+	// installed is the spec of the last Install.
+	installed service.Spec
+	state     service.State
 	// afterStart is the state once Start has been called.
 	afterStart   service.State
 	preflightErr error
@@ -126,13 +128,14 @@ func (f *fakeServices) called() []string {
 
 func (f *fakeServices) Preflight(service.Spec) error { f.record("preflight"); return f.preflightErr }
 
-func (f *fakeServices) Install(_ context.Context, _ service.Spec) error {
+func (f *fakeServices) Install(_ context.Context, spec service.Spec) error {
 	f.record("install")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.installErr != nil {
 		return f.installErr
 	}
+	f.installed = spec
 	f.state = service.StateStopped
 	return nil
 }
@@ -881,6 +884,70 @@ func TestRelativeLocalRootIsMadeAbsolute(t *testing.T) {
 	if len(roots) != 1 || !filepath.IsAbs(roots[0]) || !strings.HasSuffix(roots[0], filepath.Join("relative", "dir")) {
 		t.Errorf("local_roots = %q", roots)
 	}
+}
+
+// TestRelativePathsAreMadeAbsolute runs setup with relative paths: the
+// service starts in another directory (systemd's WorkingDirectory, System32
+// for the Windows SCM), so the config and the service must name absolute
+// paths. Not parallel: it changes the working directory.
+func TestRelativePathsAreMadeAbsolute(t *testing.T) {
+	sameFile := func(t *testing.T, what, got, want string) {
+		t.Helper()
+		if !filepath.IsAbs(got) {
+			t.Errorf("%s = %q, want an absolute path", what, got)
+			return
+		}
+		gi, gerr := os.Stat(got)
+		wi, werr := os.Stat(want)
+		if gerr != nil || werr != nil || !os.SameFile(gi, wi) {
+			t.Errorf("%s = %q, want %q (%v, %v)", what, got, want, gerr, werr)
+		}
+	}
+
+	t.Run("active", func(t *testing.T) {
+		c := newFakeController(t)
+		r := newRig(t)
+		t.Chdir(r.dir)
+		caRel, err := filepath.Rel(r.dir, c.caFile)
+		if err != nil {
+			t.Skipf("the CA file has no path relative to %s: %v", r.dir, err)
+		}
+		// Only --config relative: before the fix this passed validation (and
+		// the self-check, which runs in the same directory), but the service
+		// was given "run --config etc/worker.yaml" and could not find it.
+		o := r.activeOptions(c)
+		o.ConfigPath, o.CAFile = filepath.Join("etc", "worker.yaml"), caRel
+		res := r.mustRun(o)
+
+		sameFile(t, "result config path", res.ConfigPath, r.config)
+		sameFile(t, "result data dir", res.DataDir, r.data)
+		cfg := r.loadConfig()
+		sameFile(t, "data_dir", cfg.DataDir, r.data)
+		spec := r.svc.installed
+		if len(spec.Args) < 3 || spec.Args[1] != "--config" {
+			t.Fatalf("service args = %q", spec.Args)
+		}
+		sameFile(t, "service --config", spec.Args[2], r.config)
+		sameFile(t, "service working directory", spec.WorkDir, r.data)
+	})
+
+	t.Run("passive with a provided certificate", func(t *testing.T) {
+		r := newRig(t)
+		t.Chdir(r.dir)
+		pair, err := tlscert.Generate(tlscert.Options{Hostname: "mine.example.com"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tlscert.Write(filepath.Join(r.dir, "mine.crt"), filepath.Join(r.dir, "mine.key"), pair, false); err != nil {
+			t.Fatal(err)
+		}
+		o := r.passiveOptions(Options{TLSCertFile: "mine.crt", TLSKeyFile: "mine.key"})
+		o.DataDir, o.ConfigPath = "data", filepath.Join("etc", "worker.yaml")
+		r.mustRun(o)
+		l := r.loadConfig().Link
+		sameFile(t, "tls_cert_file", l.TLSCertFile, filepath.Join(r.dir, "mine.crt"))
+		sameFile(t, "tls_key_file", l.TLSKeyFile, filepath.Join(r.dir, "mine.key"))
+	})
 }
 
 func TestToolsFailureStopsBeforeEnrollment(t *testing.T) {

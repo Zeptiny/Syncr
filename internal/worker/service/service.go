@@ -134,6 +134,16 @@ func (s Spec) validate(goos string) error {
 		return fmt.Errorf("service: invalid name %q", s.Name)
 	case !isAbs(goos, s.Executable):
 		return fmt.Errorf("service: executable %q is not an absolute path", s.Executable)
+	case s.WorkDir != "" && !isAbs(goos, s.WorkDir):
+		return fmt.Errorf("service: working directory %q is not an absolute path", s.WorkDir)
+	}
+	// The service manager starts the worker in a directory of its own
+	// choosing (WorkDir, or System32 for the Windows SCM), so a relative path
+	// would name a different file there than it did for the installer.
+	for i, arg := range s.Args {
+		if (arg == "--config" || arg == "--log-file") && i+1 < len(s.Args) && !isAbs(goos, s.Args[i+1]) {
+			return fmt.Errorf("service: %s %q is not an absolute path", arg, s.Args[i+1])
+		}
 	}
 	return nil
 }

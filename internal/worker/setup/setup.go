@@ -251,6 +251,14 @@ func (s *Setup) plan(ctx context.Context, opts Options) (*plan, error) {
 			return nil, fmt.Errorf("find the config file location: %w (use --config)", err)
 		}
 	}
+	// The defaults derive from the environment (HOME, XDG_*), which could be
+	// relative; the flags were resolved by validateOptions.
+	if p.dataDir, err = filepath.Abs(p.dataDir); err != nil {
+		return nil, fmt.Errorf("find the data directory: %w (use --data-dir)", err)
+	}
+	if p.configPath, err = filepath.Abs(p.configPath); err != nil {
+		return nil, fmt.Errorf("find the config file location: %w (use --config)", err)
+	}
 	p.tlsDir = filepath.Join(p.dataDir, "tls")
 	if opts.CAFile != "" {
 		p.caCopy = filepath.Join(p.tlsDir, "controller-ca.pem")
@@ -352,6 +360,23 @@ func (s *Setup) validateOptions(opts *Options) error {
 		if _, _, err := tlscert.SplitHosts(opts.TLSNames); err != nil {
 			return fmt.Errorf("--tls-name: %w", err)
 		}
+	}
+	// Every path ends up in the config or the service definition, and the
+	// service starts in a directory of its own (WorkingDirectory, or
+	// System32 for the Windows SCM): resolve them against the directory
+	// setup runs in now.
+	for flag, p := range map[string]*string{
+		"--data-dir": &opts.DataDir, "--config": &opts.ConfigPath, "--ca-file": &opts.CAFile,
+		"--tls-cert": &opts.TLSCertFile, "--tls-key": &opts.TLSKeyFile,
+	} {
+		if *p == "" {
+			continue
+		}
+		abs, err := filepath.Abs(*p)
+		if err != nil {
+			return fmt.Errorf("%s %q: %w", flag, *p, err)
+		}
+		*p = abs
 	}
 	roots := make([]string, 0, len(opts.LocalRoots))
 	for _, r := range opts.LocalRoots {
