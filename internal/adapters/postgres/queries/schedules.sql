@@ -269,11 +269,20 @@ WHERE (sqlc.narg(schedule_id)::uuid IS NULL OR r.schedule_id = sqlc.narg(schedul
   AND (sqlc.narg(scheduled_until)::timestamptz IS NULL OR r.scheduled_for < sqlc.narg(scheduled_until)::timestamptz);
 
 -- name: LatestRuns :many
--- The newest run of each schedule (schedule_runs_schedule_idx).
-SELECT DISTINCT ON (r.schedule_id) sqlc.embed(r), j.status AS job_status
-FROM schedule_runs r LEFT JOIN jobs j ON j.id = r.job_id
-WHERE r.schedule_id = ANY (sqlc.arg(schedule_ids)::uuid[])
-ORDER BY r.schedule_id, r.id DESC;
+-- The newest run of each schedule in schedule_ids that has one: one probe
+-- of schedule_runs_schedule_idx per schedule (LIMIT 1 in the subquery),
+-- however many runs a schedule has, and one job lookup per result. A
+-- DISTINCT ON over the schedules' runs would read and sort every run of
+-- every schedule (and join each to its job) to keep one per schedule.
+SELECT sqlc.embed(r), j.status AS job_status
+FROM (SELECT DISTINCT unnest(sqlc.arg(schedule_ids)::uuid[]) AS schedule_id) ids
+JOIN schedule_runs r ON r.id = (
+    SELECT sr.id FROM schedule_runs sr
+    WHERE sr.schedule_id = ids.schedule_id
+    ORDER BY sr.id DESC
+    LIMIT 1
+)
+LEFT JOIN jobs j ON j.id = r.job_id;
 
 -- name: HasActiveRun :one
 -- A launching run, or a job of the schedule that is not finished

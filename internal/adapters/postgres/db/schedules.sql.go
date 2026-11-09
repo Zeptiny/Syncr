@@ -413,10 +413,15 @@ func (q *Queries) InsertScheduleRemote(ctx context.Context, arg InsertScheduleRe
 }
 
 const latestRuns = `-- name: LatestRuns :many
-SELECT DISTINCT ON (r.schedule_id) r.id, r.schedule_id, r.trigger, r.scheduled_for, r.deadline, r.coalesced, r.status, r.reason, r.message, r.worker_id, r.job_id, r.created_at, r.updated_at, r.notified_at, j.status AS job_status
-FROM schedule_runs r LEFT JOIN jobs j ON j.id = r.job_id
-WHERE r.schedule_id = ANY ($1::uuid[])
-ORDER BY r.schedule_id, r.id DESC
+SELECT r.id, r.schedule_id, r.trigger, r.scheduled_for, r.deadline, r.coalesced, r.status, r.reason, r.message, r.worker_id, r.job_id, r.created_at, r.updated_at, r.notified_at, j.status AS job_status
+FROM (SELECT DISTINCT unnest($1::uuid[]) AS schedule_id) ids
+JOIN schedule_runs r ON r.id = (
+    SELECT sr.id FROM schedule_runs sr
+    WHERE sr.schedule_id = ids.schedule_id
+    ORDER BY sr.id DESC
+    LIMIT 1
+)
+LEFT JOIN jobs j ON j.id = r.job_id
 `
 
 type LatestRunsRow struct {
@@ -424,7 +429,11 @@ type LatestRunsRow struct {
 	JobStatus   *string
 }
 
-// The newest run of each schedule (schedule_runs_schedule_idx).
+// The newest run of each schedule in schedule_ids that has one: one probe
+// of schedule_runs_schedule_idx per schedule (LIMIT 1 in the subquery),
+// however many runs a schedule has, and one job lookup per result. A
+// DISTINCT ON over the schedules' runs would read and sort every run of
+// every schedule (and join each to its job) to keep one per schedule.
 func (q *Queries) LatestRuns(ctx context.Context, scheduleIds []pgtype.UUID) ([]LatestRunsRow, error) {
 	rows, err := q.db.Query(ctx, latestRuns, scheduleIds)
 	if err != nil {
