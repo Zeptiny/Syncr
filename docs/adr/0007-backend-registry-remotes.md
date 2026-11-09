@@ -50,8 +50,15 @@ case owns them, and the job builder turns them into `union_upstreams`.
 
 ### Who validates what
 
-- **The worker is the security boundary** and stays unchanged. Descriptors
-  do not copy its denylist.
+- **The worker is the security boundary**. Descriptors do not copy its
+  rules. It accepts only an allowlist of rclone backend types
+  (`rcloneenv.SupportedBackends`: the backends of the built-in types plus
+  `memory` for tests), not a denylist: rclone has more backends that read
+  the worker's files through free-form remote strings (`archive`, `alias`,
+  `crypt`...) or sign in as the worker host (Azure CLI and managed
+  identities, cloud metadata servers) than a denylist can keep up with. A
+  backend is added to the allowlist only after its options in the pinned
+  rclone have been reviewed against the option denylist.
 - **Descriptors are the typing and UX layer**: which types are offered,
   their fields, kinds, enums, required and secret flags, defaults and
   cross-field rules (S3 needs an endpoint unless the provider is AWS; SFTP
@@ -64,6 +71,8 @@ case owns them, and the job builder turns them into `union_upstreams`.
   emitted option is an option of the real rclone backend, because rclone
   ignores unknown `RCLONE_CONFIG_*` variables silently. If a descriptor emits
   something the worker rejects, the descriptor is fixed, not the worker.
+  The same file checks that the worker's backend allowlist holds exactly
+  the backends of the built-in types (plus `memory`).
 - **A contract suite checks every descriptor's behavior.**
   `internal/backend/backendtest` (`Run`, `RunRegistry`, `WithAccept`) checks
   the ID and fields, that `Validate` accepts the examples (which together
@@ -127,7 +136,11 @@ The `storetest` suite (memory and Postgres) includes that race.
 ## Consequences
 
 - A backend type needs no proto, API, store or UI change. Its descriptor
-  must pass `backendtest` and the cross-check against the worker.
+  must pass `backendtest` and the cross-check against the worker, and a
+  new rclone backend must be reviewed and added to the worker's allowlist
+  (one line in `internal/worker/rcloneenv`). A worker older than the
+  controller rejects remotes of a backend it does not support yet, and the
+  job fails with an error naming the backend type.
 - Secrets are decrypted once per queued job per dispatcher poll. They exist
   in plaintext only in memory and on the authenticated worker link.
 - Changing the field set of a type is a data migration concern: stored

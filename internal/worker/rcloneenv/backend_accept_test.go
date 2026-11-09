@@ -138,6 +138,37 @@ func TestBuiltinBackendsAccepted(t *testing.T) {
 	}
 }
 
+// testOnlyBackends are supported by the worker without a built-in type.
+func testOnlyBackends() []string { return []string{"memory"} }
+
+// TestSupportedBackendsMatchBuiltinTypes checks that the worker's allowlist
+// of backend types holds the rclone backend of every built-in type, and
+// nothing else beyond testOnlyBackends: adding a type to one list without
+// the other (and without reviewing its options) fails here.
+func TestSupportedBackendsMatchBuiltinTypes(t *testing.T) {
+	t.Parallel()
+	want := map[string]bool{}
+	for _, b := range testOnlyBackends() {
+		want[b] = true
+	}
+	for _, ex := range examples(t) {
+		if ex.rclone.Backend != "" {
+			want[ex.rclone.Backend] = true
+		}
+	}
+	supported := rcloneenv.SupportedBackends()
+	for b := range want {
+		if !slices.Contains(supported, b) {
+			t.Errorf("rclone backend %q of a built-in type is not in rcloneenv.SupportedBackends; review its options (deniedOptions) and add it", b)
+		}
+	}
+	for _, b := range supported {
+		if !want[b] {
+			t.Errorf("rcloneenv.SupportedBackends has %q, which no built-in type uses", b)
+		}
+	}
+}
+
 // TestBuiltinBackendOptionsKnownToRclone checks with the real rclone
 // (SYNCR_TEST_RCLONE) that every option and secret the descriptors emit is
 // an option of their rclone backend, so a misspelled option name cannot

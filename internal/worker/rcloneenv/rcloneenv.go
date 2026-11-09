@@ -15,9 +15,11 @@
 //
 // Validation is strict, because the definitions come from the network:
 // aliases and option keys have a fixed charset, environment names must not
-// collide, backends that would bypass the worker's local_roots ("local") or
-// that take free-form remote strings ("alias", "crypt"...) are rejected, and
-// so are options that make rclone run local commands or read local files.
+// collide, only the backend types the worker supports are accepted (see
+// SupportedBackends; never "local", which would bypass the worker's
+// local_roots, nor backends that wrap free-form remote strings), and
+// options that make rclone run local commands or read local files are
+// rejected.
 //
 // Every error message names aliases and keys only, never values, so errors
 // can be shown to users.
@@ -350,20 +352,32 @@ func (b *Builder) addRemote(env *Env, def *syncrv1.RemoteDefinition) ([]string, 
 	return secrets, nil
 }
 
-// checkBackend rejects backend types that are malformed, or that would let a
-// remote reach the local filesystem without the local_roots check or embed
-// free-form remote strings.
+// SupportedBackends returns the rclone backend types the worker accepts,
+// sorted: the remote types built into Syncr (internal/backend/builtin) and
+// "memory", which keeps its data inside the rclone process (tests use it).
+//
+// It is an allowlist because most rclone backends must not be driven by
+// the controller: "local" and the backends that wrap free-form remote
+// strings ("alias", "archive", "crypt", "combine"...) reach the worker's
+// files without the local_roots check, and many cloud backends can sign in
+// as the worker host (Azure CLI and managed identities, cloud metadata
+// servers). "union" is supported because its upstreams are generated from
+// typed union_upstreams. A type is added here only after every one of its
+// options in the pinned rclone has been reviewed (see deniedOptions).
+func SupportedBackends() []string {
+	return []string{"b2", "memory", "s3", "sftp", "union", "webdav"}
+}
+
+// checkBackend rejects backend types that are malformed or not supported.
 func checkBackend(backend string) error {
 	if !backendRe.MatchString(backend) {
 		return errors.New("backend type must match ^[a-z][a-z0-9]{0,63}$")
 	}
-	switch backend {
-	case "local":
+	if backend == "local" {
 		return errors.New(`backend type "local" is not allowed; use a location without a remote, which is checked against local_roots`)
-	case "alias", "crypt", "chunker", "compress", "hasher", "combine", "cache":
-		// These wrap other remotes given as rclone path strings. They need
-		// typed fields like union_upstreams before they can be supported.
-		return fmt.Errorf("backend type %q (a wrapper of other remotes) is not supported", backend)
+	}
+	if supported := SupportedBackends(); !slices.Contains(supported, backend) {
+		return fmt.Errorf("backend type %q is not supported by this worker (supported: %s)", backend, strings.Join(supported, ", "))
 	}
 	return nil
 }

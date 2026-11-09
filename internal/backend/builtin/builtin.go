@@ -1,5 +1,8 @@
 // Package builtin lists the backend types built into Syncr. Adding a type is
-// one descriptor package plus one line here.
+// one descriptor package plus one line here; a type on a new rclone backend
+// also needs that backend reviewed and added to the worker's allowlist
+// (rcloneenv.SupportedBackends), which the worker's cross-check test
+// enforces.
 package builtin
 
 import (
