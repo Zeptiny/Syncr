@@ -24,7 +24,8 @@ type Config struct {
 	// MaxCommands caps the commands returned at once.
 	MaxCommands int
 	// DispatchTimeout fails a job that stays queued this long (its worker
-	// is offline or never accepts it).
+	// is offline or never accepts it), counted from this Service's start at
+	// the earliest, so a controller outage does not count.
 	DispatchTimeout time.Duration
 	// LostAfter ends the dispatched and running jobs of a worker that has
 	// been out of contact this long (no link call, see ExpireLost): they
@@ -86,8 +87,8 @@ type Service struct {
 	log     *slog.Logger
 	cfg     Config
 	// started is when the Service was created: the earliest contact
-	// ExpireLost assumes, because a worker cannot reach a controller that
-	// is down.
+	// ExpireLost assumes and the earliest queue time ExpireQueued counts
+	// from, because a worker cannot reach a controller that is down.
 	started time.Time
 
 	mu       sync.Mutex

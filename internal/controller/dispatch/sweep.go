@@ -142,9 +142,15 @@ func maxTime(a, b time.Time) time.Time {
 
 // ExpireQueued fails every job that has been queued for longer than
 // Config.DispatchTimeout with code dispatch_timeout and a message saying
-// why its worker did not take it. It returns how many jobs it failed.
+// why its worker did not take it. It returns how many jobs it failed. A
+// job's time in the queue is counted from when it was queued, or from this
+// Service's start if that is later: while the controller is down no worker
+// can take a job, and workers reconnect within seconds of its start.
 func (s *Service) ExpireQueued(ctx context.Context) (int, error) {
 	cutoff := s.clock.Now().Add(-s.cfg.DispatchTimeout)
+	if !s.started.Before(cutoff) {
+		return 0, nil // no job has waited that long for this controller
+	}
 	failed := 0
 	for {
 		js, err := s.jobs.QueuedBefore(ctx, cutoff, sweepBatch)

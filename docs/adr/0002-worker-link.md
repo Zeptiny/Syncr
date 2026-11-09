@@ -80,7 +80,9 @@ process.
 
 The full rule tables live in the package documentation of
 `internal/controller/dispatch`. A job that stays queued longer than the
-dispatch timeout (worker offline) fails with `DISPATCH_TIMEOUT`.
+dispatch timeout (worker offline) fails with `DISPATCH_TIMEOUT`; time
+while the controller is down does not count, so workers can reconnect
+after a controller outage before their queued jobs time out.
 
 **Lost workers.** A worker that never comes back cannot report on its
 jobs, and a cancel request cannot reach it. So when a worker has had no

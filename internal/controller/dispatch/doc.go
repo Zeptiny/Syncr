@@ -145,7 +145,9 @@
 // Run fails jobs that stay queued longer than Config.DispatchTimeout
 // (dispatch_timeout); the message says whether the worker never connected,
 // is offline (and since when) or is online but did not accept the job. The
-// clock starts again when a job is re-queued.
+// clock starts again when a job is re-queued, and it starts no earlier than
+// the Service: after a controller outage queued jobs get the full timeout
+// for their workers to reconnect.
 //
 // Run also ends the jobs a worker can no longer report on (ExpireLost).
 // A worker is silent from its last link call, or from the Service's start
