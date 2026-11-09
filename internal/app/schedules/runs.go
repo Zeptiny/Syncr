@@ -202,6 +202,16 @@ func (s *Service) Load(ctx context.Context, ids []domain.ScheduleID) (map[domain
 	return out, nil
 }
 
+// GetRun returns a run of any schedule (the scheduler re-reads a run whose
+// launch lost a compare-and-swap). ErrNotFound if missing.
+func (s *Service) GetRun(ctx context.Context, id domain.ScheduleRunID) (Run, error) {
+	r, err := s.repo.GetRun(ctx, id)
+	if err != nil {
+		return Run{}, fmt.Errorf("get run %s: %w", id, err)
+	}
+	return r, nil
+}
+
 // HasActiveRun reports whether the schedule has a launching run or a job
 // that is queued, dispatched or running.
 func (s *Service) HasActiveRun(ctx context.Context, id domain.ScheduleID) (bool, error) {
@@ -231,18 +241,22 @@ func (s *Service) MarkLaunched(ctx context.Context, run Run) (Run, error) {
 }
 
 // EndRun moves an open run (in run.Status) to status: missed or failed
-// with reason and msg, or pending again (a launch to retry; reason and msg
-// are then cleared). With pause the schedule is disabled in the same step
-// (PausedReason reason). ErrConflict if the run is no longer in
-// run.Status.
+// with reason and msg, cancelled (a launching run with a cancel request,
+// once its job is cancelled; reason ReasonDisabled, no pause), or pending
+// again (a launch to retry; reason and msg are then cleared). With pause
+// the schedule is disabled in the same step (PausedReason reason).
+// ErrConflict if the run is no longer in run.Status, or it has a cancel
+// request and status is not cancelled.
 func (s *Service) EndRun(ctx context.Context, run Run, status RunStatus, reason, msg string, pause bool) (Run, error) {
 	switch {
 	case !run.Status.Open():
 		return Run{}, fmt.Errorf("end run %s: %w: it is %s", run.ID, domain.ErrFailedPrecondition, run.Status)
-	case status != RunMissed && status != RunFailed && status != RunPending:
+	case status != RunMissed && status != RunFailed && status != RunPending && status != RunCancelled:
 		return Run{}, fmt.Errorf("end run %s: %w: status %q", run.ID, domain.ErrInvalidArgument, status)
 	case status == RunPending:
 		reason, msg, pause = "", "", false
+	case status == RunCancelled:
+		reason, pause = ReasonDisabled, false
 	}
 	return s.updateRun(ctx, "end run", RunUpdate{
 		ID: run.ID, From: run.Status, To: status, Reason: reason, Message: msg, At: s.clock.Now(), PauseSchedule: pause,

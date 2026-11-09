@@ -199,7 +199,8 @@ WHERE schedule_id = sqlc.arg(schedule_id)::uuid AND status = 'pending'
 -- name: UpdateRunStatus :one
 -- The compare-and-swap of a run's status; zero (NULL) worker and job IDs
 -- keep the stored ones. A run back to pending while another one is
--- violates schedule_runs_one_pending_key.
+-- violates schedule_runs_one_pending_key. A launching run with a reason
+-- (its schedule was paused while it launched) may only be cancelled.
 UPDATE schedule_runs SET
     status = sqlc.arg(to_status)::text,
     reason = sqlc.arg(reason)::text,
@@ -208,6 +209,7 @@ UPDATE schedule_runs SET
     job_id = COALESCE(sqlc.narg(job_id)::uuid, job_id),
     updated_at = sqlc.arg(updated_at)::timestamptz
 WHERE id = sqlc.arg(id)::uuid AND status = sqlc.arg(from_status)::text
+  AND (status <> 'launching' OR reason = '' OR sqlc.arg(to_status)::text = 'cancelled')
 RETURNING schedule_id;
 
 -- name: RunExists :one
@@ -215,9 +217,15 @@ SELECT EXISTS (SELECT 1 FROM schedule_runs WHERE id = sqlc.arg(id)::uuid);
 
 -- name: CancelOpenRun :exec
 -- Pausing a schedule cancels its open runs (without a notification: only
--- missed and failed runs notify).
-UPDATE schedule_runs SET status = 'cancelled', reason = 'disabled', message = '', updated_at = sqlc.arg(updated_at)::timestamptz
-WHERE schedule_id = sqlc.arg(schedule_id)::uuid AND status IN ('pending', 'launching');
+-- missed and failed runs notify). A pending run is cancelled at once; a
+-- launching run's job may already exist, so it stays launching with the
+-- reason 'disabled' (a cancel request): the scheduler cancels its job and
+-- then the run.
+UPDATE schedule_runs SET
+    status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE status END,
+    reason = 'disabled', message = '', updated_at = sqlc.arg(updated_at)::timestamptz
+WHERE schedule_id = sqlc.arg(schedule_id)::uuid
+  AND (status = 'pending' OR (status = 'launching' AND reason = ''));
 
 -- name: GetRun :one
 -- Runs come with their job's status (job_id has no foreign key: a

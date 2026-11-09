@@ -3,6 +3,7 @@ package storetest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -672,13 +673,78 @@ func testScheduleOnePendingRun(t *testing.T, s Store) {
 	}
 	third := mustAddRun(t, s, newRun(t, 5, a.ID, schedules.RunPending))
 
-	// Pausing cancels every open run.
+	// Pausing cancels the pending run and asks the launching ones to be
+	// cancelled (testScheduleCancelLaunching).
 	if _, err := s.SetScheduleEnabled(ctx, a.ID, schedules.Toggle{Enabled: false, At: at}); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []domain.ScheduleRunID{first.ID, second.ID, third.ID} {
-		if r := mustGetRun(t, s, id); r.Status != schedules.RunCancelled || r.Reason != schedules.ReasonDisabled {
-			t.Errorf("run %s after pausing = %+v", id, r)
+	if r := mustGetRun(t, s, third.ID); r.Status != schedules.RunCancelled || r.Reason != schedules.ReasonDisabled {
+		t.Errorf("pending run after pausing = %+v", r)
+	}
+	for _, id := range []domain.ScheduleRunID{first.ID, second.ID} {
+		if r := mustGetRun(t, s, id); !r.CancelRequested() {
+			t.Errorf("launching run %s after pausing = %+v, want a cancel request", id, r)
+		}
+	}
+}
+
+// testScheduleCancelLaunching: pausing a schedule (SetScheduleEnabled or
+// UpdateSchedule) cannot cancel a launching run outright, as its job may
+// exist: the run stays launching with a cancel request (Reason disabled),
+// which only lets it move to cancelled, so the launch cannot complete.
+func testScheduleCancelLaunching(t *testing.T, s Store) {
+	ctx := context.Background()
+	alice := userID(t, 1)
+	requireSchedules(t, s, alice)
+	w := newWorker(t, 1)
+	mustCreateWorker(t, s, w)
+	at := t0().Add(time.Minute)
+	for i, pause := range []func(sc schedules.Schedule) error{
+		func(sc schedules.Schedule) error {
+			_, err := s.SetScheduleEnabled(ctx, sc.ID, schedules.Toggle{Enabled: false, At: at})
+			return err
+		},
+		func(sc schedules.Schedule) error {
+			sc.Enabled, sc.NextRunAt, sc.UpdatedAt = false, time.Time{}, at
+			_, err := s.UpdateSchedule(ctx, sc, true)
+			return err
+		},
+	} {
+		sc := newSchedule(t, 1+i, alice, fmt.Sprintf("paused %d", i), w.ID)
+		mustCreateSchedule(t, s, sc)
+		r := mustAddRun(t, s, newRun(t, 10*i+1, sc.ID, schedules.RunPending))
+		if _, err := s.UpdateRun(ctx, schedules.RunUpdate{
+			ID: r.ID, From: schedules.RunPending, To: schedules.RunLaunching, WorkerID: w.ID, JobID: jobID(t, 10*i+1), At: at,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := pause(sc); err != nil {
+			t.Fatalf("pause %d: %v", i, err)
+		}
+		got := mustGetRun(t, s, r.ID)
+		if got.Status != schedules.RunLaunching || got.Reason != schedules.ReasonDisabled || !got.CancelRequested() ||
+			!got.UpdatedAt.Equal(at) || got.JobID != jobID(t, 10*i+1) {
+			t.Fatalf("pause %d: launching run = %+v, want a cancel request", i, got)
+		}
+		if active, err := s.HasActiveRun(ctx, sc.ID); err != nil || !active {
+			t.Errorf("pause %d: HasActiveRun = (%v, %v), want true (its job may exist)", i, active, err)
+		}
+		for _, to := range []schedules.RunStatus{schedules.RunLaunched, schedules.RunPending, schedules.RunFailed, schedules.RunMissed} {
+			_, err := s.UpdateRun(ctx, schedules.RunUpdate{ID: r.ID, From: schedules.RunLaunching, To: to, Reason: "x", At: at})
+			wantErr(t, fmt.Sprintf("pause %d: UpdateRun(being cancelled -> %s)", i, to), err, domain.ErrConflict)
+		}
+		ended, err := s.UpdateRun(ctx, schedules.RunUpdate{
+			ID: r.ID, From: schedules.RunLaunching, To: schedules.RunCancelled, Reason: schedules.ReasonDisabled, At: at.Add(time.Second),
+		})
+		if err != nil || ended.Status != schedules.RunCancelled || ended.Reason != schedules.ReasonDisabled {
+			t.Errorf("pause %d: UpdateRun(cancelled) = (%+v, %v)", i, ended, err)
+		}
+		// Resuming does not revive it.
+		if _, err := s.SetScheduleEnabled(ctx, sc.ID, schedules.Toggle{Enabled: true, NextRunAt: t0().Add(time.Hour), At: at}); err != nil {
+			t.Fatal(err)
+		}
+		if got := mustGetRun(t, s, r.ID); got.Status != schedules.RunCancelled {
+			t.Errorf("pause %d: run after resuming = %+v", i, got)
 		}
 	}
 }

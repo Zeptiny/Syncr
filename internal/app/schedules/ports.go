@@ -47,9 +47,9 @@ type Repository interface {
 	// the stored NextRunAt is kept, so an edit racing a fire cannot rewind
 	// it. LastFiredAt, ID, OwnerID and CreatedAt are never written. It sets
 	// Version = s.Version + 1 and returns the stored schedule. When it
-	// changes Enabled to false it also cancels the open runs (status
-	// cancelled, reason ReasonDisabled, UpdatedAt = s.UpdatedAt) in the
-	// same transaction. ErrConflict if the version differs, ErrNotFound if
+	// changes Enabled to false it also cancels the open runs as
+	// SetScheduleEnabled does (UpdatedAt = s.UpdatedAt) in the same
+	// transaction. ErrConflict if the version differs, ErrNotFound if
 	// missing (or a new link's row is missing), ErrAlreadyExists if the new
 	// name is taken, ErrInvalidArgument as for CreateSchedule (a disabled
 	// result with a NextRunAt included).
@@ -59,9 +59,11 @@ type Repository interface {
 	// check: it sets Enabled = t.Enabled, NextRunAt = t.NextRunAt (zero when
 	// disabling), PausedReason = t.PausedReason ("" when enabling),
 	// UpdatedAt = t.At and Version + 1, and when disabling cancels the open
-	// runs (status cancelled, reason ReasonDisabled, UpdatedAt = t.At) in the
-	// same transaction. It returns the stored schedule. ErrNotFound if
-	// missing.
+	// runs in the same transaction: a pending run becomes cancelled (reason
+	// ReasonDisabled, UpdatedAt = t.At); a launching run, whose job may
+	// already exist, stays launching with Reason ReasonDisabled (a cancel
+	// request, Run.CancelRequested) for the scheduler to cancel its job and
+	// then the run. It returns the stored schedule. ErrNotFound if missing.
 	SetScheduleEnabled(ctx context.Context, id domain.ScheduleID, t Toggle) (Schedule, error)
 
 	// DeleteSchedule deletes a schedule with its links and runs; jobs and
@@ -122,7 +124,9 @@ type Repository interface {
 	// and JobID (when not zero) and UpdatedAt = u.At, and with
 	// u.PauseSchedule disables the schedule as RunUpdate describes, in the
 	// same transaction; it returns the stored run. ErrConflict if the
-	// status differs (another tick or controller moved it), ErrNotFound if
+	// status differs (another tick or controller moved it) or the run is
+	// launching with a cancel request and u.To is not cancelled (its
+	// schedule was paused while it launched), ErrNotFound if
 	// missing, ErrAlreadyExists if u.To is pending and another run of the
 	// schedule is, ErrInvalidArgument if a launching or launched run would
 	// have no JobID.

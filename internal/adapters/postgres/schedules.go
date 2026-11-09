@@ -391,7 +391,7 @@ func (s *Store) UpdateRun(ctx context.Context, u schedules.RunUpdate) (schedules
 			case !exists:
 				return fmt.Errorf("%s: %w", op, domain.ErrNotFound)
 			}
-			return fmt.Errorf("%s: not %s: %w", op, u.From, domain.ErrConflict)
+			return fmt.Errorf("%s: not %s, or being cancelled: %w", op, u.From, domain.ErrConflict)
 		}
 		if err != nil {
 			return mapErr(op, err)

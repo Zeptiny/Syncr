@@ -213,12 +213,19 @@ func (s *Store) SetScheduleEnabled(_ context.Context, id domain.ScheduleID, t sc
 }
 
 // cancelOpenRunLocked cancels the schedule's open runs, if any.
+// A pending run is cancelled at once; a launching run (whose job may
+// already exist) only gets the cancel request (Reason ReasonDisabled) the
+// scheduler acts on, as the Postgres CancelOpenRun does.
 func (s *Store) cancelOpenRunLocked(id domain.ScheduleID, at time.Time) {
 	for _, r := range s.runs {
-		if r.ScheduleID == id && r.Status.Open() {
-			r.Status, r.Reason, r.Message, r.UpdatedAt = schedules.RunCancelled, schedules.ReasonDisabled, "", at
-			s.runs[r.ID] = r
+		if r.ScheduleID != id || !r.Status.Open() || r.CancelRequested() {
+			continue
 		}
+		if r.Status == schedules.RunPending {
+			r.Status = schedules.RunCancelled
+		}
+		r.Reason, r.Message, r.UpdatedAt = schedules.ReasonDisabled, "", at
+		s.runs[r.ID] = r
 	}
 }
 
@@ -431,6 +438,9 @@ func (s *Store) UpdateRun(_ context.Context, u schedules.RunUpdate) (schedules.R
 	}
 	if r.Status != u.From {
 		return schedules.Run{}, fmt.Errorf("run %s is %s, not %s: %w", u.ID, r.Status, u.From, domain.ErrConflict)
+	}
+	if r.CancelRequested() && u.To != schedules.RunCancelled {
+		return schedules.Run{}, fmt.Errorf("run %s is being cancelled: %w", u.ID, domain.ErrConflict)
 	}
 	next := r
 	next.Status, next.Reason, next.Message, next.UpdatedAt = u.To, u.Reason, u.Message, u.At

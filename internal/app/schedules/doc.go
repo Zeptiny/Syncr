@@ -24,7 +24,9 @@
 //     scheduled job notifies its schedule's contacts only, never the
 //     contacts' JobEvents.
 //   - SetEnabled needs no version: pausing sets NextRunAt to zero and
-//     cancels the open runs (no notification); resuming clears PausedReason
+//     cancels the open runs (no notification; a launching run gets a
+//     cancel request, Run.CancelRequested, for the scheduler to cancel its
+//     job and then the run); resuming clears PausedReason
 //     and sets NextRunAt to the next occurrence after now. Saving
 //     recomputes NextRunAt only when Cron, Timezone or Enabled changed.
 //   - Runs that cannot launch for a permanent reason (worker removed,

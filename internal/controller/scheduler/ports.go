@@ -17,6 +17,7 @@ type Schedules interface {
 	OpenRuns(ctx context.Context, limit int) ([]schedules.Run, error)
 	Load(ctx context.Context, ids []domain.ScheduleID) (map[domain.ScheduleID]schedules.Schedule, error)
 	HasActiveRun(ctx context.Context, id domain.ScheduleID) (bool, error)
+	GetRun(ctx context.Context, id domain.ScheduleRunID) (schedules.Run, error)
 	MarkLaunching(ctx context.Context, run schedules.Run, jobID domain.JobID, workerID domain.WorkerID) (schedules.Run, error)
 	MarkLaunched(ctx context.Context, run schedules.Run) (schedules.Run, error)
 	EndRun(ctx context.Context, run schedules.Run, status schedules.RunStatus, reason, msg string, pause bool) (schedules.Run, error)
@@ -27,6 +28,10 @@ type Jobs interface {
 	// Create queues a job for the actor; a preset p.ID makes it idempotent
 	// (ErrAlreadyExists once it exists).
 	Create(ctx context.Context, actor domain.Actor, p jobs.CreateParams) (jobs.Job, error)
+	// Cancel cancels a job (a queued one at once, an active one through
+	// its worker); a finished one is unchanged. ErrNotFound if it does not
+	// exist.
+	Cancel(ctx context.Context, actor domain.Actor, id domain.JobID) (jobs.Job, error)
 	// Unfinished returns a worker's queued, dispatched and running jobs.
 	Unfinished(ctx context.Context, workerID domain.WorkerID) ([]jobs.Job, error)
 }

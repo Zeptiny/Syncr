@@ -108,8 +108,12 @@ has to handle:
   is disabled with `paused_reason`, shown in the UI. A label without workers
   fails the run but does not pause (an admin may add the label). A run that
   failed because its owner is disabled is not notified.
-- Pausing needs no version and cancels the open run; resuming recomputes the
-  next run from now. Edits recompute it only when the expression, zone or
+- Pausing needs no version and cancels the open runs: a pending run at
+  once; a launching run, whose job may already exist, gets a cancel request
+  (it stays `launching` with reason `disabled`, and can then only become
+  `cancelled`), so its launch cannot complete and the scheduler cancels its
+  job, if created, and then the run. A paused schedule's run never keeps a
+  job running. Resuming recomputes the next run from now. Edits recompute it only when the expression, zone or
   enabled state changed, so an edit never rewinds or skips a fire.
 
 ### The scheduler: `internal/controller/scheduler`
@@ -135,7 +139,12 @@ application locks or leader election:
    launched`.
 4. A crash between any two steps is completed from the stored state: a run
    found `launching` is created with its reserved ID on the next pass,
-   whatever its deadline (the launch was decided in time).
+   whatever its deadline (the launch was decided in time), unless it has a
+   cancel request (its schedule was paused meanwhile): then its job, if it
+   exists, is cancelled and the run ends `cancelled`. A `launching ->
+   launched` that loses its compare-and-swap after the job was created
+   re-reads the run and cancels the job unless the run was launched (by
+   another controller), so a job runs only for a launched run.
 
 `schedule_runs.job_id` therefore has no foreign key: the ID exists before
 the job. Deleting a schedule cascades to its runs and links; its jobs stay,

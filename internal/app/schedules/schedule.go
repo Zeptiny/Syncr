@@ -139,7 +139,8 @@ const (
 	RunMissed RunStatus = "missed"
 	// RunFailed could not start at all. Terminal.
 	RunFailed RunStatus = "failed"
-	// RunCancelled was open when the schedule was paused. Terminal.
+	// RunCancelled was open when the schedule was paused (a launching run
+	// after the scheduler cancelled its job). Terminal.
 	RunCancelled RunStatus = "cancelled"
 )
 
@@ -195,7 +196,8 @@ type Run struct {
 
 	Status RunStatus
 	// Reason is a reason code (Reason* constants) for missed, failed and
-	// cancelled runs; Message its details for display.
+	// cancelled runs; Message its details for display. On a launching run
+	// it is a cancel request (CancelRequested).
 	Reason  string
 	Message string
 
@@ -210,6 +212,12 @@ type Run struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+// CancelRequested reports whether the run is launching and its schedule
+// was paused meanwhile (Reason ReasonDisabled): its job may already exist,
+// so the scheduler cancels the job, if any, and then the run. Such a run
+// may only move to cancelled (Repository.UpdateRun).
+func (r Run) CancelRequested() bool { return r.Status == RunLaunching && r.Reason != "" }
 
 // Limits and policy constants.
 const (

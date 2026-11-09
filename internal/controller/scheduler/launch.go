@@ -75,6 +75,10 @@ func (s *Scheduler) launchOpen(ctx context.Context) error {
 // decide handles one open run (see the package documentation for the
 // order of the checks).
 func (s *Scheduler) decide(ctx context.Context, p *pass, sc schedules.Schedule, r schedules.Run) error {
+	if r.CancelRequested() {
+		// The schedule was paused while the run launched.
+		return s.abort(ctx, sc, r)
+	}
 	if r.Status == schedules.RunLaunching {
 		// The launch was decided (in time) and its job ID reserved:
 		// complete it.
@@ -214,9 +218,65 @@ func (s *Scheduler) create(ctx context.Context, p *pass, sc schedules.Schedule, 
 		// Retried with the same job ID on the next pass.
 		return fmt.Errorf("create job %s: %w", r.JobID, err)
 	}
-	if _, err := s.schedules.MarkLaunched(ctx, r); err != nil && !errors.Is(err, domain.ErrConflict) && !errors.Is(err, domain.ErrNotFound) {
+	_, err = s.schedules.MarkLaunched(ctx, r)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrNotFound):
+		// Another pass or controller moved the run, or its schedule was
+		// paused (or deleted) while the job was created.
+		return s.settle(ctx, sc, r)
+	default:
 		return err
 	}
+}
+
+// settle handles a launch whose job exists (or may) but whose run could
+// not be marked launched: a job runs only for a launched run. A run with a
+// cancel request is aborted; a run that ended otherwise (or was deleted
+// with its schedule) gets its job cancelled; a run still open without a
+// cancel request is left for the next pass, and a launched one (another
+// controller) is done.
+func (s *Scheduler) settle(ctx context.Context, sc schedules.Schedule, r schedules.Run) error {
+	cur, err := s.schedules.GetRun(ctx, r.ID)
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		return s.cancelJob(ctx, sc, r.JobID)
+	case err != nil:
+		return err
+	case cur.Status == schedules.RunLaunched:
+		return nil
+	case cur.CancelRequested():
+		return s.abort(ctx, sc, cur)
+	case cur.Status.Open():
+		return nil
+	default:
+		return s.cancelJob(ctx, sc, r.JobID)
+	}
+}
+
+// abort ends a launching run whose schedule was paused while it launched:
+// it cancels the run's job if it was created, then the run. Both steps are
+// idempotent, so a crash between them is completed on the next pass.
+func (s *Scheduler) abort(ctx context.Context, sc schedules.Schedule, r schedules.Run) error {
+	if err := s.cancelJob(ctx, sc, r.JobID); err != nil {
+		return err
+	}
+	return s.end(ctx, r, schedules.RunCancelled, schedules.ReasonDisabled, "", false)
+}
+
+// cancelJob cancels a scheduled job as its owner; a job that was never
+// created is fine.
+func (s *Scheduler) cancelJob(ctx context.Context, sc schedules.Schedule, id domain.JobID) error {
+	j, err := s.jobs.Cancel(ctx, domain.Actor{UserID: sc.OwnerID, Role: domain.RoleUser}, id)
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		return nil
+	case err != nil:
+		return fmt.Errorf("cancel job %s: %w", id, err)
+	}
+	s.log.InfoContext(ctx, "scheduled job cancelled: its run did not launch", "schedule_id", sc.ID.String(),
+		"job_id", id.String(), "status", string(j.Status))
 	return nil
 }
 

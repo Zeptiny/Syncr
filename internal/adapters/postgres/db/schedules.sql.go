@@ -41,8 +41,11 @@ func (q *Queries) AdvanceScheduleFire(ctx context.Context, arg AdvanceScheduleFi
 }
 
 const cancelOpenRun = `-- name: CancelOpenRun :exec
-UPDATE schedule_runs SET status = 'cancelled', reason = 'disabled', message = '', updated_at = $1::timestamptz
-WHERE schedule_id = $2::uuid AND status IN ('pending', 'launching')
+UPDATE schedule_runs SET
+    status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE status END,
+    reason = 'disabled', message = '', updated_at = $1::timestamptz
+WHERE schedule_id = $2::uuid
+  AND (status = 'pending' OR (status = 'launching' AND reason = ''))
 `
 
 type CancelOpenRunParams struct {
@@ -51,7 +54,10 @@ type CancelOpenRunParams struct {
 }
 
 // Pausing a schedule cancels its open runs (without a notification: only
-// missed and failed runs notify).
+// missed and failed runs notify). A pending run is cancelled at once; a
+// launching run's job may already exist, so it stays launching with the
+// reason 'disabled' (a cancel request): the scheduler cancels its job and
+// then the run.
 func (q *Queries) CancelOpenRun(ctx context.Context, arg CancelOpenRunParams) error {
 	_, err := q.db.Exec(ctx, cancelOpenRun, arg.UpdatedAt, arg.ScheduleID)
 	return err
@@ -1021,6 +1027,7 @@ UPDATE schedule_runs SET
     job_id = COALESCE($5::uuid, job_id),
     updated_at = $6::timestamptz
 WHERE id = $7::uuid AND status = $8::text
+  AND (status <> 'launching' OR reason = '' OR $1::text = 'cancelled')
 RETURNING schedule_id
 `
 
@@ -1037,7 +1044,8 @@ type UpdateRunStatusParams struct {
 
 // The compare-and-swap of a run's status; zero (NULL) worker and job IDs
 // keep the stored ones. A run back to pending while another one is
-// violates schedule_runs_one_pending_key.
+// violates schedule_runs_one_pending_key. A launching run with a reason
+// (its schedule was paused while it launched) may only be cancelled.
 func (q *Queries) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, updateRunStatus,
 		arg.ToStatus,
