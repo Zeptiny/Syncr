@@ -126,8 +126,11 @@ What the controller can rely on:
   starts at the oldest unacked event.
 - **Cancellation.** A CANCELLED JobResult carries `JobError` with code
   CANCELLED ("job cancelled by the controller") or WORKER_SHUTDOWN ("...
-  because the worker is shutting down"). A StartJob received while the
-  worker shuts down is acked and reported CANCELLED (WORKER_SHUTDOWN).
+  because the worker is shutting down"). The result of a job that never
+  started (it waited in the local queue) has no `started_at` and no
+  JobStarted before it. A StartJob received while the worker shuts down
+  is refused: it is not acknowledged and leaves no event, so the job stays
+  queued on the controller for the worker's next process.
 - **Sizes.** A Report or Pull carries at most about 4 MiB of events
   (`PullRequest.max_bytes`, capped at 8 MiB) but always at least one event.
   A single event stays far below the 16 MiB read limits: a result's output

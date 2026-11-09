@@ -321,3 +321,47 @@ func TestActiveShutdownDrain(t *testing.T) {
 		t.Errorf("job %s %+v", j.Status, j.Error)
 	}
 }
+
+// TestActiveShutdownRequeuesWaitingJobs: the jobs waiting in the local
+// queue of a worker that stops gracefully never ran, so they go back to
+// the controller's queue (not interrupted) and the worker's next process
+// runs them.
+func TestActiveShutdownRequeuesWaitingJobs(t *testing.T) {
+	t.Parallel()
+	c := newController(t)
+	id, secret := c.enrollActive("desktop")
+	rn := newFakeRunner()
+	w := startActive(t, rn, activeOptions(c, id, secret))
+
+	var running, waiting []domain.JobID
+	for range 4 { // the agent's MaxConcurrentJobs
+		running = append(running, c.run(id, heldDefinition()))
+	}
+	for range 2 {
+		waiting = append(waiting, c.run(id, testDefinition()))
+	}
+	for _, job := range running {
+		c.waitStatus(job, domain.JobRunning)
+	}
+	for _, job := range waiting {
+		c.waitStatus(job, domain.JobDispatched)
+	}
+	if err := w.shutdown(t); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	for _, job := range running {
+		if j := c.job(job); j.Status != domain.JobInterrupted || j.Error.Code != jobs.CodeWorkerShutdown {
+			t.Errorf("running job %s %+v", j.Status, j.Error)
+		}
+	}
+	for _, job := range waiting {
+		if j := c.job(job); j.Status != domain.JobQueued || j.Requeues != 1 || rn.runCount(job) != 0 {
+			t.Errorf("waiting job %s requeues %d runs %d, want queued again", j.Status, j.Requeues, rn.runCount(job))
+		}
+	}
+
+	startActive(t, newFakeRunner(), activeOptions(c, id, secret))
+	for _, job := range waiting {
+		c.waitStatus(job, domain.JobSucceeded)
+	}
+}

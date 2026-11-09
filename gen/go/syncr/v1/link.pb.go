@@ -2199,7 +2199,9 @@ func (x *CommandAck) GetCommandId() string {
 }
 
 // StartJob asks the worker to run a job. A StartJob for a job_id the worker
-// already knows (running or finished in this epoch) is acked and ignored.
+// already knows (running or finished in this epoch) is acked and ignored. A
+// worker that is shutting down does not ack it and reports nothing, so the
+// job stays queued for the worker's next process.
 type StartJob struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Controller-assigned job UUID.

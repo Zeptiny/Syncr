@@ -523,14 +523,29 @@ func TestShutdownCancelsJobs(t *testing.T) {
 			t.Error("queued job ran during shutdown")
 		}
 
-		// Later commands are acked; new jobs are reported cancelled at once.
-		handle(t, a, startCmd("c4", "late"), startCmd("c1", "r1"))
-		if r := resultOf(t, a, "late"); r.GetStatus() != syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED ||
-			r.GetError().GetCode() != syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_SHUTDOWN {
-			t.Errorf("late result = %v", r)
+		// The queued job's result says it never started.
+		if r := resultOf(t, a, "q1"); r.GetStartedAt() != nil {
+			t.Errorf("q1 result has a start time: %v", r)
 		}
-		if got := describe(events(a)); strings.Count(got, "result(r1") != 1 {
+
+		// Later StartJobs are refused, new or known: no ack, no event, so
+		// the controller keeps the jobs queued for the next process. Other
+		// commands are still acked.
+		before := a.Outbox().Stats().Head
+		acks := a.HandleCommands(t.Context(), []*syncrv1.Command{
+			startCmd("c4", "late"), startCmd("c1", "r1"), cancelCmd("c5", "r2"), startCmd("c3", "q1"),
+		})
+		if len(acks) != 1 || acks[0].GetCommandId() != "c5" {
+			t.Errorf("acks after shutdown = %v, want only the CancelJob", acks)
+		}
+		if head := a.Outbox().Stats().Head; head != before {
+			t.Errorf("refused commands appended %d events: %s", head-before, describe(events(a)))
+		}
+		if got := describe(events(a)); strings.Count(got, "result(r1") != 1 || strings.Contains(got, "late") {
 			t.Errorf("events = %s", got)
+		}
+		if fr.runCount("late") != 0 {
+			t.Error("a job started during shutdown")
 		}
 		if err := a.Shutdown(ctx); err != nil {
 			t.Errorf("second Shutdown: %v", err)

@@ -5,7 +5,8 @@
 //
 // # Commands
 //
-// HandleCommands acknowledges every command that has an ID. An ack means
+// HandleCommands acknowledges every command that has an ID, except a
+// StartJob while the agent shuts down (see Shutdown). An ack means
 // "accepted", never "succeeded": outcomes arrive as events. Handling is
 // idempotent, because the controller redelivers commands until it receives
 // their ack:
@@ -43,9 +44,12 @@
 // # Shutdown
 //
 // Shutdown cancels queued and running jobs, waits for their CANCELLED
-// results to be in the outbox, and from then on answers StartJob with a
-// CANCELLED result. The transport then tries a final flush (see
-// internal/worker/linkcore).
+// results to be in the outbox, and from then on refuses StartJob: it is
+// not acked and leaves no event, so the controller keeps the job queued
+// for the worker's next process. (The CANCELLED result of a job that was
+// still queued has no start time and no JobStarted before it, which tells
+// the controller that it never ran, so it queues it again.) The transport
+// then tries a final flush (see internal/worker/linkcore).
 //
 // # Results
 //
@@ -281,11 +285,13 @@ func (a *Agent) Outbox() *outbox.Outbox { return a.out }
 // Epoch returns the epoch of the agent's outbox.
 func (a *Agent) Epoch() string { return a.out.Epoch() }
 
-// HandleCommands processes cmds in order and returns one ack per command
-// that has an ID, in the same order. It never blocks on job execution.
-// Commands without an ID cannot be acknowledged and are ignored; commands of
-// a type this worker does not know are acked (so the controller stops
-// redelivering them) and ignored.
+// HandleCommands processes cmds in order and returns one ack per accepted
+// command that has an ID, in the same order. It never blocks on job
+// execution. Commands without an ID cannot be acknowledged and are ignored;
+// commands of a type this worker does not know are acked (so the controller
+// stops redelivering them) and ignored. Once Shutdown began, StartJob
+// commands are refused: they get no ack, so the controller keeps the job
+// queued and redelivers it (to the worker's next process, eventually).
 func (a *Agent) HandleCommands(ctx context.Context, cmds []*syncrv1.Command) []*syncrv1.CommandAck {
 	acks := make([]*syncrv1.CommandAck, 0, len(cmds))
 	for _, cmd := range cmds {
@@ -295,7 +301,9 @@ func (a *Agent) HandleCommands(ctx context.Context, cmds []*syncrv1.Command) []*
 		}
 		switch c := cmd.GetCommand().(type) {
 		case *syncrv1.Command_StartJob:
-			a.startJob(ctx, c.StartJob)
+			if !a.startJob(ctx, c.StartJob) {
+				continue // refused: no ack
+			}
 		case *syncrv1.Command_CancelJob:
 			a.cancelJob(ctx, c.CancelJob.GetJobId())
 		default:
@@ -306,27 +314,33 @@ func (a *Agent) HandleCommands(ctx context.Context, cmds []*syncrv1.Command) []*
 	return acks
 }
 
-func (a *Agent) startJob(ctx context.Context, sj *syncrv1.StartJob) {
+// startJob handles a StartJob and reports whether it was accepted (and is
+// to be acked). It is refused only while the agent shuts down, also for a
+// job it knows: the controller keeps a job it has not seen accepted queued,
+// and settles one it has seen accepted by the job's result.
+func (a *Agent) startJob(ctx context.Context, sj *syncrv1.StartJob) bool {
 	id := sj.GetJobId()
 	if id == "" {
 		a.log.WarnContext(ctx, "ignoring start job command without job id")
-		return
+		return true
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.stopping {
+		// Debug only: a passive controller redelivers it every round of the
+		// final flush.
+		a.log.DebugContext(ctx, "refusing start job command: the worker is shutting down", "job_id", id)
+		return false
+	}
 	if a.knownLocked(id) {
 		a.log.DebugContext(ctx, "duplicate start job command", "job_id", id)
-		return
-	}
-	if a.stopping {
-		a.finishLocked(id, cancelledResult(id, ErrShuttingDown, time.Time{}, runner.Result{ExitCode: -1}))
-		return
+		return true
 	}
 	rn, err := a.runners.ForSpec(sj.GetSpec())
 	if err != nil {
 		a.log.WarnContext(ctx, "job rejected", "job_id", id, "kind", link.KindOf(sj.GetSpec()), "error", err.Error())
 		a.finishLocked(id, failedResult(id, runner.CodeOf(err), err.Error(), time.Time{}, runner.Result{ExitCode: -1}))
-		return
+		return true
 	}
 	j := &job{id: id, spec: sj.GetSpec(), runner: rn, state: stateQueued}
 	j.ctx, j.cancel = context.WithCancelCause(a.base)
@@ -335,6 +349,7 @@ func (a *Agent) startJob(ctx context.Context, sj *syncrv1.StartJob) {
 	a.queue = append(a.queue, j)
 	a.log.InfoContext(ctx, "job accepted", "job_id", id, "kind", rn.Kind())
 	a.admitLocked()
+	return true
 }
 
 func (a *Agent) cancelJob(ctx context.Context, id string) {
@@ -558,7 +573,7 @@ func (a *Agent) AckEvents(seq int64) error {
 // Shutdown stops the agent: queued jobs are cancelled at once, running jobs
 // are cancelled through their runners (which stop their tools gracefully,
 // then kill them after the supervisor's grace period), and later StartJob
-// commands are answered with CANCELLED results. It waits until every job has
+// commands are refused (not acked, no event). It waits until every job has
 // reported its result to the outbox, or until ctx is done, in which case it
 // returns an error wrapping context.Cause(ctx). Pass a ctx that outlasts the
 // supervisor's grace period. Calling Shutdown again waits again.

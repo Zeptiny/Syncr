@@ -64,7 +64,8 @@ service ControllerLinkService {
 service WorkerLinkService {
   // Command delivers commands to the worker. The worker acknowledges every
   // command it has accepted for processing, including duplicates it already
-  // knows. Safe to retry.
+  // knows; a worker that is shutting down refuses (does not acknowledge)
+  // StartJob. Safe to retry.
   rpc Command(CommandRequest) returns (CommandResponse) {}
 
   // Pull fetches outbox events after a given seq and acknowledges everything
@@ -603,7 +604,9 @@ message CommandAck {
 }
 
 // StartJob asks the worker to run a job. A StartJob for a job_id the worker
-// already knows (running or finished in this epoch) is acked and ignored.
+// already knows (running or finished in this epoch) is acked and ignored. A
+// worker that is shutting down does not ack it and reports nothing, so the
+// job stays queued for the worker's next process.
 message StartJob {
   // Controller-assigned job UUID.
   string job_id = 1;

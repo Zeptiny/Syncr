@@ -987,7 +987,9 @@ export const CommandAckSchema: GenMessage<CommandAck> = /*@__PURE__*/
 
 /**
  * StartJob asks the worker to run a job. A StartJob for a job_id the worker
- * already knows (running or finished in this epoch) is acked and ignored.
+ * already knows (running or finished in this epoch) is acked and ignored. A
+ * worker that is shutting down does not ack it and reports nothing, so the
+ * job stays queued for the worker's next process.
  *
  * @generated from message syncr.v1.StartJob
  */
@@ -2377,7 +2379,8 @@ export const WorkerLinkService: GenService<{
   /**
    * Command delivers commands to the worker. The worker acknowledges every
    * command it has accepted for processing, including duplicates it already
-   * knows. Safe to retry.
+   * knows; a worker that is shutting down refuses (does not acknowledge)
+   * StartJob. Safe to retry.
    *
    * @generated from rpc syncr.v1.WorkerLinkService.Command
    */
