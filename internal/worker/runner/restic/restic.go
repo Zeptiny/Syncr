@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -195,7 +196,13 @@ func (e *engine) run(ctx context.Context, kind string, job runner.Job, cmd comma
 		if exitErr, ok := errors.AsType[*proc.ExitError](err); ok {
 			return e.exitFailure(res, kind, cmd.verb, exitErr.ExitCode, s)
 		}
-		return res, err // *proc.StartError and collection errors
+		if pres.ExitCode != exitOK || !errors.Is(err, exec.ErrWaitDelay) {
+			return res, err // *proc.StartError and other collection errors
+		}
+		// restic succeeded, but a process it started (rclone) kept the
+		// output pipes open past the grace period. restic's own output is
+		// complete, so the run is judged by it like any other.
+		e.log.Warn("restic output not fully collected", "job_id", job.ID, "error", err.Error())
 	}
 
 	out, err := s.output(job.Spec)

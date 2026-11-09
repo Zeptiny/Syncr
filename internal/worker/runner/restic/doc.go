@@ -40,7 +40,9 @@
 // ExitCode 3, a non-zero Stats.Errors and Result.Warnings ("N items could not
 // be read; the snapshot is incomplete" plus the first reasons restic gave,
 // scrubbed and bounded by runner.LimitWarnings). The job status stays
-// SUCCEEDED.
+// SUCCEEDED. A restic that exits 0 while a process it started (rclone) holds
+// the output pipes open past the supervisor's grace period
+// (exec.ErrWaitDelay) is judged by its own output, like any other exit 0.
 //
 // Per-repository serialization is the controller's job; a lock conflict
 // (exit 11) is reported as ErrRepositoryLocked.
