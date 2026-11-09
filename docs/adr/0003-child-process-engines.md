@@ -39,6 +39,18 @@ Each job runs as one child process of a pinned, version-checked `rclone` or
   SIGINT (both tools clean up on it), then SIGKILL after a grace period. On
   Windows the child is killed. Pipes held open by orphaned grandchildren are
   closed after the same grace period, so a job can never hang the worker.
+- **No orphans.** A child dies with the worker even when the worker is killed
+  (SIGKILL, OOM, crash), so it cannot keep writing to a remote or repository
+  or race with a restarted worker that runs the job again. On Linux it gets
+  SIGKILL through the parent death signal (`Pdeathsig`); because the kernel
+  ties that signal to the forking thread, not the process, the child is
+  started and waited for on a goroutine that keeps its OS thread locked. On
+  Windows every child is added, just after it starts, to the worker's Job
+  Object (one per supervisor) with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`,
+  whose handle the worker never closes; processes the child starts (restic's
+  rclone) are in the job too. os/exec cannot start a child suspended, so a
+  child is outside the job for a moment after it starts. Other Unix systems
+  have neither mechanism.
 - **Typed outcomes.** The supervisor returns the exit code with
   `*StartError`, `*ExitError` or `*CanceledError`; runners map them to job
   error codes.
@@ -51,5 +63,7 @@ Each job runs as one child process of a pinned, version-checked `rclone` or
 - Runners depend on the tools' JSON formats; integration tests against the
   pinned versions guard them.
 - Windows has no graceful stop for console children yet; a Ctrl+Break based
-  stop or Job Objects (to also reap grandchildren) can be added behind the
-  same API.
+  stop can be added behind the same API.
+- On Linux the parent death signal reaches only the direct child: a process
+  it starts is not killed with the worker (restic's rclone exits once restic
+  closes its pipes).

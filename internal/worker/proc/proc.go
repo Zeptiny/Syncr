@@ -18,18 +18,24 @@
 //     never hangs.
 //   - Typed errors. Run returns *StartError, *ExitError or *CanceledError,
 //     and always reports the exit code in Result.
+//   - No orphans. A child dies with the worker, even when the worker itself
+//     is killed (SIGKILL, OOM, crash): on Linux through the parent-death
+//     signal, on Windows through a kill-on-close Job Object. Other Unix
+//     systems lack both, and there a killed worker's children keep running.
 //
 // On Unix the child runs in its own process group, so a Ctrl-C in the
 // worker's terminal reaches only the worker, which then stops its children
 // in an orderly way.
 //
-// Allowed dependencies: the standard library only.
+// Allowed dependencies: the standard library, and golang.org/x/sys/windows
+// on Windows.
 package proc
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,14 +67,21 @@ type Options struct {
 	// truncated (Line.Truncated) and the rest of the line is discarded.
 	// Zero means DefaultMaxLineBytes.
 	MaxLineBytes int
+
+	// Logger receives operational warnings, such as a child that could not
+	// be tied to the worker's lifetime. Nil discards them.
+	Logger *slog.Logger
 }
 
 // Supervisor starts and supervises child processes. It holds no per-run
-// state and is safe for concurrent use.
+// state and is safe for concurrent use. A worker should use one Supervisor
+// for all its children.
 type Supervisor struct {
 	environ      func() []string
 	gracePeriod  time.Duration
 	maxLineBytes int
+	log          *slog.Logger
+	life         lifetime
 }
 
 // New returns a Supervisor configured by opts.
@@ -77,6 +90,10 @@ func New(opts Options) *Supervisor {
 		environ:      opts.Environ,
 		gracePeriod:  opts.GracePeriod,
 		maxLineBytes: opts.MaxLineBytes,
+		log:          opts.Logger,
+	}
+	if s.log == nil {
+		s.log = slog.New(slog.DiscardHandler)
 	}
 	if s.environ == nil {
 		s.environ = os.Environ
@@ -191,15 +208,13 @@ func (s *Supervisor) Run(ctx context.Context, spec Spec) (Result, error) {
 	}
 
 	start := time.Now()
-	if err := cmd.Start(); err != nil {
+	waitDone, err := s.life.startChild(cmd, s.log)
+	if err != nil {
 		if ctx.Err() != nil {
 			return res, &CanceledError{Path: spec.Path, ExitCode: -1, Cause: context.Cause(ctx)}
 		}
 		return res, &StartError{Path: spec.Path, Err: err}
 	}
-
-	waitDone := make(chan error, 1)
-	go func() { waitDone <- cmd.Wait() }()
 
 	// If a callback panics before Wait returned, kill the child and keep
 	// draining in the background so the copy goroutines and Wait can finish.

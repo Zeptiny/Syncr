@@ -151,9 +151,8 @@ process has a new epoch and the controller's reconcile interrupts the jobs
   (`internal/e2e/system`, integration tag, Linux): both link modes, a
   controller killed and restarted mid-job, a worker killed and restarted
   mid-job, a graceful worker stop mid-job, and restic init + backup to S3.
-- A worker killed with SIGKILL leaves its tool processes running (they run
-  in their own process group so that a graceful stop can signal them).
-  Under systemd the unit's cgroup is killed with it; elsewhere they finish or
-  fail on their own.
+- A worker killed with SIGKILL (or crashing) takes its tool processes with
+  it: the parent death signal on Linux, a kill-on-close Job Object on
+  Windows (ADR 0003). On other systems they finish or fail on their own.
 - A passive worker that no controller ever pulls from waits the 5 s flush
   budget on stop.

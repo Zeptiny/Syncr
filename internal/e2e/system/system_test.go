@@ -122,9 +122,9 @@ func TestSystemControllerRestartMidJob(t *testing.T) {
 	}
 }
 
-// TestSystemWorkerKillMidJob kills the worker while a job runs: when the
-// worker comes back (a new process, a new epoch) the job is interrupted, and
-// the next job succeeds.
+// TestSystemWorkerKillMidJob kills the worker while a job runs: its rclone
+// dies with it, and when the worker comes back (a new process, a new epoch)
+// the job is interrupted, and the next job succeeds.
 func TestSystemWorkerKillMidJob(t *testing.T) {
 	t.Parallel()
 	rclone, restic := requirements(t)
@@ -141,7 +141,8 @@ func TestSystemWorkerKillMidJob(t *testing.T) {
 	c.waitJob(id, "running", func(j *syncrv1.Job) bool { return j.GetStatus() == syncrv1.JobStatus_JOB_STATUS_RUNNING })
 
 	w.proc.kill()
-	killMatching(t, w.dir) // the orphaned rclone
+	// rclone dies with the worker, so it cannot race with the restarted one.
+	waitNoneMatching(t, w.dir, 10*time.Second)
 	w.start()
 
 	j, _ := c.watch(id)
