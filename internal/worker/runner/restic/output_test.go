@@ -16,7 +16,7 @@ import (
 func replay(t *testing.T, kind string, files ...string) (*session, []runner.Progress) {
 	t.Helper()
 	var snaps []runner.Progress
-	s := newSession(kind, func(p runner.Progress) { snaps = append(snaps, p) })
+	s := newSession(kind, func(p runner.Progress) { snaps = append(snaps, p) }, nil)
 	for _, f := range files {
 		for _, l := range fixture(t, f) {
 			s.line(proc.Line{Data: []byte(l)})
@@ -49,7 +49,7 @@ func TestBackupFixture(t *testing.T) {
 func TestBackupProgressIsCumulative(t *testing.T) {
 	t.Parallel()
 	var snaps []runner.Progress
-	s := newSession(kindBackup, func(p runner.Progress) { snaps = append(snaps, p) })
+	s := newSession(kindBackup, func(p runner.Progress) { snaps = append(snaps, p) }, nil)
 	for _, l := range []string{
 		`{"message_type":"status","total_files":3,"total_bytes":30}`, // scan only
 		`{"message_type":"status","total_files":5,"files_done":1,"total_bytes":50,"bytes_done":10}`,
@@ -122,7 +122,7 @@ func TestRestoreFixture(t *testing.T) {
 
 func TestRestoreCountsSkippedAsProcessed(t *testing.T) {
 	t.Parallel()
-	s := newSession(kindRestore, func(runner.Progress) {})
+	s := newSession(kindRestore, func(runner.Progress) {}, nil)
 	s.line(proc.Line{Data: []byte(`{"message_type":"summary","total_files":10,"files_restored":4,"files_skipped":6,"total_bytes":100,"bytes_restored":40,"bytes_skipped":60}`)})
 	if st := s.stats(); st.Files != 10 || st.Bytes != 100 || st.TotalFiles != 10 {
 		t.Errorf("stats = %+v", st)
@@ -152,7 +152,7 @@ func TestForgetFixture(t *testing.T) {
 
 func TestForgetTruncatedKeepsDecodedGroups(t *testing.T) {
 	t.Parallel()
-	s := newSession(kindForget, func(runner.Progress) {})
+	s := newSession(kindForget, func(runner.Progress) {}, nil)
 	whole := `[{"host":"a","remove":[{"id":"aaaa"},{"id":"bbbb"}],"keep":[]},{"host":"b","remove":[{"id":"cc`
 	s.line(proc.Line{Data: []byte(whole), Truncated: true})
 	out, err := s.output(nil)
@@ -164,7 +164,7 @@ func TestForgetTruncatedKeepsDecodedGroups(t *testing.T) {
 	}
 
 	// Without truncation the same garbage is an error.
-	s = newSession(kindForget, func(runner.Progress) {})
+	s = newSession(kindForget, func(runner.Progress) {}, nil)
 	s.line(proc.Line{Data: []byte(whole)})
 	if _, err := s.output(nil); err == nil {
 		t.Error("malformed forget output accepted")
@@ -173,7 +173,7 @@ func TestForgetTruncatedKeepsDecodedGroups(t *testing.T) {
 
 func TestForgetNothingRemoved(t *testing.T) {
 	t.Parallel()
-	s := newSession(kindForget, func(runner.Progress) {})
+	s := newSession(kindForget, func(runner.Progress) {}, nil)
 	s.line(proc.Line{Data: []byte(`[{"host":"a","keep":[{"id":"x"}],"remove":null}]`)})
 	out, err := s.output(nil)
 	if err != nil || len(out.GetResticForget().GetRemovedSnapshotIds()) != 0 {
@@ -211,7 +211,7 @@ func TestSnapshotsEmptyAndTruncated(t *testing.T) {
 		t.Errorf("empty listing: %v, %v", out, err)
 	}
 
-	s = newSession(kindSnapshots, func(runner.Progress) {})
+	s = newSession(kindSnapshots, func(runner.Progress) {}, nil)
 	s.line(proc.Line{Data: []byte(`[{"id":"aaaa","time":"2026-01-01T00:00:00Z"},{"id":"bb`), Truncated: true})
 	_, err = s.output(nil)
 	if err == nil || !strings.Contains(err.Error(), "line limit") {
@@ -221,7 +221,7 @@ func TestSnapshotsEmptyAndTruncated(t *testing.T) {
 
 func TestSnapshotsMissingResultIsError(t *testing.T) {
 	t.Parallel()
-	s := newSession(kindSnapshots, func(runner.Progress) {})
+	s := newSession(kindSnapshots, func(runner.Progress) {}, nil)
 	if _, err := s.output(nil); err == nil {
 		t.Error("no result accepted")
 	}
@@ -234,7 +234,7 @@ func TestCheckFixtureAndFailure(t *testing.T) {
 		t.Errorf("checkErrors = %v, want 0", s.checkErrors)
 	}
 
-	s = newSession(kindCheck, func(runner.Progress) {})
+	s = newSession(kindCheck, func(runner.Progress) {}, nil)
 	s.line(proc.Line{Data: []byte(`{"message_type":"summary","num_errors":3,"broken_packs":["ab"],"suggest_repair_index":true}`)})
 	if s.stats().Errors != 3 {
 		t.Errorf("Errors = %d, want 3", s.stats().Errors)
@@ -262,7 +262,7 @@ func TestInitAndPruneFixturesAreAccepted(t *testing.T) {
 
 func TestUnknownAndMalformedMessagesAreIgnored(t *testing.T) {
 	t.Parallel()
-	s := newSession(kindBackup, func(runner.Progress) {})
+	s := newSession(kindBackup, func(runner.Progress) {}, nil)
 	for _, l := range []string{
 		``,
 		`   `,
@@ -290,7 +290,7 @@ func TestUnknownAndMalformedMessagesAreIgnored(t *testing.T) {
 
 func TestCRLFLinesAreParsed(t *testing.T) {
 	t.Parallel()
-	s := newSession(kindBackup, func(runner.Progress) {})
+	s := newSession(kindBackup, func(runner.Progress) {}, nil)
 	s.line(proc.Line{Data: []byte("{\"message_type\":\"status\",\"bytes_done\":5}\r")})
 	if s.stats().Bytes != 5 {
 		t.Errorf("stats = %+v", s.stats())

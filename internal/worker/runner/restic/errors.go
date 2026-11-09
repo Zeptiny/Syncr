@@ -3,7 +3,6 @@ package restic
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
@@ -13,19 +12,18 @@ import (
 // Exit codes of restic 0.19 (see "restic help backup", EXIT STATUS, and the
 // documentation's "Exit codes" table).
 const (
-	exitOK              = 0
-	exitFatal           = 1   // command failed, e.g. no snapshot created
-	exitRuntime         = 2   // Go runtime error
-	exitIncomplete      = 3   // backup: some source data could not be read
-	exitNoRepository    = 10  // repository does not exist
-	exitLocked          = 11  // failed to lock the repository
-	exitWrongPassword   = 12  // wrong password
-	exitInterrupted     = 130 // interrupted by SIGINT/SIGTERM
-	maxFailureDetail    = 1000
-	maxTailLines        = 4
-	maxTailLineBytes    = 400
-	maxItemErrors       = runner.MaxWarnings - 1 // plus the summary warning
-	redactedPlaceholder = "[redacted]"
+	exitOK            = 0
+	exitFatal         = 1   // command failed, e.g. no snapshot created
+	exitRuntime       = 2   // Go runtime error
+	exitIncomplete    = 3   // backup: some source data could not be read
+	exitNoRepository  = 10  // repository does not exist
+	exitLocked        = 11  // failed to lock the repository
+	exitWrongPassword = 12  // wrong password
+	exitInterrupted   = 130 // interrupted by SIGINT/SIGTERM
+	maxFailureDetail  = 1000
+	maxTailLines      = 4
+	maxTailLineBytes  = 400
+	maxItemErrors     = runner.MaxWarnings - 1 // plus the summary warning
 )
 
 // ExitIncomplete is the exit code restic uses for a backup that created a
@@ -129,65 +127,6 @@ func jobErrorCode(e *ExitError) syncrv1.JobErrorCode {
 	return syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED
 }
 
-// scrubbedError is an error whose text has been scrubbed of secrets. It
-// unwraps to the original so errors.Is/As (and runner.CodeOf) still work.
-type scrubbedError struct {
-	msg string
-	err error
-}
-
-func (e *scrubbedError) Error() string { return e.msg }
-func (e *scrubbedError) Unwrap() error { return e.err }
-
-// scrubber removes secret values from text.
-type scrubber struct {
-	r *strings.Replacer
-}
-
-// newScrubber returns a scrubber for secrets; empty values are ignored.
-// Longer secrets are replaced first so one that contains another is removed
-// as a whole.
-func newScrubber(secrets []string) *scrubber {
-	uniq := make(map[string]struct{}, len(secrets))
-	for _, s := range secrets {
-		if s != "" {
-			uniq[s] = struct{}{}
-		}
-	}
-	list := make([]string, 0, len(uniq))
-	for s := range uniq {
-		list = append(list, s)
-	}
-	sort.Slice(list, func(i, j int) bool {
-		if len(list[i]) != len(list[j]) {
-			return len(list[i]) > len(list[j])
-		}
-		return list[i] < list[j]
-	})
-	pairs := make([]string, 0, 2*len(list))
-	for _, s := range list {
-		pairs = append(pairs, s, redactedPlaceholder)
-	}
-	return &scrubber{r: strings.NewReplacer(pairs...)}
-}
-
-// String returns s without secrets.
-func (sc *scrubber) String(s string) string { return sc.r.Replace(s) }
-
-// Error returns err with a scrubbed message, or err itself when scrubbing
-// changes nothing. It returns nil for nil.
-func (sc *scrubber) Error(err error) error {
-	if err == nil {
-		return nil
-	}
-	msg := err.Error()
-	clean := sc.r.Replace(msg)
-	if clean == msg {
-		return err
-	}
-	return &scrubbedError{msg: clean, err: err}
-}
-
 // secretsOf lists the secret values of a job spec: the repository password
 // and the secret options of every remote.
 func secretsOf(spec *syncrv1.JobSpec) []string {
@@ -216,17 +155,3 @@ func failure(verb string, code int, message string) error {
 	e := &ExitError{Verb: verb, ExitCode: code, Message: message}
 	return runner.Fail(jobErrorCode(e), e)
 }
-
-// clip shortens s to at most n bytes on a rune boundary.
-func clip(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	cut := n
-	for cut > 0 && !isRuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut] + "..."
-}
-
-func isRuneStart(b byte) bool { return b&0xC0 != 0x80 }

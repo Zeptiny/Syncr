@@ -10,6 +10,7 @@ import (
 
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
+	"github.com/Zeptiny/Syncr/internal/worker/runner/scrub"
 )
 
 // logLine is the subset of an rclone --use-json-log line the runner uses.
@@ -78,19 +79,21 @@ const (
 )
 
 // tracker consumes rclone's output lines: it turns stats lines into
-// cumulative progress and remembers the last error lines. Its methods are
-// called from proc callbacks, which run sequentially on the Run goroutine.
+// cumulative progress and remembers the last error lines, scrubbed of
+// secrets. Its methods are called from proc callbacks, which run
+// sequentially on the Run goroutine.
 type tracker struct {
 	emit     runner.EmitFunc
+	sc       *scrub.Scrubber
 	progress runner.Progress
 	diag     []string
 }
 
-func newTracker(emit runner.EmitFunc) *tracker {
+func newTracker(emit runner.EmitFunc, sc *scrub.Scrubber) *tracker {
 	if emit == nil {
 		emit = func(runner.Progress) {}
 	}
-	return &tracker{emit: emit}
+	return &tracker{emit: emit, sc: sc}
 }
 
 // line handles one output line from either stream.
@@ -153,12 +156,11 @@ func (t *tracker) plain(s string) {
 }
 
 // note remembers an error message, keeping the last maxDiagnostics distinct
-// ones (retries repeat the same errors).
+// ones (retries repeat the same errors). The message is scrubbed whole
+// before it is collapsed to one line and shortened, so neither step can
+// change or split a secret so that it escapes scrubbing.
 func (t *tracker) note(msg string) {
-	msg = strings.Join(strings.Fields(msg), " ") // one line, no runs of spaces
-	if len(msg) > maxDiagnosticBytes {
-		msg = strings.ToValidUTF8(msg[:maxDiagnosticBytes], "") + "…"
-	}
+	msg = t.sc.Line(msg, maxDiagnosticBytes)
 	for i, d := range t.diag {
 		if d == msg {
 			t.diag = append(t.diag[:i], t.diag[i+1:]...)

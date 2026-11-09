@@ -375,6 +375,36 @@ func TestRunFailureMessageIsScrubbed(t *testing.T) {
 	}
 }
 
+// TestRunFailureMessageScrubsBeforeShortening echoes a secret with runs of
+// white space, and one that straddles the length limit of a diagnostic:
+// collapsing or cutting the line before scrubbing it would let both leak.
+func TestRunFailureMessageScrubsBeforeShortening(t *testing.T) {
+	t.Parallel()
+	const secret = "s3cr3t  Pa55\tword"
+	f := newFixture(t, &fakeSupervisor{
+		lines: []string{
+			`{"level":"error","msg":"login with ` + strings.ReplaceAll(secret, "\t", `\t`) + ` failed"}`,
+			`{"level":"error","msg":"` + strings.Repeat("x", maxDiagnosticBytes-10) + strings.ReplaceAll(secret, "\t", `\t`) + ` tail"}`,
+		},
+		result: proc.Result{ExitCode: 1},
+		err:    &proc.ExitError{Path: "rclone", ExitCode: 1, Err: errors.New("exit status 1")},
+	})
+	job := transferJob(&syncrv1.Location{Remote: "box", Path: "x"}, &syncrv1.Location{Path: f.data}, sftpRemote("box", secret))
+	_, err := f.runner.Run(t.Context(), job, nil)
+	if err == nil {
+		t.Fatal("Run() succeeded")
+	}
+	msg := err.Error()
+	for _, leak := range []string{"s3cr3t", "Pa55", "word"} {
+		if strings.Contains(msg, leak) {
+			t.Errorf("message leaks %q of the secret: %q", leak, msg)
+		}
+	}
+	if !strings.Contains(msg, "login with [redacted] failed") {
+		t.Errorf("message %q lacks the scrubbed diagnostic", msg)
+	}
+}
+
 // echoSupervisor writes error lines containing the secret in several forms.
 type echoSupervisor struct {
 	*fakeSupervisor

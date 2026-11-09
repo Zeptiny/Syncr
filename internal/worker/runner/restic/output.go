@@ -13,6 +13,7 @@ import (
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
+	"github.com/Zeptiny/Syncr/internal/worker/runner/scrub"
 )
 
 // message is the union of the fields of restic's --json messages that this
@@ -71,6 +72,9 @@ type session struct {
 	kind  string
 	start time.Time
 	emit  runner.EmitFunc
+	// sc scrubs the text kept for diagnostics and warnings, whole and
+	// before it is shortened.
+	sc *scrub.Scrubber
 
 	prog runner.Progress
 
@@ -97,8 +101,8 @@ type session struct {
 	tail []string // recent non-JSON lines, for diagnostics
 }
 
-func newSession(kind string, emit runner.EmitFunc) *session {
-	return &session{kind: kind, start: time.Now(), emit: emit, errItems: make(map[string]struct{})}
+func newSession(kind string, emit runner.EmitFunc, sc *scrub.Scrubber) *session {
+	return &session{kind: kind, start: time.Now(), emit: emit, sc: sc, errItems: make(map[string]struct{})}
 }
 
 // line handles one line of restic output from either stream.
@@ -128,7 +132,7 @@ func (s *session) keepTail(data []byte) {
 		copy(s.tail, s.tail[1:])
 		s.tail = s.tail[:maxTailLines-1]
 	}
-	s.tail = append(s.tail, clip(string(data), maxTailLineBytes))
+	s.tail = append(s.tail, s.sc.Clip(string(data), maxTailLineBytes))
 }
 
 func (s *session) message(m *message) {
@@ -205,7 +209,7 @@ func (s *session) noteItemError(item string, m *message) {
 		msg = item + ": " + msg
 	}
 	if msg != "" {
-		s.itemErrors = append(s.itemErrors, clip(msg, maxTailLineBytes))
+		s.itemErrors = append(s.itemErrors, s.sc.Clip(msg, maxTailLineBytes))
 	}
 }
 
