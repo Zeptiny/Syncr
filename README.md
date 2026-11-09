@@ -278,8 +278,9 @@ curl -H 'Content-Type: application/json' -d '{}' \
   localhost:8080/syncr.v1.SystemService/GetInfo
 ```
 
-`SYNCR_SETUP_CODE` presets the setup code (16 or more characters) instead of
-a random one, for scripted setups and tests.
+`SYNCR_SETUP_CODE` presets the setup code (16 or more characters besides
+dashes and spaces) instead of a random one, for scripted setups and tests.
+Case, dashes and spaces are ignored when the code is entered.
 
 **Web UI development.** `make dev-seed` (or
 `SYNCR_DEV_MEMORY_STORE=true SYNCR_DEV_SEED=true SYNCR_SECRETS_KEY=... go run ./cmd/syncr-controller`)
