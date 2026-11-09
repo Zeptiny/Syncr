@@ -58,7 +58,14 @@ case owns them, and the job builder turns them into `union_upstreams`.
   `crypt`...) or sign in as the worker host (Azure CLI and managed
   identities, cloud metadata servers) than a denylist can keep up with. A
   backend is added to the allowlist only after its options in the pinned
-  rclone have been reviewed against the option denylist.
+  rclone have been reviewed against the option denylist, which also
+  rejects options that use the worker host's identity (`env_auth`,
+  `key_use_agent`, `use_az`, `use_msi`, `use_kerberos`); an SFTP remote
+  must carry its own password or key, or rclone would use the host's
+  ssh-agent. With `SYNCR_TEST_RCLONE` set,
+  `TestSupportedBackendOptionsReviewed` fails on any option of a
+  supported backend that is neither denied nor listed as reviewed, so an
+  rclone upgrade cannot add one silently.
 - **Descriptors are the typing and UX layer**: which types are offered,
   their fields, kinds, enums, required and secret flags, defaults and
   cross-field rules (S3 needs an endpoint unless the provider is AWS; SFTP
