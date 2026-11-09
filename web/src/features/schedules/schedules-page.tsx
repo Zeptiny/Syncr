@@ -91,7 +91,7 @@ export function SchedulesPage() {
   const navigate = useNavigate();
   const q = useQuery(ScheduleService.method.listSchedules, {}, { refetchInterval: 30_000 });
   const workers = useQuery(WorkerAdminService.method.listWorkers, {});
-  const actions = useScheduleActions();
+  const { runNow, setEnabled } = useScheduleActions();
   const workerMap = useMemo(
     () => new Map((workers.data?.workers ?? []).map((w) => [w.id, w])),
     [workers.data],
@@ -149,7 +149,7 @@ export function SchedulesPage() {
           <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
             <Switch
               checked={s.enabled}
-              onCheckedChange={(on) => void actions.setEnabled(s, on)}
+              onCheckedChange={(on) => void setEnabled(s, on)}
               aria-label={s.enabled ? `Pause ${s.name}` : `Resume ${s.name}`}
             />
           </span>
@@ -167,11 +167,11 @@ export function SchedulesPage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => void actions.runNow(s)}>
+                <DropdownMenuItem onSelect={() => void runNow(s)}>
                   <Play aria-hidden />
                   Run now
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => void actions.setEnabled(s, !s.enabled)}>
+                <DropdownMenuItem onSelect={() => void setEnabled(s, !s.enabled)}>
                   {s.enabled ? <Pause aria-hidden /> : <Play aria-hidden />}
                   {s.enabled ? "Pause" : "Resume"}
                 </DropdownMenuItem>
@@ -189,7 +189,7 @@ export function SchedulesPage() {
         meta: { className: "w-12 text-right" },
       }),
     ],
-    [workerMap, actions],
+    [workerMap, runNow, setEnabled],
   );
 
   return (

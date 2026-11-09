@@ -10,7 +10,7 @@ import { JobStatus, type Job, type Worker } from "@/gen/syncr/v1/api_pb";
 import type { User } from "@/gen/syncr/v1/users_pb";
 import { useNow } from "@/hooks/use-now";
 import { formatBytes, formatDuration, percent, tsDate } from "@/lib/format";
-import { transferModeLabel } from "@/lib/status";
+import { isTerminal, transferModeLabel } from "@/lib/status";
 
 import { Endpoint } from "./endpoint";
 import { endpoint, jobElapsed, jobProgress, jobTitle, transferOf } from "./model";
@@ -76,6 +76,30 @@ function Transferred({ job }: { job: Job }) {
   );
 }
 
+/**
+ * Duration shows how long a job ran, counting up while it runs. The clock
+ * lives here and not in the table: column definitions that changed with
+ * every tick would make the table mount every cell anew (losing focus and
+ * selection inside the rows) every few seconds.
+ */
+function Duration({ job }: { job: Job }) {
+  const running = !!job.startedAt && !job.finishedAt && !isTerminal(job.status);
+  return running ? <RunningDuration job={job} /> : <DurationText seconds={jobElapsed(job)} />;
+}
+
+function RunningDuration({ job }: { job: Job }) {
+  const now = useNow(5000).getTime();
+  return <DurationText seconds={jobElapsed(job, now)} />;
+}
+
+function DurationText({ seconds }: { seconds: number | undefined }) {
+  return (
+    <span className="tabular text-[13px] text-muted-foreground">
+      {seconds === undefined ? "–" : formatDuration(seconds)}
+    </span>
+  );
+}
+
 /** JobsTable lists jobs; rows open the job. */
 export function JobsTable({
   jobs,
@@ -90,7 +114,6 @@ export function JobsTable({
   empty,
 }: JobsTableProps) {
   const navigate = useNavigate();
-  const now = useNow(5000).getTime();
   const columns = useMemo(
     () => [
       col.accessor("status", {
@@ -164,18 +187,11 @@ export function JobsTable({
       col.display({
         id: "duration",
         header: "Duration",
-        cell: ({ row }) => {
-          const s = jobElapsed(row.original, now);
-          return (
-            <span className="tabular text-[13px] text-muted-foreground">
-              {s === undefined ? "–" : formatDuration(s)}
-            </span>
-          );
-        },
+        cell: ({ row }) => <Duration job={row.original} />,
         meta: { className: "text-right" },
       }),
     ],
-    [workers, owners, hideWorker, hideSchedule, now],
+    [workers, owners, hideWorker, hideSchedule],
   );
   return (
     <DataTable

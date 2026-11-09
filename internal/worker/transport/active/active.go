@@ -279,10 +279,11 @@ func (t *Transport) reportLoop(ctx context.Context) {
 			backoff = 0
 		}
 		more, _ := t.core.ApplyReportResponse(req, resp) // implausible acks are logged by the core
-		if more && t.full(req) && ackedAll(req, resp) {
+		pending := more && ackedAll(req, resp)           // the controller took the batch and events remain
+		if pending && t.full(req) {
 			continue // a full, accepted batch left events behind: send the next one now
 		}
-		if !t.waitForReport(ctx, start) {
+		if !t.waitForReport(ctx, start, pending) {
 			return
 		}
 	}
@@ -290,8 +291,20 @@ func (t *Transport) reportLoop(ctx context.Context) {
 
 // waitForReport waits until the next Report is due: on new events, but not
 // before ReportInterval after the previous Report started, or after the
-// heartbeat. It returns false when ctx ends.
-func (t *Transport) waitForReport(ctx context.Context, last time.Time) bool {
+// heartbeat. With pending set, events are already waiting and the Report
+// is due after ReportInterval: they arrived during the previous Report, or
+// the byte bound kept them out of it (a small batch cut before a large
+// event). The latter were announced before that Report, so no Notify is
+// left for them, and without this they would wait for the heartbeat. It
+// returns false when ctx ends.
+func (t *Transport) waitForReport(ctx context.Context, last time.Time, pending bool) bool {
+	if pending {
+		select {
+		case <-t.core.Notify(): // announces the events that are about to be sent
+		default:
+		}
+		return sleep(ctx, t.reportInterval-time.Since(last))
+	}
 	hb := time.NewTimer(t.heartbeat - time.Since(last))
 	defer hb.Stop()
 	select {

@@ -58,6 +58,34 @@ export interface DeliveriesTableProps {
 }
 
 /**
+ * RetryButton sends a delivery that gave up again. The mutation lives here
+ * and not in the table: its state changes with every press, and column
+ * definitions that depended on it would make the table mount every cell
+ * anew (taking the focus from the pressed button).
+ */
+function RetryButton({ delivery }: { delivery: Delivery }) {
+  const queryClient = useQueryClient();
+  const retry = useMutation(ContactService.method.retryDelivery);
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={retry.isPending}
+      onClick={() =>
+        void retry
+          .mutateAsync({ deliveryId: delivery.id })
+          .then(() => invalidateService(queryClient, ContactService))
+          .then(() => toast.success("Sending it again"))
+          .catch((err: unknown) => toast.error(errorMessage(err)))
+      }
+    >
+      <RotateCw aria-hidden />
+      Retry
+    </Button>
+  );
+}
+
+/**
  * DeliveriesTable is a delivery log: what was sent, to whom, how it went,
  * how many attempts it took and the last error. Deliveries that gave up
  * can be sent again.
@@ -70,8 +98,6 @@ export function DeliveriesTable({
   pager,
   contacts,
 }: DeliveriesTableProps) {
-  const queryClient = useQueryClient();
-  const retry = useMutation(ContactService.method.retryDelivery);
   const columns = useMemo(
     () => [
       col.accessor("status", {
@@ -156,27 +182,11 @@ export function DeliveriesTable({
         id: "retry",
         header: () => <span className="sr-only">Retry</span>,
         cell: ({ row: { original: d } }) =>
-          d.status === DeliveryStatus.DEAD ? (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={retry.isPending}
-              onClick={() =>
-                void retry
-                  .mutateAsync({ deliveryId: d.id })
-                  .then(() => invalidateService(queryClient, ContactService))
-                  .then(() => toast.success("Sending it again"))
-                  .catch((err: unknown) => toast.error(errorMessage(err)))
-              }
-            >
-              <RotateCw aria-hidden />
-              Retry
-            </Button>
-          ) : null,
+          d.status === DeliveryStatus.DEAD ? <RetryButton delivery={d} /> : null,
         meta: { className: "w-24 text-right" },
       }),
     ],
-    [contacts, retry, queryClient],
+    [contacts],
   );
   return (
     <DataTable

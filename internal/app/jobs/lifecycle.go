@@ -85,7 +85,23 @@ func (s *Service) MarkRunning(ctx context.Context, workerID domain.WorkerID, id 
 // RecordProgress publishes a live sample of a job running in epoch and
 // stores it if Config.SampleInterval has passed since the last stored one.
 // It reports whether the sample was accepted (the job runs in epoch).
+//
+// The job is read (to check its worker, status and epoch) for the samples
+// that may be stored, not for every sample: between two stored samples, a
+// job this service found running for the same worker and epoch less than
+// Config.SampleInterval ago is taken to still be. Its end through this
+// service drops that memory at once (published); only an end stored by
+// another process can go unnoticed for up to that interval, during which
+// live samples (never stored ones) may still be published.
 func (s *Service) RecordProgress(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, smp Sample) (bool, error) {
+	smp.JobID = id
+	if smp.Time.IsZero() {
+		smp.Time = s.clock.Now()
+	}
+	if s.throttled(id, workerID, epoch, smp.Time) {
+		s.broker.Publish(Update{JobID: id, Progress: &smp})
+		return true, nil
+	}
 	j, err := s.repo.GetJob(ctx, id)
 	if err != nil {
 		return false, fmt.Errorf("record progress of job %s: %w", id, err)
@@ -96,18 +112,14 @@ func (s *Service) RecordProgress(ctx context.Context, workerID domain.WorkerID, 
 	if j.Status != domain.JobRunning || j.Epoch != epoch {
 		return false, nil
 	}
-	smp.JobID = id
-	if smp.Time.IsZero() {
-		smp.Time = s.clock.Now()
-	}
 	s.broker.Publish(Update{JobID: id, Progress: &smp})
-	if !s.due(id, smp.Time) {
+	if !s.due(id, workerID, epoch, smp.Time) {
 		return true, nil
 	}
 	if err := s.samples.AppendJobSample(ctx, smp); err != nil {
 		return true, fmt.Errorf("record progress of job %s: %w", id, err)
 	}
-	s.stored(id, smp.Time)
+	s.stored(id, workerID, epoch, smp.Time)
 	return true, nil
 }
 
@@ -325,13 +337,14 @@ func requeue(j *Job, now time.Time) error {
 
 // The sample rate limiter (Service.lastStored).
 //
-// An entry only throttles storage: without one, the job's next sample is
-// stored, which costs one extra row and nothing else (samples are
-// idempotent by time). So an entry is needed only while its job runs and
-// keeps reporting, and it is dropped when the job finishes (published) or,
-// whatever else happens (a sample stored concurrently with the job's end,
-// a job whose end this process never sees), once it has gone unused for
-// staleSampleAfter. That bounds the map by the jobs reporting progress
+// An entry throttles storage and, for the samples in between, the read of
+// the job (RecordProgress). Without one, the job's next sample reads the
+// job and is stored, which costs one extra row and nothing else (samples
+// are idempotent by time). So an entry is needed only while its job runs
+// and keeps reporting, and it is dropped when the job finishes (published)
+// or, whatever else happens (a sample stored concurrently with the job's
+// end, a job whose end this process never sees), once it has gone unused
+// for staleSampleAfter. That bounds the map by the jobs reporting progress
 // within that time.
 
 // staleSampleAfter is how long an unused rate limiter entry is kept, at
@@ -344,23 +357,50 @@ type lastSample struct {
 	at time.Time
 	// used is when the entry was last used (controller clock).
 	used time.Time
+	// workerID and epoch are the worker and epoch the job was last read
+	// running in, and checked is when (controller clock).
+	workerID domain.WorkerID
+	epoch    string
+	checked  time.Time
 }
 
-// due reports whether a sample taken at t should be stored.
-func (s *Service) due(id domain.JobID, t time.Time) bool {
+// throttled reports whether a sample of time t from workerID in epoch needs
+// neither the job read nor storage: the job was read running for them, and
+// its last sample stored, less than Config.SampleInterval ago (on the
+// controller's clock and in sample time).
+func (s *Service) throttled(id domain.JobID, workerID domain.WorkerID, epoch string, t time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	last, ok := s.lastStored[id]
+	now := s.clock.Now()
+	if !ok || last.workerID != workerID || last.epoch != epoch ||
+		now.Sub(last.checked) >= s.cfg.SampleInterval || t.Sub(last.at) >= s.cfg.SampleInterval {
+		return false
+	}
+	last.used = now
+	s.lastStored[id] = last
+	return true
+}
+
+// due reports whether a sample of time t of a job just read running for
+// workerID in epoch is due for storage, and notes the read in the job's
+// entry.
+func (s *Service) due(id domain.JobID, workerID domain.WorkerID, epoch string, t time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	last, ok := s.lastStored[id]
 	if ok {
 		last.used = s.clock.Now()
+		last.workerID, last.epoch, last.checked = workerID, epoch, last.used
 		s.lastStored[id] = last
 	}
 	return !ok || t.Sub(last.at) >= s.cfg.SampleInterval
 }
 
-// stored records that the sample taken at t was stored, and drops stale
-// entries at most once per staleSampleAfter.
-func (s *Service) stored(id domain.JobID, t time.Time) {
+// stored notes that the sample of time t of a job just read running for
+// workerID in epoch was stored, and drops the stale entries from time to
+// time.
+func (s *Service) stored(id domain.JobID, workerID domain.WorkerID, epoch string, t time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.clock.Now()
@@ -369,6 +409,7 @@ func (s *Service) stored(id domain.JobID, t time.Time) {
 		last.at = t
 	}
 	last.used = now
+	last.workerID, last.epoch, last.checked = workerID, epoch, now
 	s.lastStored[id] = last
 	stale := max(staleSampleAfter, 2*s.cfg.SampleInterval)
 	if now.Sub(s.lastPrune) < stale {

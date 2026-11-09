@@ -88,6 +88,13 @@ function RenameDialog({
   );
 }
 
+/**
+ * noWorkers is what the recent jobs table gets for its worker names: it
+ * hides the worker column here, and a new map on every render would make
+ * it define its columns, and so mount its cells, anew each time.
+ */
+const noWorkers = new Map<string, Worker>();
+
 /** WorkerDetailPage shows one worker, its local folders and recent jobs. */
 export function WorkerDetailPage({ workerId }: { workerId: string }) {
   const { isAdmin } = useSession();
@@ -198,7 +205,7 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
         isLoading={jobs.isPending}
         error={jobs.error ?? undefined}
         onRetry={() => void jobs.refetch()}
-        workers={new Map([[w.id, w]])}
+        workers={noWorkers}
         hideWorker
         empty={
           <p className="p-8 text-center text-[13px] text-muted-foreground">

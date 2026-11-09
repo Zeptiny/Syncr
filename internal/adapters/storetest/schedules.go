@@ -1008,9 +1008,13 @@ func testScheduleLists(t *testing.T, s Store) {
 	if n, _ := s.CountRuns(ctx, schedules.RunFilter{OwnerID: alice, ScheduledFrom: t0().Add(-2 * time.Hour)}); n != 2 {
 		t.Errorf("CountRuns(alice, since -2h) = %d", n)
 	}
-	latest, err := s.LatestRuns(ctx, []domain.ScheduleID{a.ID, d.ID, c.ID})
+	// c has no runs; an ID given twice and an unknown one change nothing.
+	latest, err := s.LatestRuns(ctx, []domain.ScheduleID{a.ID, d.ID, c.ID, a.ID, domain.NewScheduleID()})
 	if err != nil || len(latest) != 2 || latest[a.ID].ID != r3.ID || latest[d.ID].ID != r5.ID {
 		t.Errorf("LatestRuns = (%v, %v)", latest, err)
+	}
+	if got := latest[a.ID]; got.ScheduleID != a.ID || got.Status != r3.Status || got.JobStatus != r3.JobStatus {
+		t.Errorf("LatestRuns[a] = %+v, want run %+v", got, r3)
 	}
 }
 

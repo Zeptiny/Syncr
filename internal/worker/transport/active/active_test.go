@@ -47,8 +47,9 @@ type fakeController struct {
 	acked    []string
 	commands []*syncrv1.Command
 	wake     chan struct{}
-	failWith error // returned by every call while set
-	ackLess  bool  // ack nothing (for the drain deadline test)
+	failWith error         // returned by every call while set
+	ackLess  bool          // ack nothing (for the drain deadline test)
+	hold     chan struct{} // Reports wait until it is closed (holdReports)
 }
 
 func newFakeController() *fakeController {
@@ -61,6 +62,12 @@ func (f *fakeController) handler() http.Handler {
 }
 
 func (f *fakeController) Report(_ context.Context, req *connect.Request[syncrv1.ReportRequest]) (*connect.Response[syncrv1.ReportResponse], error) {
+	f.mu.Lock()
+	hold := f.hold
+	f.mu.Unlock()
+	if hold != nil {
+		<-hold
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reports = append(f.reports, time.Now())
@@ -112,6 +119,21 @@ func (f *fakeController) Poll(ctx context.Context, req *connect.Request[syncrv1.
 		}
 	}
 	return connect.NewResponse(&syncrv1.PollResponse{Commands: cmds}), nil
+}
+
+// holdReports makes Reports wait, before they are handled, until resume
+// is called.
+func (f *fakeController) holdReports() (resume func()) {
+	hold := make(chan struct{})
+	f.mu.Lock()
+	f.hold = hold
+	f.mu.Unlock()
+	return func() {
+		f.mu.Lock()
+		f.hold = nil
+		f.mu.Unlock()
+		close(hold)
+	}
 }
 
 func (f *fakeController) queue(cmd *syncrv1.Command) {
@@ -451,6 +473,72 @@ func TestNoSpinWithoutAcks(t *testing.T) {
 		stop()
 		if reports, _ := ctrl.calls(); len(reports) > 11 {
 			t.Errorf("%d reports in 10 s without acks", len(reports))
+		}
+	})
+}
+
+// bigRunner waits for release, emits one sample and succeeds with an
+// output that fills the agent's output bound, so its JobResult is about as
+// large as a whole Report may be.
+type bigRunner struct{ release chan struct{} }
+
+func (bigRunner) Kind() string { return "rclone_transfer" }
+
+func (r bigRunner) Run(_ context.Context, _ runner.Job, emit runner.EmitFunc) (runner.Result, error) {
+	<-r.release
+	emit(runner.Progress{Bytes: 1})
+	ids := make([]string, agent.DefaultMaxOutputBytes/8)
+	for i := range ids {
+		ids[i] = "0123456789abcdef"
+	}
+	return runner.Result{Output: &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticForget{
+		ResticForget: &syncrv1.ResticForgetOutput{RemovedSnapshotIds: ids},
+	}}}, nil
+}
+
+// TestEventsLeftByTheByteBoundFollowAtOnce: when the byte bound cuts a
+// Report before a large event (here a JobResult with a long listing,
+// behind the job's last Progress), the rest follows after ReportInterval.
+// The events left behind were announced before that Report (here while
+// the previous one was in flight), so nothing else would send them until
+// the heartbeat, and the job would look unfinished for that long.
+func TestEventsLeftByTheByteBoundFollowAtOnce(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ctrl := newFakeController()
+		rn := bigRunner{release: make(chan struct{})}
+		a, core, tr := setup(t, ctrl, rn, nil)
+		defer shutdownAgent(t, a)
+		stop := run(t, tr)
+		defer stop()
+		time.Sleep(5 * time.Second) // the Hello is reported; the link is idle
+		synctest.Wait()
+		before, _ := ctrl.calls()
+
+		// The job finishes while the Report of its start is in flight.
+		resume := ctrl.holdReports()
+		a.HandleCommands(t.Context(), []*syncrv1.Command{startJob("a")})
+		synctest.Wait()
+		close(rn.release)
+		synctest.Wait()
+		resume()
+		finished := time.Now()
+
+		time.Sleep(2 * DefaultReportInterval)
+		synctest.Wait()
+		reports, _ := ctrl.calls()
+		if !core.Drained() {
+			t.Errorf("the job's result is still unreported %v after the job finished (%d reports since it started)",
+				time.Since(finished), len(reports)-len(before))
+		}
+		if n := len(reports) - len(before); n != 3 {
+			t.Errorf("%d reports (start, progress, result), want 3", n)
+		}
+		// Nothing more is sent until the heartbeat.
+		time.Sleep(DefaultHeartbeat - 3*DefaultReportInterval)
+		synctest.Wait()
+		if idle, _ := ctrl.calls(); len(idle) != len(reports) {
+			t.Errorf("%d more reports while idle", len(idle)-len(reports))
 		}
 	})
 }

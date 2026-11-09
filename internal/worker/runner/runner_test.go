@@ -185,6 +185,12 @@ func TestLimitWarnings(t *testing.T) {
 		t.Errorf("len = %d, want at most %d", len(got[0]), MaxWarningBytes+3)
 	}
 
+	// Bytes that are not UTF-8 are replaced, before clipping.
+	if got := LimitWarnings([]string{"caf\xe9 \xff\xfe", strings.Repeat("\xe9a", MaxWarningBytes)}); len(got) != 2 ||
+		got[0] != "caf\uFFFD \uFFFD" || !utf8.ValidString(got[1]) || len(got[1]) > MaxWarningBytes+len("...") {
+		t.Errorf("invalid UTF-8: %q", got)
+	}
+
 	if got := LimitWarnings([]string{"short"}); len(got) != 1 || got[0] != "short" {
 		t.Errorf("short warning changed: %v", got)
 	}
