@@ -685,7 +685,7 @@ func succeededResult(id string, startedAt time.Time, res runner.Result, maxOutpu
 
 func failedResult(id string, code syncrv1.JobErrorCode, msg string, startedAt time.Time, res runner.Result) *syncrv1.JobResult {
 	r := baseResult(id, syncrv1.JobResultStatus_JOB_RESULT_STATUS_FAILED, startedAt, res)
-	r.Error = &syncrv1.JobError{Code: code, Message: clip(msg, MaxErrorMessageBytes)}
+	r.Error = &syncrv1.JobError{Code: code, Message: errorMessage(msg)}
 	return r
 }
 
@@ -701,8 +701,15 @@ func cancelledResult(id string, cause error, startedAt time.Time, res runner.Res
 		code = syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_SHUTDOWN
 	}
 	r := baseResult(id, syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED, startedAt, res)
-	r.Error = &syncrv1.JobError{Code: code, Message: clip(cause.Error(), MaxErrorMessageBytes)}
+	r.Error = &syncrv1.JobError{Code: code, Message: errorMessage(cause.Error())}
 	return r
+}
+
+// errorMessage is the message of a JobError: msg, which may quote tool
+// output, as valid UTF-8 (runner.ValidText) of at most
+// MaxErrorMessageBytes.
+func errorMessage(msg string) string {
+	return clip(runner.ValidText(msg), MaxErrorMessageBytes)
 }
 
 func baseResult(id string, status syncrv1.JobResultStatus, startedAt time.Time, res runner.Result) *syncrv1.JobResult {

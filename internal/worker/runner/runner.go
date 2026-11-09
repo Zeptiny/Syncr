@@ -16,6 +16,7 @@ package runner
 
 import (
 	"context"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -107,9 +108,10 @@ const (
 	MaxWarningBytes = 500
 )
 
-// LimitWarnings returns warnings without empty entries, each clipped to
-// MaxWarningBytes on a UTF-8 boundary (with a "..." suffix when clipped), and
-// at most MaxWarnings of them. It returns nil if nothing is left.
+// LimitWarnings returns warnings without empty entries, each made valid
+// UTF-8 (ValidText) and clipped to MaxWarningBytes on a UTF-8 boundary
+// (with a "..." suffix when clipped), and at most MaxWarnings of them. It
+// returns nil if nothing is left.
 func LimitWarnings(warnings []string) []string {
 	var out []string
 	for _, w := range warnings {
@@ -119,6 +121,7 @@ func LimitWarnings(warnings []string) []string {
 		if len(out) == MaxWarnings {
 			break
 		}
+		w = ValidText(w)
 		if len(w) > MaxWarningBytes {
 			cut := MaxWarningBytes
 			for cut > 0 && !utf8.RuneStart(w[cut]) {
@@ -129,6 +132,16 @@ func LimitWarnings(warnings []string) []string {
 		out = append(out, w)
 	}
 	return out
+}
+
+// ValidText returns s with every run of bytes that is not valid UTF-8
+// replaced by U+FFFD. Text taken from a tool's output goes through it
+// before it is put in a link message: a tool may print bytes in another
+// encoding (a file name, a remote's error body) on a line that is not
+// JSON, and a message with such a string field cannot be encoded, so its
+// event, and every event after it, could never be delivered.
+func ValidText(s string) string {
+	return strings.ToValidUTF8(s, "\uFFFD")
 }
 
 // EmitFunc publishes a progress snapshot of the running job.

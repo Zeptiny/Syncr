@@ -874,3 +874,43 @@ func TestErrorMessagesAreBounded(t *testing.T) {
 		}
 	})
 }
+
+// TestResultTextIsValidUTF8: tool output that is not UTF-8 (a remote's
+// error body in another encoding, quoted on a line that is not JSON) may
+// reach a job's error message or warnings. A proto string field must be
+// valid UTF-8 to be encoded, so a result carrying such bytes could never
+// be sent, and with it every event behind it in the outbox.
+func TestResultTextIsValidUTF8(t *testing.T) {
+	t.Parallel()
+	const bad = "rclone: 403 Acc\xe8s refus\xe9"
+	synctest.Test(t, func(t *testing.T) {
+		fr := newFakeRunner(func(context.Context, runner.Job, runner.EmitFunc) (runner.Result, error) {
+			return runner.Result{ExitCode: 1}, errors.New(bad)
+		})
+		fr.set("warned", func(context.Context, runner.Job, runner.EmitFunc) (runner.Result, error) {
+			return runner.Result{Warnings: []string{bad, strings.Repeat("\xe9", 2*runner.MaxWarningBytes)}}, nil
+		})
+		fr.set("long", func(context.Context, runner.Job, runner.EmitFunc) (runner.Result, error) {
+			return runner.Result{ExitCode: 1}, errors.New(strings.Repeat("\xe9", 10_000))
+		})
+		a := newAgent(t, fr, Config{})
+		defer shutdown(t, a)
+		handle(t, a, startCmd("c1", "failed"), startCmd("c2", "warned"), startCmd("c3", "long"))
+		synctest.Wait()
+		for _, ev := range events(a) {
+			if _, err := proto.Marshal(ev); err != nil {
+				t.Errorf("event %d cannot be encoded: %v", ev.GetSeq(), err)
+			}
+		}
+		if got, want := resultOf(t, a, "failed").GetError().GetMessage(), "rclone: 403 Acc�s refus�"; got != want {
+			t.Errorf("message = %q, want %q", got, want)
+		}
+		if got := resultOf(t, a, "warned").GetWarnings(); len(got) != 2 || got[0] != "rclone: 403 Acc�s refus�" ||
+			len(got[1]) > runner.MaxWarningBytes+len("...") {
+			t.Errorf("warnings = %q", got)
+		}
+		if msg := resultOf(t, a, "long").GetError().GetMessage(); len(msg) > MaxErrorMessageBytes || !utf8.ValidString(msg) {
+			t.Errorf("message of %d bytes, valid %v", len(msg), utf8.ValidString(msg))
+		}
+	})
+}
