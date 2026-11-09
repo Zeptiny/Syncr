@@ -260,6 +260,95 @@ func TestStartJobIsIdempotent(t *testing.T) {
 	})
 }
 
+// TestFinishedJobsAreForgotten: the agent remembers a finished job (to
+// ignore a redelivered StartJob) while its result is unacked and for
+// finishedRetention after the ack, then forgets it, so the set stays
+// bounded over the process lifetime.
+func TestFinishedJobsAreForgotten(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		fr := newFakeRunner(succeed)
+		a := newAgent(t, fr, Config{})
+		defer shutdown(t, a)
+		known := func(id string) bool {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			return a.knownLocked(id)
+		}
+		size := func() (int, int) {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			return len(a.finished), len(a.retiring)
+		}
+
+		handle(t, a, startCmd("c1", "a"))
+		synctest.Wait()
+		aSeq := resultSeq(t, a, "a")
+		handle(t, a, startCmd("c2", "b"))
+		synctest.Wait()
+
+		// Unacked results are kept however long it takes.
+		time.Sleep(2 * finishedRetention)
+		if err := a.AckEvents(aSeq - 1); err != nil {
+			t.Fatal(err)
+		}
+		if !known("a") || !known("b") {
+			t.Fatal("a finished job with an unacked result was forgotten")
+		}
+		// a's result is acked: kept for the retention, b's still unacked.
+		if err := a.AckEvents(aSeq); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(finishedRetention - time.Second)
+		handle(t, a, startCmd("c1", "a")) // a late redelivery
+		synctest.Wait()
+		if !known("a") || fr.runCount("a") != 1 {
+			t.Fatalf("within the retention: known %v, runs %d", known("a"), fr.runCount("a"))
+		}
+		time.Sleep(time.Second)
+		if err := a.AckEvents(aSeq); err != nil { // a heartbeat's ack, nothing new
+			t.Fatal(err)
+		}
+		if known("a") || !known("b") {
+			t.Errorf("after the retention: a known %v, b known %v; want only b", known("a"), known("b"))
+		}
+		if f, r := size(); f != 1 || r != 1 {
+			t.Errorf("finished %d, retiring %d; want 1 and 1", f, r)
+		}
+
+		// Many jobs later, only the recent ones are remembered.
+		for i := range 500 {
+			handle(t, a, startCmd(fmt.Sprintf("m%d", i), fmt.Sprintf("m%d", i)))
+			synctest.Wait()
+			if err := a.AckEvents(a.Outbox().Stats().Head); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if f, _ := size(); f != 501 {
+			t.Errorf("finished %d within the retention, want 501", f)
+		}
+		time.Sleep(finishedRetention)
+		if err := a.AckEvents(a.Outbox().Stats().Head); err != nil {
+			t.Fatal(err)
+		}
+		if f, r := size(); f != 0 || r != 0 {
+			t.Errorf("finished %d, retiring %d after the retention; want none", f, r)
+		}
+	})
+}
+
+// resultSeq returns the seq of job's JobResult among the unacked events.
+func resultSeq(t *testing.T, a *Agent, job string) int64 {
+	t.Helper()
+	for _, e := range events(a) {
+		if e.GetJobResult().GetJobId() == job {
+			return e.GetSeq()
+		}
+	}
+	t.Fatalf("no result for %s", job)
+	return 0
+}
+
 // TestCancelJob cancels jobs in every state.
 func TestCancelJob(t *testing.T) {
 	t.Parallel()
