@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	kservice "github.com/kardianos/service"
 )
@@ -404,5 +405,34 @@ func TestStateStrings(t *testing.T) {
 	}
 	if ScopeUser.String() != "user" || ScopeSystem.String() != "system" {
 		t.Error("scope strings")
+	}
+}
+
+// TestUnitTemplatesStopOnlyTheWorker guards the shutdown order of ADR 0005:
+// systemd must signal only the worker, which stops its rclone and restic
+// children itself, and must wait longer than the worker's stop budget before
+// it kills what is left.
+func TestUnitTemplatesStopOnlyTheWorker(t *testing.T) {
+	t.Parallel()
+	for scope, tmpl := range map[Scope]string{ScopeSystem: systemUnitTemplate, ScopeUser: userUnitTemplate} {
+		var killMode, timeoutStop string
+		for line := range strings.SplitSeq(tmpl, "\n") {
+			if v, ok := strings.CutPrefix(line, "KillMode="); ok {
+				killMode = v
+			}
+			if v, ok := strings.CutPrefix(line, "TimeoutStopSec="); ok {
+				timeoutStop = v
+			}
+		}
+		if killMode != "mixed" {
+			t.Errorf("%s unit: KillMode=%q, want mixed (control-group signals the tools together with the worker)", scope, killMode)
+		}
+		d, err := time.ParseDuration(timeoutStop + "s")
+		if err != nil {
+			t.Fatalf("%s unit: TimeoutStopSec=%q: %v", scope, timeoutStop, err)
+		}
+		if d <= stopTimeout {
+			t.Errorf("%s unit: TimeoutStopSec=%s does not exceed the worker's stop budget of %s", scope, d, stopTimeout)
+		}
 	}
 }

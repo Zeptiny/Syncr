@@ -15,6 +15,15 @@ import (
 // after a clean stop (Restart=always), and wants multi-user.target also for
 // user units, which have no such target and would never start at login.
 //
+// KillMode=mixed sends the stop signal to the worker alone, as ADR 0005
+// requires: the worker then stops its rclone and restic children itself
+// (SIGINT, a grace period, then a kill) and reports their jobs as cancelled
+// by the shutdown. The default, control-group, signals every process of the
+// unit at once, so the tools would exit before the worker has cancelled their
+// jobs, and the jobs would be reported as failed. Whatever is still running
+// when the worker exits, or after TimeoutStopSec, is killed with SIGKILL.
+// TimeoutStopSec leaves room for the worker's own stop budget (about 20 s).
+//
 // Hardening is deliberately mild. The worker is a backup tool: it must read
 // and write whatever the operator listed in local_roots, so ProtectSystem=,
 // ProtectHome= and PrivateTmp= (which hide parts of the file system from it)
@@ -36,6 +45,7 @@ ExecStart={{Path | cmdEscape}}{{range Arguments}} {{. | cmd}}{{end}}
 {{end}}Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
+KillMode=mixed
 NoNewPrivileges=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
@@ -65,6 +75,7 @@ ExecStart={{Path | cmdEscape}}{{range Arguments}} {{. | cmd}}{{end}}
 {{end}}Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
+KillMode=mixed
 NoNewPrivileges=yes
 {{range EnvVars}}{{.}}
 {{end}}

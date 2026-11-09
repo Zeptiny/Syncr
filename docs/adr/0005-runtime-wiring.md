@@ -159,5 +159,11 @@ running jobs (`worker_restarted`) and re-queues the others.
 - A worker killed with SIGKILL (or crashing) takes its tool processes with
   it: the parent death signal on Linux, a kill-on-close Job Object on
   Windows (ADR 0003). On other systems they finish or fail on their own.
+- The systemd units use `KillMode=mixed`: a stop or restart sends SIGTERM to
+  the worker only, so the shutdown above runs in order. With the default
+  (`control-group`) the tools would get the signal at the same moment, exit
+  before `agent.Shutdown` cancels their jobs, and the jobs would be reported
+  as failed instead of interrupted. Whatever is left when the worker exits,
+  or after `TimeoutStopSec=30`, is killed with SIGKILL.
 - A passive worker that no controller ever pulls from waits the 5 s flush
   budget on stop.

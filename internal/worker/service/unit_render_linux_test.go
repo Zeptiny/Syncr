@@ -56,6 +56,7 @@ func TestUnitTemplatesRender(t *testing.T) { //nolint:paralleltest // changes HO
 			"WorkingDirectory=/var/lib/syncr",
 			"After=network-online.target",
 			"Restart=on-failure\nRestartSec=5\n",
+			"TimeoutStopSec=30\nKillMode=mixed\n",
 			"StartLimitIntervalSec=300",
 			"NoNewPrivileges=yes",
 			"WantedBy=multi-user.target",
@@ -75,7 +76,7 @@ func TestUnitTemplatesRender(t *testing.T) { //nolint:paralleltest // changes HO
 		if !strings.Contains(unit, "WantedBy=default.target") || strings.Contains(unit, "multi-user.target") || strings.Contains(unit, "network-online") {
 			t.Errorf("user unit:\n%s", unit)
 		}
-		if !strings.Contains(unit, "Restart=on-failure") || strings.Contains(unit, "{{") {
+		if !strings.Contains(unit, "Restart=on-failure") || !strings.Contains(unit, "KillMode=mixed") || strings.Contains(unit, "{{") {
 			t.Errorf("user unit:\n%s", unit)
 		}
 	})

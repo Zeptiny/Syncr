@@ -121,7 +121,7 @@ func TestIntegrationRealService(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"Restart=on-failure", "RestartSec=5", "NoNewPrivileges=yes"} {
+		for _, want := range []string{"Restart=on-failure", "RestartSec=5", "KillMode=mixed", "NoNewPrivileges=yes"} {
 			if !strings.Contains(string(unit), want) {
 				t.Errorf("unit lacks %q:\n%s", want, unit)
 			}

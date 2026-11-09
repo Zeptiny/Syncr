@@ -142,7 +142,9 @@ sudo syncr-worker service uninstall   # keeps the config and data
 
 The unit is `/etc/systemd/system/syncr-worker.service`: it restarts the worker
 5 seconds after a failure (and gives up after 10 failures in 5 minutes), waits
-up to 30 seconds on stop, and sets `NoNewPrivileges`, `ProtectKernelTunables`,
+up to 30 seconds on stop, and sets `KillMode=mixed` (a stop or restart signals
+only the worker, which cancels its jobs and stops rclone and restic itself; what
+is left when it exits is killed), `NoNewPrivileges`, `ProtectKernelTunables`,
 `ProtectKernelModules`, `ProtectControlGroups`, `RestrictRealtime` and
 `LockPersonality`. It runs as root, because backup jobs read whatever you list
 in `local_roots`; `ProtectSystem`, `ProtectHome` and `PrivateTmp` are left out
