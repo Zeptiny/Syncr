@@ -82,6 +82,17 @@ The full rule tables live in the package documentation of
 `internal/controller/dispatch`. A job that stays queued longer than the
 dispatch timeout (worker offline) fails with `DISPATCH_TIMEOUT`.
 
+**Lost workers.** A worker that never comes back cannot report on its
+jobs, and a cancel request cannot reach it. So when a worker has had no
+link call for `workers.lost_after` (default 1 h; counted from the
+controller's start at the earliest, so a controller outage does not count),
+its dispatched and running jobs end `interrupted` (`WORKER_LOST`), or
+`cancelled` if a cancel was requested; a job with a cancel request already
+ends `cancelled` after 5 minutes without contact. Nothing else is needed
+for a worker that does come back with the same epoch: its late events find
+finished jobs and are acknowledged without effect, and its snapshot lists
+them, so they are orphans and get a CancelJob.
+
 **Secrets.** `JobSpec` is built at dispatch time and may carry remote
 credentials and repository passwords. It is sent once over the authenticated
 link, kept only in worker memory and never persisted or logged; the

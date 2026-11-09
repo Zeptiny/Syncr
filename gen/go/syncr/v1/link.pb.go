@@ -187,8 +187,9 @@ const (
 	// The worker restarted (new epoch) while the job was running, so its
 	// outcome is unknown. Status INTERRUPTED.
 	JobErrorCode_JOB_ERROR_CODE_WORKER_RESTARTED JobErrorCode = 21
-	// The worker no longer holds the job but never reported its result.
-	// Status INTERRUPTED.
+	// The worker no longer holds the job but never reported its result, or
+	// it has been out of contact for longer than the controller's
+	// workers.lost_after. Status INTERRUPTED.
 	JobErrorCode_JOB_ERROR_CODE_WORKER_LOST JobErrorCode = 22
 	// The worker was removed before the job finished. Status FAILED (never
 	// dispatched) or INTERRUPTED.

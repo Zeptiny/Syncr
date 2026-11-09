@@ -234,10 +234,12 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	if err != nil {
 		return nil, err
 	}
+	dcfg := dispatch.DefaultConfig()
+	dcfg.LostAfter = cfg.Workers.LostAfter
 	disp, err := dispatch.New(dispatch.Deps{
 		Jobs: js, Workers: ws, Clock: clk, Hub: hub, Specs: specs,
 		Logger: log.With("component", "dispatch"),
-	}, dispatch.DefaultConfig())
+	}, dcfg)
 	if err != nil {
 		return nil, fmt.Errorf("dispatcher: %w", err)
 	}

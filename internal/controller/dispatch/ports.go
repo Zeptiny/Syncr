@@ -23,6 +23,8 @@ type Jobs interface {
 	Finish(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, o jobs.Outcome) (jobs.Job, bool, error)
 	Requeue(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string) (jobs.Job, bool, error)
 	Interrupt(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, e jobs.JobError) (jobs.Job, bool, error)
+	CancelUnconfirmed(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string) (jobs.Job, bool, error)
+	Abandon(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, e jobs.JobError) (jobs.Job, bool, error)
 	FailQueued(ctx context.Context, id domain.JobID, queuedBefore time.Time, e jobs.JobError) (jobs.Job, bool, error)
 }
 
@@ -57,6 +59,7 @@ type Remotes interface {
 // dispatcher uses.
 type Workers interface {
 	Get(ctx context.Context, id domain.WorkerID) (workers.Worker, error)
+	List(ctx context.Context, f workers.ListFilter) ([]workers.Worker, error)
 	AdvanceEpoch(ctx context.Context, w workers.Worker, epoch string) (workers.Worker, error)
 	AdvanceAckSeq(ctx context.Context, id domain.WorkerID, epoch string, seq int64) (int64, error)
 	SetInfo(ctx context.Context, id domain.WorkerID, epoch string, info workers.Info) error

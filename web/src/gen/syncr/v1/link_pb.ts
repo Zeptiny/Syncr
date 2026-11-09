@@ -2187,8 +2187,9 @@ export enum JobErrorCode {
   WORKER_RESTARTED = 21,
 
   /**
-   * The worker no longer holds the job but never reported its result.
-   * Status INTERRUPTED.
+   * The worker no longer holds the job but never reported its result, or
+   * it has been out of contact for longer than the controller's
+   * workers.lost_after. Status INTERRUPTED.
    *
    * @generated from enum value: JOB_ERROR_CODE_WORKER_LOST = 22;
    */

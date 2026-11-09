@@ -26,7 +26,19 @@ type Config struct {
 	// DispatchTimeout fails a job that stays queued this long (its worker
 	// is offline or never accepts it).
 	DispatchTimeout time.Duration
-	// SweepInterval is how often Run checks for dispatch timeouts.
+	// LostAfter ends the dispatched and running jobs of a worker that has
+	// been out of contact this long (no link call, see ExpireLost): they
+	// become interrupted (worker_lost), or cancelled if a cancel was
+	// requested. Contact is counted from this Service's start at the
+	// earliest, so a controller outage never counts against a worker.
+	LostAfter time.Duration
+	// CancelGrace ends a dispatched or running job with a cancel request as
+	// cancelled once its worker has been out of contact this long since
+	// the request (the CancelJob cannot be delivered). It is capped at
+	// LostAfter.
+	CancelGrace time.Duration
+	// SweepInterval is how often Run checks for dispatch timeouts and lost
+	// workers.
 	SweepInterval time.Duration
 	// Passive tunes PassiveLoop.
 	Passive PassiveConfig
@@ -38,6 +50,8 @@ func DefaultConfig() Config {
 		MaxWait:         25 * time.Second,
 		MaxCommands:     64,
 		DispatchTimeout: 15 * time.Minute,
+		LostAfter:       time.Hour,
+		CancelGrace:     5 * time.Minute,
 		SweepInterval:   30 * time.Second,
 		Passive:         DefaultPassiveConfig(),
 	}
@@ -71,6 +85,10 @@ type Service struct {
 	hub     *Hub
 	log     *slog.Logger
 	cfg     Config
+	// started is when the Service was created: the earliest contact
+	// ExpireLost assumes, because a worker cannot reach a controller that
+	// is down.
+	started time.Time
 
 	mu       sync.Mutex
 	sessions map[domain.WorkerID]*session
@@ -85,9 +103,11 @@ func New(d Deps, cfg Config) (*Service, error) {
 	cfg.MaxWait = cmp.Or(cfg.MaxWait, def.MaxWait)
 	cfg.MaxCommands = cmp.Or(cfg.MaxCommands, def.MaxCommands)
 	cfg.DispatchTimeout = cmp.Or(cfg.DispatchTimeout, def.DispatchTimeout)
+	cfg.LostAfter = cmp.Or(cfg.LostAfter, def.LostAfter)
+	cfg.CancelGrace = min(cmp.Or(cfg.CancelGrace, def.CancelGrace), cfg.LostAfter)
 	cfg.SweepInterval = cmp.Or(cfg.SweepInterval, def.SweepInterval)
 	cfg.Passive = cfg.Passive.withDefaults()
-	if cfg.MaxWait < 0 || cfg.MaxCommands < 0 || cfg.DispatchTimeout < 0 || cfg.SweepInterval < 0 {
+	if cfg.MaxWait < 0 || cfg.MaxCommands < 0 || cfg.DispatchTimeout < 0 || cfg.LostAfter < 0 || cfg.CancelGrace < 0 || cfg.SweepInterval < 0 {
 		return nil, fmt.Errorf("dispatch: invalid config %+v", cfg)
 	}
 	log := d.Logger
@@ -96,6 +116,7 @@ func New(d Deps, cfg Config) (*Service, error) {
 	}
 	return &Service{
 		jobs: d.Jobs, workers: d.Workers, specs: d.Specs, clock: d.Clock, hub: d.Hub, log: log, cfg: cfg,
+		started:  d.Clock.Now(),
 		sessions: make(map[domain.WorkerID]*session),
 	}, nil
 }

@@ -518,6 +518,92 @@ func TestUnstartedJobStoppedByTheWorkerIsRequeued(t *testing.T) {
 	}
 }
 
+// TestAbandonAndCancelUnconfirmed: the jobs of a worker out of contact end
+// without the worker's word. A cancel request wins (cancelled); otherwise
+// Abandon interrupts, CancelUnconfirmed leaves the job alone. Both apply
+// only to active jobs of the given epoch and are idempotent, and the
+// worker's late events no longer change the job.
+func TestAbandonAndCancelUnconfirmed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	lost := jobs.JobError{Code: jobs.CodeWorkerLost, Message: "out of contact"}
+	tests := []struct {
+		name   string
+		from   domain.JobStatus
+		cancel bool
+		call   func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error)
+		status domain.JobStatus
+		code   string
+	}{
+		{"abandon running", domain.JobRunning, false, func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error) {
+			return e.svc.Abandon(ctx, e.worker, j.ID, ep, lost)
+		}, domain.JobInterrupted, jobs.CodeWorkerLost},
+		{"abandon dispatched", domain.JobDispatched, false, func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error) {
+			return e.svc.Abandon(ctx, e.worker, j.ID, ep, lost)
+		}, domain.JobInterrupted, jobs.CodeWorkerLost},
+		{"abandon with a cancel request", domain.JobRunning, true, func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error) {
+			return e.svc.Abandon(ctx, e.worker, j.ID, ep, lost)
+		}, domain.JobCancelled, jobs.CodeCancelled},
+		{"cancel unconfirmed running", domain.JobRunning, true, func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error) {
+			return e.svc.CancelUnconfirmed(ctx, e.worker, j.ID, ep)
+		}, domain.JobCancelled, jobs.CodeCancelled},
+		{"cancel unconfirmed dispatched", domain.JobDispatched, true, func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error) {
+			return e.svc.CancelUnconfirmed(ctx, e.worker, j.ID, ep)
+		}, domain.JobCancelled, jobs.CodeCancelled},
+		{"cancel unconfirmed without a request", domain.JobRunning, false, func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error) {
+			return e.svc.CancelUnconfirmed(ctx, e.worker, j.ID, ep)
+		}, domain.JobRunning, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			j := e.at(t, tt.from)
+			if tt.cancel {
+				if _, err := e.svc.Cancel(ctx, e.owner, j.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, changed, err := tt.call(e, j, "epoch-2"); err != nil || changed {
+				t.Fatalf("call with the wrong epoch: changed %v, err %v", changed, err)
+			}
+			e.clock.Advance(time.Minute)
+			got, changed, err := tt.call(e, j, epoch)
+			if err != nil || got.Status != tt.status || got.Error.Code != tt.code || changed != (tt.status != tt.from) {
+				t.Fatalf("got (%s, %+v, changed %v, %v), want (%s, %q)", got.Status, got.Error, changed, err, tt.status, tt.code)
+			}
+			if !tt.status.Terminal() {
+				return
+			}
+			if !got.FinishedAt.Equal(e.clock.Now()) || got.ExitCode != -1 || got.Error.Message == "" {
+				t.Errorf("finished job = %+v", got)
+			}
+			if len(e.rec.finished) != 1 {
+				t.Errorf("notifier calls = %d, want 1", len(e.rec.finished))
+			}
+			// Idempotent; the worker's late outcome changes nothing.
+			if _, changed, err := tt.call(e, j, epoch); changed || err != nil {
+				t.Errorf("second call: changed %v, err %v", changed, err)
+			}
+			late, changed, err := e.svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobSucceeded})
+			if changed || err != nil || late.Status != tt.status {
+				t.Errorf("late result: (%s, changed %v, %v)", late.Status, changed, err)
+			}
+			if ok, err := e.svc.RecordProgress(ctx, e.worker, j.ID, epoch, jobs.Sample{Time: e.clock.Now()}); ok || err != nil {
+				t.Errorf("late progress accepted: (%v, %v)", ok, err)
+			}
+		})
+	}
+	t.Run("another worker", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t)
+		j := e.at(t, domain.JobRunning)
+		if _, _, err := e.svc.Abandon(ctx, e.addWorker(t), j.ID, epoch, lost); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("err = %v, want ErrNotFound", err)
+		}
+	})
+}
+
 func TestNotifier(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

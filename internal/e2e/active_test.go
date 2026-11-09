@@ -18,6 +18,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/link"
+	wactive "github.com/Zeptiny/Syncr/internal/worker/transport/active"
 )
 
 // TestActiveJobSucceeds: enroll over HTTP, connect, run a job to success.
@@ -319,6 +320,62 @@ func TestActiveShutdownDrain(t *testing.T) {
 	j := c.job(job)
 	if j.Status != domain.JobInterrupted || j.Error.Code != jobs.CodeWorkerShutdown {
 		t.Errorf("job %s %+v", j.Status, j.Error)
+	}
+}
+
+// TestActiveLostWorkerComesBack: a worker cut off from the controller for
+// longer than LostAfter (its process keeps running the job) has its job
+// ended by the controller. When the link comes back with the same
+// process, the worker is told to stop the job, its late events are
+// acknowledged without changing the job, and its outbox drains.
+func TestActiveLostWorkerComesBack(t *testing.T) {
+	t.Parallel()
+	c := newController(t)
+	id, secret := c.enrollActive("laptop")
+	rn := newFakeRunner()
+	w := startActive(t, rn, activeOptions(c, id, secret))
+	job := c.run(id, heldDefinition())
+	c.waitStatus(job, domain.JobRunning)
+	w.kill() // the link is cut; the agent keeps running the job
+
+	c.clock.Advance(2 * time.Hour)
+	c.mu.Lock()
+	disp := c.disp
+	c.mu.Unlock()
+	if n, err := disp.ExpireLost(context.Background()); err != nil || n != 1 {
+		t.Fatalf("ExpireLost = (%d, %v), want 1", n, err)
+	}
+	ended := c.job(job)
+	if ended.Status != domain.JobInterrupted || ended.Error.Code != jobs.CodeWorkerLost {
+		t.Fatalf("job %s %+v", ended.Status, ended.Error)
+	}
+
+	tr, err := wactive.New(w.core, activeOptions(c, id, secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = tr.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	deadline := time.Now().Add(waitTimeout)
+	for len(w.agent.State().GetJobs()) > 0 || !w.core.Drained() {
+		if time.Now().After(deadline) {
+			t.Fatalf("the worker still holds %v, backlog %d", w.agent.State().GetJobs(), w.agent.Outbox().Stats().Backlog)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if j := c.job(job); j.Status != domain.JobInterrupted || j.Version != ended.Version {
+		t.Errorf("job after the worker came back: %s v%d, was %s v%d", j.Status, j.Version, ended.Status, ended.Version)
+	}
+	if rn.runCount(job) != 1 {
+		t.Errorf("runs = %d", rn.runCount(job))
 	}
 }
 

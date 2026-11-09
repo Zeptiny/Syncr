@@ -380,6 +380,7 @@ auth:
   setup_code: ""             # SYNCR_SETUP_CODE: preset first-run setup code (16+ chars); default: random, logged
 workers:
   download_base_url: https://github.com/Zeptiny/Syncr/releases/latest/download  # SYNCR_WORKERS_DOWNLOAD_BASE_URL (install commands)
+  lost_after: 1h             # SYNCR_WORKERS_LOST_AFTER: end the active jobs of a worker out of contact this long (at least 5m)
 log:
   level: info                # SYNCR_LOG_LEVEL: debug, info, warn, error
   format: text               # SYNCR_LOG_FORMAT: text or json
@@ -422,6 +423,16 @@ around it), redirects are not followed, and proxies (`HTTPS_PROXY`) are not
 used for notifications. Links in messages use `http.public_url`. The binary
 embeds the time zone database, so schedule time zones work in the distroless
 image and on Windows.
+
+A worker that stays out of contact (no report, no successful passive pull)
+for `workers.lost_after` loses its jobs: dispatched and running ones end
+`interrupted` (`worker_lost`, notified like any interruption), so schedules
+waiting on them move on. A job you cancel on a worker that cannot be reached
+ends `cancelled` after 5 minutes. Time while the controller itself is down
+does not count. If the worker comes back later, it is told to stop those
+jobs and its late results are ignored. Raise the value for machines that
+sleep through long jobs (e.g. laptops); queued jobs still fail after the
+15 minute dispatch timeout.
 
 `api.admin_token` (`SYNCR_ADMIN_TOKEN`) of Milestone 2 is gone: it is ignored
 with a warning. Create a personal API token in the UI instead.

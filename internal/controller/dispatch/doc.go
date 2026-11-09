@@ -147,6 +147,22 @@
 // is offline (and since when) or is online but did not accept the job. The
 // clock starts again when a job is re-queued.
 //
+// Run also ends the jobs a worker can no longer report on (ExpireLost).
+// A worker is silent from its last link call, or from the Service's start
+// if that is later (a controller outage never counts against a worker):
+//
+//	Worker silent for            Job (this worker)                     Becomes
+//	Config.CancelGrace (5m)      dispatched/running, cancel requested  cancelled (the CancelJob cannot be
+//	                               at least CancelGrace ago              delivered)
+//	Config.LostAfter (1h)        dispatched/running, cancel requested  cancelled
+//	Config.LostAfter (1h)        dispatched/running, no cancel request interrupted, worker_lost (notifier called)
+//
+// If the worker comes back with the same epoch, nothing special happens:
+// its late JobStarted, Progress and JobResult events find a finished job
+// and are acknowledged without effect, and its snapshot lists jobs the
+// controller considers finished, which are orphans and get a CancelJob. A
+// worker that comes back with a new epoch held nothing from before.
+//
 // # Cancel, by state
 //
 //	Job state            Cancel (package jobs)              Then
@@ -155,7 +171,8 @@
 //	dispatched, running  cancel requested, worker woken     CancelJob; the worker's CANCELLED result ->
 //	                                                        cancelled; if it finishes first, its outcome stands;
 //	                                                        if it restarts, dispatched -> cancelled and
-//	                                                        running -> interrupted
+//	                                                        running -> interrupted; if it stays out of
+//	                                                        contact for CancelGrace, cancelled
 //	finished             nothing                            -
 //
 // # Long polls and passive workers

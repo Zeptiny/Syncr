@@ -91,9 +91,11 @@ This record fixes those rules.
   the removed `api.admin_token`. `dev.seed` (only with `dev.memory_store`)
   fills the store with demo data (`internal/devseed`) before that check.
 - **Background loops**, started in this order: the dispatch-timeout
-  sweeper, the passive supervisor, the scheduler (ADR 0009), the
-  notification outbox (ADR 0010), the hourly session and API token purge
-  (`users.Service.PurgeExpired`) and, with `dev.seed`, the demo animation.
+  sweeper (it also ends the jobs of workers out of contact for
+  `workers.lost_after`, ADR 0002), the passive supervisor, the scheduler
+  (ADR 0009), the notification outbox (ADR 0010), the hourly session and
+  API token purge (`users.Service.PurgeExpired`) and, with `dev.seed`, the
+  demo animation.
 
 **Controller shutdown** (SIGINT/SIGTERM), each step logged:
 

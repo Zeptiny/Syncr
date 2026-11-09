@@ -220,6 +220,57 @@ func (s *Service) Interrupt(ctx context.Context, workerID domain.WorkerID, id do
 	return j, changed, nil
 }
 
+// msgCancelUnconfirmed is the error message of a job whose cancel request
+// could not be delivered because its worker was out of contact
+// (CancelUnconfirmed, Abandon).
+const msgCancelUnconfirmed = "cancelled while the worker was out of contact; the worker is told to stop the job if it comes back"
+
+// CancelUnconfirmed ends a job that epoch accepted (dispatched or running)
+// and whose cancel was requested as cancelled, without the worker's
+// confirmation: its worker has been out of contact since the request, so
+// the CancelJob cannot be delivered. A job without a cancel request is left
+// alone. If the worker comes back still holding the job, the dispatcher
+// tells it to stop (the job is finished as far as the controller knows),
+// and the worker's late events and result change nothing.
+func (s *Service) CancelUnconfirmed(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string) (Job, bool, error) {
+	j, changed, err := s.abandon(ctx, workerID, id, epoch, nil)
+	if err != nil {
+		return Job{}, false, fmt.Errorf("cancel job %s without its worker: %w", id, err)
+	}
+	return j, changed, nil
+}
+
+// Abandon ends a job that epoch accepted (dispatched or running) on a
+// worker that has been out of contact for too long (lost): a job with a
+// cancel request becomes cancelled as in CancelUnconfirmed, any other job
+// interrupted with reason e. As for CancelUnconfirmed, a worker that comes
+// back is told to stop the job and its late events change nothing.
+func (s *Service) Abandon(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, e JobError) (Job, bool, error) {
+	j, changed, err := s.abandon(ctx, workerID, id, epoch, &e)
+	if err != nil {
+		return Job{}, false, fmt.Errorf("abandon job %s: %w", id, err)
+	}
+	return j, changed, nil
+}
+
+// abandon implements CancelUnconfirmed (lost == nil) and Abandon. The
+// cancel request is checked atomically with the update, so a cancel
+// requested concurrently is not missed.
+func (s *Service) abandon(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, lost *JobError) (Job, bool, error) {
+	now := s.clock.Now()
+	return s.change(ctx, id, workerID, func(j *Job) (bool, error) {
+		switch {
+		case !j.Status.Active() || j.Epoch != epoch:
+			return false, nil
+		case j.CancelRequested():
+			return true, finish(j, domain.JobCancelled, now, JobError{Code: CodeCancelled, Message: msgCancelUnconfirmed})
+		case lost != nil:
+			return true, finish(j, domain.JobInterrupted, now, *lost)
+		}
+		return false, nil
+	})
+}
+
 // FailQueued fails a job that is still queued and, unless queuedBefore is
 // zero, has been queued since before queuedBefore (so a job re-queued in
 // the meantime is spared).
