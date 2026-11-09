@@ -106,7 +106,7 @@ const testDefinition = `{"rclone_transfer":{"mode":"RCLONE_TRANSFER_MODE_COPY"}}
 
 const epoch = "epoch-1"
 
-func newEnv(t *testing.T) *env {
+func newEnv(t testing.TB) *env {
 	t.Helper()
 	e := &env{
 		store:   memstore.New(),
@@ -130,7 +130,7 @@ func newEnv(t *testing.T) *env {
 
 // addUser stores a user (jobs need an existing owner) and returns it as
 // an actor.
-func (e *env) addUser(t *testing.T, role domain.Role) domain.Actor {
+func (e *env) addUser(t testing.TB, role domain.Role) domain.Actor {
 	t.Helper()
 	id := domain.NewUserID()
 	u := users.User{ID: id, Username: "u" + id.String()[24:], Role: role, PasswordHash: "x", Version: 1}
@@ -180,7 +180,7 @@ func (f *fakeRemotes) Usable(ctx context.Context, owner domain.UserID, ids []dom
 	return out, nil
 }
 
-func (e *env) addWorker(t *testing.T) domain.WorkerID {
+func (e *env) addWorker(t testing.TB) domain.WorkerID {
 	t.Helper()
 	id := domain.NewWorkerID()
 	// Names are unique among live workers.
@@ -190,13 +190,13 @@ func (e *env) addWorker(t *testing.T) domain.WorkerID {
 	return id
 }
 
-func (e *env) create(t *testing.T) jobs.Job {
+func (e *env) create(t testing.TB) jobs.Job {
 	t.Helper()
 	return e.createAs(t, e.owner, jobs.CreateParams{})
 }
 
 // createAs creates a job of actor; p's zero fields get the defaults.
-func (e *env) createAs(t *testing.T, actor domain.Actor, p jobs.CreateParams) jobs.Job {
+func (e *env) createAs(t testing.TB, actor domain.Actor, p jobs.CreateParams) jobs.Job {
 	t.Helper()
 	p.WorkerID = cmp.Or(p.WorkerID, e.worker)
 	p.Kind = cmp.Or(p.Kind, "rclone_transfer")
@@ -211,7 +211,7 @@ func (e *env) createAs(t *testing.T, actor domain.Actor, p jobs.CreateParams) jo
 }
 
 // at moves a new job to status st through the lifecycle API.
-func (e *env) at(t *testing.T, st domain.JobStatus) jobs.Job {
+func (e *env) at(t testing.TB, st domain.JobStatus) jobs.Job {
 	t.Helper()
 	ctx := context.Background()
 	j := e.create(t)
