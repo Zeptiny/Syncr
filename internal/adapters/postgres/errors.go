@@ -18,6 +18,8 @@ const (
 	sqlstateForeignKeyViolation = "23503"
 	sqlstateUniqueViolation     = "23505"
 	sqlstateCheckViolation      = "23514"
+	sqlstateSerialization       = "40001"
+	sqlstateDeadlock            = "40P01"
 )
 
 // isBadValue reports data exceptions (class 22) caused by the value the
@@ -38,6 +40,9 @@ func isBadValue(code string) bool {
 //	foreign key violation (on insert)      ErrNotFound (the referenced row is missing)
 //	pgx.ErrNoRows                          ErrNotFound
 //	check/not-null/bad-text/range errors   ErrInvalidArgument
+//	deadlock, serialization failure        ErrConflict (a lost race: the
+//	                                       transaction was rolled back and
+//	                                       may be retried)
 //
 // Methods whose "no row" result means a lost race (ErrConflict) intercept
 // pgx.ErrNoRows before calling mapErr. Everything else (connection failures,
@@ -63,6 +68,8 @@ func mapErr(op string, err error) error {
 			return fmt.Errorf("%s: %w (constraint %s)", op, domain.ErrNotFound, pgErr.ConstraintName)
 		case sqlstateCheckViolation, sqlstateNotNullViolation:
 			return fmt.Errorf("%s: %w: violates %s", op, domain.ErrInvalidArgument, constraintOrColumn(pgErr))
+		case sqlstateDeadlock, sqlstateSerialization:
+			return fmt.Errorf("%s: %w (sqlstate %s)", op, domain.ErrConflict, pgErr.Code)
 		}
 		if isBadValue(pgErr.Code) {
 			return fmt.Errorf("%s: %w (sqlstate %s)", op, domain.ErrInvalidArgument, pgErr.Code)

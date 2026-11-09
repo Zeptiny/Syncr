@@ -801,6 +801,22 @@ func (q *Queries) ListUpcoming(ctx context.Context, arg ListUpcomingParams) ([]L
 	return items, nil
 }
 
+const lockRunSchedule = `-- name: LockRunSchedule :one
+SELECT s.id FROM schedules s
+WHERE s.id = (SELECT r.schedule_id FROM schedule_runs r WHERE r.id = $1::uuid)
+FOR NO KEY UPDATE OF s
+`
+
+// Locks the schedule of a run before the run is written (UpdateRun), for
+// the same lock order; the run row itself is not locked. No row: the run
+// does not exist.
+func (q *Queries) LockRunSchedule(ctx context.Context, runID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockRunSchedule, runID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const lockSchedule = `-- name: LockSchedule :one
 SELECT enabled, version FROM schedules WHERE id = $1::uuid FOR UPDATE
 `
@@ -817,6 +833,20 @@ func (q *Queries) LockSchedule(ctx context.Context, id pgtype.UUID) (LockSchedul
 	var i LockScheduleRow
 	err := row.Scan(&i.Enabled, &i.Version)
 	return i, err
+}
+
+const lockScheduleRow = `-- name: LockScheduleRow :one
+SELECT id FROM schedules WHERE id = $1::uuid FOR NO KEY UPDATE
+`
+
+// Locks a schedule before its runs are written (AddRun), so every
+// transaction that writes a schedule and its runs locks the schedule row
+// first and two of them cannot deadlock.
+func (q *Queries) LockScheduleRow(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockScheduleRow, id)
+	var id_2 pgtype.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
 }
 
 const mergeOpenRun = `-- name: MergeOpenRun :one

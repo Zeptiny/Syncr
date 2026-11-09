@@ -421,3 +421,85 @@ func TestServiceFireDue(t *testing.T) {
 		}
 	}
 }
+
+// TestRunUpdateLocksScheduleFirst: UpdateRun locks the run's schedule
+// before the run, as pausing (the schedule, then its open run) does, so an
+// auto-pause racing a user's pause cannot deadlock. A transaction holding
+// the schedule row stands in for the pause: the auto-pause waits for it
+// without holding the run, the pause cancels the run without waiting, and
+// the auto-pause then loses its compare-and-swap.
+func TestRunUpdateLocksScheduleFirst(t *testing.T) {
+	t.Parallel()
+	s := newMigratedStore(t)
+	ctx := context.Background()
+	sc := schedTestFixture(t, s, "lock order")
+	if err := s.CreateSchedule(ctx, sc); err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.AddRun(ctx, pendingRun(sc, schedT0), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pause, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pause.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := pause.Exec(ctx, `UPDATE schedules SET enabled = false, next_run_at = NULL WHERE id = $1`, pgID(sc.ID)); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.UpdateRun(ctx, schedules.RunUpdate{
+			ID: r.ID, From: schedules.RunPending, To: schedules.RunFailed, Reason: schedules.ReasonWorkerRemoved,
+			At: schedT0.Add(time.Minute), PauseSchedule: true,
+		})
+		done <- err
+	}()
+	// Wait until the auto-pause waits for a lock.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("UpdateRun did not wait for the schedule's lock: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("UpdateRun never waited for the schedule's lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The waiting auto-pause holds no lock on the run.
+	if _, err := pause.Exec(ctx, `SELECT 1 FROM schedule_runs WHERE id = $1 FOR UPDATE NOWAIT`, pgID(r.ID)); err != nil {
+		t.Fatalf("the run is locked while UpdateRun waits for its schedule: %v", err)
+	}
+	if _, err := pause.Exec(ctx, `UPDATE schedule_runs SET status = 'cancelled', reason = 'disabled' WHERE id = $1`, pgID(r.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pause.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, domain.ErrConflict) {
+		t.Errorf("UpdateRun after the pause = %v, want ErrConflict", err)
+	}
+	if got, _ := s.GetRun(ctx, r.ID); got.Status != schedules.RunCancelled {
+		t.Errorf("run = %+v, want cancelled by the pause", got)
+	}
+	if got, _ := s.GetSchedule(ctx, sc.ID); got.PausedReason != "" {
+		t.Errorf("the lost auto-pause set the paused reason %q", got.PausedReason)
+	}
+	// A missing run is still ErrNotFound.
+	_, err = s.UpdateRun(ctx, schedules.RunUpdate{ID: domain.NewScheduleRunID(), From: schedules.RunPending, To: schedules.RunMissed, At: schedT0})
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("UpdateRun(missing) = %v", err)
+	}
+}

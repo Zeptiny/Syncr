@@ -35,6 +35,12 @@ var _ schedules.Repository = (*Store)(nil)
 //   - UpdateRun is a compare-and-swap on the run's status, so exactly one
 //     of several concurrent pending -> launching updates reserves its job
 //     ID.
+//   - Lock order: every transaction that writes a schedule's runs locks
+//     the schedule row first (UpdateSchedule, SetScheduleEnabled,
+//     FireSchedule and DeleteSchedule by writing it, AddRun and UpdateRun
+//     with LockScheduleRow and LockRunSchedule), then its runs. Two such
+//     transactions therefore cannot deadlock (e.g. an auto-pause racing a
+//     user's pause).
 
 // CreateSchedule implements schedules.Repository.
 func (s *Store) CreateSchedule(ctx context.Context, sc schedules.Schedule) error {
@@ -260,6 +266,9 @@ func (s *Store) AddRun(ctx context.Context, r schedules.Run, merge bool) (schedu
 	op := fmt.Sprintf("add run %s", r.ID)
 	var out schedules.Run
 	err := s.inTx(ctx, op, func(q *db.Queries) error {
+		if _, err := q.LockScheduleRow(ctx, pgID(r.ScheduleID)); err != nil {
+			return mapErr(op, err) // no row: ErrNotFound
+		}
 		id, err := addRun(ctx, q, op, r, merge)
 		if err != nil {
 			return err
@@ -339,13 +348,17 @@ func (s *Store) ListOpenRuns(ctx context.Context, limit int) ([]schedules.Run, e
 }
 
 // UpdateRun implements schedules.Repository: the compare-and-swap of the
-// status and, with PauseSchedule, the auto-pause, in one transaction.
-// When the update matches nothing, a second query tells a missing run
-// (ErrNotFound) from a status mismatch (ErrConflict).
+// status and, with PauseSchedule, the auto-pause, in one transaction. The
+// run's schedule is locked first (the lock order above). When the update
+// matches nothing, a second query tells a missing run (ErrNotFound) from a
+// status mismatch (ErrConflict).
 func (s *Store) UpdateRun(ctx context.Context, u schedules.RunUpdate) (schedules.Run, error) {
 	op := fmt.Sprintf("update run %s", u.ID)
 	var out schedules.Run
 	err := s.inTx(ctx, op, func(q *db.Queries) error {
+		if _, err := q.LockRunSchedule(ctx, pgID(u.ID)); err != nil {
+			return mapErr(op, err) // no row: the run does not exist (ErrNotFound)
+		}
 		schedID, err := q.UpdateRunStatus(ctx, db.UpdateRunStatusParams{
 			ToStatus: string(u.To), Reason: u.Reason, Message: cleanText(u.Message),
 			WorkerID: pgOptID(u.WorkerID), JobID: pgOptID(u.JobID), UpdatedAt: pgTime(u.At),

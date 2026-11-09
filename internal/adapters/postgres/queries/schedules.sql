@@ -69,6 +69,20 @@ ORDER BY lower(name) COLLATE "C", id;
 -- version check and the enabled transition are decided on this row.
 SELECT enabled, version FROM schedules WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 
+-- name: LockScheduleRow :one
+-- Locks a schedule before its runs are written (AddRun), so every
+-- transaction that writes a schedule and its runs locks the schedule row
+-- first and two of them cannot deadlock.
+SELECT id FROM schedules WHERE id = sqlc.arg(id)::uuid FOR NO KEY UPDATE;
+
+-- name: LockRunSchedule :one
+-- Locks the schedule of a run before the run is written (UpdateRun), for
+-- the same lock order; the run row itself is not locked. No row: the run
+-- does not exist.
+SELECT s.id FROM schedules s
+WHERE s.id = (SELECT r.schedule_id FROM schedule_runs r WHERE r.id = sqlc.arg(run_id)::uuid)
+FOR NO KEY UPDATE OF s;
+
 -- name: UpdateSchedule :one
 -- The configuration of a schedule locked by LockSchedule. next_run_at is
 -- only written when reschedule is set, so an edit racing a fire cannot

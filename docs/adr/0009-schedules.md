@@ -134,8 +134,13 @@ with `schedule_id` cleared.
 `FireSchedule` is the CAS plus the merge or insert; `UpdateRun` is a CAS on
 the status plus the optional auto-pause; `UpdateSchedule` locks the row
 (`FOR UPDATE`) to decide the version check and whether the open run must be
-cancelled. The races (fires, open runs, launch claims) are covered by
-integration tests across two connection pools.
+cancelled. Every transaction that writes a schedule's runs locks the
+schedule row first, then the runs (`UpdateRun` and `AddRun` lock the
+schedule before touching a run), so an auto-pause racing a user's pause
+cannot deadlock. A deadlock or serialization failure that still happens
+(e.g. with other tables) maps to `ErrConflict`, a lost race the caller
+retries. The races (fires, open runs, launch claims, the lock order) are
+covered by integration tests across two connection pools.
 
 ## Consequences
 
