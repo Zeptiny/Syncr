@@ -69,7 +69,7 @@ Useful flags (all optional):
 | `--data-dir DIR`, `--config FILE` | override `/var/lib/syncr` and `/etc/syncr/worker.yaml` (relative paths are resolved against the current directory, and the service gets the absolute ones) |
 | `--no-service` | write the config only; run the worker yourself |
 | `--dry-run` | print the plan, change nothing |
-| `--force` | replace an existing setup (new enrollment, new certificate) |
+| `--force` | replace an existing setup (new enrollment, new certificate); the old config, certificate and CA copy stay in place until the new enrollment succeeds |
 
 Set `SYNCR_ENROLLMENT_TOKEN` instead of `--token` to keep the token out of your
 shell history.

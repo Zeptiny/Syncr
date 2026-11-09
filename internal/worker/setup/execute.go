@@ -49,16 +49,20 @@ func (s *Setup) execute(ctx context.Context, p *plan) (*Result, error) {
 		s.printf("    %s %s (%s) %s\n", t.Name, t.Version, t.Source, t.Path)
 	}
 
-	// 3. CA and certificate.
-	if err := s.stageCA(p); err != nil {
+	// 3. CA and certificate. They are only prepared here and written with
+	// the config: an existing setup (--force) keeps working on its old files
+	// if the enrollment fails.
+	var staged stagedFiles
+	if staged.ca, err = s.stageCA(p); err != nil {
 		return nil, err
 	}
 	if p.opts.Mode == config.LinkPassive {
 		s.step("Preparing the TLS certificate")
-		fp, err := s.prepareCertificate(p)
+		fp, pair, err := s.prepareCertificate(p)
 		if err != nil {
 			return nil, err
 		}
+		staged.cert = pair
 		res.Fingerprint = fp
 		s.printf("    fingerprint (SHA-256): %s\n", fp)
 	}
@@ -73,8 +77,11 @@ func (s *Setup) execute(ctx context.Context, p *plan) (*Result, error) {
 		res.PairingSecret = secret
 	}
 
-	// 5. Config.
+	// 5. Config, after the files it refers to.
 	s.step("Writing the configuration")
+	if err := s.writeStaged(p, staged); err != nil {
+		return nil, s.afterEnrollError(p, workerID, err)
+	}
 	cfg := s.buildConfig(p, workerID, secret)
 	body, err := config.Marshal(cfg)
 	if err != nil {
@@ -143,48 +150,59 @@ func (s *Setup) prepareDirs(p *plan) error {
 	return nil
 }
 
-// stageCA copies the controller CA next to the other worker files, so the
-// service does not depend on where the operator keeps the original.
-func (s *Setup) stageCA(p *plan) error {
+// stagedFiles are written by writeStaged together with the config, once the
+// credentials are known: with --force they replace the files of a working
+// setup, which must survive a failed enrollment untouched.
+type stagedFiles struct {
+	// ca is the controller CA to copy to plan.caCopy.
+	ca []byte
+	// cert is a new certificate for plan.certPath and plan.keyPath; nil
+	// when an existing one is used.
+	cert *tlscert.Pair
+}
+
+// stageCA reads the controller CA, which writeStaged copies next to the
+// other worker files so that the service does not depend on where the
+// operator keeps the original. The TLS directory is created now, so that a
+// problem there shows before the enrollment token is spent.
+func (s *Setup) stageCA(p *plan) ([]byte, error) {
 	if p.opts.CAFile == "" {
-		return nil
+		return nil, nil
 	}
 	data, err := os.ReadFile(p.opts.CAFile)
 	if err != nil {
-		return fmt.Errorf("read the CA file: %w", err)
+		return nil, fmt.Errorf("read the CA file: %w", err)
 	}
 	if err := os.MkdirAll(p.tlsDir, 0o700); err != nil {
-		return fmt.Errorf("create %s: %w", p.tlsDir, err)
+		return nil, fmt.Errorf("create %s: %w", p.tlsDir, err)
 	}
-	if _, err := atomicfile.Write(p.caCopy, data, atomicfile.Options{Perm: 0o644}); err != nil {
-		return fmt.Errorf("store the CA file: %w", err)
-	}
-	return nil
+	return data, nil
 }
 
-// prepareCertificate creates the passive worker's certificate, or reuses what
-// is already in place (so that re-running a failed setup keeps the
-// fingerprint), and returns its fingerprint.
-func (s *Setup) prepareCertificate(p *plan) (string, error) {
+// prepareCertificate returns the fingerprint of the passive worker's
+// certificate: the one provided, the one already in place (so that
+// re-running a failed setup keeps the fingerprint), or a new one, which is
+// returned to be written by writeStaged.
+func (s *Setup) prepareCertificate(p *plan) (string, *tlscert.Pair, error) {
 	if !p.ownCert {
 		fp, err := tlscert.LoadFingerprint(p.certPath, p.keyPath)
 		if err != nil {
-			return "", fmt.Errorf("the certificate you provided cannot be used: %w", err)
+			return "", nil, fmt.Errorf("the certificate you provided cannot be used: %w", err)
 		}
-		return fp, nil
+		return fp, nil, nil
 	}
 	if !p.opts.Force {
 		if fp, err := tlscert.LoadFingerprint(p.certPath, p.keyPath); err == nil {
 			s.printf("    reusing the existing certificate %s\n", p.certPath)
-			return fp, nil
+			return fp, nil, nil
 		}
 	}
 	if err := os.MkdirAll(p.tlsDir, 0o700); err != nil {
-		return "", fmt.Errorf("create %s: %w", p.tlsDir, err)
+		return "", nil, fmt.Errorf("create %s: %w", p.tlsDir, err)
 	}
 	dns, ips, err := tlscert.SplitHosts(p.opts.TLSNames)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	host := p.opts.AdvertiseURL
 	if u, perr := url.Parse(p.opts.AdvertiseURL); perr == nil {
@@ -195,17 +213,31 @@ func (s *Setup) prepareCertificate(p *plan) (string, error) {
 	}
 	pair, err := tlscert.Generate(tlscert.Options{Hostname: host, DNSNames: dns, IPs: ips})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	w, err := tlscert.Write(p.certPath, p.keyPath, pair, p.scope == service.ScopeUser)
-	if err != nil {
-		return "", err
+	s.printf("    generated a new certificate (valid until %s); it is stored with the configuration\n", pair.NotAfter.Format(time.DateOnly))
+	return pair.Fingerprint, &pair, nil
+}
+
+// writeStaged stores the CA copy and a new certificate.
+func (s *Setup) writeStaged(p *plan, staged stagedFiles) error {
+	if staged.ca != nil {
+		if _, err := atomicfile.Write(p.caCopy, staged.ca, atomicfile.Options{Perm: 0o644}); err != nil {
+			return fmt.Errorf("store the CA file: %w", err)
+		}
+		s.printf("    %s (controller CA)\n", p.caCopy)
 	}
-	s.printf("    created %s (valid until %s)\n", p.certPath, pair.NotAfter.Format(time.DateOnly))
-	if w.ACLWarning != nil {
-		s.printf("    warning: could not restrict the private key to SYSTEM and Administrators: %v\n", w.ACLWarning)
+	if staged.cert != nil {
+		w, err := tlscert.Write(p.certPath, p.keyPath, *staged.cert, p.scope == service.ScopeUser)
+		if err != nil {
+			return err
+		}
+		s.printf("    %s and %s (new certificate)\n", p.certPath, p.keyPath)
+		if w.ACLWarning != nil {
+			s.printf("    warning: could not restrict the private key to SYSTEM and Administrators: %v\n", w.ACLWarning)
+		}
 	}
-	return pair.Fingerprint, nil
+	return nil
 }
 
 // credentials returns the worker ID (empty when registering by hand) and

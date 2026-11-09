@@ -6,9 +6,11 @@
 //
 //  1. validate the request and the machine (paths, rights, existing setup);
 //  2. create the directories and provision the pinned rclone and restic;
-//  3. passive mode: create the self-signed certificate;
+//  3. passive mode: create the self-signed certificate (in memory);
 //  4. enroll with the controller (unless registering by hand);
-//  5. write the configuration atomically, readable only by the worker;
+//  5. write the certificate, the controller CA copy and the configuration
+//     atomically, readable only by the worker (with --force, an existing
+//     setup keeps its files until the enrollment has succeeded);
 //  6. install and start the service;
 //  7. check that everything works, and print a summary.
 //

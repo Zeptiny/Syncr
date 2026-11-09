@@ -697,6 +697,84 @@ func TestPassiveRerunKeepsCertificateAndForceRegeneratesIt(t *testing.T) {
 	}
 }
 
+// TestForceKeepsAWorkingSetupWhenEnrollmentFails: --force on an installed
+// passive worker must not replace its certificate, key or controller CA
+// before the controller accepted the new enrollment. Otherwise a rejected
+// token or an unreachable controller leaves the old install with a
+// certificate the controller does not know.
+func TestForceKeepsAWorkingSetupWhenEnrollmentFails(t *testing.T) {
+	t.Parallel()
+	c := newFakeController(t)
+	r := newRig(t)
+	o := r.passiveOptions(Options{ControllerURL: c.srv.URL, Token: testToken, CAFile: c.caFile})
+	first := r.mustRun(o)
+	files := []string{r.config, filepath.Join(r.data, "tls", "worker.crt"), filepath.Join(r.data, "tls", "worker.key"), filepath.Join(r.data, "tls", "controller-ca.pem")}
+	snapshot := func() map[string]string {
+		m := map[string]string{}
+		for _, f := range files {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m[f] = string(b)
+		}
+		return m
+	}
+	before := snapshot()
+
+	// An unrelated certificate as the CA: the TLS handshake fails. (Every
+	// httptest server shares one certificate, so it is generated.)
+	unrelated, err := tlscert.Generate(tlscert.Options{Hostname: "unrelated.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongCA := filepath.Join(t.TempDir(), "wrong-ca.pem")
+	if err := os.WriteFile(wrongCA, unrelated.CertPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		edit func(*Options)
+		kind EnrollErrorKind
+	}{
+		{"untrusted controller certificate", func(o *Options) { o.CAFile = wrongCA }, EnrollTLS},
+		{"rejected token", func(o *Options) { o.Token = "wtok_used-already" }, EnrollTokenRejected},
+	} {
+		failing := o
+		failing.Force = true
+		tt.edit(&failing)
+		_, err := r.run(failing)
+		var ee *EnrollError
+		if !errors.As(err, &ee) || ee.Kind != tt.kind {
+			t.Fatalf("%s: err = %v, want an EnrollError of kind %d", tt.name, err, tt.kind)
+		}
+		after := snapshot()
+		for _, f := range files {
+			if after[f] != before[f] {
+				t.Errorf("%s: %s changed although the enrollment failed", tt.name, f)
+			}
+		}
+		if fp, err := tlscert.FingerprintFile(files[1]); err != nil || fp != first.Fingerprint {
+			t.Errorf("%s: certificate fingerprint = %s, %v; want the pinned %s", tt.name, fp, err, first.Fingerprint)
+		}
+	}
+
+	// A successful --force replaces the certificate, and the controller is
+	// told the new fingerprint.
+	o.Force = true
+	second := r.mustRun(o)
+	if second.Fingerprint == first.Fingerprint {
+		t.Error("--force kept the old certificate")
+	}
+	if fp, err := tlscert.FingerprintFile(files[1]); err != nil || fp != second.Fingerprint {
+		t.Errorf("stored fingerprint = %s, %v; want %s", fp, err, second.Fingerprint)
+	}
+	reqs := c.seen()
+	if got := reqs[len(reqs)-1].GetCertFingerprint(); got != second.Fingerprint {
+		t.Errorf("enrolled with fingerprint %s, want %s", got, second.Fingerprint)
+	}
+}
+
 func TestDryRunChangesNothing(t *testing.T) {
 	t.Parallel()
 	c := newFakeController(t)
