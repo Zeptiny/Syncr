@@ -85,6 +85,14 @@ type ContactResolver interface {
 	ResolveChannel(ctx context.Context, id domain.ContactID) (channelType string, cfg descriptor.Values, err error)
 }
 
+// AdminChecker tells whether a user is an administrator (wired with the
+// users store; app packages cannot use each other).
+type AdminChecker interface {
+	// IsAdmin reports whether user has the admin role. ErrNotFound if the
+	// user does not exist.
+	IsAdmin(ctx context.Context, user domain.UserID) (bool, error)
+}
+
 // JobDescriber describes jobs for their notifications (wired with the job
 // kinds and the remotes service; app packages cannot use them directly).
 type JobDescriber interface {

@@ -3,6 +3,7 @@ package storetest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -482,27 +483,29 @@ func testScheduleMergeOpenRun(t *testing.T, s Store) {
 		return s.FireSchedule(ctx, schedules.Fire{ID: a.ID, ExpectedNext: expected, NewNext: expected.Add(day), Run: r, Merge: merge})
 	}
 	first := newRun(t, 1, a.ID, schedules.RunPending)
+	first.Deadline = t0().Add(3 * day)
 	if _, err := fire(a.NextRunAt, first, true); err != nil {
 		t.Fatal(err)
 	}
-	// A later occurrence merges into the open run.
+	// A later occurrence, due before the pending run's deadline, merges
+	// into it; the deadline was fixed when the run opened.
 	second := newRun(t, 2, a.ID, schedules.RunPending)
-	second.Coalesced, second.Deadline, second.CreatedAt = 2, t0().Add(30*time.Hour), t0().Add(day)
+	second.Coalesced, second.Deadline, second.CreatedAt = 2, t0().Add(4*day), t0().Add(day)
 	merged, err := fire(a.NextRunAt.Add(day), second, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if merged.ID != first.ID || merged.Coalesced != 3 || !merged.Deadline.Equal(second.Deadline) ||
+	if merged.ID != first.ID || merged.Coalesced != 3 || !merged.Deadline.Equal(first.Deadline) ||
 		!merged.UpdatedAt.Equal(second.CreatedAt) || !merged.ScheduledFor.Equal(first.ScheduledFor) {
-		t.Errorf("merged run = %+v", merged)
+		t.Errorf("merged run = %+v, want the first run's deadline", merged)
 	}
 	if _, err := s.GetRun(ctx, second.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("the merged run was stored too: %v", err)
 	}
-	// An earlier deadline does not shorten the open run's.
+	// An earlier deadline does not shorten the pending run's.
 	third := newRun(t, 3, a.ID, schedules.RunPending)
 	third.Deadline = t0()
-	if merged, err = fire(a.NextRunAt.Add(2*day), third, true); err != nil || !merged.Deadline.Equal(second.Deadline) || merged.Coalesced != 4 {
+	if merged, err = fire(a.NextRunAt.Add(2*day), third, true); err != nil || !merged.Deadline.Equal(first.Deadline) || merged.Coalesced != 4 {
 		t.Errorf("merge with an earlier deadline = (%+v, %v)", merged, err)
 	}
 	// Without merge, a second open run violates the one-open-run rule and
@@ -527,8 +530,10 @@ func testScheduleMergeOpenRun(t *testing.T, s Store) {
 	manual.Trigger = schedules.TriggerManual
 	_, err = s.AddRun(ctx, manual, false)
 	wantErr(t, "AddRun(second open run)", err, domain.ErrAlreadyExists)
-	if got, err := s.AddRun(ctx, manual, true); err != nil || got.ID != first.ID || got.Coalesced != 5 {
-		t.Errorf("AddRun(merge) = (%+v, %v)", got, err)
+	// A manual request may wait as long as its own deadline allows.
+	manual.Deadline = t0().Add(10 * day)
+	if got, err := s.AddRun(ctx, manual, true); err != nil || got.ID != first.ID || got.Coalesced != 5 || !got.Deadline.Equal(manual.Deadline) {
+		t.Errorf("AddRun(merge) = (%+v, %v), want merged with the manual deadline", got, err)
 	}
 	if got := mustGetSchedule(t, s, a.ID); !got.NextRunAt.Equal(before.NextRunAt) || !got.LastFiredAt.Equal(before.LastFiredAt) {
 		t.Error("AddRun changed the fire state")
@@ -546,6 +551,237 @@ func testScheduleMergeOpenRun(t *testing.T, s Store) {
 	noJob := newRun(t, 9, a.ID, schedules.RunLaunched)
 	_, err = s.AddRun(ctx, noJob, false)
 	wantErr(t, "AddRun(launched without a job)", err, domain.ErrInvalidArgument)
+}
+
+// testScheduleFireSupersedes: an occurrence due at or after the pending
+// run's deadline does not merge into it (that would move the deadline on
+// forever): the pending run is missed with the fire's reason and the
+// occurrence opens its own run.
+func testScheduleFireSupersedes(t *testing.T, s Store) {
+	ctx := context.Background()
+	alice := userID(t, 1)
+	requireSchedules(t, s, alice)
+	w := newWorker(t, 1)
+	mustCreateWorker(t, s, w)
+	a := newSchedule(t, 1, alice, "Nightly", w.ID)
+	mustCreateSchedule(t, s, a)
+	day := 24 * time.Hour
+	fire := func(expected time.Time, r schedules.Run) (schedules.Run, error) {
+		return s.FireSchedule(ctx, schedules.Fire{
+			ID: a.ID, ExpectedNext: expected, NewNext: expected.Add(day), Run: r, Merge: true,
+			MissedReason: schedules.ReasonWorkerOffline, MissedMessage: "the worker was offline",
+		})
+	}
+	// "Until the next occurrence": the deadline is the next fire's time.
+	first := newRun(t, 1, a.ID, schedules.RunPending)
+	first.Deadline = t0().Add(day)
+	if _, err := fire(a.NextRunAt, first); err != nil {
+		t.Fatal(err)
+	}
+	second := newRun(t, 2, a.ID, schedules.RunPending)
+	second.ScheduledFor, second.Deadline, second.CreatedAt, second.UpdatedAt = t0().Add(day), t0().Add(2*day), t0().Add(day), t0().Add(day)
+	got, err := fire(a.NextRunAt.Add(day), second)
+	if err != nil || got.ID != second.ID || got.Status != schedules.RunPending || got.Coalesced != 0 || !got.Deadline.Equal(second.Deadline) {
+		t.Fatalf("FireSchedule at the pending run's deadline = (%+v, %v), want the new run", got, err)
+	}
+	if r := mustGetRun(t, s, first.ID); r.Status != schedules.RunMissed || r.Reason != schedules.ReasonWorkerOffline ||
+		r.Message != "the worker was offline" || !r.UpdatedAt.Equal(second.CreatedAt) || r.Coalesced != 0 {
+		t.Errorf("superseded run = %+v, want missed (worker offline)", r)
+	}
+	// A refused insert supersedes nothing.
+	dup := newRun(t, 1, a.ID, schedules.RunPending) // the first run's ID
+	dup.CreatedAt = t0().Add(3 * day)
+	_, err = fire(a.NextRunAt.Add(2*day), dup)
+	wantErr(t, "FireSchedule(duplicate run id)", err, domain.ErrAlreadyExists)
+	if r := mustGetRun(t, s, second.ID); r.Status != schedules.RunPending {
+		t.Errorf("a refused fire superseded the pending run: %+v", r)
+	}
+	if got := mustGetSchedule(t, s, a.ID); !got.NextRunAt.Equal(a.NextRunAt.Add(2 * day)) {
+		t.Errorf("a refused fire moved the next run to %v", got.NextRunAt)
+	}
+	// A manual request merges into a pending run past its deadline (it
+	// asks to run now), extending the deadline.
+	manual := newRun(t, 3, a.ID, schedules.RunPending)
+	manual.Trigger, manual.CreatedAt, manual.Deadline = schedules.TriggerManual, t0().Add(3*day), t0().Add(4*day)
+	if got, err := s.AddRun(ctx, manual, true); err != nil || got.ID != second.ID || !got.Deadline.Equal(manual.Deadline) {
+		t.Errorf("AddRun(merge) = (%+v, %v)", got, err)
+	}
+
+	// After downtime: a fire that records its run missed (no merge) still
+	// supersedes the pending run past its deadline, and inserts the
+	// earlier occurrences' missed run with it.
+	firedAt := t0().Add(5 * day)
+	late := newRun(t, 4, a.ID, schedules.RunMissed)
+	late.ScheduledFor, late.Reason, late.Coalesced, late.CreatedAt = t0().Add(4*day), schedules.ReasonControllerUnavailable, 1, firedAt
+	earlier := newRun(t, 5, a.ID, schedules.RunMissed)
+	earlier.ScheduledFor, earlier.Reason, earlier.CreatedAt = t0().Add(3*day), schedules.ReasonControllerUnavailable, firedAt
+	f := schedules.Fire{
+		ID: a.ID, ExpectedNext: a.NextRunAt.Add(2 * day), NewNext: a.NextRunAt.Add(6 * day), Run: late,
+		MissedReason: schedules.ReasonControllerUnavailable, MissedMessage: "the controller was down", Earlier: &earlier,
+	}
+	taken := f
+	takenEarlier := earlier
+	takenEarlier.ID = first.ID
+	taken.Earlier = &takenEarlier
+	_, err = s.FireSchedule(ctx, taken)
+	wantErr(t, "FireSchedule(earlier run's id taken)", err, domain.ErrAlreadyExists)
+	if r := mustGetRun(t, s, second.ID); r.Status != schedules.RunPending {
+		t.Errorf("a refused fire superseded the pending run: %+v", r)
+	}
+	if got, err := s.FireSchedule(ctx, f); err != nil || got.ID != late.ID || got.Status != schedules.RunMissed {
+		t.Fatalf("FireSchedule(late) = (%+v, %v)", got, err)
+	}
+	if r := mustGetRun(t, s, second.ID); r.Status != schedules.RunMissed || r.Reason != schedules.ReasonControllerUnavailable {
+		t.Errorf("pending run after the late fire = %+v, want missed (controller unavailable)", r)
+	}
+	if r := mustGetRun(t, s, earlier.ID); r.Status != schedules.RunMissed || r.Reason != schedules.ReasonControllerUnavailable ||
+		!r.ScheduledFor.Equal(earlier.ScheduledFor) {
+		t.Errorf("earlier run = %+v", r)
+	}
+	if got := mustGetSchedule(t, s, a.ID); !got.NextRunAt.Equal(f.NewNext) {
+		t.Errorf("next run after the late fire = %v", got.NextRunAt)
+	}
+}
+
+// testScheduleOnePendingRun: a schedule has at most one pending run, but a
+// launching run absorbs no fire: an occurrence due while a run launches
+// opens a pending run of its own.
+func testScheduleOnePendingRun(t *testing.T, s Store) {
+	ctx := context.Background()
+	alice := userID(t, 1)
+	requireSchedules(t, s, alice)
+	w := newWorker(t, 1)
+	mustCreateWorker(t, s, w)
+	a := newSchedule(t, 1, alice, "Nightly", w.ID)
+	mustCreateSchedule(t, s, a)
+	day := 24 * time.Hour
+	at := t0().Add(time.Minute)
+	launch := func(r schedules.Run, job int) schedules.Run {
+		t.Helper()
+		got, err := s.UpdateRun(ctx, schedules.RunUpdate{
+			ID: r.ID, From: schedules.RunPending, To: schedules.RunLaunching, WorkerID: w.ID, JobID: jobID(t, job), At: at,
+		})
+		if err != nil {
+			t.Fatalf("UpdateRun(launching): %v", err)
+		}
+		return got
+	}
+
+	first, err := s.FireSchedule(ctx, schedules.Fire{
+		ID: a.ID, ExpectedNext: a.NextRunAt, NewNext: a.NextRunAt.Add(day), Run: newRun(t, 1, a.ID, schedules.RunPending), Merge: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first = launch(first, 1)
+	// The next occurrence fires while the first run launches: a new run.
+	second := newRun(t, 2, a.ID, schedules.RunPending)
+	second.CreatedAt = t0().Add(day)
+	got, err := s.FireSchedule(ctx, schedules.Fire{
+		ID: a.ID, ExpectedNext: a.NextRunAt.Add(day), NewNext: a.NextRunAt.Add(2 * day), Run: second, Merge: true,
+	})
+	if err != nil || got.ID != second.ID || got.Status != schedules.RunPending || got.Coalesced != 0 {
+		t.Fatalf("FireSchedule while a run launches = (%+v, %v), want the new pending run", got, err)
+	}
+	if r := mustGetRun(t, s, first.ID); r.Status != schedules.RunLaunching || r.Coalesced != 0 {
+		t.Errorf("the launching run absorbed the fire: %+v", r)
+	}
+	// A manual request merges into the pending run, not the launching one.
+	manual := newRun(t, 3, a.ID, schedules.RunPending)
+	manual.Trigger = schedules.TriggerManual
+	if got, err := s.AddRun(ctx, manual, true); err != nil || got.ID != second.ID || got.Coalesced != 1 {
+		t.Errorf("AddRun(merge) = (%+v, %v), want merged into the pending run", got, err)
+	}
+	// Still at most one pending run.
+	_, err = s.AddRun(ctx, newRun(t, 4, a.ID, schedules.RunPending), false)
+	wantErr(t, "AddRun(second pending run)", err, domain.ErrAlreadyExists)
+	_, err = s.UpdateRun(ctx, schedules.RunUpdate{ID: first.ID, From: schedules.RunLaunching, To: schedules.RunPending, At: at})
+	wantErr(t, "UpdateRun(launching -> pending beside a pending run)", err, domain.ErrAlreadyExists)
+	if r := mustGetRun(t, s, first.ID); r.Status != schedules.RunLaunching {
+		t.Errorf("a refused update changed the run: %+v", r)
+	}
+	// Several runs may launch at once (overlap allow).
+	launch(mustGetRun(t, s, second.ID), 2)
+	open, err := s.ListOpenRuns(ctx, -1)
+	if err != nil || !slices.Equal(runIDs(open), []domain.ScheduleRunID{first.ID, second.ID}) {
+		t.Errorf("ListOpenRuns = (%v, %v), want both launching runs", runIDs(open), err)
+	}
+	third := mustAddRun(t, s, newRun(t, 5, a.ID, schedules.RunPending))
+
+	// Pausing cancels the pending run and asks the launching ones to be
+	// cancelled (testScheduleCancelLaunching).
+	if _, err := s.SetScheduleEnabled(ctx, a.ID, schedules.Toggle{Enabled: false, At: at}); err != nil {
+		t.Fatal(err)
+	}
+	if r := mustGetRun(t, s, third.ID); r.Status != schedules.RunCancelled || r.Reason != schedules.ReasonDisabled {
+		t.Errorf("pending run after pausing = %+v", r)
+	}
+	for _, id := range []domain.ScheduleRunID{first.ID, second.ID} {
+		if r := mustGetRun(t, s, id); !r.CancelRequested() {
+			t.Errorf("launching run %s after pausing = %+v, want a cancel request", id, r)
+		}
+	}
+}
+
+// testScheduleCancelLaunching: pausing a schedule (SetScheduleEnabled or
+// UpdateSchedule) cannot cancel a launching run outright, as its job may
+// exist: the run stays launching with a cancel request (Reason disabled),
+// which only lets it move to cancelled, so the launch cannot complete.
+func testScheduleCancelLaunching(t *testing.T, s Store) {
+	ctx := context.Background()
+	alice := userID(t, 1)
+	requireSchedules(t, s, alice)
+	w := newWorker(t, 1)
+	mustCreateWorker(t, s, w)
+	at := t0().Add(time.Minute)
+	for i, pause := range []func(sc schedules.Schedule) error{
+		func(sc schedules.Schedule) error {
+			_, err := s.SetScheduleEnabled(ctx, sc.ID, schedules.Toggle{Enabled: false, At: at})
+			return err
+		},
+		func(sc schedules.Schedule) error {
+			sc.Enabled, sc.NextRunAt, sc.UpdatedAt = false, time.Time{}, at
+			_, err := s.UpdateSchedule(ctx, sc, true)
+			return err
+		},
+	} {
+		sc := newSchedule(t, 1+i, alice, fmt.Sprintf("paused %d", i), w.ID)
+		mustCreateSchedule(t, s, sc)
+		r := mustAddRun(t, s, newRun(t, 10*i+1, sc.ID, schedules.RunPending))
+		if _, err := s.UpdateRun(ctx, schedules.RunUpdate{
+			ID: r.ID, From: schedules.RunPending, To: schedules.RunLaunching, WorkerID: w.ID, JobID: jobID(t, 10*i+1), At: at,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := pause(sc); err != nil {
+			t.Fatalf("pause %d: %v", i, err)
+		}
+		got := mustGetRun(t, s, r.ID)
+		if got.Status != schedules.RunLaunching || got.Reason != schedules.ReasonDisabled || !got.CancelRequested() ||
+			!got.UpdatedAt.Equal(at) || got.JobID != jobID(t, 10*i+1) {
+			t.Fatalf("pause %d: launching run = %+v, want a cancel request", i, got)
+		}
+		if active, err := s.HasActiveRun(ctx, sc.ID); err != nil || !active {
+			t.Errorf("pause %d: HasActiveRun = (%v, %v), want true (its job may exist)", i, active, err)
+		}
+		for _, to := range []schedules.RunStatus{schedules.RunLaunched, schedules.RunPending, schedules.RunFailed, schedules.RunMissed} {
+			_, err := s.UpdateRun(ctx, schedules.RunUpdate{ID: r.ID, From: schedules.RunLaunching, To: to, Reason: "x", At: at})
+			wantErr(t, fmt.Sprintf("pause %d: UpdateRun(being cancelled -> %s)", i, to), err, domain.ErrConflict)
+		}
+		ended, err := s.UpdateRun(ctx, schedules.RunUpdate{
+			ID: r.ID, From: schedules.RunLaunching, To: schedules.RunCancelled, Reason: schedules.ReasonDisabled, At: at.Add(time.Second),
+		})
+		if err != nil || ended.Status != schedules.RunCancelled || ended.Reason != schedules.ReasonDisabled {
+			t.Errorf("pause %d: UpdateRun(cancelled) = (%+v, %v)", i, ended, err)
+		}
+		// Resuming does not revive it.
+		if _, err := s.SetScheduleEnabled(ctx, sc.ID, schedules.Toggle{Enabled: true, NextRunAt: t0().Add(time.Hour), At: at}); err != nil {
+			t.Fatal(err)
+		}
+		if got := mustGetRun(t, s, r.ID); got.Status != schedules.RunCancelled {
+			t.Errorf("pause %d: run after resuming = %+v", i, got)
+		}
+	}
 }
 
 func testScheduleRunCAS(t *testing.T, s Store) {

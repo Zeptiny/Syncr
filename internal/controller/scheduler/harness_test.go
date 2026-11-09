@@ -371,6 +371,21 @@ func (faultySchedules) MarkLaunched(context.Context, schedules.Run) (schedules.R
 	return schedules.Run{}, errInjected
 }
 
+// pausingSchedules runs pause right after a run is marked launching: the
+// user pauses the schedule while the scheduler creates the job.
+type pausingSchedules struct {
+	scheduler.Schedules
+	pause func()
+}
+
+func (p pausingSchedules) MarkLaunching(ctx context.Context, r schedules.Run, job domain.JobID, w domain.WorkerID) (schedules.Run, error) {
+	out, err := p.Schedules.MarkLaunching(ctx, r, job, w)
+	if err == nil {
+		p.pause()
+	}
+	return out, err
+}
+
 // countingSchedules reports each FireDue (one per pass) without blocking.
 type countingSchedules struct {
 	scheduler.Schedules

@@ -208,3 +208,66 @@ func TestPassiveShutdownDrain(t *testing.T) {
 		t.Errorf("job %s %+v", j.Status, j.Error)
 	}
 }
+
+// TestPassiveShutdownRequeuesWaitingJobs: a passive worker keeps serving
+// Command while it flushes its last events. The jobs that waited in its
+// local queue go back to the controller's queue, and the StartJobs the
+// controller sends them again meanwhile are refused (not acked), so they
+// stay queued for the worker's next process instead of being accepted and
+// stopped once more.
+func TestPassiveShutdownRequeuesWaitingJobs(t *testing.T) {
+	t.Parallel()
+	c := newController(t)
+	rn := newFakeRunner()
+	secret := pairingSecret()
+	w := startPassive(t, rn, secret)
+	_, ws := c.svc()
+	reg, err := ws.RegisterPassive(context.Background(), workers.PassiveParams{
+		Name: "server", URL: w.url, CertFingerprint: w.fingerprint, Secret: secret,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.wakeSupervisor()
+	var running, waiting []domain.JobID
+	for range 4 { // the agent's MaxConcurrentJobs
+		running = append(running, c.run(reg.ID, heldDefinition()))
+	}
+	for range 2 {
+		waiting = append(waiting, c.run(reg.ID, testDefinition()))
+	}
+	for _, job := range running {
+		c.waitStatus(job, domain.JobRunning)
+	}
+	for _, job := range waiting {
+		c.waitStatus(job, domain.JobDispatched)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	if err := w.agent.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range waiting {
+		c.waitStatus(job, domain.JobQueued)
+	}
+	// Several passive rounds offer the re-queued jobs to the stopping
+	// worker before it goes away.
+	time.Sleep(300 * time.Millisecond)
+	if err := w.server.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	for _, job := range running {
+		if j := c.job(job); j.Status != domain.JobInterrupted || j.Error.Code != jobs.CodeWorkerShutdown {
+			t.Errorf("running job %s %+v", j.Status, j.Error)
+		}
+	}
+	for _, job := range waiting {
+		if j := c.job(job); j.Status != domain.JobQueued || j.Requeues != 1 || j.Epoch != "" || rn.runCount(job) != 0 {
+			t.Errorf("waiting job %s requeues %d epoch %q runs %d, want queued", j.Status, j.Requeues, j.Epoch, rn.runCount(job))
+		}
+	}
+	if st := w.agent.State(); len(st.GetJobs()) != 0 {
+		t.Errorf("the stopped worker holds %v", st.GetJobs())
+	}
+}

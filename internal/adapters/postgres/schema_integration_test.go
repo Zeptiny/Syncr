@@ -68,6 +68,8 @@ func TestIndexes(t *testing.T) {
 	for name, want := range map[string]string{
 		"jobs_worker_unfinished_idx": "status = ANY",
 		"jobs_queued_idx":            "status = 'queued'",
+		// One pending run per schedule (migration 00005).
+		"schedule_runs_one_pending_key": "status = 'pending'",
 	} {
 		var def string
 		err := s.pool.QueryRow(t.Context(), "SELECT indexdef FROM pg_indexes WHERE indexname = $1", name).Scan(&def)

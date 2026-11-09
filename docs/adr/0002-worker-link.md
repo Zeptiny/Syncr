@@ -72,9 +72,28 @@ snapshot (carried by every Report/Pull and consistent with its events; its
 - jobs the worker still holds that the controller considers finished or does
   not know are cancelled.
 
+The same holds without a restart when a worker shuts down gracefully: a
+CANCELLED result nobody asked for (`WORKER_SHUTDOWN`) interrupts a job that
+started, but a job that never started (no `JobStarted` before its result)
+goes back to `queued`, without a notification, for the worker's next
+process.
+
 The full rule tables live in the package documentation of
 `internal/controller/dispatch`. A job that stays queued longer than the
-dispatch timeout (worker offline) fails with `DISPATCH_TIMEOUT`.
+dispatch timeout (worker offline) fails with `DISPATCH_TIMEOUT`; time
+while the controller is down does not count, so workers can reconnect
+after a controller outage before their queued jobs time out.
+
+**Lost workers.** A worker that never comes back cannot report on its
+jobs, and a cancel request cannot reach it. So when a worker has had no
+link call for `workers.lost_after` (default 1 h; counted from the
+controller's start at the earliest, so a controller outage does not count),
+its dispatched and running jobs end `interrupted` (`WORKER_LOST`), or
+`cancelled` if a cancel was requested; a job with a cancel request already
+ends `cancelled` after 5 minutes without contact. Nothing else is needed
+for a worker that does come back with the same epoch: its late events find
+finished jobs and are acknowledged without effect, and its snapshot lists
+them, so they are orphans and get a CancelJob.
 
 **Secrets.** `JobSpec` is built at dispatch time and may carry remote
 credentials and repository passwords. It is sent once over the authenticated
@@ -120,8 +139,11 @@ What the controller can rely on:
   starts at the oldest unacked event.
 - **Cancellation.** A CANCELLED JobResult carries `JobError` with code
   CANCELLED ("job cancelled by the controller") or WORKER_SHUTDOWN ("...
-  because the worker is shutting down"). A StartJob received while the
-  worker shuts down is acked and reported CANCELLED (WORKER_SHUTDOWN).
+  because the worker is shutting down"). The result of a job that never
+  started (it waited in the local queue) has no `started_at` and no
+  JobStarted before it. A StartJob received while the worker shuts down
+  is refused: it is not acknowledged and leaves no event, so the job stays
+  queued on the controller for the worker's next process.
 - **Sizes.** A Report or Pull carries at most about 4 MiB of events
   (`PullRequest.max_bytes`, capped at 8 MiB) but always at least one event.
   A single event stays far below the 16 MiB read limits: a result's output

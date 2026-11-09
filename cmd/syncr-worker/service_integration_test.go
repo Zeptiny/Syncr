@@ -44,14 +44,13 @@ func TestIntegrationRealService(t *testing.T) {
 	bin := workerBinary(t)
 
 	// Never touch a worker service that is really in use.
+	base := t.TempDir()
+	cfg, data := filepath.Join(base, "worker.yaml"), filepath.Join(base, "data")
 	mgr := service.NewManager()
-	spec := service.NewSpec(runtime.GOOS, service.ScopeSystem, bin, "unused", "unused", "")
+	spec := service.NewSpec(runtime.GOOS, service.ScopeSystem, bin, cfg, data, "")
 	if st, err := mgr.Status(t.Context(), spec); err != nil || st != service.StateNotInstalled {
 		t.Fatalf("a %s service already exists on this machine (state %v, err %v); refusing to replace it", spec.Name, st, err)
 	}
-
-	base := t.TempDir()
-	cfg, data := filepath.Join(base, "worker.yaml"), filepath.Join(base, "data")
 	t.Cleanup(func() {
 		// Whatever happened, leave no service behind.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -121,7 +120,7 @@ func TestIntegrationRealService(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"Restart=on-failure", "RestartSec=5", "NoNewPrivileges=yes"} {
+		for _, want := range []string{"Restart=on-failure", "RestartSec=5", "KillMode=mixed", "NoNewPrivileges=yes"} {
 			if !strings.Contains(string(unit), want) {
 				t.Errorf("unit lacks %q:\n%s", want, unit)
 			}

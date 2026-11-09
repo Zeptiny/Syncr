@@ -66,8 +66,11 @@ type Service struct {
 	cfg      Config
 
 	mu sync.Mutex
-	// lastStored is the Time of the last stored sample per running job.
-	lastStored map[domain.JobID]time.Time
+	// lastStored is the last stored sample per running job, for the rate
+	// limiter; it is bounded (see staleSampleAfter). lastPrune is when
+	// stale entries were last dropped.
+	lastStored map[domain.JobID]lastSample
+	lastPrune  time.Time
 }
 
 // maxAttempts bounds the optimistic update retries of one change.
@@ -93,7 +96,7 @@ func New(d Deps, cfg Config) (*Service, error) {
 		repo: d.Jobs, samples: d.Samples, clock: d.Clock, ids: d.IDs,
 		broker: d.Broker, notifier: d.Notifier, waker: d.Waker, remotes: d.Remotes, activity: d.Activity,
 		log: log, cfg: cfg,
-		lastStored: make(map[domain.JobID]time.Time),
+		lastStored: make(map[domain.JobID]lastSample), lastPrune: d.Clock.Now(),
 	}, nil
 }
 
@@ -201,6 +204,20 @@ func (s *Service) LatestSample(ctx context.Context, id domain.JobID) (Sample, bo
 		return Sample{}, false, fmt.Errorf("latest sample of job %s: %w", id, err)
 	}
 	return smp, ok, nil
+}
+
+// LatestSamples is LatestSample for several jobs in one store query, keyed
+// by job ID (jobs without samples are absent). Like LatestSample it does
+// not check access.
+func (s *Service) LatestSamples(ctx context.Context, ids []domain.JobID) (map[domain.JobID]Sample, error) {
+	if len(ids) == 0 {
+		return map[domain.JobID]Sample{}, nil
+	}
+	smps, err := s.samples.LatestJobSamples(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("latest samples of %d jobs: %w", len(ids), err)
+	}
+	return smps, nil
 }
 
 // Samples returns the stored progress samples of a job the actor may see,

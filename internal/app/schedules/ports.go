@@ -47,9 +47,9 @@ type Repository interface {
 	// the stored NextRunAt is kept, so an edit racing a fire cannot rewind
 	// it. LastFiredAt, ID, OwnerID and CreatedAt are never written. It sets
 	// Version = s.Version + 1 and returns the stored schedule. When it
-	// changes Enabled to false it also cancels the open run (status
-	// cancelled, reason ReasonDisabled, UpdatedAt = s.UpdatedAt) in the
-	// same transaction. ErrConflict if the version differs, ErrNotFound if
+	// changes Enabled to false it also cancels the open runs as
+	// SetScheduleEnabled does (UpdatedAt = s.UpdatedAt) in the same
+	// transaction. ErrConflict if the version differs, ErrNotFound if
 	// missing (or a new link's row is missing), ErrAlreadyExists if the new
 	// name is taken, ErrInvalidArgument as for CreateSchedule (a disabled
 	// result with a NextRunAt included).
@@ -59,9 +59,11 @@ type Repository interface {
 	// check: it sets Enabled = t.Enabled, NextRunAt = t.NextRunAt (zero when
 	// disabling), PausedReason = t.PausedReason ("" when enabling),
 	// UpdatedAt = t.At and Version + 1, and when disabling cancels the open
-	// run (status cancelled, reason ReasonDisabled, UpdatedAt = t.At) in the
-	// same transaction. It returns the stored schedule. ErrNotFound if
-	// missing.
+	// runs in the same transaction: a pending run becomes cancelled (reason
+	// ReasonDisabled, UpdatedAt = t.At); a launching run, whose job may
+	// already exist, stays launching with Reason ReasonDisabled (a cancel
+	// request, Run.CancelRequested) for the scheduler to cancel its job and
+	// then the run. It returns the stored schedule. ErrNotFound if missing.
 	SetScheduleEnabled(ctx context.Context, id domain.ScheduleID, t Toggle) (Schedule, error)
 
 	// DeleteSchedule deletes a schedule with its links and runs; jobs and
@@ -82,23 +84,33 @@ type Repository interface {
 	//     UpdatedAt are untouched); otherwise ErrConflict and nothing
 	//     changes (another tick or controller fired it, or the user edited
 	//     or paused it; the caller re-reads on its next tick);
-	//  2. if f.Merge and the schedule has an open run, that run absorbs the
-	//     fire: Coalesced += f.Run.Coalesced + 1, Deadline =
-	//     max(Deadline, f.Run.Deadline), UpdatedAt = f.Run.CreatedAt;
-	//  3. otherwise f.Run is inserted. An open f.Run while the schedule has
-	//     an open run violates the one-open-run rule: ErrAlreadyExists, and
-	//     nothing changes.
+	//  2. if the schedule has a pending run whose Deadline is not after
+	//     f.Run.CreatedAt, that run is superseded: Status missed, Reason
+	//     f.MissedReason, Message f.MissedMessage, UpdatedAt
+	//     f.Run.CreatedAt;
+	//  3. f.Earlier, if set, is inserted (a missed run);
+	//  4. if f.Merge and the schedule has a (remaining) pending run, that
+	//     run absorbs the fire: Coalesced += f.Run.Coalesced + 1, UpdatedAt
+	//     = f.Run.CreatedAt; its Deadline is fixed when it opened and does
+	//     not move. A launching run absorbs nothing: its job is being
+	//     created;
+	//  5. otherwise f.Run is inserted. A pending f.Run while the schedule
+	//     has a pending run violates the one-pending-run rule:
+	//     ErrAlreadyExists, and nothing changes.
 	//
-	// It returns the run that holds the fire (f.Run, or the merged open
-	// run, whose ID differs). ErrNotFound if the schedule does not exist.
+	// It returns the run that holds the fire (f.Run, or the merged pending
+	// run, whose ID differs). ErrNotFound if the schedule does not exist;
+	// ErrAlreadyExists if a run ID is taken.
 	FireSchedule(ctx context.Context, f Fire) (Run, error)
 
 	// AddRun adds a run outside the cron (RunNow): if merge and the
-	// schedule has an open run, that run absorbs r as in FireSchedule
-	// (Coalesced + r.Coalesced + 1, the later deadline) and is returned;
+	// schedule has a pending run, that run absorbs r (Coalesced +
+	// r.Coalesced + 1, Deadline = max(Deadline, r.Deadline): a manual
+	// request may wait as long as its own policy allows) and is returned;
 	// otherwise r is inserted and returned. The schedule's fire state is
 	// untouched. ErrNotFound if the schedule does not exist;
-	// ErrAlreadyExists if r.ID is taken or r is open while another run is.
+	// ErrAlreadyExists if r.ID is taken or r is pending while another run
+	// is.
 	AddRun(ctx context.Context, r Run, merge bool) (Run, error)
 
 	// GetRun returns a run. ErrNotFound if missing.
@@ -114,8 +126,10 @@ type Repository interface {
 	// and JobID (when not zero) and UpdatedAt = u.At, and with
 	// u.PauseSchedule disables the schedule as RunUpdate describes, in the
 	// same transaction; it returns the stored run. ErrConflict if the
-	// status differs (another tick or controller moved it), ErrNotFound if
-	// missing, ErrAlreadyExists if u.To is open and another run of the
+	// status differs (another tick or controller moved it) or the run is
+	// launching with a cancel request and u.To is not cancelled (its
+	// schedule was paused while it launched), ErrNotFound if
+	// missing, ErrAlreadyExists if u.To is pending and another run of the
 	// schedule is, ErrInvalidArgument if a launching or launched run would
 	// have no JobID.
 	UpdateRun(ctx context.Context, u RunUpdate) (Run, error)

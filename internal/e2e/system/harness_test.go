@@ -299,15 +299,43 @@ func (p *process) stop(timeout time.Duration) error {
 }
 
 // killMatching kills every other process whose command line contains
-// marker: the tool processes a killed worker leaves behind (they run in
-// their own process group, and nothing stops them when the worker dies).
+// marker: tool processes left behind by a test that failed half-way.
 func killMatching(t *testing.T, marker string) {
+	t.Helper()
+	for _, pid := range matching(t, marker) {
+		if proc, err := os.FindProcess(pid); err == nil {
+			_ = proc.Kill()
+		}
+	}
+}
+
+// waitNoneMatching waits until no other process has marker in its command
+// line, and fails the test if one still runs after timeout.
+func waitNoneMatching(t *testing.T, marker string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		pids := matching(t, marker)
+		if len(pids) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("processes %v still running after %v", pids, timeout)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// matching returns the PIDs of the other processes whose command line
+// contains marker.
+func matching(t *testing.T, marker string) []int {
 	t.Helper()
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		t.Logf("cannot list processes: %v", err)
-		return
+		return nil
 	}
+	var pids []int
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil || pid == os.Getpid() {
@@ -317,10 +345,9 @@ func killMatching(t *testing.T, marker string) {
 		if err != nil || !bytes.Contains(cmdline, []byte(marker)) {
 			continue
 		}
-		if proc, err := os.FindProcess(pid); err == nil {
-			_ = proc.Kill()
-		}
+		pids = append(pids, pid)
 	}
+	return pids
 }
 
 func freePort(t *testing.T) string {

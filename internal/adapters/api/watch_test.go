@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -334,5 +336,100 @@ func TestWatchJobOutlivesServerTimeouts(t *testing.T) {
 		if m := w.next(); m.GetJob().GetStatus() == syncrv1.JobStatus_JOB_STATUS_DISPATCHED {
 			break
 		}
+	}
+}
+
+// createJob queues a job of owner directly through the jobs service.
+func (e *testEnv) createJob(owner domain.Actor) jobs.Job {
+	e.t.Helper()
+	j, err := e.jsvc.Create(e.t.Context(), owner, jobs.CreateParams{
+		WorkerID: e.worker, Kind: "rclone_transfer", Definition: []byte(`{"rclone_transfer":{"mode":"RCLONE_TRANSFER_MODE_COPY"}}`),
+	})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return j
+}
+
+func TestWatchJobEndsWhenTheAPITokenIsRevoked(t *testing.T) {
+	t.Parallel()
+	mutate, token, usvc := withSessionAuthService(t)
+	e := newEnv(t, mutate, func(d *Deps) { d.StreamReauthInterval = 10 * time.Millisecond })
+	ctx := t.Context()
+	j := e.createJob(testAdmin)
+	stream, err := e.jobsAs("Bearer "+token).WatchJob(ctx, connect.NewRequest(&syncrv1.WatchJobRequest{JobId: j.ID.String()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+	w := &watcher{t: t, stream: stream}
+	w.nextJob(syncrv1.JobStatus_JOB_STATUS_QUEUED)
+
+	// Valid credentials survive many re-authentications.
+	time.Sleep(60 * time.Millisecond)
+	if _, _, err := e.jsvc.MarkRunning(ctx, e.worker, j.ID, testEpoch, e.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	w.nextJob(syncrv1.JobStatus_JOB_STATUS_DISPATCHED)
+	w.nextJob(syncrv1.JobStatus_JOB_STATUS_RUNNING)
+
+	toks, err := usvc.ListAPITokens(ctx, testAdmin)
+	if err != nil || len(toks) != 1 {
+		t.Fatalf("ListAPITokens = (%v, %v)", toks, err)
+	}
+	if err := usvc.DeleteAPIToken(ctx, testAdmin, toks[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, w.end(), connect.CodeUnauthenticated)
+	waitFor(t, "the watch to be released", func() bool { return e.broker.Subscribers(j.ID) == 0 })
+}
+
+// switchAuth authenticates every call as its current actor; none fails
+// the call as unauthenticated.
+type switchAuth struct{ actor atomic.Pointer[domain.Actor] }
+
+func (a *switchAuth) Authenticate(ctx context.Context, _ http.Header, _ connect.Spec) (context.Context, error) {
+	actor := a.actor.Load()
+	if actor == nil {
+		return ctx, fmt.Errorf("%w: revoked", domain.ErrUnauthenticated)
+	}
+	return WithCaller(ctx, Caller{Actor: *actor, Method: AuthSession}), nil
+}
+
+func TestWatchJobEndsWhenTheCallerLosesAccess(t *testing.T) {
+	t.Parallel()
+	demoted := domain.Actor{UserID: testAdmin.UserID, Role: domain.RoleUser}
+	for name, tt := range map[string]struct {
+		owner domain.Actor
+		then  *domain.Actor
+		want  connect.Code // 0: the stream goes on
+	}{
+		"signed out":                {testAdmin, nil, connect.CodeUnauthenticated},
+		"admin demoted":             {testUser, &demoted, connect.CodePermissionDenied},
+		"demoted, watching own job": {testAdmin, &demoted, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			auth := &switchAuth{}
+			admin := testAdmin
+			auth.actor.Store(&admin)
+			e := newEnv(t, func(d *Deps) { d.Auth, d.StreamReauthInterval = auth, 10*time.Millisecond })
+			ctx := t.Context()
+			j := e.createJob(tt.owner)
+			w := e.watch(ctx, j.ID.String())
+			w.nextJob(syncrv1.JobStatus_JOB_STATUS_QUEUED)
+
+			auth.actor.Store(tt.then)
+			if tt.want == 0 {
+				time.Sleep(60 * time.Millisecond)
+				if _, _, err := e.jsvc.MarkRunning(ctx, e.worker, j.ID, testEpoch, e.clock.Now()); err != nil {
+					t.Fatal(err)
+				}
+				w.nextJob(syncrv1.JobStatus_JOB_STATUS_DISPATCHED)
+				return
+			}
+			wantCode(t, w.end(), tt.want)
+			waitFor(t, "the watch to be released", func() bool { return e.broker.Subscribers(j.ID) == 0 })
+		})
 	}
 }

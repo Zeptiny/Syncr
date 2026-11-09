@@ -124,8 +124,28 @@ func (r *resolver) ResolveChannel(ctx context.Context, id domain.ContactID) (str
 	return r.inner.ResolveChannel(ctx, id)
 }
 
+// adminFake answers notifications.AdminChecker for every owner.
+type adminFake struct {
+	mu    sync.Mutex
+	admin bool
+	err   error
+}
+
+func (a *adminFake) IsAdmin(context.Context, domain.UserID) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.admin, a.err
+}
+
+func (a *adminFake) set(admin bool, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.admin, a.err = admin, err
+}
+
 type env struct {
 	t        *testing.T
+	admins   *adminFake
 	svc      *notifications.Service
 	contacts *contacts.Service
 	store    *memstore.Store
@@ -162,7 +182,7 @@ func newEnv(t *testing.T, opts ...option) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, store: memstore.New(), clock: clock.NewFake(t0), ids: &idgen.Sequential{}, ch: &fakeChannel{}, logs: &bytes.Buffer{}}
+	e := &env{t: t, store: memstore.New(), clock: clock.NewFake(t0), ids: &idgen.Sequential{}, ch: &fakeChannel{}, logs: &bytes.Buffer{}, admins: &adminFake{admin: true}}
 	reg, err := notify.NewRegistry(e.ch)
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +213,7 @@ func newEnv(t *testing.T, opts ...option) *env {
 	}
 	e.resolver = &resolver{inner: e.contacts}
 	deps := notifications.Deps{
-		Repo: e.store, Channels: reg, Contacts: e.resolver, Clock: e.clock, IDs: e.ids, Random: zeroReader{},
+		Repo: e.store, Channels: reg, Contacts: e.resolver, Admins: e.admins, Clock: e.clock, IDs: e.ids, Random: zeroReader{},
 		PublicURL: "https://syncr.example/", Logger: logger,
 	}
 	cfg := notifications.Config{SendTimeout: time.Second}
@@ -826,6 +846,68 @@ func TestMaxAttemptsIsDead(t *testing.T) {
 	}
 }
 
+// A channel that quotes the secret URL's path in its reason is caught by
+// the service's own redaction before the reason is stored or logged.
+func TestSecretsAreRedactedFromStoredReasons(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.contact(e.alice, "ops", true, domain.EventFailed)
+	e.job(e.alice, domain.JobFailed, domain.ScheduleID{})
+	e.plan()
+	e.ch.setOutcome(func(int, notify.Message) error {
+		return notify.Permanent(404, `The requested webhook "POST secret-hook-token-0001" is not registered`)
+	})
+	e.deliver()
+	d := e.only()
+	if d.Status != notifications.StatusDead || strings.Contains(d.LastError, "secret-hook-token") || !strings.Contains(d.LastError, "not registered") {
+		t.Errorf("delivery = %+v", d)
+	}
+	if strings.Contains(e.logs.String(), "secret-hook-token") {
+		t.Error("the log contains the contact's secret")
+	}
+}
+
+// The delivery log shows reasons to the contact's owner. What a destination
+// or the network answered is shown to administrators only: any user can
+// create a contact, so it would turn the controller into a port scanner.
+func TestReasonsHideNetworkDetailsFromUsers(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		admin    bool
+		lookup   error
+		err      error
+		want     string
+		wantLog  string
+		wantDead bool
+	}{
+		{"user, target reply", false, nil, notify.Permanent(404, "no route for /hooks"), notify.GenericReason, "no route for /hooks", true},
+		{"user, network error", false, nil, notify.Temporary(0, "the connection to the webhook timed out", 0), notify.GenericReason, "timed out", false},
+		{"user, public failure", false, nil, notify.Public(notify.Permanent(0, "the email configuration is not valid")), "the email configuration is not valid", "", true},
+		{"admin", true, nil, notify.Permanent(404, "no route for /hooks"), "status 404: no route for /hooks", "no route for /hooks", true},
+		{"role lookup fails", true, errors.New("db down"), notify.Permanent(404, "no route for /hooks"), notify.GenericReason, "no route for /hooks", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			e.admins.set(tc.admin, tc.lookup)
+			e.contact(e.alice, "ops", true, domain.EventFailed)
+			e.job(e.alice, domain.JobFailed, domain.ScheduleID{})
+			e.plan()
+			e.ch.setOutcome(func(int, notify.Message) error { return tc.err })
+			e.deliver()
+			d := e.only()
+			if d.LastError != tc.want || (d.Status == notifications.StatusDead) != tc.wantDead {
+				t.Errorf("delivery = %q (%s), want %q", d.LastError, d.Status, tc.want)
+			}
+			// The detail goes to the log, which only operators read.
+			if tc.wantLog != "" && !strings.Contains(e.logs.String(), tc.wantLog) {
+				t.Errorf("the log lacks %q: %s", tc.wantLog, e.logs.String())
+			}
+		})
+	}
+}
+
 func TestExpiredLeaseIsReclaimed(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, withConfig(func(c *notifications.Config) { c.MaxAttempts = 2 }))
@@ -1027,9 +1109,94 @@ func TestDeliverInterruptedByShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The outcome is recorded despite the cancelled context, for a prompt
-	// retry.
-	if d := e.only(); d.Status != notifications.StatusPending || d.Attempts != 1 || !d.NextAttemptAt.Equal(t0) || d.LastError == "" {
+	// retry. The attempt is given back: our shutdown is not a failure of
+	// the target.
+	if d := e.only(); d.Status != notifications.StatusPending || d.Attempts != 0 || !d.NextAttemptAt.Equal(t0) || d.LastError == "" {
 		t.Errorf("an interrupted attempt = %+v", d)
+	}
+}
+
+// shutdownDuringAttempt claims the delivery and cancels the pass while the
+// send is in flight.
+func shutdownDuringAttempt(t *testing.T, e *env) {
+	t.Helper()
+	e.ch.block, e.ch.sent = true, make(chan notify.Message, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.svc.DeliverDue(ctx)
+		done <- err
+	}()
+	<-e.ch.sent
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	e.ch.block, e.ch.sent = false, nil
+}
+
+// An attempt cut short by the controller's own shutdown must not end the
+// delivery, even when it was the last one allowed: nothing was wrong with
+// the notification, so the next start sends it.
+func TestShutdownOnTheLastAttemptDoesNotKillTheDelivery(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, withConfig(func(c *notifications.Config) { c.MaxAttempts = 2 }))
+	e.contact(e.alice, "ops", true, domain.EventFailed)
+	e.job(e.alice, domain.JobFailed, domain.ScheduleID{})
+	e.plan()
+
+	e.ch.setOutcome(func(int, notify.Message) error { return notify.Temporary(503, "unavailable", 0) })
+	e.deliver() // attempt 1 fails
+	e.clock.Set(e.only().NextAttemptAt)
+
+	shutdownDuringAttempt(t, e) // attempt 2, the last, is interrupted
+	d := e.only()
+	if d.Status != notifications.StatusPending || d.Attempts != 1 || !d.NextAttemptAt.Equal(e.clock.Now()) {
+		t.Fatalf("after the interrupted last attempt: %+v", d)
+	}
+
+	// The next start sends it, and the budget is intact.
+	e.ch.setOutcome(func(int, notify.Message) error { return nil })
+	if e.deliver() != 1 {
+		t.Fatal("the interrupted delivery was not retried at once")
+	}
+	if d := e.only(); d.Status != notifications.StatusDelivered || d.Attempts != 2 {
+		t.Errorf("after the retry: %+v", d)
+	}
+}
+
+// A receiver that does not answer within the send timeout is a failed
+// attempt, unlike our own shutdown.
+func TestReceiverTimeoutOnTheLastAttemptIsDead(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, withConfig(func(c *notifications.Config) { c.MaxAttempts = 1; c.SendTimeout = 20 * time.Millisecond }))
+	e.contact(e.alice, "ops", true, domain.EventFailed)
+	e.job(e.alice, domain.JobFailed, domain.ScheduleID{})
+	e.plan()
+	e.ch.block = true
+	e.deliver()
+	if d := e.only(); d.Status != notifications.StatusDead || d.Attempts != 1 {
+		t.Errorf("after a receiver timeout on the last attempt: %+v", d)
+	}
+}
+
+// A reply the target gave counts even when the shutdown came right after.
+func TestReplyBeforeShutdownCounts(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, withConfig(func(c *notifications.Config) { c.MaxAttempts = 1 }))
+	e.contact(e.alice, "ops", true, domain.EventFailed)
+	e.job(e.alice, domain.JobFailed, domain.ScheduleID{})
+	e.plan()
+	ctx, cancel := context.WithCancel(context.Background())
+	e.ch.setOutcome(func(int, notify.Message) error {
+		cancel()
+		return notify.Permanent(404, "not found")
+	})
+	if _, err := e.svc.DeliverDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d := e.only(); d.Status != notifications.StatusDead || d.Attempts != 1 {
+		t.Errorf("after a 404 during shutdown: %+v", d)
 	}
 }
 

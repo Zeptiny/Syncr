@@ -1,4 +1,5 @@
-import type { Duration, Timestamp } from "@bufbuild/protobuf/wkt";
+import { create } from "@bufbuild/protobuf";
+import { DurationSchema, type Duration, type Timestamp } from "@bufbuild/protobuf/wkt";
 
 /** toNumber converts protobuf int64 (bigint) and plain numbers. */
 export function toNumber(v: bigint | number | undefined | null): number {
@@ -17,6 +18,22 @@ export function tsDate(ts: Timestamp | undefined): Date | undefined {
 export function durationSeconds(d: Duration | undefined): number {
   if (!d) return 0;
   return Number(d.seconds) + d.nanos / 1e9;
+}
+
+/**
+ * durationFromSeconds is the inverse of durationSeconds. Unlike
+ * durationFromMs it rounds to whole nanoseconds, so a stored Duration
+ * survives the round trip through a number of seconds.
+ */
+export function durationFromSeconds(seconds: number): Duration {
+  const whole = Math.trunc(seconds);
+  let nanos = Math.round((seconds - whole) * 1e9);
+  let secs = whole;
+  if (nanos >= 1e9) {
+    secs += 1;
+    nanos -= 1e9;
+  }
+  return create(DurationSchema, { seconds: BigInt(secs), nanos });
 }
 
 const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];

@@ -354,6 +354,11 @@ func TestCancelRequestThenWorkerOutcome(t *testing.T) {
 			got, _, err := e.svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobCancelled})
 			return got, err
 		}, domain.JobCancelled, jobs.CodeCancelled},
+		{"cancelled result before it started", domain.JobDispatched, func(e *env, j jobs.Job) (jobs.Job, error) {
+			got, _, err := e.svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobCancelled,
+				Error: jobs.JobError{Code: jobs.CodeWorkerShutdown, Message: "job cancelled because the worker is shutting down"}})
+			return got, err
+		}, domain.JobCancelled, jobs.CodeWorkerShutdown},
 		{"worker finished first", domain.JobRunning, func(e *env, j jobs.Job) (jobs.Job, error) {
 			got, _, err := e.svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobSucceeded})
 			return got, err
@@ -463,6 +468,142 @@ func TestUnrequestedCancelIsInterrupted(t *testing.T) {
 	}
 }
 
+// TestUnstartedJobStoppedByTheWorkerIsRequeued: a job the worker gives
+// back without having started it (its JobResult is CANCELLED without a
+// cancel request, e.g. it was waiting in the queue of a worker that shuts
+// down) ran nowhere, so it goes back to the queue instead of ending
+// interrupted, and nobody is notified.
+func TestUnstartedJobStoppedByTheWorkerIsRequeued(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	shutdown := jobs.Outcome{Status: domain.JobCancelled, ExitCode: -1,
+		Error: jobs.JobError{Code: jobs.CodeWorkerShutdown, Message: "job cancelled because the worker is shutting down"}}
+	for _, from := range []domain.JobStatus{domain.JobQueued, domain.JobDispatched} {
+		e := newEnv(t)
+		j := e.at(t, from) // queued: the worker's ack has not arrived yet
+		e.clock.Advance(time.Minute)
+		wakes := len(e.rec.wakes)
+		got, changed, err := e.svc.Finish(ctx, e.worker, j.ID, epoch, shutdown)
+		if err != nil || !changed || got.Status != domain.JobQueued || got.Epoch != "" || got.Requeues != 1 ||
+			!got.QueuedAt.Equal(e.clock.Now()) || !got.DispatchedAt.IsZero() || !got.FinishedAt.IsZero() || !got.Error.IsZero() {
+			t.Errorf("from %s: Finish = (%+v, %v, %v), want re-queued", from, got, changed, err)
+		}
+		if len(e.rec.finished) != 0 {
+			t.Errorf("from %s: notifier called for a re-queued job", from)
+		}
+		if len(e.rec.wakes) == wakes {
+			t.Errorf("from %s: re-queue did not wake the worker", from)
+		}
+		if smp, ok, _ := e.svc.LatestSample(ctx, j.ID); ok {
+			t.Errorf("from %s: a re-queued job got a final sample %+v", from, smp)
+		}
+		// The worker's next process (another epoch) takes it.
+		if got, _, err := e.svc.MarkRunning(ctx, e.worker, j.ID, "epoch-2", time.Time{}); err != nil || got.Status != domain.JobRunning {
+			t.Errorf("from %s: MarkRunning after the re-queue = (%s, %v)", from, got.Status, err)
+		}
+	}
+
+	// A result with a start time comes from a job that ran: interrupted.
+	e := newEnv(t)
+	j := e.at(t, domain.JobDispatched)
+	started := shutdown
+	started.StartedAt = e.clock.Now()
+	if got, _, err := e.svc.Finish(ctx, e.worker, j.ID, epoch, started); err != nil || got.Status != domain.JobInterrupted || got.Error.Code != jobs.CodeWorkerShutdown {
+		t.Errorf("started without JobStarted: (%s, %+v, %v), want interrupted", got.Status, got.Error, err)
+	}
+	// Results of another epoch change nothing.
+	o := e.at(t, domain.JobDispatched)
+	if _, changed, err := e.svc.Finish(ctx, e.worker, o.ID, "epoch-2", shutdown); changed || err != nil {
+		t.Errorf("another epoch's result: changed %v, err %v", changed, err)
+	}
+}
+
+// TestAbandonAndCancelUnconfirmed: the jobs of a worker out of contact end
+// without the worker's word. A cancel request wins (cancelled); otherwise
+// Abandon interrupts, CancelUnconfirmed leaves the job alone. Both apply
+// only to active jobs of the given epoch and are idempotent, and the
+// worker's late events no longer change the job.
+func TestAbandonAndCancelUnconfirmed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	lost := jobs.JobError{Code: jobs.CodeWorkerLost, Message: "out of contact"}
+	tests := []struct {
+		name   string
+		from   domain.JobStatus
+		cancel bool
+		call   func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error)
+		status domain.JobStatus
+		code   string
+	}{
+		{"abandon running", domain.JobRunning, false, func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error) {
+			return e.svc.Abandon(ctx, e.worker, j.ID, ep, lost)
+		}, domain.JobInterrupted, jobs.CodeWorkerLost},
+		{"abandon dispatched", domain.JobDispatched, false, func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error) {
+			return e.svc.Abandon(ctx, e.worker, j.ID, ep, lost)
+		}, domain.JobInterrupted, jobs.CodeWorkerLost},
+		{"abandon with a cancel request", domain.JobRunning, true, func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error) {
+			return e.svc.Abandon(ctx, e.worker, j.ID, ep, lost)
+		}, domain.JobCancelled, jobs.CodeCancelled},
+		{"cancel unconfirmed running", domain.JobRunning, true, func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error) {
+			return e.svc.CancelUnconfirmed(ctx, e.worker, j.ID, ep)
+		}, domain.JobCancelled, jobs.CodeCancelled},
+		{"cancel unconfirmed dispatched", domain.JobDispatched, true, func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error) {
+			return e.svc.CancelUnconfirmed(ctx, e.worker, j.ID, ep)
+		}, domain.JobCancelled, jobs.CodeCancelled},
+		{"cancel unconfirmed without a request", domain.JobRunning, false, func(e *env, j jobs.Job, ep string) (jobs.Job, bool, error) {
+			return e.svc.CancelUnconfirmed(ctx, e.worker, j.ID, ep)
+		}, domain.JobRunning, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			j := e.at(t, tt.from)
+			if tt.cancel {
+				if _, err := e.svc.Cancel(ctx, e.owner, j.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, changed, err := tt.call(e, j, "epoch-2"); err != nil || changed {
+				t.Fatalf("call with the wrong epoch: changed %v, err %v", changed, err)
+			}
+			e.clock.Advance(time.Minute)
+			got, changed, err := tt.call(e, j, epoch)
+			if err != nil || got.Status != tt.status || got.Error.Code != tt.code || changed != (tt.status != tt.from) {
+				t.Fatalf("got (%s, %+v, changed %v, %v), want (%s, %q)", got.Status, got.Error, changed, err, tt.status, tt.code)
+			}
+			if !tt.status.Terminal() {
+				return
+			}
+			if !got.FinishedAt.Equal(e.clock.Now()) || got.ExitCode != -1 || got.Error.Message == "" {
+				t.Errorf("finished job = %+v", got)
+			}
+			if len(e.rec.finished) != 1 {
+				t.Errorf("notifier calls = %d, want 1", len(e.rec.finished))
+			}
+			// Idempotent; the worker's late outcome changes nothing.
+			if _, changed, err := tt.call(e, j, epoch); changed || err != nil {
+				t.Errorf("second call: changed %v, err %v", changed, err)
+			}
+			late, changed, err := e.svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobSucceeded})
+			if changed || err != nil || late.Status != tt.status {
+				t.Errorf("late result: (%s, changed %v, %v)", late.Status, changed, err)
+			}
+			if ok, err := e.svc.RecordProgress(ctx, e.worker, j.ID, epoch, jobs.Sample{Time: e.clock.Now()}); ok || err != nil {
+				t.Errorf("late progress accepted: (%v, %v)", ok, err)
+			}
+		})
+	}
+	t.Run("another worker", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t)
+		j := e.at(t, domain.JobRunning)
+		if _, _, err := e.svc.Abandon(ctx, e.addWorker(t), j.ID, epoch, lost); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("err = %v, want ErrNotFound", err)
+		}
+	})
+}
+
 func TestNotifier(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -559,6 +700,100 @@ func TestProgressIsRateLimitedBeforeStorage(t *testing.T) {
 	}
 	if _, err := e.svc.RecordProgress(ctx, e.addWorker(t), r.ID, epoch, jobs.Sample{}); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("progress of another worker: err = %v", err)
+	}
+}
+
+// hookedSamples calls before ahead of every AppendJobSample.
+type hookedSamples struct {
+	jobs.SampleRepository
+	before func()
+}
+
+func (h hookedSamples) AppendJobSample(ctx context.Context, s jobs.Sample) error {
+	if h.before != nil {
+		h.before()
+	}
+	return h.SampleRepository.AppendJobSample(ctx, s)
+}
+
+// TestSampleRateLimiterIsBounded: the rate limiter keeps an entry per job
+// only while the job reports progress. It drops it when the job finishes
+// and, whatever else happened (here a sample stored while the job
+// finished, or a job that never ends), once it went unused for ten
+// minutes, so it cannot grow over the process lifetime. Dropping an entry
+// costs at most one extra stored sample.
+func TestSampleRateLimiterIsBounded(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	var finishing *jobs.Job
+	samples := &hookedSamples{SampleRepository: e.store}
+	svc, err := jobs.New(jobs.Deps{
+		Jobs: e.store, Samples: samples, Clock: e.clock, IDs: &idgen.Sequential{},
+		Broker: e.rec, Notifier: e.rec, Waker: e.rec,
+	}, jobs.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.svc = svc
+	sample := func(id domain.JobID) {
+		t.Helper()
+		if ok, err := svc.RecordProgress(ctx, e.worker, id, epoch, jobs.Sample{Time: e.clock.Now()}); !ok || err != nil {
+			t.Fatalf("RecordProgress = (%v, %v)", ok, err)
+		}
+	}
+
+	// Finishing drops the entry.
+	a := e.at(t, domain.JobRunning)
+	sample(a.ID)
+	if n := jobs.ThrottledJobs(svc); n != 1 {
+		t.Fatalf("entries = %d, want 1", n)
+	}
+	if _, _, err := svc.Finish(ctx, e.worker, a.ID, epoch, jobs.Outcome{Status: domain.JobSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	if n := jobs.ThrottledJobs(svc); n != 0 {
+		t.Errorf("entries after the job finished = %d", n)
+	}
+
+	// A sample stored while its job finishes leaves an entry behind; a job
+	// that never finishes keeps one.
+	b := e.at(t, domain.JobRunning)
+	finishing = &b
+	samples.before = func() {
+		if j := finishing; j != nil {
+			finishing = nil
+			if _, _, err := svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobFailed}); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	sample(b.ID)
+	samples.before = nil
+	forever := e.at(t, domain.JobRunning)
+	sample(forever.ID)
+	if n := jobs.ThrottledJobs(svc); n != 2 {
+		t.Fatalf("entries = %d, want 2 (a leftover and a job that never finishes)", n)
+	}
+
+	// Ten minutes later both are gone; a job still reporting keeps its own.
+	c := e.at(t, domain.JobRunning)
+	for range 10 {
+		e.clock.Advance(time.Minute)
+		sample(c.ID)
+	}
+	if n := jobs.ThrottledJobs(svc); n != 1 {
+		t.Errorf("entries after ten minutes = %d, want 1 (the job still reporting)", n)
+	}
+	// The dropped entry costs at most one extra sample: forever's next
+	// sample is stored, the one after it is throttled again.
+	before, _ := svc.Samples(ctx, e.owner, forever.ID)
+	sample(forever.ID)
+	e.clock.Advance(time.Second)
+	sample(forever.ID)
+	after, _ := svc.Samples(ctx, e.owner, forever.ID)
+	if len(after) != len(before)+1 {
+		t.Errorf("samples of the job whose entry was dropped: %d -> %d, want one more", len(before), len(after))
 	}
 }
 

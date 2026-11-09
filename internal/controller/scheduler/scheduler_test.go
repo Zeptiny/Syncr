@@ -112,6 +112,82 @@ func TestPastDeadlineIsMissed(t *testing.T) {
 	}
 }
 
+// TestOfflineUntilNextIsMissed: with run_late "until the next occurrence"
+// and a worker offline for good, each run is missed when the next
+// occurrence is due (the fire does not move its deadline), so the misses
+// are recorded and notified; the latest occurrence waits.
+func TestOfflineUntilNextIsMissed(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	w := e.addWorker(worker{name: "desktop"})
+	in := e.input("daily", schedules.Target{WorkerID: w})
+	in.Cron, in.Missed = "0 13 * * *", schedules.MissedPolicy{Action: schedules.MissedRunLate}
+	sc := e.create(in)
+	s := e.newScheduler(nil, nil)
+	for day := range 3 {
+		e.clock.Set(t0.Add(time.Hour + time.Duration(day)*24*time.Hour))
+		e.tick(s)
+		e.clock.Advance(time.Minute)
+		e.tick(s)
+	}
+	rs := e.runs(sc.ID) // newest first
+	if len(rs) != 3 || rs[0].Status != schedules.RunPending {
+		t.Fatalf("runs = %+v, want two missed and the latest pending", rs)
+	}
+	for _, r := range rs[1:] {
+		if r.Status != schedules.RunMissed || r.Reason != schedules.ReasonWorkerOffline || r.Coalesced != 0 || r.Message == "" {
+			t.Errorf("run = %+v, want missed (worker offline)", r)
+		}
+	}
+	e.online(w)
+	e.tick(s)
+	if js := e.jobsOf(sc.ID); len(js) != 1 || e.runs(sc.ID)[0].Status != schedules.RunLaunched {
+		t.Errorf("after the worker came back: jobs %d, runs %+v", len(js), e.runs(sc.ID))
+	}
+}
+
+// TestControllerDowntime: the controller was down while occurrences came
+// due. Those whose deadline passed meanwhile are missed with reason
+// controller_unavailable (not worker_offline: the worker was online), and
+// the latest one, still in time, launches.
+func TestControllerDowntime(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	w := e.addWorker(worker{name: "nas", online: true})
+	sc := e.create(e.input("hourly", schedules.Target{WorkerID: w})) // run late, 30 minutes
+	// Down from 12:55 until 15:10: 13:00 and 14:00 passed their deadlines.
+	e.clock.Set(t0.Add(3*time.Hour + 10*time.Minute))
+	e.tick(e.newScheduler(nil, nil))
+	rs := e.runs(sc.ID)
+	if len(rs) != 2 {
+		t.Fatalf("runs = %+v, want a missed one and a launched one", rs)
+	}
+	if r := rs[1]; r.Status != schedules.RunMissed || r.Reason != schedules.ReasonControllerUnavailable ||
+		!r.ScheduledFor.Equal(t0.Add(2*time.Hour)) || r.Coalesced != 1 {
+		t.Errorf("missed run = %+v, want 14:00 (and 13:00), controller unavailable", r)
+	}
+	if r := rs[0]; r.Status != schedules.RunLaunched || !r.ScheduledFor.Equal(t0.Add(3*time.Hour)) || r.Coalesced != 0 {
+		t.Errorf("latest run = %+v, want 15:00 launched", r)
+	}
+	if js := e.jobsOf(sc.ID); len(js) != 1 {
+		t.Errorf("jobs = %d, want 1", len(js))
+	}
+
+	// With skip (five minutes of grace), a fire ten minutes late is missed
+	// as a whole.
+	in := e.input("strict", schedules.Target{WorkerID: w})
+	in.Missed = schedules.MissedPolicy{Action: schedules.MissedSkip}
+	strict := e.create(in) // next 16:00
+	e.clock.Set(t0.Add(4*time.Hour + 10*time.Minute))
+	e.tick(e.newScheduler(nil, nil))
+	if rs := e.runs(strict.ID); len(rs) != 1 || rs[0].Status != schedules.RunMissed || rs[0].Reason != schedules.ReasonControllerUnavailable {
+		t.Errorf("runs = %+v, want 16:00 missed, controller unavailable", rs)
+	}
+	if js := e.jobsOf(strict.ID); len(js) != 0 {
+		t.Errorf("jobs = %d, want none", len(js))
+	}
+}
+
 func TestByLabel(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
@@ -244,6 +320,131 @@ func TestRestartAfterCreate(t *testing.T) {
 	}
 }
 
+// pauseSchedule pauses a schedule as its owner would.
+func (e *env) pauseSchedule(id domain.ScheduleID) {
+	e.t.Helper()
+	if _, err := e.svc.SetEnabled(context.Background(), e.alice, id, false); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// requireCancelled checks that a paused schedule's run ended cancelled
+// and that no job of it runs.
+func (e *env) requireCancelled(id domain.ScheduleID) {
+	e.t.Helper()
+	r := e.onlyRun(id)
+	if r.Status != schedules.RunCancelled || r.Reason != schedules.ReasonDisabled {
+		e.t.Errorf("run = %+v, want cancelled (disabled)", r)
+	}
+	for _, j := range e.jobsOf(id) {
+		if j.Status != domain.JobCancelled {
+			e.t.Errorf("job %s of the paused schedule is %s, want cancelled", j.ID, j.Status)
+		}
+	}
+	if e.schedule(id).Enabled {
+		e.t.Error("the schedule is enabled")
+	}
+}
+
+// TestPauseWhileLaunching: the user pauses the schedule after the run was
+// marked launching and before its job exists. The job the pass then
+// creates is cancelled at once and the run ends cancelled: a paused
+// schedule's run never keeps a job running.
+func TestPauseWhileLaunching(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	w := e.addWorker(worker{name: "nas", online: true})
+	sc := e.create(e.input("nightly", schedules.Target{WorkerID: w}))
+	s := e.newScheduler(nil, pausingSchedules{Schedules: e.svc, pause: func() { e.pauseSchedule(sc.ID) }})
+	e.clock.Set(t0.Add(time.Hour))
+	e.tick(s)
+	if js := e.jobsOf(sc.ID); len(js) != 1 {
+		t.Fatalf("jobs = %+v, want the one created during the pause", js)
+	}
+	e.requireCancelled(sc.ID)
+	e.tick(e.newScheduler(nil, nil))
+	e.requireCancelled(sc.ID)
+}
+
+// TestPauseWhileLaunchingTwoControllers: after the pause, a second
+// controller's pass cancels the run before the first one created the job;
+// the first one finds the run cancelled and cancels the job it created.
+func TestPauseWhileLaunchingTwoControllers(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	w := e.addWorker(worker{name: "nas", online: true})
+	sc := e.create(e.input("nightly", schedules.Target{WorkerID: w}))
+	other := e.newScheduler(nil, nil)
+	s := e.newScheduler(nil, pausingSchedules{Schedules: e.svc, pause: func() {
+		e.pauseSchedule(sc.ID)
+		if err := other.Tick(context.Background()); err != nil {
+			t.Error(err)
+		}
+		if r := e.onlyRun(sc.ID); r.Status != schedules.RunCancelled || len(e.jobsOf(sc.ID)) != 0 {
+			t.Errorf("after the other controller's pass: run %+v", r)
+		}
+	}})
+	e.clock.Set(t0.Add(time.Hour))
+	e.tick(s)
+	if js := e.jobsOf(sc.ID); len(js) != 1 {
+		t.Fatalf("jobs = %+v, want the one created after the pause", js)
+	}
+	e.requireCancelled(sc.ID)
+}
+
+// TestPauseAfterCreateBeforeRestart: the controller crashed after creating
+// the job and before closing the run, and the user paused the schedule
+// before it restarted. The restarted scheduler cancels the job and the
+// run.
+func TestPauseAfterCreateBeforeRestart(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	w := e.addWorker(worker{name: "nas", online: true})
+	sc := e.create(e.input("nightly", schedules.Target{WorkerID: w}))
+	e.clock.Set(t0.Add(time.Hour))
+	e.heartbeat()
+	if err := e.newScheduler(nil, faultySchedules{e.svc}).Tick(context.Background()); !errors.Is(err, errInjected) {
+		t.Fatalf("Tick with a failing MarkLaunched = %v", err)
+	}
+	if js := e.jobsOf(sc.ID); len(js) != 1 || js[0].Status != domain.JobQueued {
+		t.Fatalf("jobs after the crash = %+v", js)
+	}
+	e.pauseSchedule(sc.ID)
+	if r := e.onlyRun(sc.ID); !r.CancelRequested() {
+		t.Fatalf("run after the pause = %+v, want launching with a cancel request", r)
+	}
+	e.tick(e.newScheduler(nil, nil))
+	e.requireCancelled(sc.ID)
+}
+
+// TestPauseBeforeCreate: the job could not be created yet when the user
+// paused the schedule; the next pass creates no job and cancels the run.
+func TestPauseBeforeCreate(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	w := e.addWorker(worker{name: "nas", online: true})
+	sc := e.create(e.input("nightly", schedules.Target{WorkerID: w}))
+	e.clock.Set(t0.Add(time.Hour))
+	e.heartbeat()
+	if err := e.newScheduler(&faultyJobs{Jobs: e.jobs, failCreate: errInjected}, nil).Tick(context.Background()); !errors.Is(err, errInjected) {
+		t.Fatalf("Tick with a failing Create = %v", err)
+	}
+	e.pauseSchedule(sc.ID)
+	e.tick(e.newScheduler(nil, nil))
+	if js := e.jobsOf(sc.ID); len(js) != 0 {
+		t.Errorf("jobs = %+v, want none", js)
+	}
+	e.requireCancelled(sc.ID)
+	// Run now still works on the paused schedule.
+	if _, err := e.svc.RunNow(context.Background(), e.alice, sc.ID); err != nil {
+		t.Fatal(err)
+	}
+	e.tick(e.newScheduler(nil, nil))
+	if r := e.runs(sc.ID)[0]; r.Status != schedules.RunLaunched || len(e.jobsOf(sc.ID)) != 1 {
+		t.Errorf("run now on the paused schedule = %+v", r)
+	}
+}
+
 // TestConcurrentSchedulers: two schedulers (two controllers) ticking at
 // once fire the occurrence once and create one job.
 func TestConcurrentSchedulers(t *testing.T) {
@@ -346,6 +547,51 @@ func TestOverlapQueueWaits(t *testing.T) {
 	}
 }
 
+// TestOccurrenceWhileLaunching: an occurrence due while the previous run
+// is still launching is not merged into it (that run's job is already
+// decided): it opens a run of its own, which waits for the active run
+// (overlap queue) and then launches.
+func TestOccurrenceWhileLaunching(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	w := e.addWorker(worker{name: "nas", online: true})
+	in := e.input("queued", schedules.Target{WorkerID: w})
+	in.Overlap = schedules.OverlapQueue
+	sc := e.create(in)
+	flaky := &faultyJobs{Jobs: e.jobs, failCreate: errInjected}
+	s := e.newScheduler(flaky, nil)
+	failingTick := func() {
+		t.Helper()
+		e.heartbeat()
+		if err := s.Tick(context.Background()); !errors.Is(err, errInjected) {
+			t.Fatalf("Tick = %v, want the injected failure", err)
+		}
+	}
+	e.clock.Set(t0.Add(time.Hour))
+	failingTick() // 13:00 is launching: its job could not be created yet
+	e.clock.Set(t0.Add(2 * time.Hour))
+	failingTick() // 14:00 fires while 13:00 is still launching
+	rs := e.runs(sc.ID)
+	if len(rs) != 2 || rs[0].Status != schedules.RunPending || !rs[0].ScheduledFor.Equal(t0.Add(2*time.Hour)) ||
+		rs[1].Status != schedules.RunLaunching || rs[1].Coalesced != 0 {
+		t.Fatalf("runs = %+v, want 14:00 pending beside 13:00 launching", rs)
+	}
+	flaky.mu.Lock()
+	flaky.failCreate = nil
+	flaky.mu.Unlock()
+	e.tick(s)
+	js := e.jobsOf(sc.ID)
+	if len(js) != 1 || e.runs(sc.ID)[0].Status != schedules.RunPending {
+		t.Fatalf("after the launch: jobs %+v, runs %+v; want 14:00 waiting behind the job", js, e.runs(sc.ID))
+	}
+	e.finish(js[0])
+	e.tick(s)
+	r := e.runs(sc.ID)[0]
+	if js := e.jobsOf(sc.ID); len(js) != 2 || r.Status != schedules.RunLaunched || r.JobID != js[0].ID {
+		t.Errorf("after the first job finished: run %+v, jobs %+v; want the 14:00 job", r, js)
+	}
+}
+
 func TestOverlapAllowLaunchesAlongside(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
@@ -445,6 +691,43 @@ func TestWorkerGoneDuringLaunch(t *testing.T) {
 	e.tick(e.newScheduler(nil, nil))
 	if r2 := e.onlyRun(sc.ID); r2.Status != schedules.RunLaunched || r2.JobID != r.JobID {
 		t.Errorf("run = %+v, want launched with job %s", r2, r.JobID)
+	}
+}
+
+// TestWorkerGoneBesideAPendingRun: a launch whose worker went away cannot
+// go back to pending while a later occurrence's run is pending (one
+// pending run per schedule): it fails, and the later run takes over.
+func TestWorkerGoneBesideAPendingRun(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	w := e.addWorker(worker{name: "nas", online: true})
+	in := e.input("queued", schedules.Target{WorkerID: w})
+	in.Overlap = schedules.OverlapQueue
+	sc := e.create(in)
+	flaky := &faultyJobs{Jobs: e.jobs, failCreate: errInjected}
+	s := e.newScheduler(flaky, nil)
+	for _, at := range []time.Duration{time.Hour, 2 * time.Hour} {
+		e.clock.Set(t0.Add(at))
+		e.heartbeat()
+		if err := s.Tick(context.Background()); !errors.Is(err, errInjected) {
+			t.Fatalf("Tick = %v", err)
+		}
+	}
+	flaky.mu.Lock()
+	flaky.failCreate = jobs.ErrUnknownWorker
+	flaky.mu.Unlock()
+	e.tick(s)
+	rs := e.runs(sc.ID)
+	if len(rs) != 2 || rs[1].Status != schedules.RunFailed || rs[1].Reason != schedules.ReasonWorkerRemoved ||
+		rs[0].Status != schedules.RunPending {
+		t.Fatalf("runs = %+v, want 13:00 failed and 14:00 pending", rs)
+	}
+	if !e.schedule(sc.ID).Enabled {
+		t.Error("the schedule was paused")
+	}
+	e.tick(e.newScheduler(nil, nil))
+	if r := e.runs(sc.ID)[0]; r.Status != schedules.RunLaunched || len(e.jobsOf(sc.ID)) != 1 {
+		t.Errorf("14:00 = %+v, want launched", r)
 	}
 }
 

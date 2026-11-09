@@ -65,23 +65,47 @@ func (s *Service) fire(ctx context.Context, sc Schedule, now time.Time) (bool, e
 		}
 		return false, nil
 	}
+	// Whether a run is active decides an overlap skip and why a pending run
+	// that this fire supersedes was missed.
 	active := false
-	if sc.Overlap.orDefault() == OverlapSkip {
+	if WaitsForActive(sc.Overlap) {
 		if active, err = s.repo.HasActiveRun(ctx, sc.ID); err != nil {
 			return false, fmt.Errorf("fire schedule %s: %w", sc.ID, err)
 		}
 	}
 	plan := PlanFire(e, sc.NextRunAt, now, sc.Missed, sc.Overlap, active)
+	missedReason := MissedReason(sc.Overlap, active)
+	late := plan.Late || !plan.LateFor.IsZero()
+	if late {
+		// The controller was down past an occurrence's deadline, so also
+		// past the deadline of a pending run this fire supersedes.
+		missedReason = ReasonControllerUnavailable
+	}
+	var earlier *Run
+	if !plan.LateFor.IsZero() {
+		// Its ID first: runs list newest (greatest ID) first.
+		earlier = &Run{
+			ID: s.ids.NewScheduleRunID(), ScheduleID: sc.ID, Trigger: TriggerCron,
+			ScheduledFor: plan.LateFor, Deadline: Deadline(e, sc.Missed, plan.LateFor), Coalesced: plan.LateCoalesced,
+			Status: RunMissed, Reason: ReasonControllerUnavailable,
+			Message:   MissedMessage(sc, ReasonControllerUnavailable),
+			CreatedAt: now, UpdatedAt: now,
+		}
+	}
 	run := Run{
 		ID: s.ids.NewScheduleRunID(), ScheduleID: sc.ID, Trigger: TriggerCron,
 		ScheduledFor: plan.ScheduledFor, Deadline: plan.Deadline, Coalesced: plan.Coalesced,
 		Status: RunPending, CreatedAt: now, UpdatedAt: now,
 	}
-	if plan.Skip {
+	switch {
+	case plan.Late:
+		run.Status, run.Reason, run.Message = RunMissed, ReasonControllerUnavailable, MissedMessage(sc, ReasonControllerUnavailable)
+	case plan.Skip:
 		run.Status, run.Reason, run.Message = RunMissed, ReasonOverlap, "the previous run was still active"
 	}
 	stored, err := s.repo.FireSchedule(ctx, Fire{
-		ID: sc.ID, ExpectedNext: sc.NextRunAt, NewNext: plan.NewNext, Run: run, Merge: !plan.Skip,
+		ID: sc.ID, ExpectedNext: sc.NextRunAt, NewNext: plan.NewNext, Run: run, Merge: run.Status == RunPending,
+		MissedReason: missedReason, MissedMessage: MissedMessage(sc, missedReason), Earlier: earlier,
 	})
 	switch {
 	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrNotFound):
@@ -91,13 +115,13 @@ func (s *Service) fire(ctx context.Context, sc Schedule, now time.Time) (bool, e
 	case errors.Is(err, domain.ErrAlreadyExists):
 		// A manual run was opened between the merge and the insert: the
 		// next tick merges into it.
-		s.log.DebugContext(ctx, "schedule fire raced an open run; retrying on the next tick", "schedule_id", sc.ID.String())
+		s.log.DebugContext(ctx, "schedule fire raced a pending run; retrying on the next tick", "schedule_id", sc.ID.String())
 		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("fire schedule %s: %w", sc.ID, err)
 	}
 	s.log.InfoContext(ctx, "schedule fired", "schedule_id", sc.ID.String(), "run_id", stored.ID.String(),
 		"scheduled_for", plan.ScheduledFor, "coalesced", plan.Coalesced, "status", string(stored.Status),
-		"merged", stored.ID != run.ID, "next_run_at", plan.NewNext)
+		"merged", stored.ID != run.ID, "late", late, "next_run_at", plan.NewNext)
 	return true, nil
 }

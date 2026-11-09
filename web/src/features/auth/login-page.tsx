@@ -2,13 +2,13 @@ import { Code } from "@connectrpc/connect";
 import { useMutation } from "@connectrpc/connect-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AuthService } from "@/gen/syncr/v1/auth_pb";
-import { forgetSession } from "@/hooks/use-session";
+import { endSession } from "@/hooks/use-session";
 import { errorMessage, hasCode } from "@/lib/errors";
 
 import { AuthLayout } from "./auth-layout";
@@ -22,12 +22,18 @@ export function LoginPage({ redirect }: { redirect?: string }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | undefined>();
 
+  // Nobody is signed in here: drop whatever a previous session left behind,
+  // so a different user signing in never sees it.
+  useEffect(() => {
+    endSession(queryClient);
+  }, [queryClient]);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(undefined);
     try {
       await login.mutateAsync({ username: username.trim().toLowerCase(), password });
-      forgetSession(queryClient);
+      endSession(queryClient);
       await navigate({ href: redirect ?? "/", replace: true });
     } catch (err) {
       setError(

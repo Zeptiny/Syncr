@@ -6,8 +6,9 @@
 // # Credentials
 //
 //   - Enrollment tokens are short-lived and single-use. Only their SHA-256
-//     hash is stored; redeeming one is a single atomic repository call
-//     (TokenRepository.ConsumeEnrollmentToken).
+//     hash is stored; redeeming one and creating the worker it enrolls is
+//     a single atomic repository call (TokenRepository.EnrollWorker), so a
+//     failed create does not spend the token.
 //   - Every worker has a link secret. Active workers receive a random one at
 //     enrollment and present it to the controller; passive workers print a
 //     pairing secret at setup that the admin registers, and the controller

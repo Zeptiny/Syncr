@@ -51,11 +51,22 @@
 //	               SUCCEEDED                               succeeded, with warnings and output
 //	               FAILED                                  failed (notifier called)
 //	               CANCELLED, cancel requested             cancelled
-//	               CANCELLED, no cancel requested          interrupted, worker_shutdown (notifier called)
+//	               CANCELLED, no cancel requested,         not terminal: queued again (requeues+1, StartJob
+//	                 job never started (see below)           derived again; not notified)
+//	               CANCELLED, no cancel requested,         interrupted, worker_shutdown (notifier called)
+//	                 job started
 //	               unknown status                          failed, internal
 //	JobResult    terminal                                ignored
 //	any job      unknown, malformed or another worker's  skipped and acknowledged (logged)
 //	unknown type -                                       skipped and acknowledged (newer worker)
+//
+// A worker stops jobs without a cancel request only when it shuts down. A
+// job it never started is still dispatched when its result arrives (a
+// JobStarted always comes first and is never dropped) and the result has
+// no start time: nothing ran, so it goes back to the queue like a job of a
+// restarted worker (see the epoch rules) and the worker's next process
+// receives it. A shutting-down worker does not acknowledge StartJob, so a
+// job sent to it meanwhile stays queued.
 //
 // # Acks
 //
@@ -134,7 +145,25 @@
 // Run fails jobs that stay queued longer than Config.DispatchTimeout
 // (dispatch_timeout); the message says whether the worker never connected,
 // is offline (and since when) or is online but did not accept the job. The
-// clock starts again when a job is re-queued.
+// clock starts again when a job is re-queued, and it starts no earlier than
+// the Service: after a controller outage queued jobs get the full timeout
+// for their workers to reconnect.
+//
+// Run also ends the jobs a worker can no longer report on (ExpireLost).
+// A worker is silent from its last link call, or from the Service's start
+// if that is later (a controller outage never counts against a worker):
+//
+//	Worker silent for            Job (this worker)                     Becomes
+//	Config.CancelGrace (5m)      dispatched/running, cancel requested  cancelled (the CancelJob cannot be
+//	                               at least CancelGrace ago              delivered)
+//	Config.LostAfter (1h)        dispatched/running, cancel requested  cancelled
+//	Config.LostAfter (1h)        dispatched/running, no cancel request interrupted, worker_lost (notifier called)
+//
+// If the worker comes back with the same epoch, nothing special happens:
+// its late JobStarted, Progress and JobResult events find a finished job
+// and are acknowledged without effect, and its snapshot lists jobs the
+// controller considers finished, which are orphans and get a CancelJob. A
+// worker that comes back with a new epoch held nothing from before.
 //
 // # Cancel, by state
 //
@@ -144,7 +173,8 @@
 //	dispatched, running  cancel requested, worker woken     CancelJob; the worker's CANCELLED result ->
 //	                                                        cancelled; if it finishes first, its outcome stands;
 //	                                                        if it restarts, dispatched -> cancelled and
-//	                                                        running -> interrupted
+//	                                                        running -> interrupted; if it stays out of
+//	                                                        contact for CancelGrace, cancelled
 //	finished             nothing                            -
 //
 // # Long polls and passive workers

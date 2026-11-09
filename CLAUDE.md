@@ -43,7 +43,7 @@ Never hand-edit these files: change the source, then regenerate.
 - `cmd/syncr-controller/wire.go` and `cmd/syncr-worker/wire.go` are the only composition roots. Constructor injection; shutdown order is described in ADR 0005.
 
 **Extension points** (one package plus one registration line each):
-- Backend types: `internal/backend/builtin/builtin.go`
+- Backend types: `internal/backend/builtin/builtin.go`. A type on a new rclone backend also needs that backend's options reviewed and the backend added to the worker's allowlist (`rcloneenv.SupportedBackends`); a cross-check test enforces this.
 - Notification channels: `internal/adapters/notify/builtin/builtin.go`
 - Job kinds: `internal/jobkind`
 - Worker runners: registered in `cmd/syncr-worker/wire.go`

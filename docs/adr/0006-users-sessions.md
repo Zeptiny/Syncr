@@ -95,7 +95,14 @@ trusted-users model; per-user worker grants are future work.
 - **Revocation.** A password change ends the user's other sessions; an
   admin's password reset, disabling the account or changing its role ends
   all of them. Every request re-reads the user, so a role change or
-  disabling takes effect at once anyway.
+  disabling takes effect at once anyway. A stream (`WatchJob`, open for up
+  to `api.watch_max_duration`) authenticates when it starts and then
+  again every 30 s with the same credentials and policy check: once the
+  session or token is gone or the user is disabled it ends with
+  `Unauthenticated`, and once the refreshed caller no longer sees the job
+  (a demoted admin watching another user's job) with `PermissionDenied`.
+  A check that errors also ends it (fail closed); clients watch again. An
+  open stream counts as session activity, like any request.
 - **Cookie.** `__Host-syncr_session` when Secure, otherwise
   `syncr_session`; `HttpOnly; SameSite=Strict; Path=/;
   Max-Age=<remaining lifetime>`. `auth.cookie_secure` is `auto` (Secure

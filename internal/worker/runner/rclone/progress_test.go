@@ -38,7 +38,7 @@ func fixtureLines(t *testing.T, name string) []string {
 // progress.
 func feed(lines ...string) (*tracker, []runner.Progress) {
 	var emitted []runner.Progress
-	t := newTracker(func(p runner.Progress) { emitted = append(emitted, p) })
+	t := newTracker(func(p runner.Progress) { emitted = append(emitted, p) }, nil)
 	for _, l := range lines {
 		t.line(proc.Line{Data: []byte(l)})
 	}
@@ -169,7 +169,7 @@ func TestTrackerDiagnostics(t *testing.T) {
 	if len(d) != maxDiagnostics {
 		t.Fatalf("diagnostics = %q", d)
 	}
-	if !strings.HasSuffix(d[0], "…") || len(d[0]) > maxDiagnosticBytes+len("…") || !strings.HasPrefix(d[0], "éé") {
+	if !strings.HasSuffix(d[0], "...") || len(d[0]) > maxDiagnosticBytes+len("...") || !strings.HasPrefix(d[0], "éé") {
 		t.Errorf("long message not truncated cleanly: %q", d[0])
 	}
 	if d[1] != "Error: unknown flag: --bogus" || d[2] != "plain error" {
@@ -185,10 +185,10 @@ func TestTrackerDiagnostics(t *testing.T) {
 func TestTrackerTruncatedLinesAreNotParsed(t *testing.T) {
 	t.Parallel()
 	var emitted int
-	tr := newTracker(func(runner.Progress) { emitted++ })
+	tr := newTracker(func(runner.Progress) { emitted++ }, nil)
 	tr.line(proc.Line{Data: []byte(`{"level":"notice","stats":{"bytes":1}}`), Truncated: true})
 	if emitted != 0 {
 		t.Error("a truncated line was parsed")
 	}
-	newTracker(nil).line(proc.Line{Data: []byte(`{"stats":{"bytes":1}}`)}) // nil emit is allowed
+	newTracker(nil, nil).line(proc.Line{Data: []byte(`{"stats":{"bytes":1}}`)}) // nil emit is allowed
 }

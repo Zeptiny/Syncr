@@ -18,7 +18,8 @@
 // scrubbed.
 //
 // Allowed dependencies: the standard library, the generated protobuf code,
-// internal/worker/proc, internal/worker/runner and internal/worker/rcloneenv.
+// internal/worker/proc, internal/worker/runner, internal/worker/runner/scrub
+// and internal/worker/rcloneenv.
 package rclone
 
 import (
@@ -34,6 +35,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
+	"github.com/Zeptiny/Syncr/internal/worker/runner/scrub"
 )
 
 // Kind is the job kind this runner executes (the JobSpec.operation field).
@@ -152,7 +154,8 @@ func (r *Runner) Run(ctx context.Context, job runner.Job, emit runner.EmitFunc) 
 		return res, runner.Fail(syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, err)
 	}
 
-	t := newTracker(emit)
+	sc := scrub.New(env.Secrets())
+	t := newTracker(emit, sc)
 	pres, err := r.cfg.Supervisor.Run(ctx, proc.Spec{
 		Path:   r.cfg.Binary,
 		Args:   args,
@@ -164,11 +167,11 @@ func (r *Runner) Run(ctx context.Context, job runner.Job, emit runner.EmitFunc) 
 	res.ExitCode = pres.ExitCode
 	res.Stats = t.progress
 	res.Stats.Elapsed = max(res.Stats.Elapsed, pres.Duration)
-	return res, r.outcome(err, pres, t, env, args[0])
+	return res, r.outcome(err, pres, t, args[0])
 }
 
 // outcome maps the supervisor's result to the runner's error.
-func (r *Runner) outcome(err error, pres proc.Result, t *tracker, env *rcloneenv.Env, cmd string) error {
+func (r *Runner) outcome(err error, pres proc.Result, t *tracker, cmd string) error {
 	if err == nil {
 		return nil
 	}
@@ -199,7 +202,7 @@ func (r *Runner) outcome(err error, pres proc.Result, t *tracker, env *rcloneenv
 	}
 	if d := t.diagnostics(); len(d) > 0 {
 		b.WriteString(": ")
-		b.WriteString(env.Scrubber().Scrub(strings.Join(d, "; ")))
+		b.WriteString(strings.Join(d, "; ")) // scrubbed by the tracker
 	}
 	return runner.Fail(ec.code, &exitError{msg: b.String(), err: err})
 }

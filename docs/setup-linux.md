@@ -66,10 +66,10 @@ Useful flags (all optional):
 | `--name NAME` | display name (default: the host name) |
 | `--local-root PATH` | a directory jobs may read and write; repeat for several. Without one, jobs cannot touch local files |
 | `--ca-file FILE` | PEM CA (or self-signed certificate) of the controller |
-| `--data-dir DIR`, `--config FILE` | override `/var/lib/syncr` and `/etc/syncr/worker.yaml` |
+| `--data-dir DIR`, `--config FILE` | override `/var/lib/syncr` and `/etc/syncr/worker.yaml` (relative paths are resolved against the current directory, and the service gets the absolute ones) |
 | `--no-service` | write the config only; run the worker yourself |
 | `--dry-run` | print the plan, change nothing |
-| `--force` | replace an existing setup (new enrollment, new certificate) |
+| `--force` | replace an existing setup (new enrollment, new certificate); the old config, certificate and CA copy stay in place until the new enrollment succeeds |
 
 Set `SYNCR_ENROLLMENT_TOKEN` instead of `--token` to keep the token out of your
 shell history.
@@ -142,7 +142,9 @@ sudo syncr-worker service uninstall   # keeps the config and data
 
 The unit is `/etc/systemd/system/syncr-worker.service`: it restarts the worker
 5 seconds after a failure (and gives up after 10 failures in 5 minutes), waits
-up to 30 seconds on stop, and sets `NoNewPrivileges`, `ProtectKernelTunables`,
+up to 30 seconds on stop, and sets `KillMode=mixed` (a stop or restart signals
+only the worker, which cancels its jobs and stops rclone and restic itself; what
+is left when it exits is killed), `NoNewPrivileges`, `ProtectKernelTunables`,
 `ProtectKernelModules`, `ProtectControlGroups`, `RestrictRealtime` and
 `LockPersonality`. It runs as root, because backup jobs read whatever you list
 in `local_roots`; `ProtectSystem`, `ProtectHome` and `PrivateTmp` are left out
@@ -160,7 +162,8 @@ letters, digits, `-`, `_` and `.`. A schedule targeting a label picks the
 least busy online worker that has it and can run the job. A schedule's run
 waits for an offline worker as its missed-run policy says, so a machine
 that is switched off at night catches up when it is back (several missed
-occurrences merge into one run). A worker shows as offline about 45
+occurrences merge into one run while it may still wait; once its wait
+limit has passed it is recorded as missed). A worker shows as offline about 45
 seconds after its last contact; a run that comes due before that is still
 queued on it, and fails if the worker does not pick it up within 15
 minutes.
@@ -201,6 +204,15 @@ Then remove the worker in the controller UI (**Workers**, the worker,
 - **`the service did not stay running`**: read the log with `journalctl -u syncr-worker -n 50`.
   A missing tool shows as `required tools are not available`; fix with
   `sudo syncr-worker tools fetch --dir /var/lib/syncr/tools`.
+- **`every user can write to ...`**: setup will not keep the worker's data,
+  tools or config in a directory anyone can change. Remove that permission
+  (`chmod o-w`) or choose another directory with `--data-dir` / `--config`. A
+  directory owned by another account, or writable by its group, only gets a
+  warning (it may belong to a dedicated service account).
+- **`warning: ... The service runs syncr-worker from there with full rights`**:
+  other accounts can replace the binary (or add files next to it, where it
+  looks for rclone and restic). Install it with
+  `sudo install -m 0755 syncr-worker /usr/local/bin/` and run setup from there.
 - **No internet access**: place `rclone` and `restic` of the pinned versions
   next to `syncr-worker` (or set `SYNCR_RCLONE_PATH` / `SYNCR_RESTIC_PATH` when
   running setup) and run setup again.

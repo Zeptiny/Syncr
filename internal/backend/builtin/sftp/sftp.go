@@ -7,6 +7,7 @@ package sftp
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/Zeptiny/Syncr/internal/backend"
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -58,12 +59,19 @@ func (Type) Capabilities() backend.Capabilities {
 }
 
 // Validate implements backend.Type: the field checks, a password or a
-// private key, a port in range and a well-formed base path.
+// private key, a key pasted as it is, a port in range and a well-formed
+// base path.
 func (t Type) Validate(cfg backend.Config) error {
 	var v domain.Validation
 	v.AddAll("", backend.CheckFields(t.Fields(), cfg))
 	if cfg.Secrets["pass"] == "" && cfg.Secrets["key_pem"] == "" {
 		v.Add("secrets.pass", "a password or a private key is required")
+	}
+	// A PEM key never contains a backslash. One is most likely a key
+	// already escaped onto one line ("...\n...", as rclone's own docs
+	// suggest), which ToRclone would escape again.
+	if strings.Contains(cfg.Secrets["key_pem"], `\`) {
+		v.Add("secrets.key_pem", `paste the key file as it is, with its line breaks (not escaped with \n)`)
 	}
 	if port := cfg.Options["port"]; port != "" && !portInRange(port) {
 		v.Add("options.port", "must be between 1 and 65535")
@@ -81,12 +89,28 @@ func portInRange(p string) bool {
 	return err != nil || (n >= 1 && n <= 65535)
 }
 
-// ToRclone implements backend.Type; the base path becomes the Root.
+// ToRclone implements backend.Type; the base path becomes the Root, and the
+// private key is escaped onto one line (see escapeKeyPem).
 func (t Type) ToRclone(cfg backend.Config) (backend.Rclone, error) {
 	r := backend.MapFields(t.Fields(), cfg)
 	r.Backend = "sftp"
 	r.Root, _ = backend.JoinRemote(cfg.Options["path"], "")
+	if pem, ok := r.Secrets["key_pem"]; ok {
+		r.Secrets["key_pem"] = escapeKeyPem(pem)
+	}
 	return r, nil
+}
+
+// escapeKeyPem returns pem in the form rclone expects for its key_pem
+// option. rclone does not take the value as it is: it reads it as the body
+// of a Go string literal (strconv.Unquote of `"` + value + `"`). The raw
+// line breaks of a pasted key make every connection fail with "pem key not
+// formatted properly", and double quotes or backslashes would be misread
+// too. The result is the body of strconv.Quote(pem): one line, which rclone
+// unquotes back to exactly pem.
+func escapeKeyPem(pem string) string {
+	q := strconv.Quote(pem)
+	return q[1 : len(q)-1]
 }
 
 // Examples implements backend.Exampler.

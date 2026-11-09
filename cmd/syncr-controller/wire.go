@@ -204,7 +204,7 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 		return nil, fmt.Errorf("contacts service: %w", err)
 	}
 	ns, err := notifications.New(notifications.Deps{
-		Repo: st, Channels: channels, Contacts: cs, Jobs: describer, Clock: clk, IDs: ids, PublicURL: cfg.HTTP.PublicURL,
+		Repo: st, Channels: channels, Contacts: cs, Admins: adminChecker{users: st}, Jobs: describer, Clock: clk, IDs: ids, PublicURL: cfg.HTTP.PublicURL,
 		Logger: log.With("component", "notifications"),
 	}, notifications.Config{
 		MaxAttempts: cfg.Notify.MaxAttempts, Concurrency: cfg.Notify.Concurrency,
@@ -234,10 +234,12 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	if err != nil {
 		return nil, err
 	}
+	dcfg := dispatch.DefaultConfig()
+	dcfg.LostAfter = cfg.Workers.LostAfter
 	disp, err := dispatch.New(dispatch.Deps{
 		Jobs: js, Workers: ws, Clock: clk, Hub: hub, Specs: specs,
 		Logger: log.With("component", "dispatch"),
-	}, dispatch.DefaultConfig())
+	}, dcfg)
 	if err != nil {
 		return nil, fmt.Errorf("dispatcher: %w", err)
 	}
@@ -337,6 +339,25 @@ func (s notifyingSchedules) EndRun(ctx context.Context, run schedules.Run, statu
 		s.outbox.Wake()
 	}
 	return r, err
+}
+
+// adminChecker is the notification outbox's notifications.AdminChecker: it
+// reads a user's role from the users store.
+type adminChecker struct {
+	users interface {
+		GetUser(ctx context.Context, id domain.UserID) (users.User, error)
+	}
+}
+
+var _ notifications.AdminChecker = adminChecker{}
+
+// IsAdmin implements notifications.AdminChecker.
+func (a adminChecker) IsAdmin(ctx context.Context, id domain.UserID) (bool, error) {
+	u, err := a.users.GetUser(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("get user %s: %w", id, err)
+	}
+	return u.Role == domain.RoleAdmin, nil
 }
 
 // remoteNames is the remotes service as jobDescriber uses it.

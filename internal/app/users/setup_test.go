@@ -53,6 +53,23 @@ func TestArmSetupRejectsShortCodes(t *testing.T) {
 	}
 }
 
+// A preset code may hold any characters, be longer than a generated one,
+// and be entered in another case or with other dashes and spaces.
+func TestCompleteSetupPresetCode(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	if err := e.svc.ArmSetup("correct-horse-battery-staple-01"); err != nil {
+		t.Fatal(err)
+	}
+	for _, wrong := range []string{"CORRE-CTHOR-SEBAT-TERYS", "correct-horse-battery-staple-02", "correct-horse-battery-staple"} {
+		_, _, err := e.svc.CompleteSetup(e.ctx(), setupParams(wrong))
+		wantFields(t, "CompleteSetup("+wrong+")", err, "setup_code")
+	}
+	if _, _, err := e.svc.CompleteSetup(e.ctx(), setupParams(" Correct Horse-Battery-STAPLE-01 ")); err != nil {
+		t.Fatalf("CompleteSetup(preset code, other case and separators): %v", err)
+	}
+}
+
 func TestCompleteSetup(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

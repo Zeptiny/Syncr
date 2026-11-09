@@ -2,7 +2,7 @@ import { create } from "@bufbuild/protobuf";
 import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import { createConnectQueryKey, useTransport } from "@connectrpc/connect-query";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   GetJobResponseSchema,
@@ -11,6 +11,7 @@ import {
   type JobProgress,
 } from "@/gen/syncr/v1/api_pb";
 import { toNumber, tsDate } from "@/lib/format";
+import { reportUnauthenticated } from "@/lib/query-client";
 import { isTerminal } from "@/lib/status";
 
 /** JobSample is one cumulative progress sample; t is in epoch seconds. */
@@ -21,8 +22,12 @@ export interface JobSample {
   errors: number;
 }
 
-/** WatchState is the state of the live stream. */
-export type WatchState = "connecting" | "live" | "reconnecting" | "ended";
+/**
+ * WatchState is the state of the live stream. "ended" is a clean end: the job
+ * reached a terminal status. "failed" is a stop on an error that is not
+ * retried automatically (see WatchResult.error and WatchResult.retry).
+ */
+export type WatchState = "connecting" | "live" | "reconnecting" | "ended" | "failed";
 
 /** WatchOptions tunes the reconnect backoff (tests shorten it). */
 export interface WatchOptions {
@@ -43,6 +48,8 @@ export interface WatchResult {
   attempt: number;
   /** error is set when the stream stopped for a non-transient reason. */
   error: unknown;
+  /** retry starts the stream again after it failed. */
+  retry: () => void;
 }
 
 /**
@@ -107,13 +114,17 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
  * (ListJobSamples), then streams WatchJob. Job messages also update the
  * GetJob query cache, so views reading the job re-render. On
  * DEADLINE_EXCEEDED, UNAVAILABLE or a dropped connection it reconnects with
- * backoff (1 s doubling to 30 s); it stops once the job is terminal.
+ * backoff (1 s doubling to 30 s); it stops once the job is terminal. Any
+ * other error ends in state "failed" with the error (retry restarts the
+ * stream), and UNAUTHENTICATED also goes through the session-expiry path.
  */
 export function useWatchJob(jobId: string, opts: WatchOptions = {}): WatchResult {
   const transport = useTransport();
   const queryClient = useQueryClient();
   const { minBackoffMs = 1000, maxBackoffMs = 30_000, maxSamples = 5000 } = opts;
-  const [result, setResult] = useState<WatchResult & { jobId: string }>({
+  const [nonce, setNonce] = useState(0);
+  const retry = useCallback(() => setNonce((n) => n + 1), []);
+  const [result, setResult] = useState<Omit<WatchResult, "retry"> & { jobId: string }>({
     jobId,
     job: undefined,
     samples: [],
@@ -132,7 +143,7 @@ export function useWatchJob(jobId: string, opts: WatchOptions = {}): WatchResult
       transport,
       cardinality: "finite",
     });
-    const update = (patch: Partial<WatchResult>) =>
+    const update = (patch: Partial<Omit<WatchResult, "retry">>) =>
       setResult((r) => (signal.aborted ? r : { ...r, ...patch }));
     const addSamples = (add: JobSample[]) =>
       setResult((r) =>
@@ -164,7 +175,11 @@ export function useWatchJob(jobId: string, opts: WatchOptions = {}): WatchResult
     async function watch() {
       let attempt = 0;
       while (!signal.aborted) {
-        update({ state: attempt === 0 ? "connecting" : "reconnecting", attempt });
+        update(
+          attempt === 0
+            ? { state: "connecting", attempt, error: undefined }
+            : { state: "reconnecting", attempt },
+        );
         let terminal = false;
         let connected = false;
         try {
@@ -196,7 +211,8 @@ export function useWatchJob(jobId: string, opts: WatchOptions = {}): WatchResult
             return;
           }
           if (!reconnectable(err)) {
-            update({ state: "ended", error: err });
+            update({ state: "failed", error: err });
+            reportUnauthenticated(queryClient, err);
             return;
           }
         }
@@ -210,7 +226,7 @@ export function useWatchJob(jobId: string, opts: WatchOptions = {}): WatchResult
     void loadHistory();
     void watch();
     return () => ctrl.abort();
-  }, [jobId, transport, queryClient, minBackoffMs, maxBackoffMs, maxSamples]);
+  }, [jobId, transport, queryClient, minBackoffMs, maxBackoffMs, maxSamples, nonce]);
 
   // A new jobId starts from a clean slate until its effect reports.
   if (result.jobId !== jobId) {
@@ -223,7 +239,7 @@ export function useWatchJob(jobId: string, opts: WatchOptions = {}): WatchResult
       error: undefined,
     } as const;
     setResult({ ...fresh, samples: [] });
-    return { ...fresh, samples: [] };
+    return { ...fresh, samples: [], retry };
   }
-  return result;
+  return { ...result, retry };
 }

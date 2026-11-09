@@ -776,7 +776,7 @@ export type Job = Message<"syncr.v1.Job"> & {
 
   /**
    * How often the job went back to the queue because its worker restarted
-   * before starting it.
+   * or shut down before starting it.
    *
    * @generated from field: int32 requeues = 10;
    */

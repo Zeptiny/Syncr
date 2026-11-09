@@ -23,6 +23,7 @@ import { transferModes } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 import type { Compare, DefinitionErrors, DefinitionState } from "./definition";
+import { byteUnits, durationUnits } from "./units";
 
 /** Toggle is a labelled switch with optional help. */
 export function Toggle({
@@ -90,6 +91,55 @@ export function NumberInput({
             {unit}
           </span>
         )}
+      </div>
+    </FieldShell>
+  );
+}
+
+/**
+ * QuantityInput is a numeric text field next to a unit picker, for sizes and
+ * durations that are stored in one base unit.
+ */
+export function QuantityInput<U extends string>({
+  id,
+  label,
+  value,
+  unit,
+  units,
+  onChange,
+  placeholder,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  unit: U;
+  units: { id: U; label?: string }[];
+  onChange: (value: string, unit: U) => void;
+  placeholder?: string;
+}) {
+  return (
+    <FieldShell id={id} label={label}>
+      <div className="flex gap-2">
+        <Input
+          id={id}
+          inputMode="decimal"
+          className="tabular min-w-0 flex-1 bg-card"
+          value={value}
+          placeholder={placeholder ?? "Default"}
+          onChange={(e) => onChange(e.target.value.trim(), unit)}
+        />
+        <Select value={unit} onValueChange={(u) => onChange(value, u as U)}>
+          <SelectTrigger aria-label={`${label} unit`} className="w-[5.5rem] shrink-0 bg-card">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {units.map((u) => (
+              <SelectItem key={u.id} value={u.id}>
+                {u.label ?? u.id}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
     </FieldShell>
   );
@@ -231,12 +281,13 @@ export function JobDefinitionEditor({
               onChange={(v) => set("checkers", v)}
               placeholder="8"
             />
-            <NumberInput
+            <QuantityInput
               id="opt-bw"
               label="Bandwidth limit"
-              value={s.bwlimitMiB}
-              onChange={(v) => set("bwlimitMiB", v)}
-              unit="MiB/s"
+              value={s.bwlimit}
+              unit={s.bwlimitUnit}
+              units={byteUnits.map((u) => ({ id: u.id, label: `${u.id}/s` }))}
+              onChange={(bwlimit, bwlimitUnit) => onChange({ ...s, bwlimit, bwlimitUnit })}
               placeholder="Unlimited"
             />
           </div>
@@ -327,20 +378,26 @@ export function JobDefinitionEditor({
                   />
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <NumberInput
+                  <QuantityInput
                     id="opt-maxt"
                     label="Stop after"
-                    value={s.maxTransferGiB}
-                    onChange={(v) => set("maxTransferGiB", v)}
-                    unit="GiB"
+                    value={s.maxTransfer}
+                    unit={s.maxTransferUnit}
+                    units={byteUnits}
+                    onChange={(maxTransfer, maxTransferUnit) =>
+                      onChange({ ...s, maxTransfer, maxTransferUnit })
+                    }
                     placeholder="No limit"
                   />
-                  <NumberInput
+                  <QuantityInput
                     id="opt-maxd"
                     label="Stop starting after"
-                    value={s.maxDurationMin}
-                    onChange={(v) => set("maxDurationMin", v)}
-                    unit="min"
+                    value={s.maxDuration}
+                    unit={s.maxDurationUnit}
+                    units={durationUnits}
+                    onChange={(maxDuration, maxDurationUnit) =>
+                      onChange({ ...s, maxDuration, maxDurationUnit })
+                    }
                     placeholder="No limit"
                   />
                   <NumberInput

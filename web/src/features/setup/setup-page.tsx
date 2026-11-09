@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { AuthLayout } from "@/features/auth/auth-layout";
 import { MIN_PASSWORD } from "@/features/users/users-page";
 import { ActiveEnrollment } from "@/features/workers/enrollment";
+import { formatSetupCode, MIN_SETUP_CODE_LEN, setupCodeLength } from "./setup-code";
 
 /** SetupStep is the wizard's current step. */
 export type SetupStep = "code" | "account" | "worker";
@@ -23,15 +24,6 @@ const steps: { id: SetupStep; label: string }[] = [
   { id: "account", label: "Admin account" },
   { id: "worker", label: "First worker" },
 ];
-
-/** formatSetupCode normalizes input to XXXXX-XXXXX-XXXXX-XXXXX. */
-export function formatSetupCode(raw: string): string {
-  const chars = raw
-    .toUpperCase()
-    .replace(/[^A-Z2-7]/g, "")
-    .slice(0, 20);
-  return chars.match(/.{1,5}/g)?.join("-") ?? "";
-}
 
 function Stepper({ current }: { current: SetupStep }) {
   const idx = steps.findIndex((s) => s.id === current);
@@ -89,7 +81,7 @@ export function SetupPage({ step }: { step: SetupStep }) {
 
   const submitCode = (e: React.FormEvent) => {
     e.preventDefault();
-    if (code.replaceAll("-", "").length < 16) {
+    if (setupCodeLength(code) < MIN_SETUP_CODE_LEN) {
       setErrors({ setup_code: "Enter the whole code from the controller's log." });
       return;
     }

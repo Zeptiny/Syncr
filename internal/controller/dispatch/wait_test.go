@@ -203,6 +203,48 @@ func TestDispatchTimeout(t *testing.T) {
 	}
 }
 
+// TestDispatchTimeoutCountsFromControllerStart: after a controller outage
+// longer than the dispatch timeout, the first sweep does not fail the
+// queued jobs before their workers had a chance to reconnect; their time
+// in the queue counts from the controller's start.
+func TestDispatchTimeoutCountsFromControllerStart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	back, gone := e.enroll("back"), e.enroll("gone")
+	wBack, wGone := e.newFakeWorker(back), e.newFakeWorker(gone)
+	wBack.report()
+	wGone.report()
+	jBack, jGone := e.run(back), e.run(gone)
+
+	e.clock.Advance(3 * time.Hour) // the controller is down
+	e.restart()
+	if n, err := e.disp.ExpireQueued(ctx); err != nil || n != 0 {
+		t.Fatalf("first sweep after the restart: ExpireQueued = (%d, %v), want 0", n, err)
+	}
+	e.clock.Advance(40 * time.Second) // one worker reconnects
+	if cmds := wBack.poll(); len(cmds) != 1 || cmds[0].GetStartJob().GetJobId() != jBack.ID.String() {
+		t.Fatalf("the reconnected worker got %v", cmds)
+	}
+	wBack.report()
+
+	e.clock.Advance(15*time.Minute - 40*time.Second) // exactly the timeout since the start
+	if n, err := e.disp.ExpireQueued(ctx); err != nil || n != 0 {
+		t.Fatalf("at the timeout: ExpireQueued = (%d, %v), want 0", n, err)
+	}
+	e.clock.Advance(time.Microsecond)
+	if n, err := e.disp.ExpireQueued(ctx); err != nil || n != 1 {
+		t.Fatalf("after the timeout: ExpireQueued = (%d, %v), want 1", n, err)
+	}
+	if got := e.job(jGone.ID); got.Status != domain.JobFailed || got.Error.Code != jobs.CodeDispatchTimeout ||
+		!strings.HasSuffix(got.Error.Message, `worker "gone" is offline (last seen 2026-11-04T12:00:00Z)`) {
+		t.Errorf("job of the worker that stayed away = %s %+v", got.Status, got.Error)
+	}
+	if got := e.job(jBack.ID); got.Status != domain.JobDispatched {
+		t.Errorf("job of the worker that came back = %s", got.Status)
+	}
+}
+
 func TestRequeueRestartsTheDispatchClock(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -101,10 +101,13 @@ RETURNING d.*;
 -- name: CompleteDelivery :one
 -- Records the outcome of a claimed attempt: a compare-and-swap on the
 -- claimed attempt count, so a deliverer whose lease was reclaimed cannot
--- overwrite the newer attempt.
+-- overwrite the newer attempt. A released attempt (the deliverer was
+-- stopped, not the target at fault) is given back: it does not count
+-- against the attempt budget.
 UPDATE deliveries SET
     status = sqlc.arg(status)::text,
     last_error = sqlc.arg(last_error)::text,
+    attempts = attempts - CASE WHEN sqlc.arg(release_attempt)::boolean THEN 1 ELSE 0 END,
     lease_until = NULL,
     delivered_at = CASE WHEN sqlc.arg(status)::text = 'delivered' THEN sqlc.arg(at)::timestamptz ELSE delivered_at END,
     next_attempt_at = CASE WHEN sqlc.arg(status)::text = 'pending' THEN sqlc.arg(next_attempt_at)::timestamptz ELSE next_attempt_at END

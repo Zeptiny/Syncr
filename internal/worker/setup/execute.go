@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/platform/redact"
 	"github.com/Zeptiny/Syncr/internal/worker/atomicfile"
 	"github.com/Zeptiny/Syncr/internal/worker/config"
+	"github.com/Zeptiny/Syncr/internal/worker/paths"
 	"github.com/Zeptiny/Syncr/internal/worker/service"
 	"github.com/Zeptiny/Syncr/internal/worker/tlscert"
 )
@@ -33,7 +35,7 @@ func (s *Setup) execute(ctx context.Context, p *plan) (*Result, error) {
 
 	// 2. Tools.
 	s.step("Provisioning rclone and restic (pinned versions, checksum-verified)")
-	tools, err := s.Tools.Provision(ctx, p.dataDir, func(msg string) { s.printf("    %s\n", msg) })
+	tools, err := s.Tools.Provision(ctx, p.toolsDir, func(msg string) { s.printf("    %s\n", msg) })
 	if err != nil {
 		return nil, fmt.Errorf("provision the tools: %w\n"+
 			"The pinned binaries are downloaded from GitHub over HTTPS. If this machine has no internet access, "+
@@ -47,17 +49,22 @@ func (s *Setup) execute(ctx context.Context, p *plan) (*Result, error) {
 		}
 		s.printf("    %s %s (%s) %s\n", t.Name, t.Version, t.Source, t.Path)
 	}
+	s.checkPrograms(p, tools)
 
-	// 3. CA and certificate.
-	if err := s.stageCA(p); err != nil {
+	// 3. CA and certificate. They are only prepared here and written with
+	// the config: an existing setup (--force) keeps working on its old files
+	// if the enrollment fails.
+	var staged stagedFiles
+	if staged.ca, err = s.stageCA(p); err != nil {
 		return nil, err
 	}
 	if p.opts.Mode == config.LinkPassive {
 		s.step("Preparing the TLS certificate")
-		fp, err := s.prepareCertificate(p)
+		fp, pair, err := s.prepareCertificate(p)
 		if err != nil {
 			return nil, err
 		}
+		staged.cert = pair
 		res.Fingerprint = fp
 		s.printf("    fingerprint (SHA-256): %s\n", fp)
 	}
@@ -72,8 +79,11 @@ func (s *Setup) execute(ctx context.Context, p *plan) (*Result, error) {
 		res.PairingSecret = secret
 	}
 
-	// 5. Config.
+	// 5. Config, after the files it refers to.
 	s.step("Writing the configuration")
+	if err := s.writeStaged(p, staged); err != nil {
+		return nil, s.afterEnrollError(p, workerID, err)
+	}
 	cfg := s.buildConfig(p, workerID, secret)
 	body, err := config.Marshal(cfg)
 	if err != nil {
@@ -116,74 +126,172 @@ func scopeFlag(p *plan) string {
 	return ""
 }
 
-// prepareDirs creates the data and config directories, failing early with
-// advice when the rights are missing.
+// prepareDirs creates the data directory, and the tools and config
+// directories where they are not inside it, so that only the worker's
+// accounts can change them: the service runs the tools in them with full
+// rights and trusts the config (see atomicfile.MkdirPrivate). It fails early
+// with advice when the rights are missing or an existing directory cannot be
+// trusted.
 func (s *Setup) prepareDirs(p *plan) error {
 	configPerm := fs.FileMode(0o755)
 	if p.scope == service.ScopeUser {
 		configPerm = 0o700
 	}
-	for _, d := range []struct {
+	configDir := filepath.Dir(p.configPath)
+	type dir struct {
 		path string
 		perm fs.FileMode
-	}{
-		{p.dataDir, 0o700},
-		{filepath.Dir(p.configPath), configPerm},
-	} {
-		if err := os.MkdirAll(d.path, d.perm); err != nil {
-			if errors.Is(err, fs.ErrPermission) {
-				return fmt.Errorf("cannot create %s: %w\nSetting up for the whole machine needs root (Linux) or Administrator (Windows) rights. "+
-					"Run the command with sudo or from an elevated terminal, or add --user to set up for your account only, "+
-					"or choose directories you own with --data-dir and --config", d.path, err)
-			}
-			return fmt.Errorf("create %s: %w", d.path, err)
+		// own lists what the directory holds when it is the worker's
+		// alone; nil for a directory that may be shared.
+		own  []string
+		hint string
+	}
+	dirs := []dir{{p.dataDir, 0o700, []string{"tools", "tls", "scratch", "cache", "logs", filepath.Base(p.configPath)}, "choose another one with --data-dir"}}
+	if !within(p.dataDir, p.toolsDir) {
+		dirs = append(dirs, dir{p.toolsDir, 0o755, []string{"rclone", "restic"}, "point SYNCR_TOOLS_DIR at a directory of the worker's own, or unset it"})
+	}
+	if !within(p.dataDir, configDir) {
+		dirs = append(dirs, dir{configDir, configPerm, nil, "choose another location with --config"})
+	}
+	for _, d := range dirs {
+		res, err := atomicfile.MkdirPrivate(d.path, atomicfile.DirOptions{
+			Perm:               d.perm,
+			IncludeCurrentUser: p.scope == service.ScopeUser,
+			Reprotect:          d.own != nil && onlyEntries(d.path, d.own),
+		})
+		if errors.Is(err, fs.ErrPermission) {
+			return fmt.Errorf("cannot create %s: %w\nSetting up for the whole machine needs root (Linux) or Administrator (Windows) rights. "+
+				"Run the command with sudo or from an elevated terminal, or add --user to set up for your account only, "+
+				"or choose directories you own with --data-dir and --config", d.path, err)
+		}
+		if err != nil {
+			return fmt.Errorf("prepare %s: %w\nTo use another directory, %s", d.path, err, d.hint)
+		}
+		for _, w := range res.Warnings {
+			s.printf("    warning: %s\n", w)
+		}
+	}
+	// Inside the data directory, the config directory inherits its
+	// protection.
+	if within(p.dataDir, configDir) {
+		if err := os.MkdirAll(configDir, configPerm); err != nil {
+			return fmt.Errorf("create %s: %w", configDir, err)
 		}
 	}
 	return nil
 }
 
-// stageCA copies the controller CA next to the other worker files, so the
-// service does not depend on where the operator keeps the original.
-func (s *Setup) stageCA(p *plan) error {
+// onlyEntries reports whether dir is missing or holds nothing but the named
+// entries and hidden ones (the worker's temporary and lock files): whether
+// setup may treat it as the worker's own and restrict it.
+func onlyEntries(dir string, names []string) bool {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !slices.Contains(names, e.Name()) && !strings.HasPrefix(e.Name(), ".") {
+			return false
+		}
+	}
+	return true
+}
+
+// checkPrograms warns about the programs a system service will run (the
+// worker, and tools that are not managed in the protected tools directory)
+// when other accounts can replace them or put files next to them: whatever
+// is there runs with the service's full rights. Setup cannot move them, so
+// it only says so.
+func (s *Setup) checkPrograms(p *plan, tools []ToolStatus) {
+	if p.scope != service.ScopeSystem {
+		return
+	}
+	programs := []string{p.spec.Executable}
+	for _, t := range tools {
+		if t.Source != "managed" {
+			programs = append(programs, t.Path)
+		}
+	}
+	where := "for example /usr/local/bin (sudo install -m 0755 ...)"
+	if s.System.GOOS == "windows" {
+		where = `for example C:\Program Files\Syncr`
+	}
+	checked := map[string]bool{}
+	for _, program := range programs {
+		for _, target := range []string{program, filepath.Dir(program)} {
+			if checked[target] {
+				continue
+			}
+			checked[target] = true
+			problems, err := atomicfile.Exposure(target)
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+			case err != nil:
+				s.printf("    warning: cannot check who may change %s: %v\n", target, err)
+			case len(problems) > 0:
+				s.printf("    warning: %s: %s. The service runs %s from there with full rights, so whoever can change it can run their own code with those rights; "+
+					"keep it where only administrators can change it, %s\n", target, strings.Join(problems, "; "), filepath.Base(program), where)
+			}
+		}
+	}
+}
+
+// stagedFiles are written by writeStaged together with the config, once the
+// credentials are known: with --force they replace the files of a working
+// setup, which must survive a failed enrollment untouched.
+type stagedFiles struct {
+	// ca is the controller CA to copy to plan.caCopy.
+	ca []byte
+	// cert is a new certificate for plan.certPath and plan.keyPath; nil
+	// when an existing one is used.
+	cert *tlscert.Pair
+}
+
+// stageCA reads the controller CA, which writeStaged copies next to the
+// other worker files so that the service does not depend on where the
+// operator keeps the original. The TLS directory is created now, so that a
+// problem there shows before the enrollment token is spent.
+func (s *Setup) stageCA(p *plan) ([]byte, error) {
 	if p.opts.CAFile == "" {
-		return nil
+		return nil, nil
 	}
 	data, err := os.ReadFile(p.opts.CAFile)
 	if err != nil {
-		return fmt.Errorf("read the CA file: %w", err)
+		return nil, fmt.Errorf("read the CA file: %w", err)
 	}
 	if err := os.MkdirAll(p.tlsDir, 0o700); err != nil {
-		return fmt.Errorf("create %s: %w", p.tlsDir, err)
+		return nil, fmt.Errorf("create %s: %w", p.tlsDir, err)
 	}
-	if _, err := atomicfile.Write(p.caCopy, data, atomicfile.Options{Perm: 0o644}); err != nil {
-		return fmt.Errorf("store the CA file: %w", err)
-	}
-	return nil
+	return data, nil
 }
 
-// prepareCertificate creates the passive worker's certificate, or reuses what
-// is already in place (so that re-running a failed setup keeps the
-// fingerprint), and returns its fingerprint.
-func (s *Setup) prepareCertificate(p *plan) (string, error) {
+// prepareCertificate returns the fingerprint of the passive worker's
+// certificate: the one provided, the one already in place (so that
+// re-running a failed setup keeps the fingerprint), or a new one, which is
+// returned to be written by writeStaged.
+func (s *Setup) prepareCertificate(p *plan) (string, *tlscert.Pair, error) {
 	if !p.ownCert {
 		fp, err := tlscert.LoadFingerprint(p.certPath, p.keyPath)
 		if err != nil {
-			return "", fmt.Errorf("the certificate you provided cannot be used: %w", err)
+			return "", nil, fmt.Errorf("the certificate you provided cannot be used: %w", err)
 		}
-		return fp, nil
+		return fp, nil, nil
 	}
 	if !p.opts.Force {
 		if fp, err := tlscert.LoadFingerprint(p.certPath, p.keyPath); err == nil {
 			s.printf("    reusing the existing certificate %s\n", p.certPath)
-			return fp, nil
+			return fp, nil, nil
 		}
 	}
 	if err := os.MkdirAll(p.tlsDir, 0o700); err != nil {
-		return "", fmt.Errorf("create %s: %w", p.tlsDir, err)
+		return "", nil, fmt.Errorf("create %s: %w", p.tlsDir, err)
 	}
 	dns, ips, err := tlscert.SplitHosts(p.opts.TLSNames)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	host := p.opts.AdvertiseURL
 	if u, perr := url.Parse(p.opts.AdvertiseURL); perr == nil {
@@ -194,17 +302,31 @@ func (s *Setup) prepareCertificate(p *plan) (string, error) {
 	}
 	pair, err := tlscert.Generate(tlscert.Options{Hostname: host, DNSNames: dns, IPs: ips})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	w, err := tlscert.Write(p.certPath, p.keyPath, pair, p.scope == service.ScopeUser)
-	if err != nil {
-		return "", err
+	s.printf("    generated a new certificate (valid until %s); it is stored with the configuration\n", pair.NotAfter.Format(time.DateOnly))
+	return pair.Fingerprint, &pair, nil
+}
+
+// writeStaged stores the CA copy and a new certificate.
+func (s *Setup) writeStaged(p *plan, staged stagedFiles) error {
+	if staged.ca != nil {
+		if _, err := atomicfile.Write(p.caCopy, staged.ca, atomicfile.Options{Perm: 0o644}); err != nil {
+			return fmt.Errorf("store the CA file: %w", err)
+		}
+		s.printf("    %s (controller CA)\n", p.caCopy)
 	}
-	s.printf("    created %s (valid until %s)\n", p.certPath, pair.NotAfter.Format(time.DateOnly))
-	if w.ACLWarning != nil {
-		s.printf("    warning: could not restrict the private key to SYSTEM and Administrators: %v\n", w.ACLWarning)
+	if staged.cert != nil {
+		w, err := tlscert.Write(p.certPath, p.keyPath, *staged.cert, p.scope == service.ScopeUser)
+		if err != nil {
+			return err
+		}
+		s.printf("    %s and %s (new certificate)\n", p.certPath, p.keyPath)
+		if w.ACLWarning != nil {
+			s.printf("    warning: could not restrict the private key to SYSTEM and Administrators: %v\n", w.ACLWarning)
+		}
 	}
-	return pair.Fingerprint, nil
+	return nil
 }
 
 // credentials returns the worker ID (empty when registering by hand) and
@@ -296,8 +418,22 @@ func (s *Setup) selfCheck(ctx context.Context, p *plan, res *Result) (service.St
 		return service.StateNotInstalled, fmt.Errorf("self-check: the configuration does not load: %w", err)
 	}
 	ok("configuration %s is valid (link mode: %s)", p.configPath, loaded.Link.Mode)
+	// The tools must be where the service, which has none of setup's
+	// environment, will look for them.
+	serviceTools := loaded.Tools.Dir
+	if serviceTools == "" {
+		serviceTools = paths.ToolsDir(loaded.DataDir)
+	}
 	for _, t := range res.Tools {
-		ok("%s %s available", t.Name, t.Version)
+		switch {
+		case t.Source == "managed" && !within(serviceTools, t.Path):
+			return service.StateNotInstalled, fmt.Errorf("self-check: %s was installed at %s, but the service looks for managed tools in %s", t.Name, t.Path, serviceTools)
+		case t.Source == "path":
+			warn("%s %s was found on the PATH of this shell (%s); the service may run with another PATH. "+
+				"Set tools.%s_path in %s, or install it with: syncr-worker tools fetch --dir %s", t.Name, t.Version, t.Path, t.Name, p.configPath, serviceTools)
+		default:
+			ok("%s %s available", t.Name, t.Version)
+		}
 	}
 
 	state := service.StateNotInstalled
@@ -321,6 +457,12 @@ func (s *Setup) selfCheck(ctx context.Context, p *plan, res *Result) (service.St
 		}
 	}
 	return state, nil
+}
+
+// within reports whether path lies inside dir.
+func within(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // maxProbeWait bounds how long the self-check waits for a passive worker's

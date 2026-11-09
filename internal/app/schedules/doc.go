@@ -24,15 +24,24 @@
 //     scheduled job notifies its schedule's contacts only, never the
 //     contacts' JobEvents.
 //   - SetEnabled needs no version: pausing sets NextRunAt to zero and
-//     cancels the open run (no notification); resuming clears PausedReason
+//     cancels the open runs (no notification; a launching run gets a
+//     cancel request, Run.CancelRequested, for the scheduler to cancel its
+//     job and then the run); resuming clears PausedReason
 //     and sets NextRunAt to the next occurrence after now. Saving
 //     recomputes NextRunAt only when Cron, Timezone or Enabled changed.
 //   - Runs that cannot launch for a permanent reason (worker removed,
 //     definition no longer valid, a remote gone, owner disabled) fail and
 //     pause the schedule with PausedReason set (EndRun with pause).
-//   - A schedule has at most one open run (pending or launching): a later
-//     occurrence is merged into it (Coalesced, the later deadline), so a
-//     desktop that slept runs once when it wakes up.
+//   - A schedule has at most one pending run: a later occurrence due
+//     before its deadline is merged into it (Coalesced), so a desktop that
+//     slept runs once when it wakes up. The run's deadline is fixed when it
+//     opens: an occurrence due at or after it supersedes the run (missed,
+//     MissedReason) and opens its own, so a worker that stays offline
+//     produces missed runs instead of one run waiting forever. A manual
+//     request merging into the pending run extends its deadline to the
+//     request's own. A launching run absorbs nothing: an occurrence due
+//     meanwhile opens its own pending run, which the overlap policy holds
+//     or launches.
 //
 // # Policies (policy.go)
 //
@@ -41,7 +50,9 @@
 //   - Fire, when NextRunAt <= now (PlanFire): (last, n) :=
 //     expr.Latest(NextRunAt - 1ns, now, MaxCoalesce); the run is for last
 //     with Coalesced n - 1, and NewNext = expr.Next(now). Occurrences that
-//     passed while the controller was down are never run one by one.
+//     passed while the controller was down are never run one by one; those
+//     whose deadline had passed when they fired are missed with
+//     ReasonControllerUnavailable instead (FirePlan.Late, LateFor).
 //   - Deadline: run_late is ScheduledFor + MaxDelay, or the next
 //     occurrence after ScheduledFor for MaxDelay 0 (ManualUntilNext if
 //     there is none); skip is ScheduledFor + SkipGrace. A manual run's

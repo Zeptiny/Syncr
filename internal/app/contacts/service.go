@@ -317,7 +317,11 @@ func (s *Service) UsedBy(ctx context.Context, actor domain.Actor, ids []domain.C
 // The configuration is validated first (a *domain.ValidationError). Tests
 // are rate limited per user (ErrRateLimited) and bounded by
 // Config.SendTimeout. A failure of the channel is a TestResult with OK
-// false, not an error; its Reason never contains a secret.
+// false, not an error; its Reason never contains a secret. Only
+// administrators see what the destination or the network answered (see
+// notify.SendError.Public): other users get notify.GenericReason, without
+// status or latency, so test sends cannot probe the controller's network.
+// The detail is logged.
 func (s *Service) SendTest(ctx context.Context, actor domain.Actor, id domain.ContactID, in *Input) (TestResult, error) {
 	if actor.UserID.IsZero() {
 		return TestResult{}, fmt.Errorf("send test notification: %w: contacts belong to a user account", domain.ErrPermissionDenied)
@@ -345,10 +349,23 @@ func (s *Service) SendTest(ctx context.Context, actor domain.Actor, id domain.Co
 			// The caller gave up; there is nobody to show a result to.
 			return TestResult{}, fmt.Errorf("send test notification: %w", cerr)
 		}
-		res.Reason, res.Status = failureReason(err, errors.Is(sendCtx.Err(), context.DeadlineExceeded), s.cfg.SendTimeout)
+		detail := failure(err, errors.Is(sendCtx.Err(), context.DeadlineExceeded), s.cfg.SendTimeout)
+		// A safety net: the channel redacted the reply already.
+		detail.reason = notify.NewRedactor(cfg).Redact(detail.reason)
+		res.Reason, res.Status = detail.reason, detail.status
+		if !actor.IsAdmin() && !detail.public {
+			// Anyone may create a contact, so a detailed answer (refused,
+			// filtered, TLS or HTTP details, how long it took) would let
+			// any user scan the networks the controller can reach.
+			// Administrators control the network policy and see it.
+			res.Reason, res.Status, res.Latency = notify.GenericReason, 0, 0
+		}
+		s.log.InfoContext(ctx, "test notification sent", "contact_id", optID(id), "owner_id", actor.UserID.String(),
+			"channel_type", ch.ID(), "ok", false, "status", detail.status, "reason", detail.reason)
+		return res, nil
 	}
 	s.log.InfoContext(ctx, "test notification sent", "contact_id", optID(id), "owner_id", actor.UserID.String(),
-		"channel_type", ch.ID(), "ok", res.OK, "status", res.Status, "reason", res.Reason)
+		"channel_type", ch.ID(), "ok", true)
 	return res, nil
 }
 
@@ -391,23 +408,31 @@ func (s *Service) testConfig(ctx context.Context, actor domain.Actor, id domain.
 	return ch, cfg, nil
 }
 
-// failureReason describes a failed Send for people: the *notify.SendError's
+// failure describes a failed Send for people: the *notify.SendError's
 // sanitized reason and status, or a generic text for anything else (whose
 // message could quote the configuration). timedOut says whether the send's
 // deadline passed.
-func failureReason(err error, timedOut bool, timeout time.Duration) (string, int) {
+func failure(err error, timedOut bool, timeout time.Duration) failed {
 	var serr *notify.SendError
 	if errors.As(err, &serr) {
 		reason := serr.Reason
 		if reason == "" {
 			reason = "the target rejected the notification"
 		}
-		return reason, serr.Status
+		return failed{reason: reason, status: serr.Status, public: serr.Public}
 	}
 	if timedOut {
-		return fmt.Sprintf("no answer within %s", timeout), 0
+		return failed{reason: fmt.Sprintf("no answer within %s", timeout)}
 	}
-	return "the notification could not be sent", 0
+	return failed{reason: "the notification could not be sent"}
+}
+
+// failed is a failed send as administrators see it. public says that
+// everybody may be shown it (notify.SendError.Public).
+type failed struct {
+	reason string
+	status int
+	public bool
 }
 
 // Usable returns the names of ids, which must all be contacts of owner:

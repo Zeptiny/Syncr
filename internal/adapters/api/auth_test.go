@@ -92,6 +92,14 @@ func protectedCalls(e *testEnv, authorization string) map[string]func(ctx contex
 // token of testAdmin.
 func withSessionAuth(t *testing.T) (mutate func(*Deps), token string) {
 	t.Helper()
+	mutate, token, _ = withSessionAuthService(t)
+	return mutate, token
+}
+
+// withSessionAuthService is withSessionAuth that also returns the users
+// service, to revoke the token.
+func withSessionAuthService(t *testing.T) (mutate func(*Deps), token string, svc *users.Service) {
+	t.Helper()
 	ctx := context.Background()
 	st := memstore.New()
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
@@ -112,7 +120,7 @@ func withSessionAuth(t *testing.T) (mutate func(*Deps), token string) {
 		}
 		return l
 	}
-	svc, err := users.New(users.Deps{
+	svc, err = users.New(users.Deps{
 		Users: st, Sessions: st, Tokens: st, Hasher: hasher,
 		Limiters: users.Limiters{ClientIP: limiter(), Username: limiter(), Setup: limiter()},
 		Clock:    clk, IDs: &idgen.Sequential{}, Random: crand.Reader,
@@ -128,7 +136,7 @@ func withSessionAuth(t *testing.T) (mutate func(*Deps), token string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return func(d *Deps) { d.Auth = auth }, token
+	return func(d *Deps) { d.Auth = auth }, token, svc
 }
 
 func TestAuthRejectsBadCredentials(t *testing.T) {

@@ -483,50 +483,71 @@ func TestSecretsAreScrubbed(t *testing.T) {
 	}
 }
 
+// TestSecretsAreScrubbedBeforeClipping puts secrets across every length
+// limit restic's output is cut to: clipping before scrubbing would leave a
+// prefix of the secret that matches nothing and leaks.
+func TestSecretsAreScrubbedBeforeClipping(t *testing.T) {
+	t.Parallel()
+	straddle := func(limit int) string { return strings.Repeat("x", limit-8) + testSecret + " tail" }
+	tests := []struct {
+		name  string
+		setup func(te *testEnv)
+		check func(t *testing.T, res runner.Result, err error)
+	}{
+		{"diagnostic line", func(te *testEnv) {
+			te.sup.exited(1).stderr = []string{straddle(maxTailLineBytes)}
+		}, func(t *testing.T, _ runner.Result, err error) {
+			t.Helper()
+			mustNotLeak(t, err.Error())
+		}},
+		{"exit_error message", func(te *testEnv) {
+			te.sup.exited(1).stderr = []string{`{"message_type":"exit_error","code":1,"message":"` + straddle(maxFailureDetail) + `"}`}
+		}, func(t *testing.T, _ runner.Result, err error) {
+			t.Helper()
+			mustNotLeak(t, err.Error())
+		}},
+		{"item error", func(te *testEnv) {
+			te.sup.exited(3)
+			te.sup.stdout = fixture(t, "backup_warn.out")[:1]
+			te.sup.stderr = []string{`{"message_type":"error","error":{"message":"` + straddle(maxTailLineBytes-len("/data/f: ")) + `"},"during":"archival","item":"/data/f"}`}
+		}, func(t *testing.T, res runner.Result, err error) {
+			t.Helper()
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			for _, w := range res.Warnings {
+				mustNotLeak(t, w)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			te := newTestEnv(t)
+			tc.setup(te)
+			res, _, err := te.run(backupSpec(remoteRepo(), &syncrv1.ResticBackup{Paths: []string{te.local("src")}}))
+			if err == nil && tc.name != "item error" {
+				t.Fatal("expected an error")
+			}
+			tc.check(t, res, err)
+		})
+	}
+}
+
+// mustNotLeak fails if text holds a secret or a recognizable piece of one.
+func mustNotLeak(t *testing.T, text string) {
+	t.Helper()
+	for _, secret := range []string{testPassword, testSecret} {
+		if strings.Contains(text, secret[:6]) {
+			t.Errorf("text leaks (part of) a secret: %q", text)
+		}
+	}
+}
+
 type leakyPolicy struct{}
 
 func (leakyPolicy) Resolve(string) (string, error) {
 	return "", errors.New("denied for password " + testPassword)
-}
-
-func TestScrubber(t *testing.T) {
-	t.Parallel()
-	sc := newScrubber([]string{"abc", "abcdef", "", "abc"})
-	tests := map[string]string{
-		"no secret here": "no secret here",
-		"the abc is out": "the [redacted] is out",
-		"abcdef whole":   "[redacted] whole", // the longer secret wins
-		"abcabc":         "[redacted][redacted]",
-		"":               "",
-		"newline\nabc\n": "newline\n[redacted]\n",
-	}
-	for in, want := range tests {
-		if got := sc.String(in); got != want {
-			t.Errorf("String(%q) = %q, want %q", in, got, want)
-		}
-	}
-	if sc.Error(nil) != nil {
-		t.Error("Error(nil) != nil")
-	}
-	orig := errors.New("x abc y")
-	clean := sc.Error(orig)
-	if clean.Error() != "x [redacted] y" || !errors.Is(clean, orig) {
-		t.Errorf("Error() = %v (unwrap ok: %v)", clean, errors.Is(clean, orig))
-	}
-	same := errors.New("nothing")
-	if _, wrapped := errors.AsType[*scrubbedError](sc.Error(same)); wrapped {
-		t.Error("an error without secrets must be returned unchanged")
-	}
-}
-
-func TestClip(t *testing.T) {
-	t.Parallel()
-	if got := clip("héllo wörld", 2); got != "h..." {
-		t.Errorf("clip split a rune: %q", got)
-	}
-	if got := clip("short", 10); got != "short" {
-		t.Errorf("clip = %q", got)
-	}
 }
 
 func keys(m map[string]string) []string {

@@ -86,29 +86,34 @@ const completeDelivery = `-- name: CompleteDelivery :one
 UPDATE deliveries SET
     status = $1::text,
     last_error = $2::text,
+    attempts = attempts - CASE WHEN $3::boolean THEN 1 ELSE 0 END,
     lease_until = NULL,
-    delivered_at = CASE WHEN $1::text = 'delivered' THEN $3::timestamptz ELSE delivered_at END,
-    next_attempt_at = CASE WHEN $1::text = 'pending' THEN $4::timestamptz ELSE next_attempt_at END
-WHERE id = $5::uuid AND status = 'sending' AND attempts = $6::integer
+    delivered_at = CASE WHEN $1::text = 'delivered' THEN $4::timestamptz ELSE delivered_at END,
+    next_attempt_at = CASE WHEN $1::text = 'pending' THEN $5::timestamptz ELSE next_attempt_at END
+WHERE id = $6::uuid AND status = 'sending' AND attempts = $7::integer
 RETURNING id, contact_id, owner_id, event, dedupe_key, job_id, schedule_id, payload, status, attempts, max_attempts, next_attempt_at, lease_until, last_attempt_at, delivered_at, last_error, created_at
 `
 
 type CompleteDeliveryParams struct {
-	Status        string
-	LastError     string
-	At            pgtype.Timestamptz
-	NextAttemptAt pgtype.Timestamptz
-	ID            pgtype.UUID
-	Attempts      int32
+	Status         string
+	LastError      string
+	ReleaseAttempt bool
+	At             pgtype.Timestamptz
+	NextAttemptAt  pgtype.Timestamptz
+	ID             pgtype.UUID
+	Attempts       int32
 }
 
 // Records the outcome of a claimed attempt: a compare-and-swap on the
 // claimed attempt count, so a deliverer whose lease was reclaimed cannot
-// overwrite the newer attempt.
+// overwrite the newer attempt. A released attempt (the deliverer was
+// stopped, not the target at fault) is given back: it does not count
+// against the attempt budget.
 func (q *Queries) CompleteDelivery(ctx context.Context, arg CompleteDeliveryParams) (Delivery, error) {
 	row := q.db.QueryRow(ctx, completeDelivery,
 		arg.Status,
 		arg.LastError,
+		arg.ReleaseAttempt,
 		arg.At,
 		arg.NextAttemptAt,
 		arg.ID,

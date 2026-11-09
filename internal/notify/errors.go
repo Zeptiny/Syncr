@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -26,6 +27,41 @@ type SendError struct {
 	Status int
 	// Reason says what went wrong, for people.
 	Reason string
+	// Public says that Status and Reason tell nothing about the
+	// destination's state (our own validation, a fixed public service such
+	// as Discord), so every user may be shown them. Any other failure is
+	// the destination's or the network's answer (open or closed port,
+	// DNS, TLS details, HTTP status and body), which would turn a
+	// contact into a probe of the controller's network for users who
+	// are not administrators: they are shown GenericReason instead
+	// (see Visible).
+	Public bool
+}
+
+// GenericReason is what users who may not see network details are shown
+// for a failure that is not Public.
+const GenericReason = "the notification could not be delivered to the destination; an administrator can see the details in the controller's log"
+
+// Visible returns the status and reason to show a user: the failure's own
+// for administrators and for Public failures, a status-less GenericReason
+// otherwise.
+func (e *SendError) Visible(admin bool) (status int, reason string) {
+	if admin || e.Public {
+		return e.Status, e.Reason
+	}
+	return 0, GenericReason
+}
+
+// Public marks err, if it is a *SendError, as safe to show to every user
+// (see SendError.Public) and returns it; other errors are returned as is.
+func Public(err error) error {
+	var serr *SendError
+	if !errors.As(err, &serr) {
+		return err
+	}
+	c := *serr
+	c.Public = true
+	return &c
 }
 
 // Error describes the failure.

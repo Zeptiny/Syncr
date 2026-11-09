@@ -13,10 +13,24 @@ export interface QueryClientOptions {
   onUnauthenticated?: (client: QueryClient) => void;
 }
 
+const unauthenticatedHandlers = new WeakMap<QueryClient, (client: QueryClient) => void>();
+
+/**
+ * reportUnauthenticated sends err through the session-expiry path of client
+ * when it is UNAUTHENTICATED. Calls that bypass the query cache (live
+ * streams) use it, so an expired session ends the same way everywhere.
+ * It reports whether err was UNAUTHENTICATED.
+ */
+export function reportUnauthenticated(client: QueryClient, err: unknown): boolean {
+  if (!isUnauthenticated(err)) return false;
+  unauthenticatedHandlers.get(client)?.(client);
+  return true;
+}
+
 /** createQueryClient returns the app's QueryClient. */
 export function createQueryClient(opts: QueryClientOptions = {}): QueryClient {
   const handle = (err: unknown) => {
-    if (isUnauthenticated(err)) opts.onUnauthenticated?.(client);
+    reportUnauthenticated(client, err);
   };
   const client: QueryClient = new QueryClient({
     // A failing GetSession is how the guards detect a signed-out user;
@@ -36,5 +50,6 @@ export function createQueryClient(opts: QueryClientOptions = {}): QueryClient {
       mutations: { retry: false },
     },
   });
+  if (opts.onUnauthenticated) unauthenticatedHandlers.set(client, opts.onUnauthenticated);
   return client;
 }

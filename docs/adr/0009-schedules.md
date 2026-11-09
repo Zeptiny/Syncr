@@ -73,17 +73,45 @@ has to handle:
   is NotFound. Admins see the resulting jobs through `ListJobs.all_users`.
 - Each occurrence becomes a **run**: `pending` (waiting for its worker or an
   active run), `launching` (its job ID reserved), then `launched`, `missed`,
-  `failed` or `cancelled`. **A schedule has at most one open run** (pending
-  or launching; a unique partial index): a later occurrence is merged into
-  it (`coalesced + 1`, the later deadline), so a desktop that slept through
-  three nights runs once when it wakes (anacron-style).
+  `failed` or `cancelled`. **A schedule has at most one pending run** (a
+  unique partial index; migration 00005 narrowed it from one open run): a
+  later occurrence due before the run's deadline is merged into it
+  (`coalesced + 1`), so a desktop that slept through three nights runs
+  once when it wakes (anacron-style, within the deadline). The deadline is
+  fixed when the run opens and a merge never moves it: an occurrence due
+  at or after it supersedes the run, which is missed (and notified) with
+  the reason the scheduler would give at its deadline, and opens a run of
+  its own. Otherwise a run would absorb every next occurrence and never be
+  missed, e.g. with "until the next occurrence" or a `max_delay` longer
+  than the period and a worker that stays offline. A manual request that
+  merges into the pending run extends its deadline to the request's own
+  (it asked to run now). A launching run absorbs nothing, since its job is
+  already decided: an occurrence due while a run launches opens a pending
+  run of its own, which the overlap policy then records missed (skip, as
+  the launching run is active), holds (queue) or launches alongside
+  (allow).
 - **Fire** (pure, `PlanFire`): when `next_run_at <= now`, one run for the
   latest occurrence in `[next_run_at, now]`, the earlier ones counted in
   `coalesced`; `next_run_at` becomes the next occurrence after now.
   Downtime never replays occurrences one by one.
+- **Controller downtime** (`controller_unavailable`): a running scheduler
+  fires an occurrence within a tick, so an occurrence whose deadline has
+  already passed when it fires means the controller was down (or not
+  scheduling) from before that deadline. Such occurrences are missed with
+  `controller_unavailable`: the latest one's run is recorded missed instead
+  of opened, and earlier ones are recorded as one missed run (for the
+  latest of them, the others in `coalesced`) beside the run of those that
+  may still start; a pending run superseded by such a late fire gets the
+  same reason. With "until the next occurrence" every occurrence but the
+  latest is past its deadline after downtime, so the latest runs and the
+  others are reported missed. A pending run whose deadline passes during
+  downtime without a late fire (e.g. no occurrence came due) is still
+  missed as `worker_offline`: no state tells how long the controller was
+  down.
 - **Deadline**: `run_late` waits `max_delay` (at most 7 days), or until the
-  next occurrence when it is 0; `skip` allows a 5-minute grace. A manual run
-  counts from the request.
+  next occurrence when it is 0 (so each next occurrence supersedes a run
+  still waiting); `skip` allows a 5-minute grace. A manual run counts from
+  the request.
 - **Overlap**: `skip` (default) records the occurrence as `missed`
   (`overlap`) while a run is active (launching, or its job queued,
   dispatched or running); `queue` waits for it; `allow` runs alongside.
@@ -94,8 +122,12 @@ has to handle:
   is disabled with `paused_reason`, shown in the UI. A label without workers
   fails the run but does not pause (an admin may add the label). A run that
   failed because its owner is disabled is not notified.
-- Pausing needs no version and cancels the open run; resuming recomputes the
-  next run from now. Edits recompute it only when the expression, zone or
+- Pausing needs no version and cancels the open runs: a pending run at
+  once; a launching run, whose job may already exist, gets a cancel request
+  (it stays `launching` with reason `disabled`, and can then only become
+  `cancelled`), so its launch cannot complete and the scheduler cancels its
+  job, if created, and then the run. A paused schedule's run never keeps a
+  job running. Resuming recomputes the next run from now. Edits recompute it only when the expression, zone or
   enabled state changed, so an edit never rewinds or skips a fire.
 
 ### The scheduler: `internal/controller/scheduler`
@@ -114,14 +146,19 @@ application locks or leader election:
 
 1. A fire is a compare-and-swap on `next_run_at` in one transaction with
    the run's merge or insert.
-2. The one-open-run index makes a second open run impossible.
+2. The one-pending-run index makes a second pending run impossible.
 3. The launch has two phases: `pending -> launching` is a compare-and-swap
    that reserves a job ID on the run, then `jobs.Create` with that preset
    ID (idempotent: AlreadyExists counts as success), then `launching ->
    launched`.
 4. A crash between any two steps is completed from the stored state: a run
    found `launching` is created with its reserved ID on the next pass,
-   whatever its deadline (the launch was decided in time).
+   whatever its deadline (the launch was decided in time), unless it has a
+   cancel request (its schedule was paused meanwhile): then its job, if it
+   exists, is cancelled and the run ends `cancelled`. A `launching ->
+   launched` that loses its compare-and-swap after the job was created
+   re-reads the run and cancels the job unless the run was launched (by
+   another controller), so a job runs only for a launched run.
 
 `schedule_runs.job_id` therefore has no foreign key: the ID exists before
 the job. Deleting a schedule cascades to its runs and links; its jobs stay,
@@ -130,12 +167,18 @@ with `schedule_id` cleared.
 ### Postgres
 
 `schedules`, `schedule_remotes`, `schedule_contacts` and `schedule_runs`
-(migration 00003). Every port method is one statement or one transaction:
+(migration 00003; 00005 makes the one-open-run index one pending run).
+Every port method is one statement or one transaction:
 `FireSchedule` is the CAS plus the merge or insert; `UpdateRun` is a CAS on
 the status plus the optional auto-pause; `UpdateSchedule` locks the row
-(`FOR UPDATE`) to decide the version check and whether the open run must be
-cancelled. The races (fires, open runs, launch claims) are covered by
-integration tests across two connection pools.
+(`FOR UPDATE`) to decide the version check and whether the open runs must be
+cancelled. Every transaction that writes a schedule's runs locks the
+schedule row first, then the runs (`UpdateRun` and `AddRun` lock the
+schedule before touching a run), so an auto-pause racing a user's pause
+cannot deadlock. A deadlock or serialization failure that still happens
+(e.g. with other tables) maps to `ErrConflict`, a lost race the caller
+retries. The races (fires, open runs, launch claims, the lock order) are
+covered by integration tests across two connection pools.
 
 ## Consequences
 

@@ -9,7 +9,7 @@ import (
 )
 
 // JobService is the part of the jobs use cases the API calls (implemented
-// by *jobs.Service). Every use case but LatestSample takes the caller's
+// by *jobs.Service). Every use case but LatestSamples takes the caller's
 // actor and scopes by it: a user's own jobs, any job for an admin, and
 // domain.ErrNotFound for another user's job.
 type JobService interface {
@@ -19,8 +19,9 @@ type JobService interface {
 	Cancel(ctx context.Context, actor domain.Actor, id domain.JobID) (jobs.Job, error)
 	Watch(ctx context.Context, actor domain.Actor, id domain.JobID, fn func(jobs.Update) error) error
 	Samples(ctx context.Context, actor domain.Actor, id domain.JobID) ([]jobs.Sample, error)
-	// LatestSample is only called for jobs the actor has just read.
-	LatestSample(ctx context.Context, id domain.JobID) (jobs.Sample, bool, error)
+	// LatestSamples is only called for jobs the actor has just read; one
+	// store query for all of them.
+	LatestSamples(ctx context.Context, ids []domain.JobID) (map[domain.JobID]jobs.Sample, error)
 }
 
 var _ JobService = (*jobs.Service)(nil)

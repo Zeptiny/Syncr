@@ -288,13 +288,16 @@ func (s *Store) CompleteDelivery(ctx context.Context, c notifications.Completion
 	default:
 		return notifications.Delivery{}, fmt.Errorf("%s: %w: status %q", op, domain.ErrInvalidArgument, c.Status)
 	}
+	if c.Release && c.Status != notifications.StatusPending {
+		return notifications.Delivery{}, fmt.Errorf("%s: %w: only a pending delivery can release its attempt", op, domain.ErrInvalidArgument)
+	}
 	attempts, err := int32Of(c.Attempts)
 	if err != nil {
 		return notifications.Delivery{}, fmt.Errorf("%s: %w", op, err)
 	}
 	row, err := s.q.CompleteDelivery(ctx, db.CompleteDeliveryParams{
 		ID: pgID(c.ID), Attempts: attempts, Status: string(c.Status), LastError: cleanText(c.LastError),
-		At: pgTime(c.At), NextAttemptAt: pgTime(c.NextAttemptAt),
+		At: pgTime(c.At), NextAttemptAt: pgTime(c.NextAttemptAt), ReleaseAttempt: c.Release,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return notifications.Delivery{}, s.missingOr(ctx, op, c.ID,

@@ -199,7 +199,9 @@ func demoSchedules(seed time.Time) []demoSchedule {
 		{
 			owner: ownerAdmin, name: sOffice, description: "Copy the office documents to MinIO while the PC is on.",
 			cron: "0 * * * *", timezone: "Europe/Berlin", worker: "office-pc",
-			missed: schedules.MissedPolicy{Action: schedules.MissedRunLate}, overlap: schedules.OverlapSkip,
+			// Long enough for a night's runs to merge into one (a run's
+			// deadline is fixed when it opens).
+			missed: schedules.MissedPolicy{Action: schedules.MissedRunLate, MaxDelay: 14 * h}, overlap: schedules.OverlapSkip,
 			links: []demoLink{{cMail, []domain.NotificationEvent{domain.EventFailed, domain.EventMissed}}},
 			job:   demoJob{owner: ownerAdmin, mode: copyMode, src: loc{"", `C:\Users\ada\Documents`}, dst: loc{rMinIO, "office-pc/documents"}},
 			age:   2*d + 4*h,

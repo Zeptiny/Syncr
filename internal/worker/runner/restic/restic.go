@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
+	"github.com/Zeptiny/Syncr/internal/worker/runner/scrub"
 )
 
 // Supervisor runs a child process. *proc.Supervisor implements it.
@@ -125,12 +128,12 @@ func (r *kindRunner) Run(ctx context.Context, job runner.Job, emit runner.EmitFu
 		return res, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "invalid job ID %q", job.ID)
 	}
 	// Every error leaving this method is scrubbed of the job's secrets.
-	sc := newScrubber(secretsOf(job.Spec))
+	secrets := secretsOf(job.Spec)
 	cmd, err := r.plan(r.e, job.Spec)
 	if err != nil {
-		return res, sc.Error(err)
+		return res, scrub.New(secrets).Error(err)
 	}
-	res, err = r.e.run(ctx, r.kind, job, cmd, emit)
+	res, sc, err := r.e.run(ctx, r.kind, job, cmd, emit, secrets)
 	if err != nil && !runner.Canceled(err) {
 		err = sc.Error(err)
 	}
@@ -141,23 +144,29 @@ func (r *kindRunner) Run(ctx context.Context, job runner.Job, emit runner.EmitFu
 	return res, err
 }
 
-// run executes a planned command.
-func (e *engine) run(ctx context.Context, kind string, job runner.Job, cmd command, emit runner.EmitFunc) (runner.Result, error) {
+// run executes a planned command. It returns the scrubber for every secret
+// of the run, with which restic's output was scrubbed and with which the
+// caller must scrub the result.
+func (e *engine) run(ctx context.Context, kind string, job runner.Job, cmd command, emit runner.EmitFunc, secrets []string) (runner.Result, *scrub.Scrubber, error) {
 	res := runner.Result{ExitCode: -1}
 	spec := job.Spec
+	sc := scrub.New(secrets)
 
 	repo, viaRclone, err := e.repository(spec, cmd.repo)
 	if err != nil {
-		return res, err
+		return res, sc, err
 	}
 	env, err := e.baseEnv(spec, cmd.repo.GetPassword(), viaRclone)
 	if err != nil {
-		return res, err
+		return res, sc, err
+	}
+	if obscured := obscuredSecrets(spec, env); len(obscured) > 0 {
+		sc = scrub.New(append(slices.Clip(secrets), obscured...))
 	}
 
 	scratch, cleanup, err := e.scratchDir(job.ID)
 	if err != nil {
-		return res, err
+		return res, sc, err
 	}
 	defer cleanup()
 	for _, name := range []string{"TMPDIR", "TEMP", "TMP"} {
@@ -175,7 +184,7 @@ func (e *engine) run(ctx context.Context, kind string, job runner.Job, cmd comma
 	argv = append(argv, cmd.verb)
 	argv = append(argv, cmd.args...)
 
-	s := newSession(kind, emit)
+	s := newSession(kind, emit, sc)
 	pres, err := e.cfg.Supervisor.Run(ctx, proc.Spec{
 		Path:   e.cfg.ResticPath,
 		Args:   argv,
@@ -190,20 +199,27 @@ func (e *engine) run(ctx context.Context, kind string, job runner.Job, cmd comma
 	switch {
 	case err == nil:
 	case runner.Canceled(err):
-		return res, err
+		return res, sc, err
 	default:
 		if exitErr, ok := errors.AsType[*proc.ExitError](err); ok {
-			return e.exitFailure(res, kind, cmd.verb, exitErr.ExitCode, s)
+			res, err := e.exitFailure(res, kind, cmd.verb, exitErr.ExitCode, s)
+			return res, sc, err
 		}
-		return res, err // *proc.StartError and collection errors
+		if pres.ExitCode != exitOK || !errors.Is(err, exec.ErrWaitDelay) {
+			return res, sc, err // *proc.StartError and other collection errors
+		}
+		// restic succeeded, but a process it started (rclone) kept the
+		// output pipes open past the grace period. restic's own output is
+		// complete, so the run is judged by it like any other.
+		e.log.Warn("restic output not fully collected", "job_id", job.ID, "error", err.Error())
 	}
 
 	out, err := s.output(job.Spec)
 	if err != nil {
-		return res, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "restic %s: %w", cmd.verb, err)
+		return res, sc, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "restic %s: %w", cmd.verb, err)
 	}
 	res.Output = out
-	return res, nil
+	return res, sc, nil
 }
 
 // exitFailure maps a non-zero restic exit to the job outcome. A backup that
@@ -220,7 +236,8 @@ func (e *engine) exitFailure(res runner.Result, kind, verb string, code int, s *
 			return res, nil
 		}
 	}
-	return res, failure(verb, code, clip(s.detail(), maxFailureDetail))
+	// detail is scrubbed whole before it is shortened.
+	return res, failure(verb, code, s.sc.Clip(s.detail(), maxFailureDetail))
 }
 
 // incompleteWarnings describes a backup that exited with code 3: how many

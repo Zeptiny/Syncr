@@ -109,9 +109,13 @@ On stop (service stop, Ctrl-C, SIGTERM) the worker cancels its running jobs
 (rclone and restic get 10 s to exit, then they are killed), reports them as
 cancelled by the shutdown (the controller shows them `interrupted`, code
 `worker_shutdown`), and gives the controller up to 5 s to collect those
-results. The whole stop stays under 20 s, the time a service
-manager allows. If the worker dies instead (crash, power loss), the controller
-marks its running jobs `interrupted` (`worker_restarted`) when it comes back.
+results. Jobs still waiting in the worker's queue never started, so the
+controller queues them again for the worker's next start. The whole stop
+stays under 20 s, the time a service manager allows. If the worker dies
+instead (crash, SIGKILL, out of memory), its rclone and restic processes are
+killed with it (on Linux and Windows; on other systems they finish or fail on
+their own), and the controller marks its running jobs `interrupted`
+(`worker_restarted`) when it comes back.
 
 ### Secrets
 
@@ -121,12 +125,37 @@ file, so the file must be private:
 - Linux: setup writes it with mode `0600` (owner only), atomically, in a
   directory of mode `0755` (system) or `0700` (user). The private key of a
   generated certificate is `0600` too.
-- Windows: setup restricts the file's ACL to `SYSTEM` and `Administrators`
-  (and, for `--user` installs, the installing user), without inheriting from
-  the parent folder. This is best effort: if the ACL cannot be set, setup
-  prints a warning and you should restrict the file yourself. Because the
-  `Administrators` entry only applies to an elevated token, run
+- Windows: setup creates the file with an ACL limited to `SYSTEM` and
+  `Administrators` (and, for `--user` installs, the installing user), not
+  inherited from the parent folder, already on the temporary file it writes
+  before renaming it into place. This is best effort: if the ACL cannot be
+  built, setup prints a warning and you should restrict the file yourself.
+  Because the `Administrators` entry only applies to an elevated token, run
   `syncr-worker run` by hand from an elevated terminal for a system install.
+
+The directories matter as much as the files: the service runs the tools in
+`<data_dir>/tools` and trusts the config, so whoever can change those
+directories can run code with the worker's rights. Setup therefore prepares
+the data directory, and the tools and config directories where they are not
+inside it:
+
+- Windows: a directory setup creates (and any missing parent) gets the same
+  private ACL, inherited by everything inside. An existing one must be a real
+  directory (not a link or junction) owned by `SYSTEM`, `Administrators`,
+  `TrustedInstaller` or the account running setup; otherwise setup stops and
+  says so, since another account may have created it in advance. If other
+  accounts can change an existing directory, setup restricts it when it holds
+  only the worker's files (and every file in it has one of those owners), and
+  refuses it otherwise, before contacting the controller.
+- Linux: directories are created as before. An existing one that every user
+  may write to (without the sticky bit) is refused; one owned by another
+  account or writable by its group is reported as a warning.
+
+For a system install, setup also warns when other accounts can change the
+`syncr-worker` binary, the directory it is in, or an rclone or restic binary
+that is not in the managed tools directory, because the service runs them
+with full rights. Keep them where only administrators can change them, such
+as `C:\Program Files\Syncr` or `/usr/local/bin`.
 
 In memory the secrets are `redact.Secret` values: printing or logging the
 loaded configuration (with `%v`, `%+v`, slog text or JSON) shows `[redacted]`,
@@ -155,6 +184,14 @@ fix it. Inspect the sources with `syncr-worker tools status`.
 `tools fetch` and `tools status` take `--dir`, else `SYNCR_TOOLS_DIR`, else
 `<SYNCR_DATA_DIR or the default data dir>/tools`. A `data_dir` or `tools.dir`
 set only in the YAML file is not visible to them: pass `--dir` for those.
+
+`syncr-worker setup` installs missing tools into `SYNCR_TOOLS_DIR` when it is
+set, else into `<data_dir>/tools`, and writes what the service needs to find
+them again: always `data_dir`, `tools.dir` when it is not `<data_dir>/tools`,
+and `tools.rclone_path` / `tools.restic_path` for binaries given with
+`SYNCR_RCLONE_PATH` / `SYNCR_RESTIC_PATH`. Its self-check fails if a managed
+tool is not where the service will look, and warns about a tool found only on
+the setup shell's `PATH` (the service may run with another one).
 
 ## Child process limits
 

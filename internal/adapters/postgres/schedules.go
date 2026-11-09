@@ -29,12 +29,19 @@ var _ schedules.Repository = (*Store)(nil)
 //     row lock, then re-evaluates the WHERE on the new row and matches
 //     nothing (ErrConflict). The run is merged or inserted in the same
 //     transaction, so a lost fire leaves no run behind.
-//   - The unique partial index schedule_runs_one_open_key allows one open
-//     (pending or launching) run per schedule: an insert that would open a
-//     second one fails (ErrAlreadyExists) and rolls its transaction back.
+//   - The unique partial index schedule_runs_one_pending_key allows one
+//     pending run per schedule: an insert (or an update back to pending)
+//     that would make a second one fails (ErrAlreadyExists) and rolls its
+//     transaction back.
 //   - UpdateRun is a compare-and-swap on the run's status, so exactly one
 //     of several concurrent pending -> launching updates reserves its job
 //     ID.
+//   - Lock order: every transaction that writes a schedule's runs locks
+//     the schedule row first (UpdateSchedule, SetScheduleEnabled,
+//     FireSchedule and DeleteSchedule by writing it, AddRun and UpdateRun
+//     with LockScheduleRow and LockRunSchedule), then its runs. Two such
+//     transactions therefore cannot deadlock (e.g. an auto-pause racing a
+//     user's pause).
 
 // CreateSchedule implements schedules.Repository.
 func (s *Store) CreateSchedule(ctx context.Context, sc schedules.Schedule) error {
@@ -242,7 +249,7 @@ func (s *Store) FireSchedule(ctx context.Context, f schedules.Fire) (schedules.R
 		}
 		r := f.Run
 		r.ScheduleID = f.ID
-		id, err := addRun(ctx, q, op, r, f.Merge)
+		id, err := addRun(ctx, q, op, r, f.Merge, &f)
 		if err != nil {
 			return err
 		}
@@ -260,7 +267,10 @@ func (s *Store) AddRun(ctx context.Context, r schedules.Run, merge bool) (schedu
 	op := fmt.Sprintf("add run %s", r.ID)
 	var out schedules.Run
 	err := s.inTx(ctx, op, func(q *db.Queries) error {
-		id, err := addRun(ctx, q, op, r, merge)
+		if _, err := q.LockScheduleRow(ctx, pgID(r.ScheduleID)); err != nil {
+			return mapErr(op, err) // no row: ErrNotFound
+		}
+		id, err := addRun(ctx, q, op, r, merge, nil)
 		if err != nil {
 			return err
 		}
@@ -273,15 +283,40 @@ func (s *Store) AddRun(ctx context.Context, r schedules.Run, merge bool) (schedu
 	return out, nil
 }
 
-// addRun merges r into its schedule's open run (if merge and there is one)
-// or inserts it; it returns the ID of the run that holds it. A missing
-// schedule fails the insert's foreign key (ErrNotFound).
-func addRun(ctx context.Context, q *db.Queries, op string, r schedules.Run, merge bool) (pgtype.UUID, error) {
+// addRun merges r into its schedule's pending run (if merge and there is
+// one) or inserts it; it returns the ID of the run that holds it. For a
+// fire (f set) a pending run whose deadline is not after the fire time is
+// first superseded (ended missed), f.Earlier is inserted, and a remaining
+// pending run absorbs r keeping its deadline; a manual request (f nil)
+// extends the pending run's deadline to its own. A missing schedule fails
+// the insert's foreign key (ErrNotFound).
+func addRun(ctx context.Context, q *db.Queries, op string, r schedules.Run, merge bool, f *schedules.Fire) (pgtype.UUID, error) {
+	if f != nil {
+		if err := q.SupersedePendingRun(ctx, db.SupersedePendingRunParams{
+			Reason: f.MissedReason, Message: cleanText(f.MissedMessage),
+			UpdatedAt: pgTime(r.CreatedAt), ScheduleID: pgID(r.ScheduleID),
+		}); err != nil {
+			return pgtype.UUID{}, mapErr(op, err)
+		}
+		if f.Earlier != nil {
+			e := *f.Earlier
+			e.ScheduleID = r.ScheduleID
+			if err := insertRun(ctx, q, op, e); err != nil {
+				return pgtype.UUID{}, err
+			}
+		}
+	}
 	if merge {
-		id, err := q.MergeOpenRun(ctx, db.MergeOpenRunParams{
+		p := db.MergePendingRunParams{
 			AddCoalesced: int32(r.Coalesced), //nolint:gosec // G115: at most schedules.MaxCoalesce per fire
-			Deadline:     pgTime(r.Deadline), UpdatedAt: pgTime(r.CreatedAt), ScheduleID: pgID(r.ScheduleID),
-		})
+			UpdatedAt:    pgTime(r.CreatedAt), ScheduleID: pgID(r.ScheduleID),
+		}
+		if f != nil {
+			p.OpenAfter = pgTime(r.CreatedAt)
+		} else {
+			p.ExtendTo = pgTime(r.Deadline)
+		}
+		id, err := q.MergePendingRun(ctx, p)
 		if err == nil {
 			return id, nil
 		}
@@ -289,6 +324,14 @@ func addRun(ctx context.Context, q *db.Queries, op string, r schedules.Run, merg
 			return pgtype.UUID{}, mapErr(op, err)
 		}
 	}
+	if err := insertRun(ctx, q, op, r); err != nil {
+		return pgtype.UUID{}, err
+	}
+	return pgID(r.ID), nil
+}
+
+// insertRun inserts r.
+func insertRun(ctx context.Context, q *db.Queries, op string, r schedules.Run) error {
 	if err := q.InsertRun(ctx, db.InsertRunParams{
 		ID: pgID(r.ID), ScheduleID: pgID(r.ScheduleID), Trigger: r.Trigger,
 		ScheduledFor: pgTime(r.ScheduledFor), Deadline: pgTime(r.Deadline),
@@ -297,9 +340,9 @@ func addRun(ctx context.Context, q *db.Queries, op string, r schedules.Run, merg
 		WorkerID: pgOptID(r.WorkerID), JobID: pgOptID(r.JobID),
 		CreatedAt: pgTime(r.CreatedAt), UpdatedAt: pgTime(r.UpdatedAt),
 	}); err != nil {
-		return pgtype.UUID{}, mapErr(op, err)
+		return mapErr(op, err)
 	}
-	return pgID(r.ID), nil
+	return nil
 }
 
 // GetRun implements schedules.Repository.
@@ -339,13 +382,17 @@ func (s *Store) ListOpenRuns(ctx context.Context, limit int) ([]schedules.Run, e
 }
 
 // UpdateRun implements schedules.Repository: the compare-and-swap of the
-// status and, with PauseSchedule, the auto-pause, in one transaction.
-// When the update matches nothing, a second query tells a missing run
-// (ErrNotFound) from a status mismatch (ErrConflict).
+// status and, with PauseSchedule, the auto-pause, in one transaction. The
+// run's schedule is locked first (the lock order above). When the update
+// matches nothing, a second query tells a missing run (ErrNotFound) from a
+// status mismatch (ErrConflict).
 func (s *Store) UpdateRun(ctx context.Context, u schedules.RunUpdate) (schedules.Run, error) {
 	op := fmt.Sprintf("update run %s", u.ID)
 	var out schedules.Run
 	err := s.inTx(ctx, op, func(q *db.Queries) error {
+		if _, err := q.LockRunSchedule(ctx, pgID(u.ID)); err != nil {
+			return mapErr(op, err) // no row: the run does not exist (ErrNotFound)
+		}
 		schedID, err := q.UpdateRunStatus(ctx, db.UpdateRunStatusParams{
 			ToStatus: string(u.To), Reason: u.Reason, Message: cleanText(u.Message),
 			WorkerID: pgOptID(u.WorkerID), JobID: pgOptID(u.JobID), UpdatedAt: pgTime(u.At),
@@ -359,7 +406,7 @@ func (s *Store) UpdateRun(ctx context.Context, u schedules.RunUpdate) (schedules
 			case !exists:
 				return fmt.Errorf("%s: %w", op, domain.ErrNotFound)
 			}
-			return fmt.Errorf("%s: not %s: %w", op, u.From, domain.ErrConflict)
+			return fmt.Errorf("%s: not %s, or being cancelled: %w", op, u.From, domain.ErrConflict)
 		}
 		if err != nil {
 			return mapErr(op, err)

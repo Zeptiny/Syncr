@@ -46,8 +46,8 @@ export function renderWithProviders(
 export function renderApp(
   path: string,
   transport: Transport,
-): RenderResult & { router: AppRouter } {
+): RenderResult & { router: AppRouter; queryClient: QueryClient } {
   const app = createApp(transport, createMemoryHistory({ initialEntries: [path] }));
   const result = render(<App {...app} />);
-  return { ...result, router: app.router };
+  return { ...result, router: app.router, queryClient: app.queryClient };
 }

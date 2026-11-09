@@ -396,6 +396,18 @@ func testDeliveryLeaseAndComplete(t *testing.T, s Store) {
 	if len(third) != 1 || third[0].Attempts != 3 {
 		t.Fatalf("claim after the backoff = %+v", third)
 	}
+	// A released attempt (the deliverer was stopped) is given back.
+	_, err = s.CompleteDelivery(ctx, notifications.Completion{ID: d.ID, Attempts: 3, Status: notifications.StatusDead, Release: true, At: retry})
+	wantErr(t, "CompleteDelivery(release and dead)", err, domain.ErrInvalidArgument)
+	released, err := s.CompleteDelivery(ctx, notifications.Completion{ID: d.ID, Attempts: 3, Status: notifications.StatusPending,
+		Release: true, NextAttemptAt: retry, LastError: "stopped", At: retry})
+	if err != nil || released.Status != notifications.StatusPending || released.Attempts != 2 || released.LastError != "stopped" {
+		t.Fatalf("CompleteDelivery(release) = (%+v, %v)", released, err)
+	}
+	third = claim(retry)
+	if len(third) != 1 || third[0].Attempts != 3 {
+		t.Fatalf("claim after a released attempt = %+v", third)
+	}
 	at := retry.Add(time.Second)
 	got, err = s.CompleteDelivery(ctx, notifications.Completion{ID: d.ID, Attempts: 3, Status: notifications.StatusDelivered, At: at})
 	if err != nil || got.Status != notifications.StatusDelivered || !got.DeliveredAt.Equal(at) || got.LastError != "" {

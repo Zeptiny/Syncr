@@ -143,8 +143,11 @@ type Rclone struct {
 	// Backend is the rclone backend type (e.g. "s3"). It is "" exactly when
 	// the type is Local: the remote resolves to the worker's filesystem.
 	Backend string
-	// Options and Secrets are keyed by rclone option name. Secrets are plain
-	// values; ObscureKeys lists the secrets rclone expects obscured.
+	// Options and Secrets are keyed by rclone option name, with values in
+	// the form rclone parses for that option (e.g. sftp's key_pem escaped
+	// onto one line), since the worker passes them on unchanged. Secrets
+	// are not obscured; ObscureKeys lists the secrets rclone expects
+	// obscured, which the worker obscures.
 	Options     map[string]string
 	Secrets     map[string]string
 	ObscureKeys []string

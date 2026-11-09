@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"errors"
 	"io"
 	"math/big"
@@ -87,13 +88,16 @@ func newCA(t *testing.T) testCA {
 // mailbox is the go-smtp backend: it records sessions and fails the
 // commands it is told to.
 type mailbox struct {
-	mu       sync.Mutex
-	mechs    []string
-	rcptErr  error
-	dataErr  error
-	auths    []string // "MECH user password"
-	messages []delivered
-	tlsSeen  []bool
+	mu      sync.Mutex
+	mechs   []string
+	rcptErr error
+	dataErr error
+	auths   []string // "MECH user password"
+	// authMessage, if set, is the text of a failed authentication (servers
+	// that quote the credentials they reject).
+	authMessage func(user, pass string) string
+	messages    []delivered
+	tlsSeen     []bool
 }
 
 type delivered struct {
@@ -123,7 +127,11 @@ func (s *session) check(mech, user, pass string) error {
 	defer s.box.mu.Unlock()
 	s.box.auths = append(s.box.auths, mech+" "+user+" "+pass)
 	if user != testUser || pass != testPassword {
-		return &smtp.SMTPError{Code: 535, EnhancedCode: smtp.EnhancedCode{5, 7, 8}, Message: "Authentication credentials invalid"}
+		msg := "Authentication credentials invalid"
+		if s.box.authMessage != nil {
+			msg = s.box.authMessage(user, pass)
+		}
+		return &smtp.SMTPError{Code: 535, EnhancedCode: smtp.EnhancedCode{5, 7, 8}, Message: msg}
 	}
 	return nil
 }
@@ -407,6 +415,31 @@ func TestFailures(t *testing.T) {
 		}
 		if n := len(tt.box.received()); n != 0 {
 			t.Errorf("%s: %d messages delivered", tt.name, n)
+		}
+	}
+}
+
+// TestServerRepliesQuotingCredentialsAreRedacted: some servers repeat the
+// user name, the password or the PLAIN blob in the 535 reply.
+func TestServerRepliesQuotingCredentialsAreRedacted(t *testing.T) {
+	t.Parallel()
+	ca := newCA(t)
+	const wrong = "wrong-Pa55word-xyz"
+	blob := base64.StdEncoding.EncodeToString([]byte("\x00" + testUser + "\x00" + wrong))
+	box := &mailbox{mechs: []string{sasl.Plain}, authMessage: func(user, pass string) string {
+		return "5.7.8 Error: authentication failed for " + user + " password " + pass + " (" + blob + ") " + strings.ToUpper(user)
+	}}
+	port := startServer(t, ca, box, true, false)
+	cfg := conf(port, email.SecuritySTARTTLS, true)
+	cfg.Secrets[email.FieldPassword] = wrong
+	err := send(t, newChannel(ca), cfg, notifytest.SampleMessage())
+	var serr *notify.SendError
+	if !errors.As(err, &serr) || serr.Status != 535 {
+		t.Fatalf("Send = %v, want a 535 SendError", err)
+	}
+	for _, secret := range []string{testUser, strings.ToUpper(testUser), wrong, blob} {
+		if strings.Contains(serr.Reason, secret) {
+			t.Errorf("reason %q contains %q", serr.Reason, secret)
 		}
 	}
 }

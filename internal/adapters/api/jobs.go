@@ -69,7 +69,7 @@ func (h *jobHandler) job(ctx context.Context, j jobs.Job) (*syncrv1.Job, error) 
 
 // protoJobs converts js with their remote and schedule references (one
 // Names lookup each for all) and, where the job's status calls for them
-// (see pickStats), the live counters.
+// (see pickStats), the live counters (one LatestSamples lookup for all).
 func (h *jobHandler) protoJobs(ctx context.Context, js []jobs.Job) ([]*syncrv1.Job, error) {
 	refs, err := h.remoteRefs(ctx, js)
 	if err != nil {
@@ -79,17 +79,23 @@ func (h *jobHandler) protoJobs(ctx context.Context, js []jobs.Job) ([]*syncrv1.J
 	if err != nil {
 		return nil, err
 	}
+	var sampled []domain.JobID
+	for _, j := range js {
+		if _, needSample := pickStats(j); needSample {
+			sampled = append(sampled, j.ID)
+		}
+	}
+	var latest map[domain.JobID]jobs.Sample
+	if len(sampled) > 0 {
+		if latest, err = h.jobs.LatestSamples(ctx, sampled); err != nil {
+			return nil, err
+		}
+	}
 	out := make([]*syncrv1.Job, 0, len(js))
 	for _, j := range js {
 		stats, needSample := pickStats(j)
-		if needSample {
-			smp, ok, err := h.jobs.LatestSample(ctx, j.ID)
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				stats = &smp.Stats
-			}
+		if smp, ok := latest[j.ID]; needSample && ok {
+			stats = &smp.Stats
 		}
 		msg, err := jobToProto(j, stats, refs)
 		if err != nil {
@@ -319,7 +325,10 @@ func (h *jobHandler) CancelJob(ctx context.Context, req *connect.Request[syncrv1
 //   - the client goes away (nothing is sent, the stream is just released);
 //   - the watch duration limit is reached (DeadlineExceeded; the client
 //     watches again, and the first message is the then current job);
-//   - the controller shuts down (Unavailable).
+//   - the controller shuts down (Unavailable);
+//   - the caller's session or token stops working, the user is disabled
+//     (Unauthenticated) or no longer sees the job (PermissionDenied): the
+//     guard re-authenticates the stream periodically (streamauth.go).
 //
 // A slow client does not hold the job pipeline back: the broker coalesces
 // progress samples per subscriber, so the handler only ever blocks its own
@@ -331,6 +340,19 @@ func (h *jobHandler) WatchJob(ctx context.Context, req *connect.Request[syncrv1.
 	if err != nil {
 		return err
 	}
+	// While the stream is open, the guard re-authenticates the caller; the
+	// refreshed actor must still see the job (an admin may have lost the
+	// role).
+	onReauth(ctx, func(ctx context.Context, c Caller) error {
+		_, err := h.jobs.Get(ctx, c.Actor, id)
+		if errors.Is(err, domain.ErrNotFound) {
+			return connect.NewError(connect.CodePermissionDenied, errors.New("access to the job was revoked"))
+		}
+		if err != nil {
+			return h.fail(ctx, procedure, err)
+		}
+		return nil
+	})
 
 	wctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)

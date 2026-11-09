@@ -6,13 +6,39 @@
 
 -- Labels are set by admins (normalized: lower case, sorted, unique).
 ALTER TABLE workers ADD COLUMN labels text[] NOT NULL DEFAULT '{}';
--- Worker names become unique among live workers: suffix existing duplicates
--- (development data only so far).
-UPDATE workers w SET name = left(w.name, 55) || '-' || left(w.id::text, 8)
- WHERE w.removed_at IS NULL AND EXISTS (
-     SELECT 1 FROM workers o
-      WHERE o.removed_at IS NULL AND lower(o.name) = lower(w.name) AND o.id < w.id
- );
+-- Worker names become unique among live workers. Existing duplicates
+-- (case-insensitive; the oldest worker keeps the name) get the first
+-- numeric suffix that no live worker has, like Enroll does: "nas" becomes
+-- "nas-2", then "nas-3", the name cut to stay within 64 characters. Each
+-- candidate is checked against the names as renamed so far.
+-- +goose StatementBegin
+DO $$
+DECLARE
+    dup record;
+    candidate text;
+    n integer;
+BEGIN
+    FOR dup IN
+        SELECT w.id, w.name FROM workers w
+         WHERE w.removed_at IS NULL AND EXISTS (
+             SELECT 1 FROM workers o
+              WHERE o.removed_at IS NULL AND lower(o.name) = lower(w.name) AND o.id < w.id
+         )
+         ORDER BY w.id
+    LOOP
+        n := 2;
+        LOOP
+            candidate := rtrim(left(dup.name, 63 - length(n::text))) || '-' || n;
+            EXIT WHEN NOT EXISTS (
+                SELECT 1 FROM workers o WHERE o.removed_at IS NULL AND lower(o.name) = lower(candidate)
+            );
+            n := n + 1;
+        END LOOP;
+        UPDATE workers SET name = candidate WHERE id = dup.id;
+    END LOOP;
+END
+$$;
+-- +goose StatementEnd
 CREATE UNIQUE INDEX workers_name_key ON workers (lower(name)) WHERE removed_at IS NULL;
 
 -- Notification contacts: instances of a channel type, private to their

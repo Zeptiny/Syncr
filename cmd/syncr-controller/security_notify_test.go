@@ -375,10 +375,12 @@ func TestSecurityNotifications(t *testing.T) {
 	})
 
 	t.Run("test sends are rate limited per user", func(t *testing.T) {
+		// Bob is not an administrator: he learns nothing of the network policy or
+		// the destination.
 		in := &syncrv1.ContactInput{Name: "Probe", ChannelType: "webhook", Secrets: map[string]string{"url": "http://127.0.0.1:9/probe"}}
 		for i := range 3 {
 			res, err := bob.contacts.SendTestNotification(ctx, connect.NewRequest(&syncrv1.SendTestNotificationRequest{Input: in}))
-			if err != nil || res.Msg.GetOk() || !strings.Contains(res.Msg.GetError(), guardReason) {
+			if err != nil || res.Msg.GetOk() || strings.Contains(res.Msg.GetError(), guardReason) || !strings.Contains(res.Msg.GetError(), "administrator can see the details") || res.Msg.GetStatus() != 0 {
 				t.Fatalf("bob's test send %d = %v (%v)", i, res, err)
 			}
 		}

@@ -88,9 +88,12 @@ func (s *cmdServices) Info(service.Spec) service.Info {
 
 type cmdTools struct{}
 
-func (cmdTools) Provision(_ context.Context, _ string, progress func(string)) ([]setup.ToolStatus, error) {
+func (cmdTools) Provision(_ context.Context, toolsDir string, progress func(string)) ([]setup.ToolStatus, error) {
 	progress("fake tools")
-	return []setup.ToolStatus{{Name: "rclone", Version: "1", Source: "managed", Path: "/r"}, {Name: "restic", Version: "2", Source: "managed", Path: "/s"}}, nil
+	return []setup.ToolStatus{
+		{Name: "rclone", Version: "1", Source: "managed", Path: filepath.Join(toolsDir, "rclone")},
+		{Name: "restic", Version: "2", Source: "managed", Path: filepath.Join(toolsDir, "restic")},
+	}, nil
 }
 
 type setupFixture struct {
@@ -161,6 +164,25 @@ func TestSetupCommandActive(t *testing.T) {
 	}
 	if !strings.Contains(stderr2.String(), "already set up") || !strings.Contains(stderr2.String(), "--force") {
 		t.Errorf("stderr = %s", stderr2)
+	}
+}
+
+// TestSetupCommandWritesTheToolsDir: tools installed under $SYNCR_TOOLS_DIR
+// during setup must be found by the service, which runs without it.
+func TestSetupCommandWritesTheToolsDir(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	toolsDir := filepath.Join(dir, "shared-tools")
+	f, e, stdout, stderr := newSetupFixture(t, map[string]string{tokenEnv: "wtok_x", toolsDirEnv: toolsDir})
+	if code := run(t.Context(), f.args("--controller", "https://syncr.example.com"), e); code != exitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout(), stderr())
+	}
+	cfg := workerconfig.Default()
+	if err := platformconfig.Load(filepath.Join(f.dir, "worker.yaml"), nil, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tools.Dir != toolsDir {
+		t.Errorf("tools.dir = %q, want %q", cfg.Tools.Dir, toolsDir)
 	}
 }
 
@@ -279,6 +301,51 @@ func TestServiceCommands(t *testing.T) {
 	}
 	if code := run(t.Context(), []string{"service", "stop", "--start"}, e5); code != exitUsage {
 		t.Errorf("--start with stop: exit %d (%s)", code, err5)
+	}
+}
+
+// TestRelativePathsReachTheServiceAbsolute runs `setup` and `service install`
+// with relative --config and --data-dir: the service starts elsewhere, so it
+// must be given absolute paths. Not parallel: it changes the working
+// directory.
+func TestRelativePathsReachTheServiceAbsolute(t *testing.T) {
+	f, e, stdout, stderr := newSetupFixture(t, map[string]string{tokenEnv: "wtok_x"})
+	t.Chdir(f.dir)
+	cfg := filepath.Join(f.dir, "worker.yaml")
+	if code := run(t.Context(), []string{"setup", "--controller", "https://syncr.example.com", "--config", "worker.yaml", "--data-dir", "data"}, e); code != exitOK {
+		t.Fatalf("setup: exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout(), stderr())
+	}
+	loaded := workerconfig.Default()
+	if err := platformconfig.Load(cfg, nil, &loaded); err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(loaded.DataDir) || filepath.Base(loaded.DataDir) != "data" {
+		t.Errorf("data_dir = %q, want an absolute path", loaded.DataDir)
+	}
+
+	e2, _, stderr2 := testEnv(nil)
+	e2.setup = e.setup
+	if code := run(t.Context(), []string{"service", "install", "--config", "worker.yaml", "--data-dir", "data"}, e2); code != exitOK {
+		t.Fatalf("service install: exit %d, %s", code, stderr2)
+	}
+
+	f.services.mu.Lock()
+	calls := append([]string(nil), f.services.calls...)
+	f.services.mu.Unlock()
+	var installs []string
+	for _, c := range calls {
+		if strings.HasPrefix(c, "install ") {
+			installs = append(installs, c)
+		}
+	}
+	if len(installs) != 2 {
+		t.Fatalf("install calls = %q, want one from setup and one from service install", installs)
+	}
+	for _, c := range installs {
+		got := strings.TrimPrefix(c, "install run --config ")
+		if !filepath.IsAbs(got) || filepath.Base(got) != "worker.yaml" {
+			t.Errorf("service installed with --config %q, want an absolute path", got)
+		}
 	}
 }
 

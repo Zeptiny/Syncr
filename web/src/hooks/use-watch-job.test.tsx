@@ -2,9 +2,9 @@ import { create } from "@bufbuild/protobuf";
 import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import { Code, ConnectError } from "@connectrpc/connect";
 import { TransportProvider } from "@connectrpc/connect-query";
-import { QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import type { MessageInitShape } from "@bufbuild/protobuf";
 
@@ -15,6 +15,7 @@ import {
   JobStatus,
   type WatchJobResponseSchema,
 } from "@/gen/syncr/v1/api_pb";
+import { createQueryClient } from "@/lib/query-client";
 import { mockTransport, testQueryClient } from "@/test/render";
 
 import { appendSamples, backoffDelay, reconnectable, useWatchJob } from "./use-watch-job";
@@ -29,7 +30,10 @@ const progress = (sec: number, bytes: number) =>
     stats: { bytes: BigInt(bytes) },
   });
 
-function setup(watch: (call: number) => AsyncIterable<unknown>) {
+function setup(
+  watch: (call: number) => AsyncIterable<unknown>,
+  queryClient: QueryClient = testQueryClient(),
+) {
   let calls = 0;
   const transport = mockTransport(({ service }) => {
     service(JobService, {
@@ -37,7 +41,6 @@ function setup(watch: (call: number) => AsyncIterable<unknown>) {
       watchJob: () => watch(++calls) as AsyncIterable<WatchJobResponseInit>,
     });
   });
-  const queryClient = testQueryClient();
   const wrapper = ({ children }: { children: React.ReactNode }) => (
     <TransportProvider transport={transport}>
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -123,9 +126,44 @@ describe("useWatchJob", () => {
         throw new ConnectError("not yours", Code.NotFound);
       })(),
     );
-    await waitFor(() => expect(hook.result.current.state).toBe("ended"));
+    await waitFor(() => expect(hook.result.current.state).toBe("failed"));
     expect(calls()).toBe(1);
     expect(hook.result.current.error).toBeInstanceOf(ConnectError);
+  });
+
+  it("does not report a failed stream as ended, and can retry it", async () => {
+    const { hook, calls } = setup((n) =>
+      (async function* () {
+        await Promise.resolve();
+        if (n === 1) throw new ConnectError("not allowed", Code.PermissionDenied);
+        yield { update: { case: "job", value: job(JobStatus.SUCCEEDED) } };
+      })(),
+    );
+    await waitFor(() => expect(hook.result.current.state).toBe("failed"));
+    expect(hook.result.current.state).not.toBe("ended");
+
+    act(() => hook.result.current.retry());
+    await waitFor(() => expect(hook.result.current.state).toBe("ended"));
+    expect(calls()).toBe(2);
+    expect(hook.result.current.error).toBeUndefined();
+  });
+
+  it("sends UNAUTHENTICATED through the session-expiry path", async () => {
+    const expired = vi.fn();
+    const client = createQueryClient({ onUnauthenticated: expired });
+    const { hook, calls } = setup(
+      () =>
+        (async function* () {
+          await Promise.resolve();
+          yield* [];
+          throw new ConnectError("session expired", Code.Unauthenticated);
+        })(),
+      client,
+    );
+    await waitFor(() => expect(hook.result.current.state).toBe("failed"));
+    expect(expired).toHaveBeenCalledTimes(1);
+    expect(expired).toHaveBeenCalledWith(client);
+    expect(calls()).toBe(1);
   });
 
   it("reconnects when the stream closes before the job ends", async () => {

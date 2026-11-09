@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/Zeptiny/Syncr/internal/adapters/postgres/db"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
@@ -43,6 +44,31 @@ func (s *Store) LatestJobSample(ctx context.Context, id domain.JobID) (jobs.Samp
 	}
 	smp, err := sampleFrom(row)
 	return smp, err == nil, err
+}
+
+// LatestJobSamples implements jobs.SampleRepository: one query, a primary
+// key probe per job.
+func (s *Store) LatestJobSamples(ctx context.Context, ids []domain.JobID) (map[domain.JobID]jobs.Sample, error) {
+	out := make(map[domain.JobID]jobs.Sample, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	pgIDs := make([]pgtype.UUID, len(ids))
+	for i, id := range ids {
+		pgIDs[i] = pgID(id)
+	}
+	rows, err := s.q.LatestJobSamples(ctx, pgIDs)
+	if err != nil {
+		return nil, mapErr(fmt.Sprintf("latest samples of %d jobs", len(ids)), err)
+	}
+	for _, r := range rows {
+		smp, err := sampleFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		out[smp.JobID] = smp
+	}
+	return out, nil
 }
 
 // ListJobSamples implements jobs.SampleRepository.

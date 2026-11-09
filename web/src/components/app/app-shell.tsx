@@ -47,7 +47,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { AuthService } from "@/gen/syncr/v1/auth_pb";
-import { displayName, useSession } from "@/hooks/use-session";
+import { displayName, endSession, useSession } from "@/hooks/use-session";
 import { useTheme, type Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -153,7 +153,7 @@ function UserMenu() {
     try {
       await logout.mutateAsync({});
     } finally {
-      queryClient.clear();
+      endSession(queryClient);
       await navigate({ to: "/login" });
     }
   };

@@ -98,6 +98,10 @@ func TestValidate(t *testing.T) {
 		{"download base url", func(c *Config) { c.Workers.DownloadBaseURL = "https://mirror.example.com/syncr" }, ""},
 		{"download base url empty", func(c *Config) { c.Workers.DownloadBaseURL = "" }, "workers.download_base_url"},
 		{"download base url scheme", func(c *Config) { c.Workers.DownloadBaseURL = "file:///srv" }, "workers.download_base_url"},
+		{"lost after", func(c *Config) { c.Workers.LostAfter = 24 * time.Hour }, ""},
+		{"lost after minimum", func(c *Config) { c.Workers.LostAfter = MinLostAfter }, ""},
+		{"lost after too short", func(c *Config) { c.Workers.LostAfter = time.Minute }, "workers.lost_after must be at least 5m0s"},
+		{"lost after unset", func(c *Config) { c.Workers.LostAfter = 0 }, "workers.lost_after"},
 		{"seed with memory store", func(c *Config) { c.Dev.Seed, c.Dev.MemoryStore = true, true }, ""},
 		{"seed without memory store", func(c *Config) { c.Dev.Seed = true }, "dev.seed needs dev.memory_store"},
 	}
@@ -236,14 +240,14 @@ func TestLoadAuthAndWorkers(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "controller.yaml")
 	content := "http:\n  public_url: https://from-file.example.com\nauth:\n  cookie_secure: always\n  session_idle_timeout: 12h\n" +
-		"workers:\n  download_base_url: https://mirror.example.com/syncr\ndev:\n  memory_store: true\n  seed: true\n"
+		"workers:\n  download_base_url: https://mirror.example.com/syncr\n  lost_after: 3h\ndev:\n  memory_store: true\n  seed: true\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	const code = "ABCDE-FGHIJ-KLMNO-PQRS2"
 	env := map[string]string{
 		"SYNCR_PUBLIC_URL": "https://syncr.example.com", "SYNCR_SETUP_CODE": code,
-		"SYNCR_AUTH_SESSION_MAX_AGE": "48h", "SYNCR_DEV_SEED": "false",
+		"SYNCR_AUTH_SESSION_MAX_AGE": "48h", "SYNCR_DEV_SEED": "false", "SYNCR_WORKERS_LOST_AFTER": "6h",
 	}
 	cfg := Default()
 	if err := platformconfig.Load(path, func(k string) (string, bool) { v, ok := env[k]; return v, ok }, &cfg); err != nil {
@@ -256,7 +260,7 @@ func TestLoadAuthAndWorkers(t *testing.T) {
 	if cfg.Auth != want {
 		t.Errorf("Auth = %+v", cfg.Auth)
 	}
-	if cfg.Workers.DownloadBaseURL != "https://mirror.example.com/syncr" || cfg.Dev.Seed || !cfg.Dev.MemoryStore {
+	if cfg.Workers.DownloadBaseURL != "https://mirror.example.com/syncr" || cfg.Workers.LostAfter != 6*time.Hour || cfg.Dev.Seed || !cfg.Dev.MemoryStore {
 		t.Errorf("Workers = %+v, Dev = %+v", cfg.Workers, cfg.Dev)
 	}
 	if got := fmt.Sprintf("%v %+v %#v", cfg, cfg, cfg); strings.Contains(got, code) {
@@ -270,7 +274,7 @@ func TestDefaultAuth(t *testing.T) {
 	if cfg.Auth.CookieSecure != CookieSecureAuto || cfg.Auth.SessionIdleTimeout != 7*24*time.Hour || cfg.Auth.SessionMaxAge != 30*24*time.Hour || !cfg.Auth.SetupCode.IsZero() {
 		t.Errorf("Auth = %+v", cfg.Auth)
 	}
-	if cfg.Workers.DownloadBaseURL != DefaultDownloadBaseURL || cfg.HTTP.PublicURL != "" || cfg.Dev.Seed {
+	if cfg.Workers.DownloadBaseURL != DefaultDownloadBaseURL || cfg.Workers.LostAfter != time.Hour || cfg.HTTP.PublicURL != "" || cfg.Dev.Seed {
 		t.Errorf("Workers = %+v, HTTP.PublicURL = %q, Dev = %+v", cfg.Workers, cfg.HTTP.PublicURL, cfg.Dev)
 	}
 }

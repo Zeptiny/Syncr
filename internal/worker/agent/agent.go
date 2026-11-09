@@ -5,14 +5,17 @@
 //
 // # Commands
 //
-// HandleCommands acknowledges every command that has an ID. An ack means
+// HandleCommands acknowledges every command that has an ID, except a
+// StartJob while the agent shuts down (see Shutdown). An ack means
 // "accepted", never "succeeded": outcomes arrive as events. Handling is
 // idempotent, because the controller redelivers commands until it receives
 // their ack:
 //
 //   - StartJob for a job ID the agent already knows in this epoch (queued,
 //     running or finished) is acked and ignored. The result of a finished job
-//     stays in the outbox until the controller acks it.
+//     stays in the outbox until the controller acks it; the job's ID is
+//     remembered until 10 minutes after that ack, by when the controller
+//     can no longer send a StartJob for it.
 //   - StartJob whose spec has no runner (no operation, unsupported kind) is
 //     acked and reported at once as a FAILED JobResult.
 //   - CancelJob for a queued job removes it from the queue and reports a
@@ -43,9 +46,12 @@
 // # Shutdown
 //
 // Shutdown cancels queued and running jobs, waits for their CANCELLED
-// results to be in the outbox, and from then on answers StartJob with a
-// CANCELLED result. The transport then tries a final flush (see
-// internal/worker/linkcore).
+// results to be in the outbox, and from then on refuses StartJob: it is
+// not acked and leaves no event, so the controller keeps the job queued
+// for the worker's next process. (The CANCELLED result of a job that was
+// still queued has no start time and no JobStarted before it, which tells
+// the controller that it never ran, so it queues it again.) The transport
+// then tries a final flush (see internal/worker/linkcore).
 //
 // # Results
 //
@@ -214,10 +220,41 @@ type Agent struct {
 	// waiting reports that a goroutine waits for outbox capacity to resume
 	// admission.
 	waiting bool
-	// finished holds the IDs of every job that finished in this epoch, so
-	// duplicate StartJobs are ignored (about 50 bytes per job).
+	// finished holds the IDs of jobs that finished in this epoch, so a
+	// StartJob delivered again is ignored instead of running the job twice.
+	//
+	// Invariant: an ID stays while the controller may still send a StartJob
+	// for it. The controller derives StartJob only for jobs it considers
+	// queued, and it stores a job's JobResult (after which the job is no
+	// longer queued in this epoch: it is finished, or re-queued after a
+	// shutdown, when StartJob is refused anyway) before it acks that
+	// event. So an ID is kept while its result is unacked, and then for
+	// finishedRetention, which covers a StartJob derived before the result
+	// was stored but delivered after its ack (a delayed long poll or
+	// Command). Then it is dropped, which bounds the set by the unacked
+	// results plus the jobs that finished during the retention.
 	finished map[string]struct{}
+	// retiring lists the finished jobs in the seq order of their results
+	// (results are appended under mu); its first nAcked entries have an
+	// acked result and an ackedAt.
+	retiring []finishedJob
+	nAcked   int
 	stopping bool
+}
+
+// finishedRetention is how long a finished job's ID is kept after its
+// result was acknowledged (see Agent.finished): far longer than any
+// command spends in flight (a long poll lasts at most about 25 s, link
+// calls time out within a minute).
+const finishedRetention = 10 * time.Minute
+
+// finishedJob is an entry of Agent.retiring.
+type finishedJob struct {
+	id string
+	// seq is the seq of the job's JobResult.
+	seq int64
+	// ackedAt is when the agent saw the result acked; zero before.
+	ackedAt time.Time
 }
 
 // New returns an Agent and creates its outbox, whose first event is the
@@ -281,11 +318,13 @@ func (a *Agent) Outbox() *outbox.Outbox { return a.out }
 // Epoch returns the epoch of the agent's outbox.
 func (a *Agent) Epoch() string { return a.out.Epoch() }
 
-// HandleCommands processes cmds in order and returns one ack per command
-// that has an ID, in the same order. It never blocks on job execution.
-// Commands without an ID cannot be acknowledged and are ignored; commands of
-// a type this worker does not know are acked (so the controller stops
-// redelivering them) and ignored.
+// HandleCommands processes cmds in order and returns one ack per accepted
+// command that has an ID, in the same order. It never blocks on job
+// execution. Commands without an ID cannot be acknowledged and are ignored;
+// commands of a type this worker does not know are acked (so the controller
+// stops redelivering them) and ignored. Once Shutdown began, StartJob
+// commands are refused: they get no ack, so the controller keeps the job
+// queued and redelivers it (to the worker's next process, eventually).
 func (a *Agent) HandleCommands(ctx context.Context, cmds []*syncrv1.Command) []*syncrv1.CommandAck {
 	acks := make([]*syncrv1.CommandAck, 0, len(cmds))
 	for _, cmd := range cmds {
@@ -295,7 +334,9 @@ func (a *Agent) HandleCommands(ctx context.Context, cmds []*syncrv1.Command) []*
 		}
 		switch c := cmd.GetCommand().(type) {
 		case *syncrv1.Command_StartJob:
-			a.startJob(ctx, c.StartJob)
+			if !a.startJob(ctx, c.StartJob) {
+				continue // refused: no ack
+			}
 		case *syncrv1.Command_CancelJob:
 			a.cancelJob(ctx, c.CancelJob.GetJobId())
 		default:
@@ -306,27 +347,33 @@ func (a *Agent) HandleCommands(ctx context.Context, cmds []*syncrv1.Command) []*
 	return acks
 }
 
-func (a *Agent) startJob(ctx context.Context, sj *syncrv1.StartJob) {
+// startJob handles a StartJob and reports whether it was accepted (and is
+// to be acked). It is refused only while the agent shuts down, also for a
+// job it knows: the controller keeps a job it has not seen accepted queued,
+// and settles one it has seen accepted by the job's result.
+func (a *Agent) startJob(ctx context.Context, sj *syncrv1.StartJob) bool {
 	id := sj.GetJobId()
 	if id == "" {
 		a.log.WarnContext(ctx, "ignoring start job command without job id")
-		return
+		return true
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.stopping {
+		// Debug only: a passive controller redelivers it every round of the
+		// final flush.
+		a.log.DebugContext(ctx, "refusing start job command: the worker is shutting down", "job_id", id)
+		return false
+	}
 	if a.knownLocked(id) {
 		a.log.DebugContext(ctx, "duplicate start job command", "job_id", id)
-		return
-	}
-	if a.stopping {
-		a.finishLocked(id, cancelledResult(id, ErrShuttingDown, time.Time{}, runner.Result{ExitCode: -1}))
-		return
+		return true
 	}
 	rn, err := a.runners.ForSpec(sj.GetSpec())
 	if err != nil {
 		a.log.WarnContext(ctx, "job rejected", "job_id", id, "kind", link.KindOf(sj.GetSpec()), "error", err.Error())
 		a.finishLocked(id, failedResult(id, runner.CodeOf(err), err.Error(), time.Time{}, runner.Result{ExitCode: -1}))
-		return
+		return true
 	}
 	j := &job{id: id, spec: sj.GetSpec(), runner: rn, state: stateQueued}
 	j.ctx, j.cancel = context.WithCancelCause(a.base)
@@ -335,6 +382,7 @@ func (a *Agent) startJob(ctx context.Context, sj *syncrv1.StartJob) {
 	a.queue = append(a.queue, j)
 	a.log.InfoContext(ctx, "job accepted", "job_id", id, "kind", rn.Kind())
 	a.admitLocked()
+	return true
 }
 
 func (a *Agent) cancelJob(ctx context.Context, id string) {
@@ -473,18 +521,44 @@ func (a *Agent) finishJobLocked(j *job, result *syncrv1.JobResult) {
 // finishLocked records id as finished and appends its result.
 func (a *Agent) finishLocked(id string, result *syncrv1.JobResult) {
 	a.finished[id] = struct{}{}
-	a.appendLocked(&syncrv1.Event{Payload: &syncrv1.Event_JobResult{JobResult: result}})
+	seq := a.appendLocked(&syncrv1.Event{Payload: &syncrv1.Event_JobResult{JobResult: result}})
+	a.retiring = append(a.retiring, finishedJob{id: id, seq: seq})
+	a.retireLocked(time.Now())
 }
 
-// appendLocked appends ev; the agent's lock orders it with state changes.
-func (a *Agent) appendLocked(ev *syncrv1.Event) { a.append(ev) }
+// retireLocked marks the results acked so far and forgets the finished
+// jobs whose result was acked finishedRetention ago or earlier (see
+// Agent.finished).
+func (a *Agent) retireLocked(now time.Time) {
+	acked := a.out.Stats().Acked
+	for a.nAcked < len(a.retiring) && a.retiring[a.nAcked].seq <= acked {
+		a.retiring[a.nAcked].ackedAt = now
+		a.nAcked++
+	}
+	n := 0
+	for n < a.nAcked && now.Sub(a.retiring[n].ackedAt) >= finishedRetention {
+		delete(a.finished, a.retiring[n].id)
+		n++
+	}
+	if n > 0 {
+		clear(a.retiring[:n]) // release the IDs
+		a.retiring = a.retiring[n:]
+		a.nAcked -= n
+	}
+}
 
-func (a *Agent) append(ev *syncrv1.Event) {
-	if _, err := a.out.Append(ev); err != nil {
+// appendLocked appends ev and returns its seq; the agent's lock orders it
+// with state changes.
+func (a *Agent) appendLocked(ev *syncrv1.Event) int64 { return a.append(ev) }
+
+func (a *Agent) append(ev *syncrv1.Event) int64 {
+	seq, err := a.out.Append(ev)
+	if err != nil {
 		// Only events without a payload or Hello events are refused, which
 		// the agent never builds.
 		panic(fmt.Sprintf("agent: outbox refused an event: %v", err))
 	}
+	return seq
 }
 
 // State returns the jobs the agent holds (queued, waiting to start or
@@ -549,16 +623,22 @@ func (a *Agent) Snapshot(afterSeq int64, limit, maxBytes int) Snapshot {
 	return Snapshot{Epoch: a.out.Epoch(), Events: b.Events, More: b.More, State: st}
 }
 
-// AckEvents acknowledges events up to and including seq (outbox.Ack).
+// AckEvents acknowledges events up to and including seq (outbox.Ack). It
+// also forgets finished jobs whose acked result is old enough (see
+// Agent.finished); the transports call it on every Report response and
+// Pull, so this happens even while no new job finishes.
 func (a *Agent) AckEvents(seq int64) error {
 	_, err := a.out.Ack(seq)
+	a.mu.Lock()
+	a.retireLocked(time.Now())
+	a.mu.Unlock()
 	return err
 }
 
 // Shutdown stops the agent: queued jobs are cancelled at once, running jobs
 // are cancelled through their runners (which stop their tools gracefully,
 // then kill them after the supervisor's grace period), and later StartJob
-// commands are answered with CANCELLED results. It waits until every job has
+// commands are refused (not acked, no event). It waits until every job has
 // reported its result to the outbox, or until ctx is done, in which case it
 // returns an error wrapping context.Cause(ctx). Pass a ctx that outlasts the
 // supervisor's grace period. Calling Shutdown again waits again.

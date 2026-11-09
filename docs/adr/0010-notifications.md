@@ -117,12 +117,42 @@ migration marks all earlier history as notified).
   the delivery is dead. An attempt whose lease expired counts. If the
   reclaimed claim exceeds the limit, the delivery is dead without another
   send.
-- **Shutdown.** An attempt interrupted by shutdown is recorded, with a
-  context that is not cancelled, as pending again at once.
+- **Shutdown.** An attempt interrupted by the controller's own shutdown is
+  recorded, with a context that is not cancelled, as pending again at once,
+  and the attempt is given back (`Completion.Release` decrements
+  `attempts`): it does not count against the budget, so an interruption on
+  the last allowed attempt does not make the delivery dead. A receiver's
+  timeout is not an interruption (the send's own deadline fired, not the
+  pass's context) and counts, and so does a reply the target gave just
+  before the shutdown. The interrupted send may have reached the target, so
+  the retry can duplicate it, like any lease expiry.
 - **Last error.** Only a `SendError`'s sanitized reason (with the status)
   reaches `last_error` and the logs. Any other error could quote the
   configuration, such as a `*url.Error` with a token, and is replaced by a
-  generic text.
+  generic text. The excerpt of a receiver's reply that a reason quotes is
+  redacted first: each channel builds a `notify.Redactor` per send from the
+  contact's configuration and removes the destination's secrets from the
+  whole body before it is cut. It matches ignoring case, in the forms a
+  receiver echoes them (URL-escaped or not, JSON-escaped, `\/`, HTML
+  escapes, base64, an authorization header without its scheme), and for a
+  URL its user info, path (with or without the leading slash), long or
+  digit-bearing path segments, query and query values. n8n, for one, answers
+  a deactivated workflow with `The requested webhook "POST <path>" is not
+  registered`. The outbox and `SendTest` apply a redactor to every reason as
+  a safety net.
+- **Who sees the reason.** Every signed-in user can create contacts and
+  test them, and the default `private` network policy allows LAN
+  addresses, so detailed reasons would make the controller a scanner and
+  an oracle for internal services (open or closed ports, TLS details, HTTP
+  statuses and bodies, timing). A `SendError` is therefore shown in full
+  only to administrators, who control the network policy, unless the
+  channel marked it `Public` (our own validation; every Discord failure,
+  because the destination is a fixed public host). Other users get
+  `notify.GenericReason` without status or latency in the `SendTest` result,
+  and as `last_error` of their deliveries (the outbox asks an
+  `AdminChecker` for the owner's role when a send fails, and treats an
+  unknown role as a user). The detail still goes to the controller's log.
+  A channel that does not set `Public` is safe by default.
 - **Manual retry.** `RetryDelivery` queues a dead delivery again with its
   attempts reset.
 - **Retention.** Delivered and dead deliveries are purged after

@@ -183,7 +183,8 @@ func (UnimplementedControllerLinkServiceHandler) Poll(context.Context, *connect.
 type WorkerLinkServiceClient interface {
 	// Command delivers commands to the worker. The worker acknowledges every
 	// command it has accepted for processing, including duplicates it already
-	// knows. Safe to retry.
+	// knows; a worker that is shutting down refuses (does not acknowledge)
+	// StartJob. Safe to retry.
 	Command(context.Context, *connect.Request[v1.CommandRequest]) (*connect.Response[v1.CommandResponse], error)
 	// Pull fetches outbox events after a given seq and acknowledges everything
 	// up to and including it. The controller calls it about once a second while
@@ -238,7 +239,8 @@ func (c *workerLinkServiceClient) Pull(ctx context.Context, req *connect.Request
 type WorkerLinkServiceHandler interface {
 	// Command delivers commands to the worker. The worker acknowledges every
 	// command it has accepted for processing, including duplicates it already
-	// knows. Safe to retry.
+	// knows; a worker that is shutting down refuses (does not acknowledge)
+	// StartJob. Safe to retry.
 	Command(context.Context, *connect.Request[v1.CommandRequest]) (*connect.Response[v1.CommandResponse], error)
 	// Pull fetches outbox events after a given seq and acknowledges everything
 	// up to and including it. The controller calls it about once a second while

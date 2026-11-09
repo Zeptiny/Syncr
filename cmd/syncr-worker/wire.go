@@ -96,7 +96,7 @@ func buildWorker(ctx context.Context, cfg workerconfig.Config, deps workerDeps, 
 		log.Info("local roots", "roots", roots)
 	}
 
-	w.supervisor = proc.New(proc.Options{MaxLineBytes: maxToolLineBytes})
+	w.supervisor = proc.New(proc.Options{MaxLineBytes: maxToolLineBytes, Logger: log})
 
 	w.tools, err = resolveTools(ctx, cfg, deps, w.supervisor, toolsDir, log)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -152,18 +153,21 @@ func newPolicy() map[string]access {
 // procedure's access level, authenticates the call unless it is public
 // (the Authenticator puts the Caller into the context) and checks the
 // caller against the level. It runs before any handler code, for unary and
-// streaming calls.
+// streaming calls, and repeats the check while an authenticated stream is
+// open (streamauth.go).
 type guard struct {
 	// auth authenticates calls; nil denies every non-public procedure.
 	auth   Authenticator
 	policy map[string]access
 	log    *slog.Logger
+	// reauth is how often an open authenticated stream is checked again.
+	reauth time.Duration
 }
 
 var _ connect.Interceptor = (*guard)(nil)
 
 func newGuard(auth Authenticator, log *slog.Logger) *guard {
-	return &guard{auth: auth, policy: newPolicy(), log: log}
+	return &guard{auth: auth, policy: newPolicy(), log: log, reauth: defaultStreamReauth}
 }
 
 func (g *guard) check(ctx context.Context, header http.Header, spec connect.Spec, peer string) (context.Context, error) {
@@ -237,10 +241,13 @@ func (g *guard) WrapStreamingClient(next connect.StreamingClientFunc) connect.St
 // WrapStreamingHandler implements connect.Interceptor.
 func (g *guard) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
 	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
-		ctx, err := g.check(ctx, conn.RequestHeader(), conn.Spec(), conn.Peer().Addr)
+		actx, err := g.check(ctx, conn.RequestHeader(), conn.Spec(), conn.Peer().Addr)
 		if err != nil {
 			return err
 		}
-		return next(ctx, conn)
+		if _, ok := CallerFrom(actx); !ok { // a public procedure
+			return next(actx, conn)
+		}
+		return g.serveReauthenticated(ctx, actx, conn, next)
 	}
 }

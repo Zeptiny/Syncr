@@ -88,8 +88,9 @@ const (
 	// The job could not be run or the tool reported a failure.
 	JobResultStatus_JOB_RESULT_STATUS_FAILED JobResultStatus = 2
 	// The job was stopped by a CancelJob command or worker shutdown. The
-	// controller records CANCELLED if a cancel was requested and INTERRUPTED
-	// otherwise.
+	// controller records CANCELLED if a cancel was requested; otherwise it
+	// queues the job again if it never started (no JobStarted, no
+	// started_at) and records INTERRUPTED if it did.
 	JobResultStatus_JOB_RESULT_STATUS_CANCELLED JobResultStatus = 3
 )
 
@@ -175,9 +176,10 @@ const (
 	// CANCELLED).
 	JobErrorCode_JOB_ERROR_CODE_CANCELLED JobErrorCode = 13
 	// The job was stopped because the worker is shutting down (JobResult
-	// status CANCELLED). The controller records the job as INTERRUPTED unless
-	// a cancel had been requested; it also uses this code for a CANCELLED
-	// result without a code that nobody asked for.
+	// status CANCELLED). Unless a cancel had been requested, the controller
+	// queues a job that never started again and records one that started as
+	// INTERRUPTED; it also uses this code for a CANCELLED result without a
+	// code that nobody asked for.
 	JobErrorCode_JOB_ERROR_CODE_WORKER_SHUTDOWN JobErrorCode = 14
 	// The worker did not accept the job within the controller's dispatch
 	// timeout (it was offline or unreachable). Status FAILED.
@@ -185,8 +187,9 @@ const (
 	// The worker restarted (new epoch) while the job was running, so its
 	// outcome is unknown. Status INTERRUPTED.
 	JobErrorCode_JOB_ERROR_CODE_WORKER_RESTARTED JobErrorCode = 21
-	// The worker no longer holds the job but never reported its result.
-	// Status INTERRUPTED.
+	// The worker no longer holds the job but never reported its result, or
+	// it has been out of contact for longer than the controller's
+	// workers.lost_after. Status INTERRUPTED.
 	JobErrorCode_JOB_ERROR_CODE_WORKER_LOST JobErrorCode = 22
 	// The worker was removed before the job finished. Status FAILED (never
 	// dispatched) or INTERRUPTED.
@@ -2197,7 +2200,9 @@ func (x *CommandAck) GetCommandId() string {
 }
 
 // StartJob asks the worker to run a job. A StartJob for a job_id the worker
-// already knows (running or finished in this epoch) is acked and ignored.
+// already knows (running or finished in this epoch) is acked and ignored. A
+// worker that is shutting down does not ack it and reports nothing, so the
+// job stays queued for the worker's next process.
 type StartJob struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Controller-assigned job UUID.

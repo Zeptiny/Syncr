@@ -66,6 +66,11 @@ type SampleRepository interface {
 	// ok is false if it has none.
 	LatestJobSample(ctx context.Context, id domain.JobID) (s Sample, ok bool, err error)
 
+	// LatestJobSamples returns the LatestJobSample of each of the jobs in
+	// one query, keyed by job ID; jobs without samples (or unknown ones)
+	// are absent. Repeated IDs are allowed.
+	LatestJobSamples(ctx context.Context, ids []domain.JobID) (map[domain.JobID]Sample, error)
+
 	// ListJobSamples returns all samples of the job by Time ascending.
 	ListJobSamples(ctx context.Context, id domain.JobID) ([]Sample, error)
 }

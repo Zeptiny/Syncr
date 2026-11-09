@@ -9,6 +9,8 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -257,8 +259,13 @@ func TestRemotesRejects(t *testing.T) {
 		{"uppercase backend", []*syncrv1.RemoteDefinition{remote("src", "S3")}, false},
 		{"local backend", []*syncrv1.RemoteDefinition{remote("src", "local")}, false},
 		{"alias backend", []*syncrv1.RemoteDefinition{remote("src", "alias", withOptions("remote", "/etc"))}, false},
+		{"archive backend", []*syncrv1.RemoteDefinition{remote("src", "archive", withOptions("remote", "/"))}, false},
+		{"archive backend without remote", []*syncrv1.RemoteDefinition{remote("src", "archive")}, false},
 		{"crypt backend", []*syncrv1.RemoteDefinition{remote("src", "crypt")}, false},
 		{"combine backend", []*syncrv1.RemoteDefinition{remote("src", "combine")}, false},
+		{"azureblob backend", []*syncrv1.RemoteDefinition{remote("src", "azureblob", withOptions("account", "a"))}, false},
+		{"drive backend", []*syncrv1.RemoteDefinition{remote("src", "drive")}, false},
+		{"unknown backend", []*syncrv1.RemoteDefinition{remote("src", "gopher")}, false},
 		{"empty option key", []*syncrv1.RemoteDefinition{remote("src", "s3", withOptions("", "x"))}, false},
 		{"option key with =", []*syncrv1.RemoteDefinition{remote("src", "s3", withOptions("a=b", "x"))}, false},
 		{"option key with space", []*syncrv1.RemoteDefinition{remote("src", "s3", withOptions("a b", "x"))}, false},
@@ -273,9 +280,13 @@ func TestRemotesRejects(t *testing.T) {
 		{"NUL in secret", []*syncrv1.RemoteDefinition{remote("src", "s3", withSecrets("k", secret+"\x00"))}, false},
 		{"NUL in obscured secret", []*syncrv1.RemoteDefinition{remote("src", "sftp", withSecrets("pass", secret+"\x00"), withObscure("pass"))}, false},
 		{"ssh command", []*syncrv1.RemoteDefinition{remote("src", "sftp", withOptions("ssh", "sh -c evil"))}, false},
+		{"ssh-agent", []*syncrv1.RemoteDefinition{remote("src", "sftp", withOptions("key-use-agent", "true"), withSecrets("pass", secret), withObscure("pass"))}, false},
+		{"sftp without credentials", []*syncrv1.RemoteDefinition{remote("src", "sftp", withOptions("host", "h", "user", "u"))}, false},
+		{"sftp with empty credentials", []*syncrv1.RemoteDefinition{remote("src", "sftp", withSecrets("pass", "", "key_pem", ""))}, false},
+		{"sftp asking for a password", []*syncrv1.RemoteDefinition{remote("src", "sftp", withOptions("ask_password", "true"))}, false},
 		{"bearer token command", []*syncrv1.RemoteDefinition{remote("src", "webdav", withOptions("bearer-token-command", "evil"))}, false},
 		{"local key file", []*syncrv1.RemoteDefinition{remote("src", "sftp", withOptions("key_file", "/etc/shadow"))}, false},
-		{"local file, uppercase", []*syncrv1.RemoteDefinition{remote("src", "drive", withOptions("Service_Account_File", "/x"))}, false},
+		{"local file, uppercase", []*syncrv1.RemoteDefinition{remote("src", "sftp", withOptions("Known_Hosts_File", "/x"))}, false},
 		{"env auth", []*syncrv1.RemoteDefinition{remote("src", "s3", withOptions("env_auth", "true"))}, false},
 		{"unix socket", []*syncrv1.RemoteDefinition{remote("src", "webdav", withOptions("unix_socket", "/run/docker.sock"))}, false},
 		{"obscure key not a secret", []*syncrv1.RemoteDefinition{remote("src", "sftp", withOptions("pass", "x"), withObscure("pass"))}, false},
@@ -317,6 +328,103 @@ func TestRemotesRejects(t *testing.T) {
 				t.Errorf("error message leaks a value: %v", err)
 			}
 		})
+	}
+}
+
+func TestCheckBackend(t *testing.T) {
+	t.Parallel()
+	for _, b := range SupportedBackends() {
+		if err := checkBackend(b); err != nil {
+			t.Errorf("checkBackend(%q) = %v, want nil", b, err)
+		}
+	}
+	if !slices.IsSorted(SupportedBackends()) {
+		t.Errorf("SupportedBackends() = %q, not sorted", SupportedBackends())
+	}
+	// Wrappers of free-form remotes, and backends that can use the worker
+	// host's identity, among others.
+	for _, b := range []string{
+		"alias", "archive", "cache", "chunker", "combine", "compress", "crypt", "hasher",
+		"azureblob", "azurefiles", "drive", "oracleobjectstorage", "smb", "swift", "http", "ftp", "hdfs",
+	} {
+		err := checkBackend(b)
+		if err == nil || !strings.Contains(err.Error(), "not supported by this worker") || !strings.Contains(err.Error(), strconv.Quote(b)) {
+			t.Errorf("checkBackend(%q) = %v, want a not-supported error naming it", b, err)
+		}
+	}
+	if err := checkBackend("local"); err == nil || !strings.Contains(err.Error(), "local_roots") {
+		t.Errorf(`checkBackend("local") = %v, want a pointer to local_roots`, err)
+	}
+	// rclone's GCS type name has spaces, so it cannot even be named.
+	if err := checkBackend("google cloud storage"); err == nil || strings.Contains(err.Error(), "google") {
+		t.Errorf("checkBackend(google cloud storage) = %v, want a format error without the value", err)
+	}
+
+	// SupportedBackends returns a copy.
+	SupportedBackends()[0] = "local"
+	if SupportedBackends()[0] == "local" {
+		t.Error("SupportedBackends() exposed internal state")
+	}
+}
+
+func TestCheckOptionDenies(t *testing.T) {
+	t.Parallel()
+	// Options of rclone backends (supported or not) that run commands on
+	// the worker, touch its files or sockets, or sign in as the worker
+	// host. Each must be denied whatever its backend, case and dashes.
+	for _, tt := range []struct{ backend, key, reason string }{
+		{"sftp", "ssh", "runs a local command"},
+		{"sftp", "key_use_agent", "ssh-agent"},
+		{"sftp", "Key-Use-Agent", "ssh-agent"},
+		{"sftp", "key_file", "reads a local file"},
+		{"sftp", "pubkey_file", "reads a local file"},
+		{"sftp", "known_hosts_file", "reads a local file"},
+		{"webdav", "bearer_token_command", "runs a local command"},
+		{"webdav", "unix_socket", "local socket"},
+		{"s3", "env_auth", "host's credentials"},
+		{"s3", "shared_credentials_file", "reads a local file"},
+		{"azureblob", "use_az", "Azure CLI"},
+		{"azurefiles", "USE_AZ", "Azure CLI"},
+		{"azureblob", "use-msi", "managed identity"},
+		{"azurefiles", "use_msi", "managed identity"},
+		{"azureblob", "env_auth", "host's credentials"},
+		{"azureblob", "client_certificate_path", "reads a local file"},
+		{"azureblob", "service_principal_file", "reads a local file"},
+		{"smb", "use_kerberos", "Kerberos"},
+		{"smb", "kerberos_ccache", "reads a local file"},
+		{"drive", "service_account_file", "reads a local file"},
+		{"drive", "env_auth", "host's credentials"},
+		{"gcs", "env_auth", "host's credentials"},
+		{"box", "box_config_file", "reads a local file"},
+		{"oracleobjectstorage", "config_file", "reads a local file"},
+		{"oracleobjectstorage", "sse_customer_key_file", "reads a local file"},
+		{"cache", "db_path", "writes local files"},
+		{"cache", "chunk_path", "writes local files"},
+		{"cache", "tmp_upload_path", "writes local files"},
+		{"union", "upstreams", "union_upstreams"},
+	} {
+		err := checkOption(tt.backend, tt.key)
+		if err == nil || !strings.Contains(err.Error(), tt.reason) || !strings.Contains(err.Error(), strconv.Quote(tt.key)) {
+			t.Errorf("checkOption(%q, %q) = %v, want an error naming the key and %q", tt.backend, tt.key, err, tt.reason)
+		}
+	}
+}
+
+func TestSFTPCredentials(t *testing.T) {
+	t.Parallel()
+	for name, def := range map[string]*syncrv1.RemoteDefinition{
+		"password":             remote("box", "sftp", withSecrets("pass", "p"), withObscure("pass")),
+		"empty password, sent": remote("box", "sftp", withSecrets("pass", ""), withObscure("pass")), // obscured, so rclone sees one
+		"key":                  remote("box", "sftp", withSecrets("key_pem", "k")),
+		"key in options":       remote("box", "sftp", withOptions("Key_Pem", "k")),
+	} {
+		if _, err := NewBuilder(nil).Remotes([]*syncrv1.RemoteDefinition{def}); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	_, err := NewBuilder(nil).Remotes([]*syncrv1.RemoteDefinition{remote("box", "sftp", withOptions("host", "h"))})
+	if err == nil || !strings.Contains(err.Error(), "ssh-agent") {
+		t.Errorf("sftp without credentials: err = %v, want one about the ssh-agent", err)
 	}
 }
 

@@ -38,8 +38,9 @@
 // # Passive mode (the controller calls the worker)
 //
 //   - Command: resp := core.HandleCommandRequest(ctx, req). Every command
-//     with an ID is acked in the response (duplicates too); the controller
-//     redelivers commands whose ack it did not get.
+//     with an ID that the agent accepts is acked in the response
+//     (duplicates too); the controller redelivers commands whose ack it did
+//     not get. The agent refuses StartJob once it shuts down.
 //   - Pull: resp := core.HandlePull(req). req.after_seq acknowledges every
 //     event up to it when req.epoch is the worker's epoch; otherwise (a new
 //     worker process, or a controller that never saw this epoch) it is
@@ -55,7 +56,8 @@
 // CANCELLED result in the outbox, then gives the transport a bounded grace
 // period for a final flush: the active transport keeps reporting until
 // core.Drained() (or the deadline); the passive transport keeps serving Pull
-// until core.WaitDrained(ctx) returns.
+// (and Command, whose StartJobs the agent now refuses) until
+// core.WaitDrained(ctx) returns.
 //
 // Allowed dependencies: the standard library, the generated protobuf code
 // and internal/worker/agent (for its Snapshot type).

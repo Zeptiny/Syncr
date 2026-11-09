@@ -32,7 +32,8 @@ type Config struct {
 	API     API            `yaml:"api"`
 	// Auth configures users' sessions and the first-run setup.
 	Auth Auth `yaml:"auth"`
-	// Workers configures what the controller tells new workers.
+	// Workers configures what the controller tells new workers and when it
+	// gives up on an unreachable one.
 	Workers Workers `yaml:"workers"`
 	// Database configures the Postgres store.
 	Database Database `yaml:"database"`
@@ -225,14 +226,24 @@ func (a Auth) validate() error {
 	return errors.Join(errs...)
 }
 
-// Workers configures what the controller tells new workers.
+// Workers configures what the controller tells new workers and when it
+// gives up on an unreachable one.
 type Workers struct {
 	// DownloadBaseURL is where the worker install commands download the
 	// syncr-worker release archives from (default DefaultDownloadBaseURL,
 	// the project's latest GitHub release). A mirror must serve the same
 	// file names.
 	DownloadBaseURL string `yaml:"download_base_url" env:"SYNCR_WORKERS_DOWNLOAD_BASE_URL"`
+	// LostAfter ends the dispatched and running jobs of a worker that has
+	// been out of contact this long (default 1h, at least MinLostAfter):
+	// they become interrupted (worker_lost), or cancelled if a cancel was
+	// requested. A worker that comes back later is told to stop them.
+	LostAfter time.Duration `yaml:"lost_after" env:"SYNCR_WORKERS_LOST_AFTER"`
 }
+
+// MinLostAfter is the shortest workers.lost_after: well above the time a
+// worker counts as offline (45 s) and its reconnect backoff (30 s).
+const MinLostAfter = 5 * time.Minute
 
 // DefaultDownloadBaseURL is the default workers.download_base_url (equal to
 // api.DefaultDownloadBaseURL; a test in cmd/syncr-controller keeps them in
@@ -240,10 +251,14 @@ type Workers struct {
 const DefaultDownloadBaseURL = "https://github.com/Zeptiny/Syncr/releases/latest/download"
 
 func (w Workers) validate() error {
+	var errs []error
 	if err := validateHTTPURL(w.DownloadBaseURL); err != nil {
-		return fmt.Errorf("workers.download_base_url: %w", err)
+		errs = append(errs, fmt.Errorf("workers.download_base_url: %w", err))
 	}
-	return nil
+	if w.LostAfter < MinLostAfter {
+		errs = append(errs, fmt.Errorf("workers.lost_after must be at least %v", MinLostAfter))
+	}
+	return errors.Join(errs...)
 }
 
 // validateHTTPURL accepts an absolute http or https URL with a host and
@@ -284,7 +299,7 @@ func Default() Config {
 			SessionIdleTimeout: 7 * 24 * time.Hour,
 			SessionMaxAge:      30 * 24 * time.Hour,
 		},
-		Workers: Workers{DownloadBaseURL: DefaultDownloadBaseURL},
+		Workers: Workers{DownloadBaseURL: DefaultDownloadBaseURL, LostAfter: time.Hour},
 		Database: Database{
 			MaxConns:       10,
 			ConnectTimeout: 10 * time.Second,

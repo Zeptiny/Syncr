@@ -47,6 +47,20 @@ for example `127.0.0.1/32` for a relay on the controller's host. A refused
 address fails the delivery permanently with "the address is not allowed by
 the notification network policy".
 
+Any signed-in user can create contacts and send test notifications, and the
+default policy lets them reach LAN addresses. To keep contacts from being
+used to scan the controller's network, **only administrators see what a
+destination or the network answered**: whether a port is open, DNS, TLS and
+HTTP details, a reply's status and body, and how long the attempt took. Other
+users get "the notification could not be delivered to the destination; an
+administrator can see the details in the controller's log" instead, in the
+test result and in the delivery log. The detail (without secrets) is in the
+controller's log. Messages that say nothing about the destination, such as
+an invalid configuration, and everything about Discord (its destination is
+fixed) stay readable for everyone. The test-send rate limit still applies.
+What a user can still observe is the delivery's outcome (delivered, retried
+or given up), which is what notifications are for.
+
 Proxies are not supported for notifications: `HTTPS_PROXY` and friends are
 ignored, because the policy would then check the proxy instead of the target.
 
@@ -95,7 +109,10 @@ and network errors are retried.
 | Authorization header | Advanced, optional; sent as is, e.g. `Bearer <token>`. |
 
 Replies: any 2xx is success. 408, 425, 429 and 5xx are retried (honoring
-`Retry-After`). Redirects and other 4xx fail permanently.
+`Retry-After`). Redirects and other 4xx fail permanently. A short excerpt of
+the receiver's reply is kept in the delivery log; the URL, its path, query and
+user info, the signing secret and the authorization header are removed from
+it, even when the receiver echoes them (many answer "no route for <path>").
 
 ### Request
 

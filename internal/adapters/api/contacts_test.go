@@ -93,7 +93,7 @@ func newNotifyEnv(t *testing.T, mutate ...func(*Deps)) *notifyEnv {
 		t.Fatal(err)
 	}
 	e.outbox, err = notifications.New(notifications.Deps{
-		Repo: e.store, Channels: reg, Contacts: e.contacts, Clock: e.clock, IDs: e.ids,
+		Repo: e.store, Channels: reg, Contacts: e.contacts, Admins: storeAdmins{e.store}, Clock: e.clock, IDs: e.ids,
 		PublicURL: "https://syncr.example", Logger: logger,
 	}, notifications.Config{})
 	if err != nil {
@@ -399,12 +399,14 @@ func TestSendTestNotification(t *testing.T) {
 	resp, err = client.SendTestNotification(ctx, connect.NewRequest(&syncrv1.SendTestNotificationRequest{
 		ContactId: c.GetId(), Input: &syncrv1.ContactInput{Options: map[string]string{"room": "nowhere"}},
 	}))
-	if err != nil || resp.Msg.GetOk() || resp.Msg.GetStatus() != 404 || resp.Msg.GetError() != "no such room" {
+	// Users who are not administrators are not told what the destination
+	// answered, how, or how fast (they could probe the network with it).
+	if err != nil || resp.Msg.GetOk() || resp.Msg.GetStatus() != 0 || resp.Msg.GetError() != notify.GenericReason || resp.Msg.GetLatency().AsDuration() != 0 {
 		t.Errorf("SendTestNotification(failing edit) = (%v, %v)", resp, err)
 	}
 	noContactSecret(t, "SendTestNotification", resp.Msg)
 	resp, err = client.SendTestNotification(ctx, connect.NewRequest(&syncrv1.SendTestNotificationRequest{Input: fakeContactInput("", "busy")}))
-	if err != nil || resp.Msg.GetOk() || resp.Msg.GetStatus() != 503 {
+	if err != nil || resp.Msg.GetOk() || resp.Msg.GetStatus() != 0 || resp.Msg.GetError() != notify.GenericReason {
 		t.Errorf("SendTestNotification(unsaved) = (%v, %v)", resp, err)
 	}
 	if sent := e.channel.messages(); len(sent) != 3 {
@@ -429,6 +431,60 @@ func TestSendTestNotification(t *testing.T) {
 		t.Errorf("SendTestNotification(invalid) = %v", err)
 	}
 	e.noSecretInLogs()
+}
+
+// Administrators control the network policy, so they see what the
+// destination answered.
+func TestSendTestNotificationAdminSeesDetails(t *testing.T) {
+	t.Parallel()
+	e := newNotifyEnv(t)
+	ctx := t.Context()
+	client := e.contactsFor(testAdmin)
+	c := e.createContact(testAdmin, fakeContactInput("Team chat", "ops"))
+	resp, err := client.SendTestNotification(ctx, connect.NewRequest(&syncrv1.SendTestNotificationRequest{
+		ContactId: c.GetId(), Input: &syncrv1.ContactInput{Options: map[string]string{"room": "nowhere"}},
+	}))
+	if err != nil || resp.Msg.GetOk() || resp.Msg.GetStatus() != 404 || resp.Msg.GetError() != "no such room" {
+		t.Errorf("SendTestNotification(failing edit) = (%v, %v)", resp, err)
+	}
+	noContactSecret(t, "SendTestNotification", resp.Msg)
+	resp, err = client.SendTestNotification(ctx, connect.NewRequest(&syncrv1.SendTestNotificationRequest{Input: fakeContactInput("", "busy")}))
+	if err != nil || resp.Msg.GetOk() || resp.Msg.GetStatus() != 503 {
+		t.Errorf("SendTestNotification(unsaved) = (%v, %v)", resp, err)
+	}
+}
+
+// storeAdmins is the outbox's notifications.AdminChecker, reading roles from
+// the store as the composition root does.
+type storeAdmins struct{ store *memstore.Store }
+
+func (a storeAdmins) IsAdmin(ctx context.Context, id domain.UserID) (bool, error) {
+	u, err := a.store.GetUser(ctx, id)
+	return u.Role == domain.RoleAdmin, err
+}
+
+// The delivery log tells administrators what the destination answered and
+// everybody else only that it could not be delivered.
+func TestDeliveryLogHidesNetworkDetailsFromUsers(t *testing.T) {
+	t.Parallel()
+	e := newNotifyEnv(t)
+	for _, tc := range []struct {
+		actor domain.Actor
+		want  string
+	}{
+		{testUser, notify.GenericReason},
+		{testAdmin, "status 503: the room is busy"},
+	} {
+		in := fakeContactInput("Busy chat", "busy")
+		in.JobEvents = []syncrv1.NotificationEvent{syncrv1.NotificationEvent_NOTIFICATION_EVENT_FAILED}
+		busy := e.createContact(tc.actor, in)
+		e.finishJob(tc.actor, domain.JobFailed, domain.ScheduleID{})
+		e.planAndDeliver()
+		ds := e.listDeliveries(tc.actor, &syncrv1.ListDeliveriesRequest{ContactId: busy.GetId()})
+		if len(ds.GetDeliveries()) != 1 || ds.GetDeliveries()[0].GetLastError() != tc.want {
+			t.Errorf("deliveries of %s = %v, want last_error %q", tc.actor.Role, ds, tc.want)
+		}
+	}
 }
 
 func TestDeliveryLog(t *testing.T) {
@@ -461,7 +517,7 @@ func TestDeliveryLog(t *testing.T) {
 	d := retrying.GetDeliveries()[0]
 	if d.GetContactId() != busy.GetId() || d.GetEvent() != syncrv1.NotificationEvent_NOTIFICATION_EVENT_FAILED || d.GetAttempts() != 1 ||
 		d.GetMaxAttempts() != 8 || d.GetNextAttemptAt() == nil || d.GetLastAttemptAt() == nil || d.GetDeliveredAt() != nil ||
-		d.GetLastError() != "status 503: the room is busy" || d.GetTitle() != "Job failed: rclone_transfer" ||
+		d.GetLastError() != notify.GenericReason || d.GetTitle() != "Job failed: rclone_transfer" ||
 		d.GetJobId() != jobIDs[2].String() || d.GetScheduleId() != "" || d.GetCreatedAt() == nil {
 		t.Errorf("newest pending delivery = %v", d)
 	}

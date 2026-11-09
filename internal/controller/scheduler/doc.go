@@ -27,16 +27,31 @@
 //     with its reserved ID on the next tick, whatever its deadline: the
 //     launch was decided in time.
 //
+// # Pausing during a launch
+//
+// Pausing a schedule cancels its pending run, but a launching run's job
+// may already exist, so the pause only records a cancel request on it
+// (schedules.Run.CancelRequested), which forbids launching -> launched. A
+// run with a cancel request is aborted (whenever a pass finds it, after a
+// restart too): its job, if it was created, is cancelled (jobs.Cancel,
+// idempotent), then the run ends cancelled. When MarkLaunched loses its
+// compare-and-swap after the job was created, the pass re-reads the run:
+// with a cancel request it aborts it; if the run ended without launching
+// (another controller aborted it) or is gone with its schedule, it cancels
+// the job; a job runs only for a launched run.
+//
 // Launch errors: a remote that is gone fails the run (remote_unavailable)
 // and pauses the schedule; an invalid definition the same with
 // invalid_definition; a worker that disappeared puts the run back to
-// pending (the next tick decides again); any other error leaves the run
-// launching, retried on the next tick with the same job ID.
+// pending (the next tick decides again), or fails it (worker_removed, no
+// pause) if a later occurrence opened a pending run meanwhile; any other
+// error leaves the run launching, retried on the next tick with the same
+// job ID.
 //
 // # No double runs
 //
 // Across restarts and concurrent schedulers (two controllers): a fire is a
-// compare-and-swap on NextRunAt; a schedule has at most one open run (a
+// compare-and-swap on NextRunAt; a schedule has at most one pending run (a
 // unique index); the pending -> launching compare-and-swap reserves the job
 // ID once; and jobs.Create is idempotent by ID. A crash between any two
 // steps is retried from the stored state with the same job ID.

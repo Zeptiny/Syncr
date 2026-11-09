@@ -85,6 +85,21 @@ func runHelper(mode string, args []string) int {
 		return 0
 	case "pgid":
 		return printProcessGroup()
+	case "supervise": // plays the worker: supervises a "pid" child and relays its output
+		self, err := os.Executable()
+		if err != nil {
+			return 10
+		}
+		spec := Spec{Path: self, Env: map[string]string{helperEnv: "pid"}}
+		if dir, ok := os.LookupEnv("GOCOVERDIR"); ok {
+			spec.Env["GOCOVERDIR"] = dir
+		}
+		spec.Stdout = func(l Line) { fmt.Println(string(l.Data)) }
+		if _, err := New(Options{}).Run(context.Background(), spec); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 12
+		}
+		return 0
 	case "orphan": // leaves a grandchild holding stdout open, then exits 0
 		self, err := os.Executable()
 		if err != nil {

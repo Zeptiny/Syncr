@@ -97,8 +97,15 @@ export function DashboardPage({ search }: { search: DashboardSearch }) {
   const unit: BucketUnit = d?.bucketUnit === "day" ? "day" : "hour";
   const points = useMemo(
     () =>
-      d ? shapeActivity(d.activity, { from: tsDate(d.from), until: tsDate(d.until), unit }) : [],
-    [d, unit],
+      d
+        ? shapeActivity(d.activity, {
+            from: tsDate(d.from),
+            until: tsDate(d.until),
+            unit,
+            timeZone: timezone,
+          })
+        : [],
+    [d, unit, timezone],
   );
   const t = d?.totals;
   const succeeded = toNumber(t?.succeeded);

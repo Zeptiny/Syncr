@@ -16,7 +16,6 @@ import (
 
 	"github.com/Zeptiny/Syncr/internal/platform/redact"
 	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
-	"github.com/Zeptiny/Syncr/internal/worker/paths"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/service"
 	"github.com/Zeptiny/Syncr/internal/worker/setup"
@@ -127,6 +126,7 @@ Flags:
 	if dir == "" {
 		dir, _ = e.lookupEnv(dataDirEnv)
 	}
+	toolsDir, _ := e.lookupEnv(toolsDirEnv)
 	opts := setup.Options{
 		Mode:          workerconfig.LinkActive,
 		ControllerURL: *controller,
@@ -141,6 +141,7 @@ Flags:
 		LocalRoots:    localRoots,
 		DataDir:       dir,
 		ConfigPath:    *configPath,
+		ToolsDir:      toolsDir,
 		User:          *user,
 		NoService:     *noService,
 		Force:         *force,
@@ -186,16 +187,14 @@ Flags:
 }
 
 // toolProvisioner makes the pinned rclone and restic available for setup:
-// the same resolution `run` performs, with downloading allowed.
+// the same resolution `run` performs, with downloading allowed, in the tools
+// directory setup writes to the config.
 type toolProvisioner struct{ e *env }
 
-func (p toolProvisioner) Provision(ctx context.Context, dataDir string, progress func(string)) ([]setup.ToolStatus, error) {
+func (p toolProvisioner) Provision(ctx context.Context, toolsDir string, progress func(string)) ([]setup.ToolStatus, error) {
 	cfg := workerconfig.Default()
-	cfg.DataDir = dataDir
+	cfg.Tools.Dir = toolsDir
 	cfg.Tools.Download = true
-	if v, ok := p.e.lookupEnv(toolsDirEnv); ok && v != "" {
-		cfg.Tools.Dir = v
-	}
 	for tool, target := range map[string]*string{toolRclone: &cfg.Tools.RclonePath, toolRestic: &cfg.Tools.ResticPath} {
 		if v, ok := p.e.lookupEnv("SYNCR_" + strings.ToUpper(tool) + "_PATH"); ok {
 			*target = v
@@ -208,7 +207,7 @@ func (p toolProvisioner) Provision(ctx context.Context, dataDir string, progress
 		paths:      p.e.pathsEnv(),
 		bundledDir: executableDir(),
 		tools:      p.e.tools,
-	}, sup, orDefault(cfg.Tools.Dir, paths.ToolsDir(dataDir)), quiet)
+	}, sup, toolsDir, quiet)
 	if err != nil {
 		return nil, err
 	}
@@ -218,13 +217,6 @@ func (p toolProvisioner) Provision(ctx context.Context, dataDir string, progress
 		out = append(out, setup.ToolStatus{Name: n, Version: r.Version, Source: string(r.Source), Path: r.Path})
 	}
 	return out, nil
-}
-
-func orDefault(v, def string) string {
-	if v != "" {
-		return v
-	}
-	return def
 }
 
 // probeTLS connects to addr and returns the fingerprint of the certificate

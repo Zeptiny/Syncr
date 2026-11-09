@@ -15,9 +15,11 @@
 //
 // Validation is strict, because the definitions come from the network:
 // aliases and option keys have a fixed charset, environment names must not
-// collide, backends that would bypass the worker's local_roots ("local") or
-// that take free-form remote strings ("alias", "crypt"...) are rejected, and
-// so are options that make rclone run local commands or read local files.
+// collide, only the backend types the worker supports are accepted (see
+// SupportedBackends; never "local", which would bypass the worker's
+// local_roots, nor backends that wrap free-form remote strings), and
+// options that make rclone run local commands, read local files or use the
+// worker host's credentials are rejected.
 //
 // Every error message names aliases and keys only, never values, so errors
 // can be shown to users.
@@ -119,7 +121,8 @@ func (e *Env) BackendType(alias string) (string, bool) {
 
 // Secrets returns the secret values of all remotes, in the forms they could
 // take in tool output (plain, obscured, quoted, URL-escaped), longest first.
-// Use it to scrub tool output before showing it to users; see Scrubber.
+// Use it to scrub tool output before showing it to users (see
+// internal/worker/runner/scrub).
 func (e *Env) Secrets() []string { return secretForms(e.secrets) }
 
 // Build prepares dir (see Isolate) and returns the environment that defines
@@ -335,6 +338,9 @@ func (b *Builder) addRemote(env *Env, def *syncrv1.RemoteDefinition) ([]string, 
 			return nil, err
 		}
 	}
+	if err := checkCredentials(alias, backend, vars); err != nil {
+		return nil, err
+	}
 
 	if isUnion {
 		upstreams, err := b.unionUpstreams(env, alias, def.GetUnionUpstreams())
@@ -350,34 +356,54 @@ func (b *Builder) addRemote(env *Env, def *syncrv1.RemoteDefinition) ([]string, 
 	return secrets, nil
 }
 
-// checkBackend rejects backend types that are malformed, or that would let a
-// remote reach the local filesystem without the local_roots check or embed
-// free-form remote strings.
+// SupportedBackends returns the rclone backend types the worker accepts,
+// sorted: the remote types built into Syncr (internal/backend/builtin) and
+// "memory", which keeps its data inside the rclone process (tests use it).
+//
+// It is an allowlist because most rclone backends must not be driven by
+// the controller: "local" and the backends that wrap free-form remote
+// strings ("alias", "archive", "crypt", "combine"...) reach the worker's
+// files without the local_roots check, and many cloud backends can sign in
+// as the worker host (Azure CLI and managed identities, cloud metadata
+// servers). "union" is supported because its upstreams are generated from
+// typed union_upstreams. A type is added here only after every one of its
+// options in the pinned rclone has been reviewed: see deniedOptions and
+// TestSupportedBackendOptionsReviewed.
+func SupportedBackends() []string {
+	return []string{"b2", "memory", "s3", "sftp", "union", "webdav"}
+}
+
+// checkBackend rejects backend types that are malformed or not supported.
 func checkBackend(backend string) error {
 	if !backendRe.MatchString(backend) {
 		return errors.New("backend type must match ^[a-z][a-z0-9]{0,63}$")
 	}
-	switch backend {
-	case "local":
+	if backend == "local" {
 		return errors.New(`backend type "local" is not allowed; use a location without a remote, which is checked against local_roots`)
-	case "alias", "crypt", "chunker", "compress", "hasher", "combine", "cache":
-		// These wrap other remotes given as rclone path strings. They need
-		// typed fields like union_upstreams before they can be supported.
-		return fmt.Errorf("backend type %q (a wrapper of other remotes) is not supported", backend)
+	}
+	if supported := SupportedBackends(); !slices.Contains(supported, backend) {
+		return fmt.Errorf("backend type %q is not supported by this worker (supported: %s)", backend, strings.Join(supported, ", "))
 	}
 	return nil
 }
 
 // deniedOptions are rclone options that run commands on the worker, read or
 // write arbitrary local files or sockets, or pick up the worker host's own
-// credentials. The controller's backend descriptors never emit them; this is
-// defense in depth.
+// credentials; checkOption also denies every "*_file" option. The
+// controller's backend descriptors never emit them. They are denied for
+// every backend type: the supported ones were reviewed against the pinned
+// rclone (TestSupportedBackendOptionsReviewed), and the entries for other
+// backends (Azure, SMB, the cache wrapper...) keep the list safe to extend.
 func deniedOptions() map[string]string {
 	return map[string]string{ //nolint:gosec // G101 false positive: option names, not credentials
 		"ssh":                     "runs a local command",
 		"bearer_token_command":    "runs a local command",
+		"use_az":                  "runs a local command (the Azure CLI) with the worker host's login",
 		"unix_socket":             "connects to a local socket",
 		"env_auth":                "uses the worker host's credentials",
+		"key_use_agent":           "uses the worker host's ssh-agent",
+		"use_msi":                 "uses the worker host's managed identity",
+		"use_kerberos":            "uses the worker host's Kerberos tickets",
 		"shared_credentials_file": "reads a local file",
 		"config_file":             "reads a local file",
 		"kerberos_ccache":         "reads a local file",
@@ -386,6 +412,20 @@ func deniedOptions() map[string]string {
 		"chunk_path":              "writes local files",
 		"tmp_upload_path":         "writes local files",
 	}
+}
+
+// checkCredentials rejects a remote that rclone would sign in with the
+// worker host's own credentials because it carries none of its own. vars
+// are the remote's variables, as passed to rclone.
+func checkCredentials(alias, backend string, vars map[string]string) error {
+	if backend == "sftp" && vars[EnvName(alias, "pass")] == "" && vars[EnvName(alias, "key_pem")] == "" {
+		// rclone then signs in with the host's ssh-agent (key_file and
+		// ssh are denied). SSH_AUTH_SOCK never reaches children on Unix,
+		// but on Windows rclone finds Pageant or the OpenSSH agent pipe
+		// by itself.
+		return errors.New(`an sftp remote needs a "pass" or a "key_pem"; the worker's ssh-agent is never used`)
+	}
+	return nil
 }
 
 // checkOption validates an option or secret key.

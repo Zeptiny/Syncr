@@ -43,6 +43,7 @@ import {
   toNumber,
   tsDate,
 } from "@/lib/format";
+import { errorMessage } from "@/lib/errors";
 import { invalidateService } from "@/lib/invalidate";
 import { errorCodeLabel, isTerminal, kindLabel, transferModeLabel } from "@/lib/status";
 import { cn } from "@/lib/utils";
@@ -161,6 +162,17 @@ function RouteBand({
 function Connection({ watch, terminal }: { watch: WatchResult; terminal: boolean }) {
   if (terminal || watch.state === "ended") {
     return <span className="text-xs text-muted-foreground">Finished</span>;
+  }
+  if (watch.state === "failed") {
+    return (
+      <span className="inline-flex items-center gap-2 text-xs text-danger" role="alert">
+        <span className="size-1.5 rounded-full bg-current" aria-hidden />
+        Live updates stopped: {errorMessage(watch.error)}
+        <Button variant="outline" size="sm" className="h-6 px-2 text-xs" onClick={watch.retry}>
+          Retry
+        </Button>
+      </span>
+    );
   }
   const live = watch.state === "live";
   return (

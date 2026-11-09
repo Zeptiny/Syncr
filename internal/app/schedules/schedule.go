@@ -139,7 +139,8 @@ const (
 	RunMissed RunStatus = "missed"
 	// RunFailed could not start at all. Terminal.
 	RunFailed RunStatus = "failed"
-	// RunCancelled was open when the schedule was paused. Terminal.
+	// RunCancelled was open when the schedule was paused (a launching run
+	// after the scheduler cancelled its job). Terminal.
 	RunCancelled RunStatus = "cancelled"
 )
 
@@ -153,7 +154,7 @@ func (s RunStatus) Valid() bool {
 }
 
 // Open reports whether s is pending or launching. A schedule has at most
-// one open run.
+// one pending run (and any number of launching ones).
 func (s RunStatus) Open() bool { return s == RunPending || s == RunLaunching }
 
 // Run triggers.
@@ -195,7 +196,8 @@ type Run struct {
 
 	Status RunStatus
 	// Reason is a reason code (Reason* constants) for missed, failed and
-	// cancelled runs; Message its details for display.
+	// cancelled runs; Message its details for display. On a launching run
+	// it is a cancel request (CancelRequested).
 	Reason  string
 	Message string
 
@@ -210,6 +212,12 @@ type Run struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+// CancelRequested reports whether the run is launching and its schedule
+// was paused meanwhile (Reason ReasonDisabled): its job may already exist,
+// so the scheduler cancels the job, if any, and then the run. Such a run
+// may only move to cancelled (Repository.UpdateRun).
+func (r Run) CancelRequested() bool { return r.Status == RunLaunching && r.Reason != "" }
 
 // Limits and policy constants.
 const (
@@ -335,9 +343,18 @@ type Fire struct {
 	// LastFiredAt). A terminal run (missed, reason overlap) is always
 	// inserted.
 	Run Run
-	// Merge merges the fire into the schedule's open run, if it has one,
-	// instead of inserting Run.
+	// Merge merges the fire into the schedule's pending run, if it has one
+	// and its Deadline is after Run.CreatedAt, instead of inserting Run;
+	// the pending run keeps its deadline.
 	Merge bool
+	// MissedReason and MissedMessage end a pending run whose Deadline is
+	// not after Run.CreatedAt: every fire supersedes it (it is missed) before
+	// Run is merged or inserted.
+	MissedReason, MissedMessage string
+	// Earlier, if set, is a missed run inserted with the fire: earlier
+	// occurrences whose deadline passed before they could fire
+	// (FirePlan.LateFor).
+	Earlier *Run
 }
 
 // Toggle is the change of Repository.SetScheduleEnabled.

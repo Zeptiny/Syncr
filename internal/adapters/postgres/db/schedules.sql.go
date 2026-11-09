@@ -41,8 +41,11 @@ func (q *Queries) AdvanceScheduleFire(ctx context.Context, arg AdvanceScheduleFi
 }
 
 const cancelOpenRun = `-- name: CancelOpenRun :exec
-UPDATE schedule_runs SET status = 'cancelled', reason = 'disabled', message = '', updated_at = $1::timestamptz
-WHERE schedule_id = $2::uuid AND status IN ('pending', 'launching')
+UPDATE schedule_runs SET
+    status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE status END,
+    reason = 'disabled', message = '', updated_at = $1::timestamptz
+WHERE schedule_id = $2::uuid
+  AND (status = 'pending' OR (status = 'launching' AND reason = ''))
 `
 
 type CancelOpenRunParams struct {
@@ -50,8 +53,11 @@ type CancelOpenRunParams struct {
 	ScheduleID pgtype.UUID
 }
 
-// Pausing a schedule cancels its open run (without a notification: only
-// missed and failed runs notify).
+// Pausing a schedule cancels its open runs (without a notification: only
+// missed and failed runs notify). A pending run is cancelled at once; a
+// launching run's job may already exist, so it stays launching with the
+// reason 'disabled' (a cancel request): the scheduler cancels its job and
+// then the run.
 func (q *Queries) CancelOpenRun(ctx context.Context, arg CancelOpenRunParams) error {
 	_, err := q.db.Exec(ctx, cancelOpenRun, arg.UpdatedAt, arg.ScheduleID)
 	return err
@@ -351,8 +357,9 @@ type InsertRunParams struct {
 	UpdatedAt    pgtype.Timestamptz
 }
 
-// An open run while the schedule has one violates schedule_runs_one_open_key;
-// a missing schedule or worker a foreign key.
+// A pending run while the schedule has one violates
+// schedule_runs_one_pending_key; a missing schedule or worker a foreign
+// key.
 func (q *Queries) InsertRun(ctx context.Context, arg InsertRunParams) error {
 	_, err := q.db.Exec(ctx, insertRun,
 		arg.ID,
@@ -801,6 +808,22 @@ func (q *Queries) ListUpcoming(ctx context.Context, arg ListUpcomingParams) ([]L
 	return items, nil
 }
 
+const lockRunSchedule = `-- name: LockRunSchedule :one
+SELECT s.id FROM schedules s
+WHERE s.id = (SELECT r.schedule_id FROM schedule_runs r WHERE r.id = $1::uuid)
+FOR NO KEY UPDATE OF s
+`
+
+// Locks the schedule of a run before the run is written (UpdateRun), for
+// the same lock order; the run row itself is not locked. No row: the run
+// does not exist.
+func (q *Queries) LockRunSchedule(ctx context.Context, runID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockRunSchedule, runID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const lockSchedule = `-- name: LockSchedule :one
 SELECT enabled, version FROM schedules WHERE id = $1::uuid FOR UPDATE
 `
@@ -819,30 +842,52 @@ func (q *Queries) LockSchedule(ctx context.Context, id pgtype.UUID) (LockSchedul
 	return i, err
 }
 
-const mergeOpenRun = `-- name: MergeOpenRun :one
+const lockScheduleRow = `-- name: LockScheduleRow :one
+SELECT id FROM schedules WHERE id = $1::uuid FOR NO KEY UPDATE
+`
+
+// Locks a schedule before its runs are written (AddRun), so every
+// transaction that writes a schedule and its runs locks the schedule row
+// first and two of them cannot deadlock.
+func (q *Queries) LockScheduleRow(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockScheduleRow, id)
+	var id_2 pgtype.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
+const mergePendingRun = `-- name: MergePendingRun :one
 UPDATE schedule_runs SET
     coalesced = coalesced + $1::integer + 1,
     deadline = GREATEST(deadline, $2::timestamptz),
     updated_at = $3::timestamptz
-WHERE schedule_id = $4::uuid AND status IN ('pending', 'launching')
+WHERE schedule_id = $4::uuid AND status = 'pending'
+  AND ($5::timestamptz IS NULL OR deadline > $5::timestamptz)
 RETURNING id
 `
 
-type MergeOpenRunParams struct {
+type MergePendingRunParams struct {
 	AddCoalesced int32
-	Deadline     pgtype.Timestamptz
+	ExtendTo     pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
 	ScheduleID   pgtype.UUID
+	OpenAfter    pgtype.Timestamptz
 }
 
-// Merges an occurrence (or a manual request) into the schedule's open run,
-// if it has one (at most one: schedule_runs_one_open_key).
-func (q *Queries) MergeOpenRun(ctx context.Context, arg MergeOpenRunParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, mergeOpenRun,
+// Merges an occurrence (or a manual request) into the schedule's pending
+// run, if it has one (at most one: schedule_runs_one_pending_key). A
+// launching run is past its launch and absorbs nothing. A fire passes
+// open_after (the fire time): only a run whose deadline is after it
+// absorbs the occurrence, and its deadline stays. A manual request passes
+// extend_to (its own deadline) instead: the run may then wait that long
+// (GREATEST ignores a NULL).
+func (q *Queries) MergePendingRun(ctx context.Context, arg MergePendingRunParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, mergePendingRun,
 		arg.AddCoalesced,
-		arg.Deadline,
+		arg.ExtendTo,
 		arg.UpdatedAt,
 		arg.ScheduleID,
+		arg.OpenAfter,
 	)
 	var id pgtype.UUID
 	err := row.Scan(&id)
@@ -945,6 +990,34 @@ func (q *Queries) SetScheduleEnabled(ctx context.Context, arg SetScheduleEnabled
 	return i, err
 }
 
+const supersedePendingRun = `-- name: SupersedePendingRun :exec
+UPDATE schedule_runs SET
+    status = 'missed', reason = $1::text, message = $2::text,
+    updated_at = $3::timestamptz
+WHERE schedule_id = $4::uuid AND status = 'pending'
+  AND deadline <= $3::timestamptz
+`
+
+type SupersedePendingRunParams struct {
+	Reason     string
+	Message    string
+	UpdatedAt  pgtype.Timestamptz
+	ScheduleID pgtype.UUID
+}
+
+// A fire ends the schedule's pending run whose deadline is not after the
+// fire time as missed, before merging or inserting the occurrence's run:
+// the run may not absorb an occurrence that is due after its deadline.
+func (q *Queries) SupersedePendingRun(ctx context.Context, arg SupersedePendingRunParams) error {
+	_, err := q.db.Exec(ctx, supersedePendingRun,
+		arg.Reason,
+		arg.Message,
+		arg.UpdatedAt,
+		arg.ScheduleID,
+	)
+	return err
+}
+
 const updateRunStatus = `-- name: UpdateRunStatus :one
 UPDATE schedule_runs SET
     status = $1::text,
@@ -954,6 +1027,7 @@ UPDATE schedule_runs SET
     job_id = COALESCE($5::uuid, job_id),
     updated_at = $6::timestamptz
 WHERE id = $7::uuid AND status = $8::text
+  AND (status <> 'launching' OR reason = '' OR $1::text = 'cancelled')
 RETURNING schedule_id
 `
 
@@ -969,7 +1043,9 @@ type UpdateRunStatusParams struct {
 }
 
 // The compare-and-swap of a run's status; zero (NULL) worker and job IDs
-// keep the stored ones.
+// keep the stored ones. A run back to pending while another one is
+// violates schedule_runs_one_pending_key. A launching run with a reason
+// (its schedule was paused while it launched) may only be cancelled.
 func (q *Queries) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, updateRunStatus,
 		arg.ToStatus,

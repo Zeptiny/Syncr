@@ -69,6 +69,20 @@ ORDER BY lower(name) COLLATE "C", id;
 -- version check and the enabled transition are decided on this row.
 SELECT enabled, version FROM schedules WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 
+-- name: LockScheduleRow :one
+-- Locks a schedule before its runs are written (AddRun), so every
+-- transaction that writes a schedule and its runs locks the schedule row
+-- first and two of them cannot deadlock.
+SELECT id FROM schedules WHERE id = sqlc.arg(id)::uuid FOR NO KEY UPDATE;
+
+-- name: LockRunSchedule :one
+-- Locks the schedule of a run before the run is written (UpdateRun), for
+-- the same lock order; the run row itself is not locked. No row: the run
+-- does not exist.
+SELECT s.id FROM schedules s
+WHERE s.id = (SELECT r.schedule_id FROM schedule_runs r WHERE r.id = sqlc.arg(run_id)::uuid)
+FOR NO KEY UPDATE OF s;
+
 -- name: UpdateSchedule :one
 -- The configuration of a schedule locked by LockSchedule. next_run_at is
 -- only written when reschedule is set, so an edit racing a fire cannot
@@ -142,8 +156,9 @@ ORDER BY next_run_at, id
 LIMIT sqlc.narg(row_limit)::bigint;
 
 -- name: InsertRun :exec
--- An open run while the schedule has one violates schedule_runs_one_open_key;
--- a missing schedule or worker a foreign key.
+-- A pending run while the schedule has one violates
+-- schedule_runs_one_pending_key; a missing schedule or worker a foreign
+-- key.
 INSERT INTO schedule_runs (
     id, schedule_id, trigger, scheduled_for, deadline, coalesced, status, reason, message,
     worker_id, job_id, created_at, updated_at
@@ -155,19 +170,37 @@ INSERT INTO schedule_runs (
     sqlc.arg(created_at)::timestamptz, sqlc.arg(updated_at)::timestamptz
 );
 
--- name: MergeOpenRun :one
--- Merges an occurrence (or a manual request) into the schedule's open run,
--- if it has one (at most one: schedule_runs_one_open_key).
+-- name: MergePendingRun :one
+-- Merges an occurrence (or a manual request) into the schedule's pending
+-- run, if it has one (at most one: schedule_runs_one_pending_key). A
+-- launching run is past its launch and absorbs nothing. A fire passes
+-- open_after (the fire time): only a run whose deadline is after it
+-- absorbs the occurrence, and its deadline stays. A manual request passes
+-- extend_to (its own deadline) instead: the run may then wait that long
+-- (GREATEST ignores a NULL).
 UPDATE schedule_runs SET
     coalesced = coalesced + sqlc.arg(add_coalesced)::integer + 1,
-    deadline = GREATEST(deadline, sqlc.arg(deadline)::timestamptz),
+    deadline = GREATEST(deadline, sqlc.narg(extend_to)::timestamptz),
     updated_at = sqlc.arg(updated_at)::timestamptz
-WHERE schedule_id = sqlc.arg(schedule_id)::uuid AND status IN ('pending', 'launching')
+WHERE schedule_id = sqlc.arg(schedule_id)::uuid AND status = 'pending'
+  AND (sqlc.narg(open_after)::timestamptz IS NULL OR deadline > sqlc.narg(open_after)::timestamptz)
 RETURNING id;
+
+-- name: SupersedePendingRun :exec
+-- A fire ends the schedule's pending run whose deadline is not after the
+-- fire time as missed, before merging or inserting the occurrence's run:
+-- the run may not absorb an occurrence that is due after its deadline.
+UPDATE schedule_runs SET
+    status = 'missed', reason = sqlc.arg(reason)::text, message = sqlc.arg(message)::text,
+    updated_at = sqlc.arg(updated_at)::timestamptz
+WHERE schedule_id = sqlc.arg(schedule_id)::uuid AND status = 'pending'
+  AND deadline <= sqlc.arg(updated_at)::timestamptz;
 
 -- name: UpdateRunStatus :one
 -- The compare-and-swap of a run's status; zero (NULL) worker and job IDs
--- keep the stored ones.
+-- keep the stored ones. A run back to pending while another one is
+-- violates schedule_runs_one_pending_key. A launching run with a reason
+-- (its schedule was paused while it launched) may only be cancelled.
 UPDATE schedule_runs SET
     status = sqlc.arg(to_status)::text,
     reason = sqlc.arg(reason)::text,
@@ -176,16 +209,23 @@ UPDATE schedule_runs SET
     job_id = COALESCE(sqlc.narg(job_id)::uuid, job_id),
     updated_at = sqlc.arg(updated_at)::timestamptz
 WHERE id = sqlc.arg(id)::uuid AND status = sqlc.arg(from_status)::text
+  AND (status <> 'launching' OR reason = '' OR sqlc.arg(to_status)::text = 'cancelled')
 RETURNING schedule_id;
 
 -- name: RunExists :one
 SELECT EXISTS (SELECT 1 FROM schedule_runs WHERE id = sqlc.arg(id)::uuid);
 
 -- name: CancelOpenRun :exec
--- Pausing a schedule cancels its open run (without a notification: only
--- missed and failed runs notify).
-UPDATE schedule_runs SET status = 'cancelled', reason = 'disabled', message = '', updated_at = sqlc.arg(updated_at)::timestamptz
-WHERE schedule_id = sqlc.arg(schedule_id)::uuid AND status IN ('pending', 'launching');
+-- Pausing a schedule cancels its open runs (without a notification: only
+-- missed and failed runs notify). A pending run is cancelled at once; a
+-- launching run's job may already exist, so it stays launching with the
+-- reason 'disabled' (a cancel request): the scheduler cancels its job and
+-- then the run.
+UPDATE schedule_runs SET
+    status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE status END,
+    reason = 'disabled', message = '', updated_at = sqlc.arg(updated_at)::timestamptz
+WHERE schedule_id = sqlc.arg(schedule_id)::uuid
+  AND (status = 'pending' OR (status = 'launching' AND reason = ''));
 
 -- name: GetRun :one
 -- Runs come with their job's status (job_id has no foreign key: a

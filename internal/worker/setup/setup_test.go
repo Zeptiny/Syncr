@@ -99,7 +99,9 @@ func (c *fakeController) seen() []*syncrv1.EnrollRequest {
 type fakeServices struct {
 	mu    sync.Mutex
 	calls []string
-	state service.State
+	// installed is the spec of the last Install.
+	installed service.Spec
+	state     service.State
 	// afterStart is the state once Start has been called.
 	afterStart   service.State
 	preflightErr error
@@ -126,13 +128,14 @@ func (f *fakeServices) called() []string {
 
 func (f *fakeServices) Preflight(service.Spec) error { f.record("preflight"); return f.preflightErr }
 
-func (f *fakeServices) Install(_ context.Context, _ service.Spec) error {
+func (f *fakeServices) Install(_ context.Context, spec service.Spec) error {
 	f.record("install")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.installErr != nil {
 		return f.installErr
 	}
+	f.installed = spec
 	f.state = service.StateStopped
 	return nil
 }
@@ -170,15 +173,16 @@ func (f *fakeServices) Info(spec service.Spec) service.Info {
 }
 
 type fakeTools struct {
-	mu      sync.Mutex
+	mu sync.Mutex
+	// dirs are the tools directories Provision was given.
 	dirs    []string
 	err     error
 	reports []ToolStatus
 }
 
-func (f *fakeTools) Provision(_ context.Context, dataDir string, progress func(string)) ([]ToolStatus, error) {
+func (f *fakeTools) Provision(_ context.Context, toolsDir string, progress func(string)) ([]ToolStatus, error) {
 	f.mu.Lock()
-	f.dirs = append(f.dirs, dataDir)
+	f.dirs = append(f.dirs, toolsDir)
 	f.mu.Unlock()
 	progress("resolving rclone and restic")
 	if f.err != nil {
@@ -188,8 +192,8 @@ func (f *fakeTools) Provision(_ context.Context, dataDir string, progress func(s
 		return f.reports, nil
 	}
 	return []ToolStatus{
-		{Name: "rclone", Version: "1.70.0", Source: "managed", Path: filepath.Join(dataDir, "tools", "rclone")},
-		{Name: "restic", Version: "0.18.0", Source: "managed", Path: filepath.Join(dataDir, "tools", "restic")},
+		{Name: "rclone", Version: "1.70.0", Source: "managed", Path: filepath.Join(toolsDir, "rclone", "1.70.0", "rclone")},
+		{Name: "restic", Version: "0.18.0", Source: "managed", Path: filepath.Join(toolsDir, "restic", "0.18.0", "restic")},
 	}, nil
 }
 
@@ -340,8 +344,11 @@ func TestActiveSetupEndToEnd(t *testing.T) {
 	if want := []string{"preflight", "install", "start"}; !equalPrefixed(r.svc.called(), want) {
 		t.Errorf("service calls = %v, want %v in order", r.svc.called(), want)
 	}
-	if len(r.tools.dirs) != 1 || r.tools.dirs[0] != r.data {
-		t.Errorf("tools provisioned in %v", r.tools.dirs)
+	if want := filepath.Join(r.data, "tools"); len(r.tools.dirs) != 1 || r.tools.dirs[0] != want {
+		t.Errorf("tools provisioned in %v, want %s", r.tools.dirs, want)
+	}
+	if cfg.Tools.Dir != "" {
+		t.Errorf("tools.dir = %q: the default follows data_dir and is not written", cfg.Tools.Dir)
 	}
 	if res.WorkerID != enrolledID || res.Service != service.StateRunning || len(res.Tools) != 2 {
 		t.Errorf("result = %+v", res)
@@ -690,6 +697,84 @@ func TestPassiveRerunKeepsCertificateAndForceRegeneratesIt(t *testing.T) {
 	}
 }
 
+// TestForceKeepsAWorkingSetupWhenEnrollmentFails: --force on an installed
+// passive worker must not replace its certificate, key or controller CA
+// before the controller accepted the new enrollment. Otherwise a rejected
+// token or an unreachable controller leaves the old install with a
+// certificate the controller does not know.
+func TestForceKeepsAWorkingSetupWhenEnrollmentFails(t *testing.T) {
+	t.Parallel()
+	c := newFakeController(t)
+	r := newRig(t)
+	o := r.passiveOptions(Options{ControllerURL: c.srv.URL, Token: testToken, CAFile: c.caFile})
+	first := r.mustRun(o)
+	files := []string{r.config, filepath.Join(r.data, "tls", "worker.crt"), filepath.Join(r.data, "tls", "worker.key"), filepath.Join(r.data, "tls", "controller-ca.pem")}
+	snapshot := func() map[string]string {
+		m := map[string]string{}
+		for _, f := range files {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m[f] = string(b)
+		}
+		return m
+	}
+	before := snapshot()
+
+	// An unrelated certificate as the CA: the TLS handshake fails. (Every
+	// httptest server shares one certificate, so it is generated.)
+	unrelated, err := tlscert.Generate(tlscert.Options{Hostname: "unrelated.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongCA := filepath.Join(t.TempDir(), "wrong-ca.pem")
+	if err := os.WriteFile(wrongCA, unrelated.CertPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		edit func(*Options)
+		kind EnrollErrorKind
+	}{
+		{"untrusted controller certificate", func(o *Options) { o.CAFile = wrongCA }, EnrollTLS},
+		{"rejected token", func(o *Options) { o.Token = "wtok_used-already" }, EnrollTokenRejected},
+	} {
+		failing := o
+		failing.Force = true
+		tt.edit(&failing)
+		_, err := r.run(failing)
+		var ee *EnrollError
+		if !errors.As(err, &ee) || ee.Kind != tt.kind {
+			t.Fatalf("%s: err = %v, want an EnrollError of kind %d", tt.name, err, tt.kind)
+		}
+		after := snapshot()
+		for _, f := range files {
+			if after[f] != before[f] {
+				t.Errorf("%s: %s changed although the enrollment failed", tt.name, f)
+			}
+		}
+		if fp, err := tlscert.FingerprintFile(files[1]); err != nil || fp != first.Fingerprint {
+			t.Errorf("%s: certificate fingerprint = %s, %v; want the pinned %s", tt.name, fp, err, first.Fingerprint)
+		}
+	}
+
+	// A successful --force replaces the certificate, and the controller is
+	// told the new fingerprint.
+	o.Force = true
+	second := r.mustRun(o)
+	if second.Fingerprint == first.Fingerprint {
+		t.Error("--force kept the old certificate")
+	}
+	if fp, err := tlscert.FingerprintFile(files[1]); err != nil || fp != second.Fingerprint {
+		t.Errorf("stored fingerprint = %s, %v; want %s", fp, err, second.Fingerprint)
+	}
+	reqs := c.seen()
+	if got := reqs[len(reqs)-1].GetCertFingerprint(); got != second.Fingerprint {
+		t.Errorf("enrolled with fingerprint %s, want %s", got, second.Fingerprint)
+	}
+}
+
 func TestDryRunChangesNothing(t *testing.T) {
 	t.Parallel()
 	c := newFakeController(t)
@@ -830,6 +915,99 @@ func TestUnwritableDirectoriesFailBeforeEnrolling(t *testing.T) {
 	}
 }
 
+// TestUntrustedDataDirFailsBeforeEnrolling: a data directory that another
+// account prepared (here: one every user may write to) would let it plant
+// the tools or the config the service trusts. Setup refuses it before the
+// token is spent. (Windows has its own test of owners and ACLs.)
+func TestUntrustedDataDirFailsBeforeEnrolling(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits")
+	}
+	c := newFakeController(t)
+	r := newRig(t)
+	if err := os.Mkdir(r.data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(r.data, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	_, err := r.run(r.activeOptions(c))
+	if err == nil {
+		t.Fatal("setup accepted a world-writable data directory")
+	}
+	mustContain(t, "error", err.Error(), r.data, "every user can write", "--data-dir")
+	if len(c.seen()) != 0 || len(r.tools.dirs) != 0 {
+		t.Error("enrolled or provisioned tools in an untrusted directory")
+	}
+	r.assertNothingWritten()
+}
+
+func TestProgramsOthersCanChangeAreReported(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits; Windows ACLs are covered in atomicfile")
+	}
+	for _, tt := range []struct {
+		name string
+		mode os.FileMode
+		user bool
+		warn bool
+	}{
+		{"private binary", 0o755, false, false},
+		{"binary every user can write", 0o777, false, true},
+		{"user service", 0o777, true, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := newFakeController(t)
+			r := newRig(t)
+			bin := filepath.Join(r.dir, "bin", "syncr-worker")
+			if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(bin, nil, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(bin, tt.mode); err != nil {
+				t.Fatal(err)
+			}
+			r.setup.System.Executable = func() (string, error) { return bin, nil }
+			o := r.activeOptions(c)
+			o.User = tt.user
+			r.mustRun(o)
+			out := r.out.String()
+			got := strings.Contains(out, "warning: "+bin+":") && strings.Contains(out, "every user can write to it")
+			if got != tt.warn {
+				t.Errorf("warning shown = %v, want %v:\n%s", got, tt.warn, r.out)
+			}
+		})
+	}
+}
+
+func TestOnlyEntries(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	own := []string{"tools", "tls"}
+	if !onlyEntries(filepath.Join(dir, "missing"), own) || !onlyEntries(dir, own) {
+		t.Error("a missing or empty directory is the worker's to take")
+	}
+	for _, name := range []string{"tools", ".worker.yaml.123.tmp"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !onlyEntries(dir, own) {
+		t.Error("the worker's own entries and hidden files are accepted")
+	}
+	if err := os.Mkdir(filepath.Join(dir, "Documents"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if onlyEntries(dir, own) {
+		t.Error("a directory with other content was taken as the worker's own")
+	}
+}
+
 func TestOptionValidation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -881,6 +1059,70 @@ func TestRelativeLocalRootIsMadeAbsolute(t *testing.T) {
 	if len(roots) != 1 || !filepath.IsAbs(roots[0]) || !strings.HasSuffix(roots[0], filepath.Join("relative", "dir")) {
 		t.Errorf("local_roots = %q", roots)
 	}
+}
+
+// TestRelativePathsAreMadeAbsolute runs setup with relative paths: the
+// service starts in another directory (systemd's WorkingDirectory, System32
+// for the Windows SCM), so the config and the service must name absolute
+// paths. Not parallel: it changes the working directory.
+func TestRelativePathsAreMadeAbsolute(t *testing.T) {
+	sameFile := func(t *testing.T, what, got, want string) {
+		t.Helper()
+		if !filepath.IsAbs(got) {
+			t.Errorf("%s = %q, want an absolute path", what, got)
+			return
+		}
+		gi, gerr := os.Stat(got)
+		wi, werr := os.Stat(want)
+		if gerr != nil || werr != nil || !os.SameFile(gi, wi) {
+			t.Errorf("%s = %q, want %q (%v, %v)", what, got, want, gerr, werr)
+		}
+	}
+
+	t.Run("active", func(t *testing.T) {
+		c := newFakeController(t)
+		r := newRig(t)
+		t.Chdir(r.dir)
+		caRel, err := filepath.Rel(r.dir, c.caFile)
+		if err != nil {
+			t.Skipf("the CA file has no path relative to %s: %v", r.dir, err)
+		}
+		// Only --config relative: before the fix this passed validation (and
+		// the self-check, which runs in the same directory), but the service
+		// was given "run --config etc/worker.yaml" and could not find it.
+		o := r.activeOptions(c)
+		o.ConfigPath, o.CAFile = filepath.Join("etc", "worker.yaml"), caRel
+		res := r.mustRun(o)
+
+		sameFile(t, "result config path", res.ConfigPath, r.config)
+		sameFile(t, "result data dir", res.DataDir, r.data)
+		cfg := r.loadConfig()
+		sameFile(t, "data_dir", cfg.DataDir, r.data)
+		spec := r.svc.installed
+		if len(spec.Args) < 3 || spec.Args[1] != "--config" {
+			t.Fatalf("service args = %q", spec.Args)
+		}
+		sameFile(t, "service --config", spec.Args[2], r.config)
+		sameFile(t, "service working directory", spec.WorkDir, r.data)
+	})
+
+	t.Run("passive with a provided certificate", func(t *testing.T) {
+		r := newRig(t)
+		t.Chdir(r.dir)
+		pair, err := tlscert.Generate(tlscert.Options{Hostname: "mine.example.com"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tlscert.Write(filepath.Join(r.dir, "mine.crt"), filepath.Join(r.dir, "mine.key"), pair, false); err != nil {
+			t.Fatal(err)
+		}
+		o := r.passiveOptions(Options{TLSCertFile: "mine.crt", TLSKeyFile: "mine.key"})
+		o.DataDir, o.ConfigPath = "data", filepath.Join("etc", "worker.yaml")
+		r.mustRun(o)
+		l := r.loadConfig().Link
+		sameFile(t, "tls_cert_file", l.TLSCertFile, filepath.Join(r.dir, "mine.crt"))
+		sameFile(t, "tls_key_file", l.TLSKeyFile, filepath.Join(r.dir, "mine.key"))
+	})
 }
 
 func TestToolsFailureStopsBeforeEnrollment(t *testing.T) {
@@ -1037,11 +1279,71 @@ func TestExplicitToolPathsAreWrittenToTheConfig(t *testing.T) {
 	rclone := filepath.Join(r.dir, "bin", "rclone")
 	r.tools.reports = []ToolStatus{
 		{Name: "rclone", Version: "1", Source: "configured", Path: rclone},
-		{Name: "restic", Version: "2", Source: "managed", Path: "/managed/restic"},
+		{Name: "restic", Version: "2", Source: "managed", Path: filepath.Join(r.data, "tools", "restic")},
 	}
 	r.mustRun(r.activeOptions(c))
 	cfg := r.loadConfig()
 	if cfg.Tools.RclonePath != rclone || cfg.Tools.ResticPath != "" {
 		t.Errorf("tools = %+v: only explicitly configured binaries belong in the config", cfg.Tools)
 	}
+}
+
+// TestCustomToolsDirIsWrittenToTheConfig: tools that setup installs into a
+// directory other than <data dir>/tools (SYNCR_TOOLS_DIR) must be found by
+// the service, which runs without that environment.
+func TestCustomToolsDirIsWrittenToTheConfig(t *testing.T) {
+	t.Parallel()
+	c := newFakeController(t)
+	r := newRig(t)
+	o := r.activeOptions(c)
+	o.ToolsDir = filepath.Join(r.dir, "opt", "tools")
+	r.mustRun(o)
+	if len(r.tools.dirs) != 1 || r.tools.dirs[0] != o.ToolsDir {
+		t.Errorf("tools provisioned in %v, want %s", r.tools.dirs, o.ToolsDir)
+	}
+	if got := r.loadConfig().Tools.Dir; got != o.ToolsDir {
+		t.Errorf("tools.dir = %q, want %q", got, o.ToolsDir)
+	}
+	mustContain(t, "output", r.out.String(), "ok    rclone 1.70.0 available")
+
+	// The dry run names the directory too.
+	r2 := newRig(t)
+	o2 := r2.activeOptions(c)
+	o2.ToolsDir, o2.DryRun = o.ToolsDir, true
+	if _, err := r2.run(o2); err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, "plan", r2.out.String(), "provision the pinned rclone and restic under "+o.ToolsDir)
+}
+
+// TestSelfCheckFindsToolsWhereTheServiceLooks: a managed tool outside the
+// directory the service resolves from the config would be missing when the
+// service starts, so the self-check fails instead of reporting it available.
+func TestSelfCheckFindsToolsWhereTheServiceLooks(t *testing.T) {
+	t.Parallel()
+	c := newFakeController(t)
+	r := newRig(t)
+	elsewhere := filepath.Join(r.dir, "elsewhere", "rclone")
+	r.tools.reports = []ToolStatus{
+		{Name: "rclone", Version: "1", Source: "managed", Path: elsewhere},
+		{Name: "restic", Version: "2", Source: "managed", Path: filepath.Join(r.data, "tools", "restic")},
+	}
+	_, err := r.run(r.activeOptions(c))
+	if err == nil {
+		t.Fatal("the self-check accepted a tool the service cannot find")
+	}
+	mustContain(t, "error", err.Error(), "self-check", elsewhere, filepath.Join(r.data, "tools"), "service restart")
+}
+
+func TestSelfCheckWarnsAboutToolsFromThePath(t *testing.T) {
+	t.Parallel()
+	c := newFakeController(t)
+	r := newRig(t)
+	onPath := filepath.Join(r.dir, "home", "bin", "rclone")
+	r.tools.reports = []ToolStatus{
+		{Name: "rclone", Version: "1", Source: "path", Path: onPath},
+		{Name: "restic", Version: "2", Source: "managed", Path: filepath.Join(r.data, "tools", "restic")},
+	}
+	r.mustRun(r.activeOptions(c))
+	mustContain(t, "output", r.out.String(), "warn  rclone 1 was found on the PATH", onPath, "tools.rclone_path", "ok    restic 2 available")
 }

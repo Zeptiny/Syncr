@@ -91,9 +91,11 @@ This record fixes those rules.
   the removed `api.admin_token`. `dev.seed` (only with `dev.memory_store`)
   fills the store with demo data (`internal/devseed`) before that check.
 - **Background loops**, started in this order: the dispatch-timeout
-  sweeper, the passive supervisor, the scheduler (ADR 0009), the
-  notification outbox (ADR 0010), the hourly session and API token purge
-  (`users.Service.PurgeExpired`) and, with `dev.seed`, the demo animation.
+  sweeper (it also ends the jobs of workers out of contact for
+  `workers.lost_after`, ADR 0002), the passive supervisor, the scheduler
+  (ADR 0009), the notification outbox (ADR 0010), the hourly session and
+  API token purge (`users.Service.PurgeExpired`) and, with `dev.seed`, the
+  demo animation.
 
 **Controller shutdown** (SIGINT/SIGTERM), each step logged:
 
@@ -137,10 +139,13 @@ logged and bounded so the whole stays under the 20 s a service manager allows:
    whenever a Pull returned events, since only the next Pull acknowledges
    them.
 
-The controller turns those results into `interrupted` (`worker_shutdown`).
+The controller turns the results of jobs that had started into
+`interrupted` (`worker_shutdown`). Jobs that never started (they waited in
+the worker's local queue) go back to the controller's queue, without a
+notification, and the worker's next process runs them, as after a crash.
 If the flush does not finish, nothing is lost for good: the next worker
-process has a new epoch and the controller's reconcile interrupts the jobs
-(`worker_restarted`).
+process has a new epoch and the controller's reconcile interrupts the
+running jobs (`worker_restarted`) and re-queues the others.
 
 ## Consequences
 
@@ -151,9 +156,14 @@ process has a new epoch and the controller's reconcile interrupts the jobs
   (`internal/e2e/system`, integration tag, Linux): both link modes, a
   controller killed and restarted mid-job, a worker killed and restarted
   mid-job, a graceful worker stop mid-job, and restic init + backup to S3.
-- A worker killed with SIGKILL leaves its tool processes running (they run
-  in their own process group so that a graceful stop can signal them).
-  Under systemd the unit's cgroup is killed with it; elsewhere they finish or
-  fail on their own.
+- A worker killed with SIGKILL (or crashing) takes its tool processes with
+  it: the parent death signal on Linux, a kill-on-close Job Object on
+  Windows (ADR 0003). On other systems they finish or fail on their own.
+- The systemd units use `KillMode=mixed`: a stop or restart sends SIGTERM to
+  the worker only, so the shutdown above runs in order. With the default
+  (`control-group`) the tools would get the signal at the same moment, exit
+  before `agent.Shutdown` cancels their jobs, and the jobs would be reported
+  as failed instead of interrupted. Whatever is left when the worker exits,
+  or after `TimeoutStopSec=30`, is killed with SIGKILL.
 - A passive worker that no controller ever pulls from waits the 5 s flush
   budget on stop.
