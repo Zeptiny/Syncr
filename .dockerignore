@@ -8,8 +8,12 @@ web/node_modules
 web/dist
 **/*.test
 **/*.out
-.env
-.env.*
+# Local env files hold secrets (setup code, DB password, keyring key) and
+# must stay out of the context at any depth, e.g. deploy/.env. The
+# committed .env.example templates are kept.
+**/.env
+**/.env.*
+!**/.env.example
 *.local.yaml
 *.local.yml
 deploy/*.yml
