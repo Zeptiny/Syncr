@@ -69,13 +69,14 @@ func (s *Service) CreateEnrollmentToken(ctx context.Context, ttl time.Duration) 
 }
 
 // Enroll redeems an enrollment token and creates the worker with a new
-// random secret. The request is validated before the token is consumed, so a
-// typo does not burn it. The token is consumed before the worker is created:
-// if creating fails the token is spent and the admin issues a new one.
-// Invalid, expired and used tokens all yield ErrUnauthenticated. Worker
-// names are unique among live workers: a taken name gets the first free
-// numeric suffix ("nas-01" becomes "nas-01-2"), since the worker cannot ask
-// its operator for another.
+// random secret. The request is validated before the token is redeemed, so a
+// typo does not burn it, and redeeming the token and creating the worker are
+// one atomic store call (TokenRepository.EnrollWorker): if creating fails
+// the token stays unused and the worker can retry with it. Invalid, expired
+// and used tokens all yield ErrUnauthenticated. Worker names are unique
+// among live workers: a taken name gets the first free numeric suffix
+// ("nas-01" becomes "nas-01-2"), since the worker cannot ask its operator
+// for another.
 func (s *Service) Enroll(ctx context.Context, p EnrollParams) (Enrollment, error) {
 	if !strings.HasPrefix(p.Token, tokenPrefix) || len(p.Token) > 128 {
 		return Enrollment{}, fmt.Errorf("enroll: %w: invalid enrollment token", domain.ErrUnauthenticated)
@@ -109,13 +110,6 @@ func (s *Service) Enroll(ctx context.Context, p EnrollParams) (Enrollment, error
 		}
 	}
 
-	now := s.clock.Now()
-	if _, err := s.tokens.ConsumeEnrollmentToken(ctx, HashToken(p.Token), now, id); err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return Enrollment{}, fmt.Errorf("enroll: %w: invalid, expired or used enrollment token", domain.ErrUnauthenticated)
-		}
-		return Enrollment{}, fmt.Errorf("enroll: %w", err)
-	}
 	secret, err := s.randomString(secretPrefix)
 	if err != nil {
 		return Enrollment{}, fmt.Errorf("enroll: %w", err)
@@ -123,26 +117,33 @@ func (s *Service) Enroll(ctx context.Context, p EnrollParams) (Enrollment, error
 	if w.SecretEnc, err = s.cipher.Encrypt([]byte(secret), SecretAD(id)); err != nil {
 		return Enrollment{}, fmt.Errorf("enroll: encrypt secret: %w", err)
 	}
-	w.CreatedAt = now
-	if w, err = s.createWithFreeName(ctx, w); err != nil {
+	w.CreatedAt = s.clock.Now()
+	if w, err = s.enrollWithFreeName(ctx, HashToken(p.Token), w); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return Enrollment{}, fmt.Errorf("enroll: %w: invalid, expired or used enrollment token", domain.ErrUnauthenticated)
+		}
 		return Enrollment{}, fmt.Errorf("enroll: %w", err)
 	}
 	s.log.InfoContext(ctx, "worker enrolled", "worker_id", id.String(), "name", w.Name, "mode", string(mode))
 	return Enrollment{Worker: w, Secret: secret}, nil
 }
 
-// maxNameAttempts bounds how often Enroll retries the create when the name
-// it picked was taken concurrently.
+// maxNameAttempts bounds how often Enroll retries when the name it picked
+// was taken concurrently.
 const maxNameAttempts = 5
 
 // maxNameSuffix bounds the numeric suffixes Enroll tries.
 const maxNameSuffix = 1000
 
-// createWithFreeName stores w under its name or, when a live worker has
-// that name (case-insensitively), under the first free "<name>-2",
-// "<name>-3", ... (the name is shortened to keep within 64 characters). A
-// name taken between the check and the insert is retried a few times.
-func (s *Service) createWithFreeName(ctx context.Context, w Worker) (Worker, error) {
+// enrollWithFreeName redeems the token hash and stores w under its name or,
+// when a live worker has that name (case-insensitively), under the first
+// free "<name>-2", "<name>-3", ... (the name is shortened to keep within 64
+// characters). A name taken between the check and the insert is retried a
+// few times; every attempt is one atomic EnrollWorker call, so a failed one
+// leaves the token unused. ErrNotFound if the token cannot be redeemed: the
+// store checks the token before the name, so an invalid token is reported
+// as such even when every name is taken.
+func (s *Service) enrollWithFreeName(ctx context.Context, hash TokenHash, w Worker) (Worker, error) {
 	base := w.Name
 	for attempt := 1; ; attempt++ {
 		live, err := s.repo.ListWorkers(ctx, ListFilter{})
@@ -153,19 +154,21 @@ func (s *Service) createWithFreeName(ctx context.Context, w Worker) (Worker, err
 		for _, o := range live {
 			taken[strings.ToLower(o.Name)] = true
 		}
-		name, ok := freeName(base, taken)
-		if !ok {
-			return Worker{}, fmt.Errorf("%w: every worker name derived from %q is taken", domain.ErrAlreadyExists, base)
+		name, free := freeName(base, taken)
+		if !free {
+			name = base // taken, but lets the store report an invalid token first
 		}
 		w.Name = name
-		err = s.repo.CreateWorker(ctx, w)
-		if err == nil {
+		_, err = s.tokens.EnrollWorker(ctx, hash, w.CreatedAt, w)
+		switch {
+		case err == nil:
 			if name != base {
 				s.log.InfoContext(ctx, "worker name was taken; enrolled with a suffix", "requested", base, "name", name)
 			}
 			return w, nil
-		}
-		if !errors.Is(err, domain.ErrAlreadyExists) || attempt == maxNameAttempts {
+		case errors.Is(err, domain.ErrAlreadyExists) && !free:
+			return Worker{}, fmt.Errorf("%w: every worker name derived from %q is taken", domain.ErrAlreadyExists, base)
+		case !errors.Is(err, domain.ErrAlreadyExists) || attempt == maxNameAttempts:
 			return Worker{}, err
 		}
 	}

@@ -16,6 +16,10 @@ import (
 func (s *Store) CreateWorker(_ context.Context, w workers.Worker) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.createWorkerLocked(w)
+}
+
+func (s *Store) createWorkerLocked(w workers.Worker) error {
 	if _, ok := s.workers[w.ID]; ok {
 		return fmt.Errorf("worker %s: %w", w.ID, domain.ErrAlreadyExists)
 	}
@@ -172,15 +176,20 @@ func (s *Store) CreateEnrollmentToken(_ context.Context, t workers.EnrollmentTok
 	return nil
 }
 
-// ConsumeEnrollmentToken implements workers.TokenRepository.
-func (s *Store) ConsumeEnrollmentToken(_ context.Context, hash workers.TokenHash, at time.Time, by domain.WorkerID) (workers.EnrollmentToken, error) {
+// EnrollWorker implements workers.TokenRepository: the token check, the
+// worker insert and the redemption happen under one lock, the token check
+// first.
+func (s *Store) EnrollWorker(_ context.Context, hash workers.TokenHash, at time.Time, w workers.Worker) (workers.EnrollmentToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.tokens[hash]
 	if !ok || !t.UsedAt.IsZero() || !at.Before(t.ExpiresAt) {
 		return workers.EnrollmentToken{}, fmt.Errorf("enrollment token: %w", domain.ErrNotFound)
 	}
-	t.UsedAt, t.UsedBy = at, by
+	if err := s.createWorkerLocked(w); err != nil {
+		return workers.EnrollmentToken{}, err
+	}
+	t.UsedAt, t.UsedBy = at, w.ID
 	s.tokens[hash] = t
 	return t, nil
 }

@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -75,6 +76,7 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 		{"WorkerInfoAndTouch", testWorkerInfoAndTouch},
 		{"WorkerConcurrentLinkUpdates", testWorkerConcurrentLinkUpdates},
 		{"EnrollmentTokens", testEnrollmentTokens},
+		{"EnrollmentTokenKeptOnFailedCreate", testEnrollmentTokenKeptOnFailedCreate},
 		{"EnrollmentTokenSingleUseUnderRace", testEnrollmentTokenRace},
 		{"JobCreateGet", testJobCreateGet},
 		{"JobUpdateVersioned", testJobUpdateVersioned},
@@ -439,48 +441,101 @@ func testEnrollmentTokens(t *testing.T, s Store) {
 	}
 	wantErr(t, "duplicate token", s.CreateEnrollmentToken(ctx, workers.EnrollmentToken{Hash: h1}), domain.ErrAlreadyExists)
 
-	by := workerID(t, 1)
-	got, err := s.ConsumeEnrollmentToken(ctx, h1, t0().Add(time.Minute), by)
-	if err != nil || !got.UsedAt.Equal(t0().Add(time.Minute)) || got.UsedBy != by {
-		t.Errorf("ConsumeEnrollmentToken = (%+v, %v)", got, err)
+	w1 := newWorker(t, 1)
+	got, err := s.EnrollWorker(ctx, h1, t0().Add(time.Minute), w1)
+	if err != nil || !got.UsedAt.Equal(t0().Add(time.Minute)) || got.UsedBy != w1.ID {
+		t.Errorf("EnrollWorker = (%+v, %v)", got, err)
 	}
-	_, err = s.ConsumeEnrollmentToken(ctx, h1, t0().Add(2*time.Minute), by)
+	if w, err := s.GetWorker(ctx, w1.ID); err != nil || w.Name != w1.Name {
+		t.Errorf("GetWorker(enrolled) = (%+v, %v)", w, err)
+	}
+	// A token that cannot be redeemed is reported as ErrNotFound before the
+	// worker is looked at (w1 again would be ErrAlreadyExists), and no
+	// worker is created.
+	_, err = s.EnrollWorker(ctx, h1, t0().Add(2*time.Minute), w1)
 	wantErr(t, "second use", err, domain.ErrNotFound)
-	_, err = s.ConsumeEnrollmentToken(ctx, h2, t0().Add(time.Minute), by) // at == ExpiresAt
+	_, err = s.EnrollWorker(ctx, h2, t0().Add(time.Minute), newWorker(t, 2)) // at == ExpiresAt
 	wantErr(t, "expired token", err, domain.ErrNotFound)
-	_, err = s.ConsumeEnrollmentToken(ctx, workers.TokenHash{9}, t0(), by)
+	_, err = s.EnrollWorker(ctx, workers.TokenHash{9}, t0(), newWorker(t, 2))
 	wantErr(t, "unknown token", err, domain.ErrNotFound)
+	_, err = s.GetWorker(ctx, workerID(t, 2))
+	wantErr(t, "worker of a failed enrollment", err, domain.ErrNotFound)
 
 	n, err := s.DeleteEnrollmentTokens(ctx, t0().Add(2*time.Hour))
 	if err != nil || n != 2 {
 		t.Errorf("DeleteEnrollmentTokens = (%d, %v), want 2 (h1 used, h2 expired)", n, err)
 	}
-	if _, err := s.ConsumeEnrollmentToken(ctx, h3, t0().Add(3*time.Hour), by); err != nil {
+	if _, err := s.EnrollWorker(ctx, h3, t0().Add(3*time.Hour), newWorker(t, 3)); err != nil {
 		t.Errorf("token h3 should survive the purge: %v", err)
 	}
 }
 
+// testEnrollmentTokenKeptOnFailedCreate: a worker that cannot be created
+// does not spend the token.
+func testEnrollmentTokenKeptOnFailedCreate(t *testing.T, s Store) {
+	ctx := context.Background()
+	taken := newWorker(t, 1)
+	mustCreateWorker(t, s, taken)
+	h := workers.TokenHash{5}
+	if err := s.CreateEnrollmentToken(ctx, workers.EnrollmentToken{Hash: h, CreatedAt: t0(), ExpiresAt: t0().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	sameName := newWorker(t, 2)
+	sameName.Name = strings.ToUpper(taken.Name)
+	_, err := s.EnrollWorker(ctx, h, t0(), sameName)
+	wantErr(t, "EnrollWorker(live name taken)", err, domain.ErrAlreadyExists)
+	sameID := newWorker(t, 3)
+	sameID.ID = taken.ID
+	_, err = s.EnrollWorker(ctx, h, t0(), sameID)
+	wantErr(t, "EnrollWorker(ID taken)", err, domain.ErrAlreadyExists)
+	if _, err := s.GetWorker(ctx, sameName.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("GetWorker(failed enrollment) err = %v, want ErrNotFound", err)
+	}
+
+	w := newWorker(t, 4)
+	got, err := s.EnrollWorker(ctx, h, t0().Add(time.Second), w)
+	if err != nil || got.UsedBy != w.ID {
+		t.Fatalf("EnrollWorker after failed creates = (%+v, %v), want the token still usable", got, err)
+	}
+	if _, err := s.GetWorker(ctx, w.ID); err != nil {
+		t.Errorf("GetWorker(enrolled) = %v", err)
+	}
+}
+
+// testEnrollmentTokenRace: of concurrent enrollments with one token,
+// exactly one creates its worker, and those whose worker cannot be created
+// do not take the token from the others.
 func testEnrollmentTokenRace(t *testing.T, s Store) {
 	ctx := context.Background()
+	taken := newWorker(t, 100)
+	mustCreateWorker(t, s, taken)
 	h := workers.TokenHash{7}
 	if err := s.CreateEnrollmentToken(ctx, workers.EnrollmentToken{Hash: h, CreatedAt: t0(), ExpiresAt: t0().Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	wins := 0
+	var winners []int
 	for i := range 20 {
 		wg.Go(func() {
-			if _, err := s.ConsumeEnrollmentToken(ctx, h, t0(), workerID(t, i+1)); err == nil {
+			w := newWorker(t, i+1)
+			if i%2 == 0 {
+				w.Name = taken.Name // this one fails
+			}
+			if _, err := s.EnrollWorker(ctx, h, t0(), w); err == nil {
 				mu.Lock()
-				wins++
+				winners = append(winners, i)
 				mu.Unlock()
 			}
 		})
 	}
 	wg.Wait()
-	if wins != 1 {
-		t.Errorf("%d concurrent redemptions succeeded, want 1", wins)
+	if len(winners) != 1 || winners[0]%2 == 0 {
+		t.Fatalf("enrollments %v succeeded, want exactly one with a free name", winners)
+	}
+	live, err := s.ListWorkers(ctx, workers.ListFilter{})
+	if err != nil || len(live) != 2 {
+		t.Errorf("ListWorkers = (%d workers, %v), want 2 (the existing one and the winner)", len(live), err)
 	}
 }
 

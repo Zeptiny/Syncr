@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,10 +36,12 @@ func (r *releaser) ReleaseWorkerJobs(_ context.Context, id domain.WorkerID) erro
 }
 
 type env struct {
-	svc   *workers.Service
-	store *memstore.Store
-	clock *clock.Fake
-	jobs  *releaser
+	svc    *workers.Service
+	store  *memstore.Store
+	clock  *clock.Fake
+	jobs   *releaser
+	cipher *secrets.Keyring
+	ids    *idgen.Sequential
 }
 
 func newEnv(t *testing.T) *env {
@@ -49,10 +52,13 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{store: memstore.New(), clock: clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)), jobs: &releaser{}}
+	e := &env{
+		store: memstore.New(), clock: clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)), jobs: &releaser{},
+		cipher: cipher, ids: &idgen.Sequential{},
+	}
 	e.svc, err = workers.New(workers.Deps{
 		Workers: e.store, Tokens: e.store, Cipher: cipher, Clock: e.clock,
-		IDs: &idgen.Sequential{}, Jobs: e.jobs, Random: rand.Reader,
+		IDs: e.ids, Jobs: e.jobs, Random: rand.Reader,
 	}, workers.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -155,6 +161,61 @@ func TestEnrollmentTokenRaceHasOneWinner(t *testing.T) {
 	wg.Wait()
 	if wins != 1 {
 		t.Errorf("%d enrollments with one token, want 1", wins)
+	}
+}
+
+// blindList hides every worker from ListWorkers while blind is set, so
+// Enroll picks names that CreateWorker then finds taken (as if other
+// enrollments took them concurrently).
+type blindList struct {
+	*memstore.Store
+	blind atomic.Bool
+}
+
+func (b *blindList) ListWorkers(ctx context.Context, f workers.ListFilter) ([]workers.Worker, error) {
+	if b.blind.Load() {
+		return nil, nil
+	}
+	return b.Store.ListWorkers(ctx, f)
+}
+
+func TestEnrollKeepsTheTokenWhenCreatingFails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	repo := &blindList{Store: e.store}
+	svc, err := workers.New(workers.Deps{
+		Workers: repo, Tokens: e.store, Cipher: e.cipher, Clock: e.clock,
+		IDs: e.ids, Jobs: e.jobs, Random: rand.Reader,
+	}, workers.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.enroll(t, "nas-01")
+	token := e.token(t)
+
+	repo.blind.Store(true)
+	if _, err := svc.Enroll(ctx, workers.EnrollParams{Token: token, Name: "nas-01"}); !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("Enroll with every attempt conflicting: err = %v, want ErrAlreadyExists", err)
+	}
+	// An invalid token is still reported as such, whatever the name.
+	if _, err := svc.Enroll(ctx, workers.EnrollParams{Token: token + "x", Name: "nas-01"}); !errors.Is(err, domain.ErrUnauthenticated) {
+		t.Errorf("Enroll with an unknown token and a taken name: err = %v, want ErrUnauthenticated", err)
+	}
+
+	repo.blind.Store(false)
+	en, err := svc.Enroll(ctx, workers.EnrollParams{Token: token, Name: "nas-01"})
+	if err != nil {
+		t.Fatalf("Enroll retried with the same token: %v, want the token unspent", err)
+	}
+	if en.Worker.Name != "nas-01-2" {
+		t.Errorf("retried enrollment named the worker %q, want nas-01-2", en.Worker.Name)
+	}
+	if _, err := svc.Enroll(ctx, workers.EnrollParams{Token: token}); !errors.Is(err, domain.ErrUnauthenticated) {
+		t.Errorf("third use of the token: err = %v, want ErrUnauthenticated", err)
+	}
+	if live, _ := e.svc.List(ctx, workers.ListFilter{}); len(live) != 2 {
+		t.Errorf("%d live workers, want 2", len(live))
 	}
 }
 

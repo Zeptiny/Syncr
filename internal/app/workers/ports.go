@@ -92,14 +92,20 @@ type TokenRepository interface {
 	// CreateEnrollmentToken inserts t. ErrAlreadyExists if its hash exists.
 	CreateEnrollmentToken(ctx context.Context, t EnrollmentToken) error
 
-	// ConsumeEnrollmentToken redeems a token atomically: if a token with
-	// this hash exists, is unused and at < ExpiresAt, it sets UsedAt = at
-	// and UsedBy = by and returns the updated token. Otherwise ErrNotFound,
-	// whether the token is unknown, used or expired (callers must not be
-	// able to tell). Of two concurrent calls for the same token at most one
-	// succeeds (SQL: UPDATE ... WHERE hash = $1 AND used_at IS NULL AND
-	// expires_at > $2 RETURNING ...).
-	ConsumeEnrollmentToken(ctx context.Context, hash TokenHash, at time.Time, by domain.WorkerID) (EnrollmentToken, error)
+	// EnrollWorker redeems a token and creates the worker it enrolls, as one
+	// atomic step. If a token with this hash exists, is unused and at <
+	// ExpiresAt, it sets UsedAt = at and UsedBy = w.ID, inserts w (with the
+	// rules of Repository.CreateWorker) and returns the updated token.
+	// Otherwise ErrNotFound, whether the token is unknown, used or expired
+	// (callers must not be able to tell), and whatever w is: the token is
+	// checked first. If w cannot be inserted (ErrAlreadyExists for a taken ID
+	// or live name, or any other error) nothing changes and the token stays
+	// redeemable. Of concurrent calls for the same token at most one
+	// succeeds, and one that fails does not spend the token for the others
+	// (SQL: one transaction of UPDATE ... WHERE hash = $1 AND used_at IS NULL
+	// AND expires_at > $2 RETURNING ..., whose row lock serializes the
+	// redemptions, and the INSERT of the worker).
+	EnrollWorker(ctx context.Context, hash TokenHash, at time.Time, w Worker) (EnrollmentToken, error)
 
 	// DeleteEnrollmentTokens deletes every token (used or not) with
 	// ExpiresAt < before and returns how many it deleted.
