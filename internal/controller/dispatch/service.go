@@ -58,8 +58,8 @@ func DefaultConfig() Config {
 	}
 }
 
-// Deps are the dispatcher's collaborators. All are required except Specs and
-// Logger.
+// Deps are the dispatcher's collaborators. All are required except Specs,
+// Probes and Logger.
 type Deps struct {
 	Jobs    Jobs
 	Workers Workers
@@ -70,6 +70,9 @@ type Deps struct {
 	Clock Clock
 	// Hub must be the same Hub given to the job service as its Waker.
 	Hub *Hub
+	// Probes is the probe broker whose run_probe commands and results go
+	// through this dispatcher (Milestone 5); nil serves no probes.
+	Probes *ProbeBroker
 	// Logger defaults to discarding.
 	Logger *slog.Logger
 }
@@ -82,6 +85,7 @@ type Service struct {
 	jobs    Jobs
 	workers Workers
 	specs   SpecBuilder
+	probes  *ProbeBroker
 	clock   Clock
 	hub     *Hub
 	log     *slog.Logger
@@ -116,7 +120,7 @@ func New(d Deps, cfg Config) (*Service, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Service{
-		jobs: d.Jobs, workers: d.Workers, specs: d.Specs, clock: d.Clock, hub: d.Hub, log: log, cfg: cfg,
+		jobs: d.Jobs, workers: d.Workers, specs: d.Specs, probes: d.Probes, clock: d.Clock, hub: d.Hub, log: log, cfg: cfg,
 		started:  d.Clock.Now(),
 		sessions: make(map[domain.WorkerID]*session),
 	}, nil

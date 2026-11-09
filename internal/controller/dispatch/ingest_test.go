@@ -13,6 +13,7 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/link"
@@ -23,6 +24,7 @@ func TestControllerErrorCodesExistOnTheWire(t *testing.T) {
 	for _, code := range []string{
 		jobs.CodeInternal, jobs.CodeCancelled, jobs.CodeWorkerShutdown, jobs.CodeDispatchTimeout,
 		jobs.CodeWorkerRestarted, jobs.CodeWorkerLost, jobs.CodeWorkerRemoved, jobs.CodeInvalidSpec, jobs.CodeRemoteUnavailable,
+		jobs.CodeRepositoryUnavailable, jobs.CodeWorkerOutdated,
 	} {
 		if link.ParseErrorCode(code) == syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSPECIFIED {
 			t.Errorf("jobs code %q has no JobErrorCode", code)
@@ -255,7 +257,7 @@ func TestSpecResolveErrors(t *testing.T) {
 // specBuilderFunc adapts a function to dispatch.SpecBuilder.
 type specBuilderFunc func(context.Context, jobs.Job) (*syncrv1.JobSpec, error)
 
-func (f specBuilderFunc) Build(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, error) {
+func (f specBuilderFunc) Build(ctx context.Context, j jobs.Job, _ workers.Info) (*syncrv1.JobSpec, error) {
 	return f(ctx, j)
 }
 

@@ -245,3 +245,8 @@ func TestPassiveFailuresDoNotCountAsContact(t *testing.T) {
 		}
 	})
 }
+
+// Probe implements dispatch.PassiveClient (m5: Track B tests probes).
+func (c *fakePassive) Probe(context.Context, *syncrv1.ProbeRequest) (*syncrv1.ProbeResponse, error) {
+	return nil, errors.ErrUnsupported
+}

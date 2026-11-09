@@ -2,7 +2,7 @@
 INSERT INTO schedules (
     id, owner_id, name, description, cron, timezone, kind, definition, search_text,
     worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason,
-    next_run_at, last_fired_at, created_at, updated_at, version
+    next_run_at, last_fired_at, created_at, updated_at, version, repository_id
 ) VALUES (
     sqlc.arg(id)::uuid, sqlc.arg(owner_id)::uuid, sqlc.arg(name)::text, sqlc.arg(description)::text,
     sqlc.arg(cron)::text, sqlc.arg(timezone)::text, sqlc.arg(kind)::text, sqlc.arg(definition)::jsonb,
@@ -10,7 +10,8 @@ INSERT INTO schedules (
     sqlc.arg(missed_action)::text, sqlc.arg(max_delay_ns)::bigint, sqlc.arg(overlap)::text,
     sqlc.arg(enabled)::boolean, sqlc.arg(paused_reason)::text,
     sqlc.narg(next_run_at)::timestamptz, sqlc.narg(last_fired_at)::timestamptz,
-    sqlc.arg(created_at)::timestamptz, sqlc.arg(updated_at)::timestamptz, sqlc.arg(version)::bigint
+    sqlc.arg(created_at)::timestamptz, sqlc.arg(updated_at)::timestamptz, sqlc.arg(version)::bigint,
+    sqlc.narg(repository_id)::uuid
 );
 
 -- name: InsertScheduleRemote :exec
@@ -51,7 +52,8 @@ SELECT EXISTS (SELECT 1 FROM schedules WHERE id = sqlc.arg(id)::uuid);
 -- name: ListSchedules :many
 -- Every NULL filter matches all schedules. The remote filter matches
 -- schedule_remotes_remote_idx, the contact filter
--- schedule_contacts_contact_idx.
+-- schedule_contacts_contact_idx, the repository filter
+-- schedules_repository_idx.
 SELECT * FROM schedules
 WHERE (sqlc.narg(owner_id)::uuid IS NULL OR owner_id = sqlc.narg(owner_id)::uuid)
   AND (sqlc.narg(remote_id)::uuid IS NULL OR EXISTS (
@@ -62,6 +64,7 @@ WHERE (sqlc.narg(owner_id)::uuid IS NULL OR owner_id = sqlc.narg(owner_id)::uuid
       SELECT 1 FROM schedule_contacts sc
       WHERE sc.schedule_id = schedules.id AND sc.contact_id = sqlc.narg(contact_id)::uuid
   ))
+  AND (sqlc.narg(repository_id)::uuid IS NULL OR repository_id = sqlc.narg(repository_id)::uuid)
 ORDER BY lower(name) COLLATE "C", id;
 
 -- name: LockSchedule :one
@@ -102,6 +105,7 @@ UPDATE schedules SET
     overlap = sqlc.arg(overlap)::text,
     enabled = sqlc.arg(enabled)::boolean,
     paused_reason = sqlc.arg(paused_reason)::text,
+    repository_id = sqlc.narg(repository_id)::uuid,
     next_run_at = CASE WHEN sqlc.arg(reschedule)::boolean THEN sqlc.narg(next_run_at)::timestamptz ELSE next_run_at END,
     updated_at = sqlc.arg(updated_at)::timestamptz,
     version = version + 1

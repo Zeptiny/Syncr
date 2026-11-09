@@ -6,7 +6,7 @@ import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobu
 import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import type { Duration, Timestamp } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_duration, file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
-import type { JobError, JobOutput, JobStats, RcloneTransferMode, RcloneTransferOptions, ToolVersion, WorkerMode } from "./link_pb";
+import type { JobError, JobOutput, JobStats, RcloneTransferMode, RcloneTransferOptions, ResticRestoreOverwrite, ResticRetentionPolicy, ToolVersion, WorkerMode } from "./link_pb";
 import { file_syncr_v1_link } from "./link_pb";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file syncr/v1/api.proto.
  */
 export const file_syncr_v1_api: GenFile = /*@__PURE__*/
-  fileDesc("ChJzeW5jci92MS9hcGkucHJvdG8SCHN5bmNyLnYxIj8KD1ZhbGlkYXRpb25FcnJvchIsCgp2aW9sYXRpb25zGAEgAygLMhguc3luY3IudjEuRmllbGRWaW9sYXRpb24iMAoORmllbGRWaW9sYXRpb24SDQoFZmllbGQYASABKAkSDwoHbWVzc2FnZRgCIAEoCSIQCg5HZXRJbmZvUmVxdWVzdCJiCg9HZXRJbmZvUmVzcG9uc2USDwoHdmVyc2lvbhgBIAEoCRIOCgZjb21taXQYAiABKAkSLgoKYnVpbGRfdGltZRgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAirgIKBldvcmtlchIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEiIKBG1vZGUYAyABKA4yFC5zeW5jci52MS5Xb3JrZXJNb2RlEiYKBnN0YXR1cxgEIAEoDjIWLnN5bmNyLnYxLldvcmtlclN0YXR1cxItCglsYXN0X3NlZW4YBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCmNyZWF0ZWRfYXQYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgsKA3VybBgHIAEoCRIYChBjZXJ0X2ZpbmdlcnByaW50GAggASgJEiIKBGluZm8YCSABKAsyFC5zeW5jci52MS5Xb3JrZXJJbmZvEg4KBmxhYmVscxgKIAMoCUoECAsQFCLyAQoKV29ya2VySW5mbxIWCg53b3JrZXJfdmVyc2lvbhgBIAEoCRIKCgJvcxgCIAEoCRIMCgRhcmNoGAMgASgJEhAKCGhvc3RuYW1lGAQgASgJEiQKBXRvb2xzGAUgAygLMhUuc3luY3IudjEuVG9vbFZlcnNpb24SEQoJam9iX2tpbmRzGAYgAygJEhsKE21heF9jb25jdXJyZW50X2pvYnMYByABKAUSEwoLbG9jYWxfcm9vdHMYCCADKAkSLwoLcmVwb3J0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSgQIChAUIl4KHENyZWF0ZUVucm9sbG1lbnRUb2tlblJlcXVlc3QSJgoDdHRsGAEgASgLMhkuZ29vZ2xlLnByb3RvYnVmLkR1cmF0aW9uEhYKDmNvbnRyb2xsZXJfdXJsGAIgASgJIpIBCh1DcmVhdGVFbnJvbGxtZW50VG9rZW5SZXNwb25zZRINCgV0b2tlbhgBIAEoCRIuCgpleHBpcmVzX2F0GAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIyChBpbnN0YWxsX2NvbW1hbmRzGAMgAygLMhguc3luY3IudjEuSW5zdGFsbENvbW1hbmQiIgogR2V0UGFzc2l2ZUluc3RhbGxDb21tYW5kc1JlcXVlc3QiTwohR2V0UGFzc2l2ZUluc3RhbGxDb21tYW5kc1Jlc3BvbnNlEioKCGNvbW1hbmRzGAEgAygLMhguc3luY3IudjEuSW5zdGFsbENvbW1hbmQipwEKDkluc3RhbGxDb21tYW5kEisKCHBsYXRmb3JtGAEgASgOMhkuc3luY3IudjEuSW5zdGFsbFBsYXRmb3JtEiUKBXNjb3BlGAIgASgOMhYuc3luY3IudjEuSW5zdGFsbFNjb3BlEg0KBXNoZWxsGAMgASgJEg0KBXRpdGxlGAQgASgJEg8KB2NvbW1hbmQYBSABKAkSDAoEbm90ZRgGIAEoCUoECAcQECJrChxSZWdpc3RlclBhc3NpdmVXb3JrZXJSZXF1ZXN0EgwKBG5hbWUYASABKAkSCwoDdXJsGAIgASgJEhgKEGNlcnRfZmluZ2VycHJpbnQYAyABKAkSFgoOcGFpcmluZ19zZWNyZXQYBCABKAkiQQodUmVnaXN0ZXJQYXNzaXZlV29ya2VyUmVzcG9uc2USIAoGd29ya2VyGAEgASgLMhAuc3luY3IudjEuV29ya2VyIiMKEkxpc3RXb3JrZXJzUmVxdWVzdBINCgVsYWJlbBgBIAEoCSI4ChNMaXN0V29ya2Vyc1Jlc3BvbnNlEiEKB3dvcmtlcnMYASADKAsyEC5zeW5jci52MS5Xb3JrZXIiJQoQR2V0V29ya2VyUmVxdWVzdBIRCgl3b3JrZXJfaWQYASABKAkiNQoRR2V0V29ya2VyUmVzcG9uc2USIAoGd29ya2VyGAEgASgLMhAuc3luY3IudjEuV29ya2VyIjYKE1JlbmFtZVdvcmtlclJlcXVlc3QSEQoJd29ya2VyX2lkGAEgASgJEgwKBG5hbWUYAiABKAkiOAoUUmVuYW1lV29ya2VyUmVzcG9uc2USIAoGd29ya2VyGAEgASgLMhAuc3luY3IudjEuV29ya2VyIigKE1JlbW92ZVdvcmtlclJlcXVlc3QSEQoJd29ya2VyX2lkGAEgASgJIhYKFFJlbW92ZVdvcmtlclJlc3BvbnNlIjsKFlNldFdvcmtlckxhYmVsc1JlcXVlc3QSEQoJd29ya2VyX2lkGAEgASgJEg4KBmxhYmVscxgCIAMoCSI7ChdTZXRXb3JrZXJMYWJlbHNSZXNwb25zZRIgCgZ3b3JrZXIYASABKAsyEC5zeW5jci52MS5Xb3JrZXIimQUKA0pvYhIKCgJpZBgBIAEoCRIRCgl3b3JrZXJfaWQYAiABKAkSDAoEa2luZBgDIAEoCRIjCgZzdGF0dXMYBCABKA4yEy5zeW5jci52MS5Kb2JTdGF0dXMSGAoQY2FuY2VsX3JlcXVlc3RlZBgFIAEoCBIuCgpjcmVhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIxCg1kaXNwYXRjaGVkX2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpzdGFydGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgtmaW5pc2hlZF9hdBgJIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEAoIcmVxdWV1ZXMYCiABKAUSIQoFc3RhdHMYCyABKAsyEi5zeW5jci52MS5Kb2JTdGF0cxIhCgVlcnJvchgMIAEoCzISLnN5bmNyLnYxLkpvYkVycm9yEhAKCHdhcm5pbmdzGA0gAygJEhYKCWV4aXRfY29kZRgOIAEoBUgAiAEBEiMKBm91dHB1dBgPIAEoCzITLnN5bmNyLnYxLkpvYk91dHB1dBIQCghvd25lcl9pZBgQIAEoCRIrCgpkZWZpbml0aW9uGBEgASgLMhcuc3luY3IudjEuSm9iRGVmaW5pdGlvbhInCgdyZW1vdGVzGBIgAygLMhYuc3luY3IudjEuSm9iUmVtb3RlUmVmEhMKC3NjaGVkdWxlX2lkGBMgASgJEioKCHNjaGVkdWxlGBQgASgLMhguc3luY3IudjEuSm9iU2NoZWR1bGVSZWZCDAoKX2V4aXRfY29kZUoECBUQHiIqCg5Kb2JTY2hlZHVsZVJlZhIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJIlUKDEpvYlJlbW90ZVJlZhIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhQKDGJhY2tlbmRfdHlwZRgDIAEoCRIPCgdkZWxldGVkGAQgASgISgQIBRAKImEKDUpvYkRlZmluaXRpb24SPQoPcmNsb25lX3RyYW5zZmVyGAogASgLMiIuc3luY3IudjEuUmNsb25lVHJhbnNmZXJEZWZpbml0aW9uSABCCwoJb3BlcmF0aW9uSgQIFBAeItEBChhSY2xvbmVUcmFuc2ZlckRlZmluaXRpb24SKgoEbW9kZRgBIAEoDjIcLnN5bmNyLnYxLlJjbG9uZVRyYW5zZmVyTW9kZRIlCgZzb3VyY2UYAiABKAsyFS5zeW5jci52MS5Kb2JMb2NhdGlvbhIqCgtkZXN0aW5hdGlvbhgDIAEoCzIVLnN5bmNyLnYxLkpvYkxvY2F0aW9uEjAKB29wdGlvbnMYBCABKAsyHy5zeW5jci52MS5SY2xvbmVUcmFuc2Zlck9wdGlvbnNKBAgFEAoiNAoLSm9iTG9jYXRpb24SEQoJcmVtb3RlX2lkGAEgASgJEgwKBHBhdGgYAiABKAlKBAgDEAoiWwoNUnVuSm9iUmVxdWVzdBIRCgl3b3JrZXJfaWQYASABKAkSKwoKZGVmaW5pdGlvbhgDIAEoCzIXLnN5bmNyLnYxLkpvYkRlZmluaXRpb25KBAgCEANSBHNwZWMiLAoOUnVuSm9iUmVzcG9uc2USGgoDam9iGAEgASgLMg0uc3luY3IudjEuSm9iIh8KDUdldEpvYlJlcXVlc3QSDgoGam9iX2lkGAEgASgJIiwKDkdldEpvYlJlc3BvbnNlEhoKA2pvYhgBIAEoCzINLnN5bmNyLnYxLkpvYiKyAgoPTGlzdEpvYnNSZXF1ZXN0EhEKCXdvcmtlcl9pZBgBIAEoCRIlCghzdGF0dXNlcxgCIAMoDjITLnN5bmNyLnYxLkpvYlN0YXR1cxIRCglwYWdlX3NpemUYAyABKAUSEgoKcGFnZV90b2tlbhgEIAEoCRIRCglyZW1vdGVfaWQYBSABKAkSDQoFa2luZHMYBiADKAkSDQoFcXVlcnkYByABKAkSMQoNY3JlYXRlZF9hZnRlchgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMgoOY3JlYXRlZF9iZWZvcmUYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhEKCWFsbF91c2VycxgKIAEoCBITCgtzY2hlZHVsZV9pZBgLIAEoCSJIChBMaXN0Sm9ic1Jlc3BvbnNlEhsKBGpvYnMYASADKAsyDS5zeW5jci52MS5Kb2ISFwoPbmV4dF9wYWdlX3Rva2VuGAIgASgJIiIKEENhbmNlbEpvYlJlcXVlc3QSDgoGam9iX2lkGAEgASgJIi8KEUNhbmNlbEpvYlJlc3BvbnNlEhoKA2pvYhgBIAEoCzINLnN5bmNyLnYxLkpvYiIhCg9XYXRjaEpvYlJlcXVlc3QSDgoGam9iX2lkGAEgASgJImUKEFdhdGNoSm9iUmVzcG9uc2USHAoDam9iGAEgASgLMg0uc3luY3IudjEuSm9iSAASKQoIcHJvZ3Jlc3MYAiABKAsyFS5zeW5jci52MS5Kb2JQcm9ncmVzc0gAQggKBnVwZGF0ZSInChVMaXN0Sm9iU2FtcGxlc1JlcXVlc3QSDgoGam9iX2lkGAEgASgJIkAKFkxpc3RKb2JTYW1wbGVzUmVzcG9uc2USJgoHc2FtcGxlcxgBIAMoCzIVLnN5bmNyLnYxLkpvYlByb2dyZXNzIloKC0pvYlByb2dyZXNzEigKBHRpbWUYASABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEiEKBXN0YXRzGAIgASgLMhIuc3luY3IudjEuSm9iU3RhdHMqfQoMV29ya2VyU3RhdHVzEh0KGVdPUktFUl9TVEFUVVNfVU5TUEVDSUZJRUQQABIZChVXT1JLRVJfU1RBVFVTX1BFTkRJTkcQARIYChRXT1JLRVJfU1RBVFVTX09OTElORRACEhkKFVdPUktFUl9TVEFUVVNfT0ZGTElORRADKm0KD0luc3RhbGxQbGF0Zm9ybRIgChxJTlNUQUxMX1BMQVRGT1JNX1VOU1BFQ0lGSUVEEAASGgoWSU5TVEFMTF9QTEFURk9STV9MSU5VWBABEhwKGElOU1RBTExfUExBVEZPUk1fV0lORE9XUxACKl8KDEluc3RhbGxTY29wZRIdChlJTlNUQUxMX1NDT1BFX1VOU1BFQ0lGSUVEEAASGAoUSU5TVEFMTF9TQ09QRV9TWVNURU0QARIWChJJTlNUQUxMX1NDT1BFX1VTRVIQAirYAQoJSm9iU3RhdHVzEhoKFkpPQl9TVEFUVVNfVU5TUEVDSUZJRUQQABIVChFKT0JfU1RBVFVTX1FVRVVFRBABEhkKFUpPQl9TVEFUVVNfRElTUEFUQ0hFRBACEhYKEkpPQl9TVEFUVVNfUlVOTklORxADEhgKFEpPQl9TVEFUVVNfU1VDQ0VFREVEEAQSFQoRSk9CX1NUQVRVU19GQUlMRUQQBRIYChRKT0JfU1RBVFVTX0NBTkNFTExFRBAGEhoKFkpPQl9TVEFUVVNfSU5URVJSVVBURUQQBzJUCg1TeXN0ZW1TZXJ2aWNlEkMKB0dldEluZm8SGC5zeW5jci52MS5HZXRJbmZvUmVxdWVzdBoZLnN5bmNyLnYxLkdldEluZm9SZXNwb25zZSIDkAIBMogGChJXb3JrZXJBZG1pblNlcnZpY2USagoVQ3JlYXRlRW5yb2xsbWVudFRva2VuEiYuc3luY3IudjEuQ3JlYXRlRW5yb2xsbWVudFRva2VuUmVxdWVzdBonLnN5bmNyLnYxLkNyZWF0ZUVucm9sbG1lbnRUb2tlblJlc3BvbnNlIgASeQoZR2V0UGFzc2l2ZUluc3RhbGxDb21tYW5kcxIqLnN5bmNyLnYxLkdldFBhc3NpdmVJbnN0YWxsQ29tbWFuZHNSZXF1ZXN0Gisuc3luY3IudjEuR2V0UGFzc2l2ZUluc3RhbGxDb21tYW5kc1Jlc3BvbnNlIgOQAgESagoVUmVnaXN0ZXJQYXNzaXZlV29ya2VyEiYuc3luY3IudjEuUmVnaXN0ZXJQYXNzaXZlV29ya2VyUmVxdWVzdBonLnN5bmNyLnYxLlJlZ2lzdGVyUGFzc2l2ZVdvcmtlclJlc3BvbnNlIgASTwoLTGlzdFdvcmtlcnMSHC5zeW5jci52MS5MaXN0V29ya2Vyc1JlcXVlc3QaHS5zeW5jci52MS5MaXN0V29ya2Vyc1Jlc3BvbnNlIgOQAgESSQoJR2V0V29ya2VyEhouc3luY3IudjEuR2V0V29ya2VyUmVxdWVzdBobLnN5bmNyLnYxLkdldFdvcmtlclJlc3BvbnNlIgOQAgESUgoMUmVuYW1lV29ya2VyEh0uc3luY3IudjEuUmVuYW1lV29ya2VyUmVxdWVzdBoeLnN5bmNyLnYxLlJlbmFtZVdvcmtlclJlc3BvbnNlIgOQAgISUgoMUmVtb3ZlV29ya2VyEh0uc3luY3IudjEuUmVtb3ZlV29ya2VyUmVxdWVzdBoeLnN5bmNyLnYxLlJlbW92ZVdvcmtlclJlc3BvbnNlIgOQAgISWwoPU2V0V29ya2VyTGFiZWxzEiAuc3luY3IudjEuU2V0V29ya2VyTGFiZWxzUmVxdWVzdBohLnN5bmNyLnYxLlNldFdvcmtlckxhYmVsc1Jlc3BvbnNlIgOQAgIyxAMKCkpvYlNlcnZpY2USPQoGUnVuSm9iEhcuc3luY3IudjEuUnVuSm9iUmVxdWVzdBoYLnN5bmNyLnYxLlJ1bkpvYlJlc3BvbnNlIgASQAoGR2V0Sm9iEhcuc3luY3IudjEuR2V0Sm9iUmVxdWVzdBoYLnN5bmNyLnYxLkdldEpvYlJlc3BvbnNlIgOQAgESRgoITGlzdEpvYnMSGS5zeW5jci52MS5MaXN0Sm9ic1JlcXVlc3QaGi5zeW5jci52MS5MaXN0Sm9ic1Jlc3BvbnNlIgOQAgESSQoJQ2FuY2VsSm9iEhouc3luY3IudjEuQ2FuY2VsSm9iUmVxdWVzdBobLnN5bmNyLnYxLkNhbmNlbEpvYlJlc3BvbnNlIgOQAgISSAoIV2F0Y2hKb2ISGS5zeW5jci52MS5XYXRjaEpvYlJlcXVlc3QaGi5zeW5jci52MS5XYXRjaEpvYlJlc3BvbnNlIgOQAgEwARJYCg5MaXN0Sm9iU2FtcGxlcxIfLnN5bmNyLnYxLkxpc3RKb2JTYW1wbGVzUmVxdWVzdBogLnN5bmNyLnYxLkxpc3RKb2JTYW1wbGVzUmVzcG9uc2UiA5ACAUKLAQoMY29tLnN5bmNyLnYxQghBcGlQcm90b1ABWjBnaXRodWIuY29tL1plcHRpbnkvU3luY3IvZ2VuL2dvL3N5bmNyL3YxO3N5bmNydjGiAgNTWFiqAghTeW5jci5WMcoCCFN5bmNyXFYx4gIUU3luY3JcVjFcR1BCTWV0YWRhdGHqAglTeW5jcjo6VjFiBnByb3RvMw", [file_google_protobuf_duration, file_google_protobuf_timestamp, file_syncr_v1_link]);
+  fileDesc("ChJzeW5jci92MS9hcGkucHJvdG8SCHN5bmNyLnYxIj8KD1ZhbGlkYXRpb25FcnJvchIsCgp2aW9sYXRpb25zGAEgAygLMhguc3luY3IudjEuRmllbGRWaW9sYXRpb24iMAoORmllbGRWaW9sYXRpb24SDQoFZmllbGQYASABKAkSDwoHbWVzc2FnZRgCIAEoCSIQCg5HZXRJbmZvUmVxdWVzdCJiCg9HZXRJbmZvUmVzcG9uc2USDwoHdmVyc2lvbhgBIAEoCRIOCgZjb21taXQYAiABKAkSLgoKYnVpbGRfdGltZRgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAirgIKBldvcmtlchIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEiIKBG1vZGUYAyABKA4yFC5zeW5jci52MS5Xb3JrZXJNb2RlEiYKBnN0YXR1cxgEIAEoDjIWLnN5bmNyLnYxLldvcmtlclN0YXR1cxItCglsYXN0X3NlZW4YBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCmNyZWF0ZWRfYXQYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgsKA3VybBgHIAEoCRIYChBjZXJ0X2ZpbmdlcnByaW50GAggASgJEiIKBGluZm8YCSABKAsyFC5zeW5jci52MS5Xb3JrZXJJbmZvEg4KBmxhYmVscxgKIAMoCUoECAsQFCKXAgoKV29ya2VySW5mbxIWCg53b3JrZXJfdmVyc2lvbhgBIAEoCRIKCgJvcxgCIAEoCRIMCgRhcmNoGAMgASgJEhAKCGhvc3RuYW1lGAQgASgJEiQKBXRvb2xzGAUgAygLMhUuc3luY3IudjEuVG9vbFZlcnNpb24SEQoJam9iX2tpbmRzGAYgAygJEhsKE21heF9jb25jdXJyZW50X2pvYnMYByABKAUSEwoLbG9jYWxfcm9vdHMYCCADKAkSLwoLcmVwb3J0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhAKCGZlYXR1cmVzGAogAygJEhEKCXByb2JlX29wcxgLIAMoCUoECAwQFCJeChxDcmVhdGVFbnJvbGxtZW50VG9rZW5SZXF1ZXN0EiYKA3R0bBgBIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbhIWCg5jb250cm9sbGVyX3VybBgCIAEoCSKSAQodQ3JlYXRlRW5yb2xsbWVudFRva2VuUmVzcG9uc2USDQoFdG9rZW4YASABKAkSLgoKZXhwaXJlc19hdBgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMgoQaW5zdGFsbF9jb21tYW5kcxgDIAMoCzIYLnN5bmNyLnYxLkluc3RhbGxDb21tYW5kIiIKIEdldFBhc3NpdmVJbnN0YWxsQ29tbWFuZHNSZXF1ZXN0Ik8KIUdldFBhc3NpdmVJbnN0YWxsQ29tbWFuZHNSZXNwb25zZRIqCghjb21tYW5kcxgBIAMoCzIYLnN5bmNyLnYxLkluc3RhbGxDb21tYW5kIqcBCg5JbnN0YWxsQ29tbWFuZBIrCghwbGF0Zm9ybRgBIAEoDjIZLnN5bmNyLnYxLkluc3RhbGxQbGF0Zm9ybRIlCgVzY29wZRgCIAEoDjIWLnN5bmNyLnYxLkluc3RhbGxTY29wZRINCgVzaGVsbBgDIAEoCRINCgV0aXRsZRgEIAEoCRIPCgdjb21tYW5kGAUgASgJEgwKBG5vdGUYBiABKAlKBAgHEBAiawocUmVnaXN0ZXJQYXNzaXZlV29ya2VyUmVxdWVzdBIMCgRuYW1lGAEgASgJEgsKA3VybBgCIAEoCRIYChBjZXJ0X2ZpbmdlcnByaW50GAMgASgJEhYKDnBhaXJpbmdfc2VjcmV0GAQgASgJIkEKHVJlZ2lzdGVyUGFzc2l2ZVdvcmtlclJlc3BvbnNlEiAKBndvcmtlchgBIAEoCzIQLnN5bmNyLnYxLldvcmtlciIjChJMaXN0V29ya2Vyc1JlcXVlc3QSDQoFbGFiZWwYASABKAkiOAoTTGlzdFdvcmtlcnNSZXNwb25zZRIhCgd3b3JrZXJzGAEgAygLMhAuc3luY3IudjEuV29ya2VyIiUKEEdldFdvcmtlclJlcXVlc3QSEQoJd29ya2VyX2lkGAEgASgJIjUKEUdldFdvcmtlclJlc3BvbnNlEiAKBndvcmtlchgBIAEoCzIQLnN5bmNyLnYxLldvcmtlciI2ChNSZW5hbWVXb3JrZXJSZXF1ZXN0EhEKCXdvcmtlcl9pZBgBIAEoCRIMCgRuYW1lGAIgASgJIjgKFFJlbmFtZVdvcmtlclJlc3BvbnNlEiAKBndvcmtlchgBIAEoCzIQLnN5bmNyLnYxLldvcmtlciIoChNSZW1vdmVXb3JrZXJSZXF1ZXN0EhEKCXdvcmtlcl9pZBgBIAEoCSIWChRSZW1vdmVXb3JrZXJSZXNwb25zZSI7ChZTZXRXb3JrZXJMYWJlbHNSZXF1ZXN0EhEKCXdvcmtlcl9pZBgBIAEoCRIOCgZsYWJlbHMYAiADKAkiOwoXU2V0V29ya2VyTGFiZWxzUmVzcG9uc2USIAoGd29ya2VyGAEgASgLMhAuc3luY3IudjEuV29ya2VyIpoGCgNKb2ISCgoCaWQYASABKAkSEQoJd29ya2VyX2lkGAIgASgJEgwKBGtpbmQYAyABKAkSIwoGc3RhdHVzGAQgASgOMhMuc3luY3IudjEuSm9iU3RhdHVzEhgKEGNhbmNlbF9yZXF1ZXN0ZWQYBSABKAgSLgoKY3JlYXRlZF9hdBgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMQoNZGlzcGF0Y2hlZF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKc3RhcnRlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLZmluaXNoZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhAKCHJlcXVldWVzGAogASgFEiEKBXN0YXRzGAsgASgLMhIuc3luY3IudjEuSm9iU3RhdHMSIQoFZXJyb3IYDCABKAsyEi5zeW5jci52MS5Kb2JFcnJvchIQCgh3YXJuaW5ncxgNIAMoCRIWCglleGl0X2NvZGUYDiABKAVIAIgBARIjCgZvdXRwdXQYDyABKAsyEy5zeW5jci52MS5Kb2JPdXRwdXQSEAoIb3duZXJfaWQYECABKAkSKwoKZGVmaW5pdGlvbhgRIAEoCzIXLnN5bmNyLnYxLkpvYkRlZmluaXRpb24SJwoHcmVtb3RlcxgSIAMoCzIWLnN5bmNyLnYxLkpvYlJlbW90ZVJlZhITCgtzY2hlZHVsZV9pZBgTIAEoCRIqCghzY2hlZHVsZRgUIAEoCzIYLnN5bmNyLnYxLkpvYlNjaGVkdWxlUmVmEg0KBXRpdGxlGBUgASgJEi4KCnJlcG9zaXRvcnkYFiABKAsyGi5zeW5jci52MS5Kb2JSZXBvc2l0b3J5UmVmEhoKEndhaXRpbmdfZm9yX2pvYl9pZBgXIAEoCRIkCgdkZXRhaWxzGBggAygLMhMuc3luY3IudjEuSm9iRGV0YWlsQgwKCl9leGl0X2NvZGVKBAgZEB4iQwoQSm9iUmVwb3NpdG9yeVJlZhIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB2RlbGV0ZWQYAyABKAhKBAgEEAoiLwoJSm9iRGV0YWlsEg0KBWxhYmVsGAEgASgJEg0KBXZhbHVlGAIgASgJSgQIAxAGIioKDkpvYlNjaGVkdWxlUmVmEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkiVQoMSm9iUmVtb3RlUmVmEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSFAoMYmFja2VuZF90eXBlGAMgASgJEg8KB2RlbGV0ZWQYBCABKAhKBAgFEAoi1gMKDUpvYkRlZmluaXRpb24SPQoPcmNsb25lX3RyYW5zZmVyGAogASgLMiIuc3luY3IudjEuUmNsb25lVHJhbnNmZXJEZWZpbml0aW9uSAASOQoNcmVzdGljX2JhY2t1cBgVIAEoCzIgLnN5bmNyLnYxLlJlc3RpY0JhY2t1cERlZmluaXRpb25IABI5Cg1yZXN0aWNfZm9yZ2V0GBYgASgLMiAuc3luY3IudjEuUmVzdGljRm9yZ2V0RGVmaW5pdGlvbkgAEjcKDHJlc3RpY19wcnVuZRgXIAEoCzIfLnN5bmNyLnYxLlJlc3RpY1BydW5lRGVmaW5pdGlvbkgAEjcKDHJlc3RpY19jaGVjaxgYIAEoCzIfLnN5bmNyLnYxLlJlc3RpY0NoZWNrRGVmaW5pdGlvbkgAEjsKDnJlc3RpY19yZXN0b3JlGBkgASgLMiEuc3luY3IudjEuUmVzdGljUmVzdG9yZURlZmluaXRpb25IABJCChJyZXN0aWNfZGVsZXRlX2RhdGEYGyABKAsyJC5zeW5jci52MS5SZXN0aWNEZWxldGVEYXRhRGVmaW5pdGlvbkgAQgsKCW9wZXJhdGlvbkoECBQQFUoECBoQG0oECBwQHiLRAQoYUmNsb25lVHJhbnNmZXJEZWZpbml0aW9uEioKBG1vZGUYASABKA4yHC5zeW5jci52MS5SY2xvbmVUcmFuc2Zlck1vZGUSJQoGc291cmNlGAIgASgLMhUuc3luY3IudjEuSm9iTG9jYXRpb24SKgoLZGVzdGluYXRpb24YAyABKAsyFS5zeW5jci52MS5Kb2JMb2NhdGlvbhIwCgdvcHRpb25zGAQgASgLMh8uc3luY3IudjEuUmNsb25lVHJhbnNmZXJPcHRpb25zSgQIBRAKIpMCChZSZXN0aWNCYWNrdXBEZWZpbml0aW9uEhUKDXJlcG9zaXRvcnlfaWQYASABKAkSDQoFcGF0aHMYAiADKAkSEAoIZXhjbHVkZXMYAyADKAkSDAoEdGFncxgEIAMoCRIMCgRob3N0GAUgASgJEhcKD3VzZV9mc19zbmFwc2hvdBgGIAEoCBIWCg5leGNsdWRlX2NhY2hlcxgHIAEoCBIXCg9vbmVfZmlsZV9zeXN0ZW0YCCABKAgSJgoZZXhjbHVkZV9sYXJnZXJfdGhhbl9ieXRlcxgJIAEoA0gAiAEBEg8KB2RyeV9ydW4YCiABKAhCHAoaX2V4Y2x1ZGVfbGFyZ2VyX3RoYW5fYnl0ZXNKBAgLEB4iogEKFlJlc3RpY0ZvcmdldERlZmluaXRpb24SFQoNcmVwb3NpdG9yeV9pZBgBIAEoCRIvCgZwb2xpY3kYAiABKAsyHy5zeW5jci52MS5SZXN0aWNSZXRlbnRpb25Qb2xpY3kSDQoFcHJ1bmUYAyABKAgSDAoEdGFncxgEIAMoCRIMCgRob3N0GAUgASgJEg8KB2RyeV9ydW4YBiABKAhKBAgHEBQiRQoVUmVzdGljUHJ1bmVEZWZpbml0aW9uEhUKDXJlcG9zaXRvcnlfaWQYASABKAkSDwoHZHJ5X3J1bhgCIAEoCEoECAMQFCJPChVSZXN0aWNDaGVja0RlZmluaXRpb24SFQoNcmVwb3NpdG9yeV9pZBgBIAEoCRIZChFyZWFkX2RhdGFfcGVyY2VudBgCIAEoBUoECAMQFCLUAQoXUmVzdGljUmVzdG9yZURlZmluaXRpb24SFQoNcmVwb3NpdG9yeV9pZBgBIAEoCRITCgtzbmFwc2hvdF9pZBgCIAEoCRIOCgZ0YXJnZXQYAyABKAkSDQoFcGF0aHMYBCADKAkSEAoIZXhjbHVkZXMYBSADKAkSDgoGdmVyaWZ5GAYgASgIEhEKCXN1YmZvbGRlchgHIAEoCRIzCglvdmVyd3JpdGUYCCABKA4yIC5zeW5jci52MS5SZXN0aWNSZXN0b3JlT3ZlcndyaXRlSgQICRAUIjkKGlJlc3RpY0RlbGV0ZURhdGFEZWZpbml0aW9uEhUKDXJlcG9zaXRvcnlfaWQYASABKAlKBAgCEBQiNAoLSm9iTG9jYXRpb24SEQoJcmVtb3RlX2lkGAEgASgJEgwKBHBhdGgYAiABKAlKBAgDEAoiWwoNUnVuSm9iUmVxdWVzdBIRCgl3b3JrZXJfaWQYASABKAkSKwoKZGVmaW5pdGlvbhgDIAEoCzIXLnN5bmNyLnYxLkpvYkRlZmluaXRpb25KBAgCEANSBHNwZWMiLAoOUnVuSm9iUmVzcG9uc2USGgoDam9iGAEgASgLMg0uc3luY3IudjEuSm9iIh8KDUdldEpvYlJlcXVlc3QSDgoGam9iX2lkGAEgASgJIiwKDkdldEpvYlJlc3BvbnNlEhoKA2pvYhgBIAEoCzINLnN5bmNyLnYxLkpvYiLJAgoPTGlzdEpvYnNSZXF1ZXN0EhEKCXdvcmtlcl9pZBgBIAEoCRIlCghzdGF0dXNlcxgCIAMoDjITLnN5bmNyLnYxLkpvYlN0YXR1cxIRCglwYWdlX3NpemUYAyABKAUSEgoKcGFnZV90b2tlbhgEIAEoCRIRCglyZW1vdGVfaWQYBSABKAkSDQoFa2luZHMYBiADKAkSDQoFcXVlcnkYByABKAkSMQoNY3JlYXRlZF9hZnRlchgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMgoOY3JlYXRlZF9iZWZvcmUYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhEKCWFsbF91c2VycxgKIAEoCBITCgtzY2hlZHVsZV9pZBgLIAEoCRIVCg1yZXBvc2l0b3J5X2lkGAwgASgJIkgKEExpc3RKb2JzUmVzcG9uc2USGwoEam9icxgBIAMoCzINLnN5bmNyLnYxLkpvYhIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkiIgoQQ2FuY2VsSm9iUmVxdWVzdBIOCgZqb2JfaWQYASABKAkiLwoRQ2FuY2VsSm9iUmVzcG9uc2USGgoDam9iGAEgASgLMg0uc3luY3IudjEuSm9iIiEKD1dhdGNoSm9iUmVxdWVzdBIOCgZqb2JfaWQYASABKAkiZQoQV2F0Y2hKb2JSZXNwb25zZRIcCgNqb2IYASABKAsyDS5zeW5jci52MS5Kb2JIABIpCghwcm9ncmVzcxgCIAEoCzIVLnN5bmNyLnYxLkpvYlByb2dyZXNzSABCCAoGdXBkYXRlIicKFUxpc3RKb2JTYW1wbGVzUmVxdWVzdBIOCgZqb2JfaWQYASABKAkiQAoWTGlzdEpvYlNhbXBsZXNSZXNwb25zZRImCgdzYW1wbGVzGAEgAygLMhUuc3luY3IudjEuSm9iUHJvZ3Jlc3MiWgoLSm9iUHJvZ3Jlc3MSKAoEdGltZRgBIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASIQoFc3RhdHMYAiABKAsyEi5zeW5jci52MS5Kb2JTdGF0cyp9CgxXb3JrZXJTdGF0dXMSHQoZV09SS0VSX1NUQVRVU19VTlNQRUNJRklFRBAAEhkKFVdPUktFUl9TVEFUVVNfUEVORElORxABEhgKFFdPUktFUl9TVEFUVVNfT05MSU5FEAISGQoVV09SS0VSX1NUQVRVU19PRkZMSU5FEAMqbQoPSW5zdGFsbFBsYXRmb3JtEiAKHElOU1RBTExfUExBVEZPUk1fVU5TUEVDSUZJRUQQABIaChZJTlNUQUxMX1BMQVRGT1JNX0xJTlVYEAESHAoYSU5TVEFMTF9QTEFURk9STV9XSU5ET1dTEAIqXwoMSW5zdGFsbFNjb3BlEh0KGUlOU1RBTExfU0NPUEVfVU5TUEVDSUZJRUQQABIYChRJTlNUQUxMX1NDT1BFX1NZU1RFTRABEhYKEklOU1RBTExfU0NPUEVfVVNFUhACKtgBCglKb2JTdGF0dXMSGgoWSk9CX1NUQVRVU19VTlNQRUNJRklFRBAAEhUKEUpPQl9TVEFUVVNfUVVFVUVEEAESGQoVSk9CX1NUQVRVU19ESVNQQVRDSEVEEAISFgoSSk9CX1NUQVRVU19SVU5OSU5HEAMSGAoUSk9CX1NUQVRVU19TVUNDRUVERUQQBBIVChFKT0JfU1RBVFVTX0ZBSUxFRBAFEhgKFEpPQl9TVEFUVVNfQ0FOQ0VMTEVEEAYSGgoWSk9CX1NUQVRVU19JTlRFUlJVUFRFRBAHMlQKDVN5c3RlbVNlcnZpY2USQwoHR2V0SW5mbxIYLnN5bmNyLnYxLkdldEluZm9SZXF1ZXN0Ghkuc3luY3IudjEuR2V0SW5mb1Jlc3BvbnNlIgOQAgEyiAYKEldvcmtlckFkbWluU2VydmljZRJqChVDcmVhdGVFbnJvbGxtZW50VG9rZW4SJi5zeW5jci52MS5DcmVhdGVFbnJvbGxtZW50VG9rZW5SZXF1ZXN0Gicuc3luY3IudjEuQ3JlYXRlRW5yb2xsbWVudFRva2VuUmVzcG9uc2UiABJ5ChlHZXRQYXNzaXZlSW5zdGFsbENvbW1hbmRzEiouc3luY3IudjEuR2V0UGFzc2l2ZUluc3RhbGxDb21tYW5kc1JlcXVlc3QaKy5zeW5jci52MS5HZXRQYXNzaXZlSW5zdGFsbENvbW1hbmRzUmVzcG9uc2UiA5ACARJqChVSZWdpc3RlclBhc3NpdmVXb3JrZXISJi5zeW5jci52MS5SZWdpc3RlclBhc3NpdmVXb3JrZXJSZXF1ZXN0Gicuc3luY3IudjEuUmVnaXN0ZXJQYXNzaXZlV29ya2VyUmVzcG9uc2UiABJPCgtMaXN0V29ya2VycxIcLnN5bmNyLnYxLkxpc3RXb3JrZXJzUmVxdWVzdBodLnN5bmNyLnYxLkxpc3RXb3JrZXJzUmVzcG9uc2UiA5ACARJJCglHZXRXb3JrZXISGi5zeW5jci52MS5HZXRXb3JrZXJSZXF1ZXN0Ghsuc3luY3IudjEuR2V0V29ya2VyUmVzcG9uc2UiA5ACARJSCgxSZW5hbWVXb3JrZXISHS5zeW5jci52MS5SZW5hbWVXb3JrZXJSZXF1ZXN0Gh4uc3luY3IudjEuUmVuYW1lV29ya2VyUmVzcG9uc2UiA5ACAhJSCgxSZW1vdmVXb3JrZXISHS5zeW5jci52MS5SZW1vdmVXb3JrZXJSZXF1ZXN0Gh4uc3luY3IudjEuUmVtb3ZlV29ya2VyUmVzcG9uc2UiA5ACAhJbCg9TZXRXb3JrZXJMYWJlbHMSIC5zeW5jci52MS5TZXRXb3JrZXJMYWJlbHNSZXF1ZXN0GiEuc3luY3IudjEuU2V0V29ya2VyTGFiZWxzUmVzcG9uc2UiA5ACAjLEAwoKSm9iU2VydmljZRI9CgZSdW5Kb2ISFy5zeW5jci52MS5SdW5Kb2JSZXF1ZXN0Ghguc3luY3IudjEuUnVuSm9iUmVzcG9uc2UiABJACgZHZXRKb2ISFy5zeW5jci52MS5HZXRKb2JSZXF1ZXN0Ghguc3luY3IudjEuR2V0Sm9iUmVzcG9uc2UiA5ACARJGCghMaXN0Sm9icxIZLnN5bmNyLnYxLkxpc3RKb2JzUmVxdWVzdBoaLnN5bmNyLnYxLkxpc3RKb2JzUmVzcG9uc2UiA5ACARJJCglDYW5jZWxKb2ISGi5zeW5jci52MS5DYW5jZWxKb2JSZXF1ZXN0Ghsuc3luY3IudjEuQ2FuY2VsSm9iUmVzcG9uc2UiA5ACAhJICghXYXRjaEpvYhIZLnN5bmNyLnYxLldhdGNoSm9iUmVxdWVzdBoaLnN5bmNyLnYxLldhdGNoSm9iUmVzcG9uc2UiA5ACATABElgKDkxpc3RKb2JTYW1wbGVzEh8uc3luY3IudjEuTGlzdEpvYlNhbXBsZXNSZXF1ZXN0GiAuc3luY3IudjEuTGlzdEpvYlNhbXBsZXNSZXNwb25zZSIDkAIBQosBCgxjb20uc3luY3IudjFCCEFwaVByb3RvUAFaMGdpdGh1Yi5jb20vWmVwdGlueS9TeW5jci9nZW4vZ28vc3luY3IvdjE7c3luY3J2MaICA1NYWKoCCFN5bmNyLlYxygIIU3luY3JcVjHiAhRTeW5jclxWMVxHUEJNZXRhZGF0YeoCCVN5bmNyOjpWMWIGcHJvdG8z", [file_google_protobuf_duration, file_google_protobuf_timestamp, file_syncr_v1_link]);
 
 /**
  * ValidationError is attached as an error detail to INVALID_ARGUMENT errors
@@ -268,6 +268,22 @@ export type WorkerInfo = Message<"syncr.v1.WorkerInfo"> & {
    * @generated from field: google.protobuf.Timestamp reported_at = 9;
    */
   reportedAt?: Timestamp | undefined;
+
+  /**
+   * Link features the worker implements (Hello.features), e.g. "probe",
+   * "restic.v2", "restic.delete". A worker without "restic.v2" must be
+   * upgraded to run restic jobs.
+   *
+   * @generated from field: repeated string features = 10;
+   */
+  features: string[];
+
+  /**
+   * Probe operations the worker can run (Hello.probe_ops).
+   *
+   * @generated from field: repeated string probe_ops = 11;
+   */
+  probeOps: string[];
 };
 
 /**
@@ -857,6 +873,37 @@ export type Job = Message<"syncr.v1.Job"> & {
    * @generated from field: syncr.v1.JobScheduleRef schedule = 20;
    */
   schedule?: JobScheduleRef | undefined;
+
+  /**
+   * One-line description of what the job runs, e.g. "Back up /srv/photos →
+   * Photos vault" (the controller's job kind describes it).
+   *
+   * @generated from field: string title = 21;
+   */
+  title: string;
+
+  /**
+   * The restic repository the job uses; unset for other kinds.
+   *
+   * @generated from field: syncr.v1.JobRepositoryRef repository = 22;
+   */
+  repository?: JobRepositoryRef | undefined;
+
+  /**
+   * Set while the job is queued behind an older unfinished job on the same
+   * restic repository (they share a concurrency key): the job it waits for.
+   *
+   * @generated from field: string waiting_for_job_id = 23;
+   */
+  waitingForJobId: string;
+
+  /**
+   * Kind-specific results for display (e.g. "Snapshot", "Data added"), in
+   * order; empty for kinds without any.
+   *
+   * @generated from field: repeated syncr.v1.JobDetail details = 24;
+   */
+  details: JobDetail[];
 };
 
 /**
@@ -865,6 +912,69 @@ export type Job = Message<"syncr.v1.Job"> & {
  */
 export const JobSchema: GenMessage<Job> = /*@__PURE__*/
   messageDesc(file_syncr_v1_api, 23);
+
+/**
+ * JobRepositoryRef names the restic repository a job or schedule uses.
+ *
+ * @generated from message syncr.v1.JobRepositoryRef
+ */
+export type JobRepositoryRef = Message<"syncr.v1.JobRepositoryRef"> & {
+  /**
+   * Repository ID (UUID).
+   *
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * The repository's name.
+   *
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * Whether the repository has been deleted since.
+   *
+   * @generated from field: bool deleted = 3;
+   */
+  deleted: boolean;
+};
+
+/**
+ * Describes the message syncr.v1.JobRepositoryRef.
+ * Use `create(JobRepositoryRefSchema)` to create a new message.
+ */
+export const JobRepositoryRefSchema: GenMessage<JobRepositoryRef> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_api, 24);
+
+/**
+ * JobDetail is one kind-specific result of a job, for display.
+ *
+ * @generated from message syncr.v1.JobDetail
+ */
+export type JobDetail = Message<"syncr.v1.JobDetail"> & {
+  /**
+   * What it is, e.g. "Snapshot".
+   *
+   * @generated from field: string label = 1;
+   */
+  label: string;
+
+  /**
+   * Its value, formatted for people, e.g. "1a2b3c4d".
+   *
+   * @generated from field: string value = 2;
+   */
+  value: string;
+};
+
+/**
+ * Describes the message syncr.v1.JobDetail.
+ * Use `create(JobDetailSchema)` to create a new message.
+ */
+export const JobDetailSchema: GenMessage<JobDetail> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_api, 25);
 
 /**
  * JobScheduleRef names the schedule that launched a job.
@@ -892,7 +1002,7 @@ export type JobScheduleRef = Message<"syncr.v1.JobScheduleRef"> & {
  * Use `create(JobScheduleRefSchema)` to create a new message.
  */
 export const JobScheduleRefSchema: GenMessage<JobScheduleRef> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 24);
+  messageDesc(file_syncr_v1_api, 26);
 
 /**
  * JobRemoteRef names a remote a job refers to.
@@ -934,7 +1044,7 @@ export type JobRemoteRef = Message<"syncr.v1.JobRemoteRef"> & {
  * Use `create(JobRemoteRefSchema)` to create a new message.
  */
 export const JobRemoteRefSchema: GenMessage<JobRemoteRef> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 25);
+  messageDesc(file_syncr_v1_api, 27);
 
 /**
  * JobDefinition is what a job runs, as the API accepts and returns it: the
@@ -955,6 +1065,50 @@ export type JobDefinition = Message<"syncr.v1.JobDefinition"> & {
      */
     value: RcloneTransferDefinition;
     case: "rcloneTransfer";
+  } | {
+    /**
+     * Restic operations (Milestone 5) on one of the owner's repositories.
+     *
+     * @generated from field: syncr.v1.ResticBackupDefinition restic_backup = 21;
+     */
+    value: ResticBackupDefinition;
+    case: "resticBackup";
+  } | {
+    /**
+     * @generated from field: syncr.v1.ResticForgetDefinition restic_forget = 22;
+     */
+    value: ResticForgetDefinition;
+    case: "resticForget";
+  } | {
+    /**
+     * @generated from field: syncr.v1.ResticPruneDefinition restic_prune = 23;
+     */
+    value: ResticPruneDefinition;
+    case: "resticPrune";
+  } | {
+    /**
+     * @generated from field: syncr.v1.ResticCheckDefinition restic_check = 24;
+     */
+    value: ResticCheckDefinition;
+    case: "resticCheck";
+  } | {
+    /**
+     * Restores are started from the snapshot browser; they cannot be
+     * scheduled.
+     *
+     * @generated from field: syncr.v1.ResticRestoreDefinition restic_restore = 25;
+     */
+    value: ResticRestoreDefinition;
+    case: "resticRestore";
+  } | {
+    /**
+     * Created only by ResticService.DeleteRepository (delete_data); RunJob
+     * and schedules reject it.
+     *
+     * @generated from field: syncr.v1.ResticDeleteDataDefinition restic_delete_data = 27;
+     */
+    value: ResticDeleteDataDefinition;
+    case: "resticDeleteData";
   } | { case: undefined; value?: undefined };
 };
 
@@ -963,7 +1117,7 @@ export type JobDefinition = Message<"syncr.v1.JobDefinition"> & {
  * Use `create(JobDefinitionSchema)` to create a new message.
  */
 export const JobDefinitionSchema: GenMessage<JobDefinition> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 26);
+  messageDesc(file_syncr_v1_api, 28);
 
 /**
  * RcloneTransferDefinition copies, syncs or moves files between two
@@ -1006,7 +1160,303 @@ export type RcloneTransferDefinition = Message<"syncr.v1.RcloneTransferDefinitio
  * Use `create(RcloneTransferDefinitionSchema)` to create a new message.
  */
 export const RcloneTransferDefinitionSchema: GenMessage<RcloneTransferDefinition> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 27);
+  messageDesc(file_syncr_v1_api, 29);
+
+/**
+ * ResticBackupDefinition backs up local paths of the worker into a
+ * repository (see ResticBackup).
+ *
+ * @generated from message syncr.v1.ResticBackupDefinition
+ */
+export type ResticBackupDefinition = Message<"syncr.v1.ResticBackupDefinition"> & {
+  /**
+   * One of the owner's repositories (ResticService).
+   *
+   * @generated from field: string repository_id = 1;
+   */
+  repositoryId: string;
+
+  /**
+   * Absolute local paths to back up, inside the worker's local_roots: 1 to
+   * 100, without ".." segments or duplicates.
+   *
+   * @generated from field: repeated string paths = 2;
+   */
+  paths: string[];
+
+  /**
+   * --exclude patterns, at most 1000.
+   *
+   * @generated from field: repeated string excludes = 3;
+   */
+  excludes: string[];
+
+  /**
+   * --tag values, at most 32, each 1 to 128 bytes without commas.
+   *
+   * @generated from field: repeated string tags = 4;
+   */
+  tags: string[];
+
+  /**
+   * --host override; empty uses the worker's host name.
+   *
+   * @generated from field: string host = 5;
+   */
+  host: string;
+
+  /**
+   * --use-fs-snapshot (Windows VSS; the worker must run as a system
+   * service). Fails on other operating systems.
+   *
+   * @generated from field: bool use_fs_snapshot = 6;
+   */
+  useFsSnapshot: boolean;
+
+  /**
+   * --exclude-caches.
+   *
+   * @generated from field: bool exclude_caches = 7;
+   */
+  excludeCaches: boolean;
+
+  /**
+   * --one-file-system.
+   *
+   * @generated from field: bool one_file_system = 8;
+   */
+  oneFileSystem: boolean;
+
+  /**
+   * --exclude-larger-than in bytes; greater than 0 when set.
+   *
+   * @generated from field: optional int64 exclude_larger_than_bytes = 9;
+   */
+  excludeLargerThanBytes?: bigint | undefined;
+
+  /**
+   * --dry-run.
+   *
+   * @generated from field: bool dry_run = 10;
+   */
+  dryRun: boolean;
+};
+
+/**
+ * Describes the message syncr.v1.ResticBackupDefinition.
+ * Use `create(ResticBackupDefinitionSchema)` to create a new message.
+ */
+export const ResticBackupDefinitionSchema: GenMessage<ResticBackupDefinition> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_api, 30);
+
+/**
+ * ResticForgetDefinition applies a retention policy (see ResticForget).
+ *
+ * @generated from message syncr.v1.ResticForgetDefinition
+ */
+export type ResticForgetDefinition = Message<"syncr.v1.ResticForgetDefinition"> & {
+  /**
+   * One of the owner's repositories.
+   *
+   * @generated from field: string repository_id = 1;
+   */
+  repositoryId: string;
+
+  /**
+   * Which snapshots to keep: at least one rule.
+   *
+   * @generated from field: syncr.v1.ResticRetentionPolicy policy = 2;
+   */
+  policy?: ResticRetentionPolicy | undefined;
+
+  /**
+   * --prune: remove unreferenced data afterwards.
+   *
+   * @generated from field: bool prune = 3;
+   */
+  prune: boolean;
+
+  /**
+   * Only consider snapshots with these tags.
+   *
+   * @generated from field: repeated string tags = 4;
+   */
+  tags: string[];
+
+  /**
+   * Only consider snapshots of this host; empty means all hosts.
+   *
+   * @generated from field: string host = 5;
+   */
+  host: string;
+
+  /**
+   * --dry-run.
+   *
+   * @generated from field: bool dry_run = 6;
+   */
+  dryRun: boolean;
+};
+
+/**
+ * Describes the message syncr.v1.ResticForgetDefinition.
+ * Use `create(ResticForgetDefinitionSchema)` to create a new message.
+ */
+export const ResticForgetDefinitionSchema: GenMessage<ResticForgetDefinition> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_api, 31);
+
+/**
+ * ResticPruneDefinition removes unreferenced data (see ResticPrune).
+ *
+ * @generated from message syncr.v1.ResticPruneDefinition
+ */
+export type ResticPruneDefinition = Message<"syncr.v1.ResticPruneDefinition"> & {
+  /**
+   * One of the owner's repositories.
+   *
+   * @generated from field: string repository_id = 1;
+   */
+  repositoryId: string;
+
+  /**
+   * --dry-run.
+   *
+   * @generated from field: bool dry_run = 2;
+   */
+  dryRun: boolean;
+};
+
+/**
+ * Describes the message syncr.v1.ResticPruneDefinition.
+ * Use `create(ResticPruneDefinitionSchema)` to create a new message.
+ */
+export const ResticPruneDefinitionSchema: GenMessage<ResticPruneDefinition> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_api, 32);
+
+/**
+ * ResticCheckDefinition verifies a repository (see ResticCheck).
+ *
+ * @generated from message syncr.v1.ResticCheckDefinition
+ */
+export type ResticCheckDefinition = Message<"syncr.v1.ResticCheckDefinition"> & {
+  /**
+   * One of the owner's repositories.
+   *
+   * @generated from field: string repository_id = 1;
+   */
+  repositoryId: string;
+
+  /**
+   * Percentage of pack data to read and verify, 0 to 100; 0 checks only
+   * the structure.
+   *
+   * @generated from field: int32 read_data_percent = 2;
+   */
+  readDataPercent: number;
+};
+
+/**
+ * Describes the message syncr.v1.ResticCheckDefinition.
+ * Use `create(ResticCheckDefinitionSchema)` to create a new message.
+ */
+export const ResticCheckDefinitionSchema: GenMessage<ResticCheckDefinition> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_api, 33);
+
+/**
+ * ResticRestoreDefinition restores a snapshot into a local folder of the
+ * worker (see ResticRestore).
+ *
+ * @generated from message syncr.v1.ResticRestoreDefinition
+ */
+export type ResticRestoreDefinition = Message<"syncr.v1.ResticRestoreDefinition"> & {
+  /**
+   * One of the owner's repositories.
+   *
+   * @generated from field: string repository_id = 1;
+   */
+  repositoryId: string;
+
+  /**
+   * "latest" or a snapshot ID of 8 to 64 hex digits.
+   *
+   * @generated from field: string snapshot_id = 2;
+   */
+  snapshotId: string;
+
+  /**
+   * Absolute local target folder inside the worker's local_roots.
+   *
+   * @generated from field: string target = 3;
+   */
+  target: string;
+
+  /**
+   * Literal snapshot tree paths to restore (selected items), at most 1000;
+   * each starts with "/". Cannot be combined with subfolder.
+   *
+   * @generated from field: repeated string paths = 4;
+   */
+  paths: string[];
+
+  /**
+   * --exclude patterns.
+   *
+   * @generated from field: repeated string excludes = 5;
+   */
+  excludes: string[];
+
+  /**
+   * --verify.
+   *
+   * @generated from field: bool verify = 6;
+   */
+  verify: boolean;
+
+  /**
+   * Restore the contents of this snapshot folder (a tree path) directly
+   * into target.
+   *
+   * @generated from field: string subfolder = 7;
+   */
+  subfolder: string;
+
+  /**
+   * What happens to files that exist at the target. UNSPECIFIED means
+   * NEVER: a restore never replaces files unless asked to.
+   *
+   * @generated from field: syncr.v1.ResticRestoreOverwrite overwrite = 8;
+   */
+  overwrite: ResticRestoreOverwrite;
+};
+
+/**
+ * Describes the message syncr.v1.ResticRestoreDefinition.
+ * Use `create(ResticRestoreDefinitionSchema)` to create a new message.
+ */
+export const ResticRestoreDefinitionSchema: GenMessage<ResticRestoreDefinition> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_api, 34);
+
+/**
+ * ResticDeleteDataDefinition deletes a repository's data in the backend
+ * (see ResticDeleteData). Only ResticService.DeleteRepository creates it.
+ *
+ * @generated from message syncr.v1.ResticDeleteDataDefinition
+ */
+export type ResticDeleteDataDefinition = Message<"syncr.v1.ResticDeleteDataDefinition"> & {
+  /**
+   * The repository being deleted.
+   *
+   * @generated from field: string repository_id = 1;
+   */
+  repositoryId: string;
+};
+
+/**
+ * Describes the message syncr.v1.ResticDeleteDataDefinition.
+ * Use `create(ResticDeleteDataDefinitionSchema)` to create a new message.
+ */
+export const ResticDeleteDataDefinitionSchema: GenMessage<ResticDeleteDataDefinition> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_api, 35);
 
 /**
  * JobLocation is a path on one of the owner's remotes, or on the worker's
@@ -1037,7 +1487,7 @@ export type JobLocation = Message<"syncr.v1.JobLocation"> & {
  * Use `create(JobLocationSchema)` to create a new message.
  */
 export const JobLocationSchema: GenMessage<JobLocation> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 28);
+  messageDesc(file_syncr_v1_api, 36);
 
 /**
  * RunJobRequest queues a job.
@@ -1065,7 +1515,7 @@ export type RunJobRequest = Message<"syncr.v1.RunJobRequest"> & {
  * Use `create(RunJobRequestSchema)` to create a new message.
  */
 export const RunJobRequestSchema: GenMessage<RunJobRequest> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 29);
+  messageDesc(file_syncr_v1_api, 37);
 
 /**
  * RunJobResponse returns the queued job.
@@ -1084,7 +1534,7 @@ export type RunJobResponse = Message<"syncr.v1.RunJobResponse"> & {
  * Use `create(RunJobResponseSchema)` to create a new message.
  */
 export const RunJobResponseSchema: GenMessage<RunJobResponse> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 30);
+  messageDesc(file_syncr_v1_api, 38);
 
 /**
  * GetJobRequest names a job.
@@ -1103,7 +1553,7 @@ export type GetJobRequest = Message<"syncr.v1.GetJobRequest"> & {
  * Use `create(GetJobRequestSchema)` to create a new message.
  */
 export const GetJobRequestSchema: GenMessage<GetJobRequest> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 31);
+  messageDesc(file_syncr_v1_api, 39);
 
 /**
  * GetJobResponse returns the job.
@@ -1122,7 +1572,7 @@ export type GetJobResponse = Message<"syncr.v1.GetJobResponse"> & {
  * Use `create(GetJobResponseSchema)` to create a new message.
  */
 export const GetJobResponseSchema: GenMessage<GetJobResponse> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 32);
+  messageDesc(file_syncr_v1_api, 40);
 
 /**
  * ListJobsRequest filters and pages the job list.
@@ -1207,6 +1657,13 @@ export type ListJobsRequest = Message<"syncr.v1.ListJobsRequest"> & {
    * @generated from field: string schedule_id = 11;
    */
   scheduleId: string;
+
+  /**
+   * Only jobs on this restic repository; empty means any.
+   *
+   * @generated from field: string repository_id = 12;
+   */
+  repositoryId: string;
 };
 
 /**
@@ -1214,7 +1671,7 @@ export type ListJobsRequest = Message<"syncr.v1.ListJobsRequest"> & {
  * Use `create(ListJobsRequestSchema)` to create a new message.
  */
 export const ListJobsRequestSchema: GenMessage<ListJobsRequest> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 33);
+  messageDesc(file_syncr_v1_api, 41);
 
 /**
  * ListJobsResponse is one page of jobs, newest first.
@@ -1240,7 +1697,7 @@ export type ListJobsResponse = Message<"syncr.v1.ListJobsResponse"> & {
  * Use `create(ListJobsResponseSchema)` to create a new message.
  */
 export const ListJobsResponseSchema: GenMessage<ListJobsResponse> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 34);
+  messageDesc(file_syncr_v1_api, 42);
 
 /**
  * CancelJobRequest names the job to cancel.
@@ -1259,7 +1716,7 @@ export type CancelJobRequest = Message<"syncr.v1.CancelJobRequest"> & {
  * Use `create(CancelJobRequestSchema)` to create a new message.
  */
 export const CancelJobRequestSchema: GenMessage<CancelJobRequest> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 35);
+  messageDesc(file_syncr_v1_api, 43);
 
 /**
  * CancelJobResponse returns the job after the cancel request.
@@ -1278,7 +1735,7 @@ export type CancelJobResponse = Message<"syncr.v1.CancelJobResponse"> & {
  * Use `create(CancelJobResponseSchema)` to create a new message.
  */
 export const CancelJobResponseSchema: GenMessage<CancelJobResponse> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 36);
+  messageDesc(file_syncr_v1_api, 44);
 
 /**
  * WatchJobRequest names the job to watch.
@@ -1297,7 +1754,7 @@ export type WatchJobRequest = Message<"syncr.v1.WatchJobRequest"> & {
  * Use `create(WatchJobRequestSchema)` to create a new message.
  */
 export const WatchJobRequestSchema: GenMessage<WatchJobRequest> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 37);
+  messageDesc(file_syncr_v1_api, 45);
 
 /**
  * WatchJobResponse is one update of a watched job.
@@ -1332,7 +1789,7 @@ export type WatchJobResponse = Message<"syncr.v1.WatchJobResponse"> & {
  * Use `create(WatchJobResponseSchema)` to create a new message.
  */
 export const WatchJobResponseSchema: GenMessage<WatchJobResponse> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 38);
+  messageDesc(file_syncr_v1_api, 46);
 
 /**
  * ListJobSamplesRequest names a job.
@@ -1351,7 +1808,7 @@ export type ListJobSamplesRequest = Message<"syncr.v1.ListJobSamplesRequest"> & 
  * Use `create(ListJobSamplesRequestSchema)` to create a new message.
  */
 export const ListJobSamplesRequestSchema: GenMessage<ListJobSamplesRequest> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 39);
+  messageDesc(file_syncr_v1_api, 47);
 
 /**
  * ListJobSamplesResponse lists the job's stored samples, oldest first.
@@ -1370,7 +1827,7 @@ export type ListJobSamplesResponse = Message<"syncr.v1.ListJobSamplesResponse"> 
  * Use `create(ListJobSamplesResponseSchema)` to create a new message.
  */
 export const ListJobSamplesResponseSchema: GenMessage<ListJobSamplesResponse> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 40);
+  messageDesc(file_syncr_v1_api, 48);
 
 /**
  * JobProgress is a live progress sample. Rates are derived by clients from
@@ -1399,7 +1856,7 @@ export type JobProgress = Message<"syncr.v1.JobProgress"> & {
  * Use `create(JobProgressSchema)` to create a new message.
  */
 export const JobProgressSchema: GenMessage<JobProgress> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_api, 41);
+  messageDesc(file_syncr_v1_api, 49);
 
 /**
  * WorkerStatus is a worker's connection status.
@@ -1706,11 +2163,17 @@ export const WorkerAdminService: GenService<{
 export const JobService: GenService<{
   /**
    * RunJob queues a job on a worker. The definition refers to the caller's
-   * remotes by ID and carries no secrets; it is checked for shape and path
-   * syntax (INVALID_ARGUMENT with a ValidationError detail) and its remotes
-   * must be the caller's live remotes (NOT_FOUND otherwise). The controller
-   * resolves the remotes' credentials only when it hands the job to the
+   * remotes and restic repositories by ID and carries no secrets; it is
+   * checked for shape and path syntax (INVALID_ARGUMENT with a
+   * ValidationError detail) and its remotes and repository must be the
+   * caller's live ones (NOT_FOUND otherwise). A repository whose data is
+   * being deleted accepts no new jobs (FAILED_PRECONDITION); a
+   * restic_delete_data definition is rejected (INVALID_ARGUMENT on
+   * "definition.restic_delete_data": DeleteRepository starts it). The
+   * controller resolves the credentials only when it hands the job to the
    * worker, which validates it fully and reports problems as a FAILED job.
+   * Jobs on one restic repository run one at a time, oldest first
+   * (Job.waiting_for_job_id).
    *
    * @generated from rpc syncr.v1.JobService.RunJob
    */

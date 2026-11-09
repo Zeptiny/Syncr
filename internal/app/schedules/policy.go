@@ -163,12 +163,14 @@ func MissedMessage(sc Schedule, reason string) string {
 
 // AutoPauses reports whether a run that failed for reason pauses its
 // schedule: the permanent launch failures (the worker was removed, the
-// definition is no longer valid, a remote is gone, the owner is disabled),
-// which every later run would hit too. A missing label worker does not
-// pause (a worker may get the label), nor do missed runs.
+// definition is no longer valid, a remote or the repository is gone or its
+// data is being deleted, the owner is disabled), which every later run
+// would hit too. A missing label worker does not pause (a worker may get
+// the label), nor do missed runs.
 func AutoPauses(reason string) bool {
 	switch reason {
-	case ReasonWorkerRemoved, ReasonInvalidDefinition, ReasonRemoteUnavailable, ReasonOwnerDisabled:
+	case ReasonWorkerRemoved, ReasonInvalidDefinition, ReasonRemoteUnavailable, ReasonOwnerDisabled,
+		ReasonRepositoryUnavailable, ReasonRepositoryDeleting:
 		return true
 	}
 	return false

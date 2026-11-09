@@ -1,6 +1,7 @@
 package workers
 
 import (
+	"slices"
 	"time"
 
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -52,8 +53,23 @@ type Info struct {
 	JobKinds          []string
 	MaxConcurrentJobs int
 	LocalRoots        []string
+	// Features are the link features the worker implements (internal/link
+	// Feature*, Hello.features); nil for a worker older than Milestone 5.
+	Features []string
+	// ProbeOps are the probe operations it can run (Hello.probe_ops).
+	ProbeOps []string
 	// ReportedAt is when the worker sent the Hello (worker clock).
 	ReportedAt time.Time
+}
+
+// HasFeatures reports whether the worker reported every one of features.
+func (i Info) HasFeatures(features ...string) bool {
+	for _, f := range features {
+		if !slices.Contains(i.Features, f) {
+			return false
+		}
+	}
+	return true
 }
 
 // Tool is a supervised tool and its version (rclone, restic).

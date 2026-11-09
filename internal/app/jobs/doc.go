@@ -62,6 +62,22 @@
 //	// same way, by status.
 //	CountUnfinished(ctx, actor domain.Actor, allUsers bool) (map[domain.JobStatus]int64, error)
 //
+// # Repositories and concurrency keys (Milestone 5)
+//
+// A restic job refers to one of the owner's repositories
+// (CreateParams.RepositoryID): Create checks it with the RepositoryChecker
+// (ErrUnknownRepository for another user's or a deleted one;
+// ErrRepositoryDeleting while its data is being deleted, except for the
+// deletion job, created with its reserved ID), adds the repository's remote
+// to RemoteIDs and its name to the search text. Jobs also carry
+// concurrency keys, set at creation and never changed (restic jobs hold
+// "restic-repo:<id>"). A queued job is started only when no older
+// unfinished job (by CreatedAt, then ID) shares one of its keys: the
+// dispatcher asks Blockers, decided from the store alone, so it is
+// deterministic across controllers and restarts. The dispatch timeout of a
+// waiting job counts from when it became the head of its keys
+// (Repository.ListQueuedJobs).
+//
 // Allowed dependencies: the standard library and internal/domain; every
 // other collaborator is a port declared in ports.go.
 package jobs

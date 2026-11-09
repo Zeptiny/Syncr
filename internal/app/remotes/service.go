@@ -235,7 +235,9 @@ func (s *Service) Update(ctx context.Context, actor domain.Actor, id domain.Remo
 }
 
 // Delete soft-deletes one of actor's remotes. ErrFailedPrecondition, naming
-// the union, while the remote is a member of a live union.
+// the union, while the remote is a member of a live union, or naming the
+// repository while a live restic repository is on it (the repository
+// checks that in its transaction).
 func (s *Service) Delete(ctx context.Context, actor domain.Actor, id domain.RemoteID) error {
 	if _, err := s.owned(ctx, actor, id); err != nil {
 		return fmt.Errorf("delete remote: %w", err)
@@ -281,6 +283,35 @@ func (s *Service) Usable(ctx context.Context, owner domain.UserID, ids []domain.
 		out[id] = r.Name
 	}
 	return out, nil
+}
+
+// RemoteType returns the backend type ID of id, which must be a live remote
+// of owner: ErrNotFound otherwise (missing, deleted or another user's). It
+// implements the restic service's RemoteChecker.
+func (s *Service) RemoteType(ctx context.Context, owner domain.UserID, id domain.RemoteID) (string, error) {
+	if id.IsZero() {
+		return "", fmt.Errorf("remote type: %w", domain.ErrInvalidID)
+	}
+	rs, err := s.usable(ctx, owner, []domain.RemoteID{id})
+	if err != nil {
+		return "", fmt.Errorf("remote type: %w", err)
+	}
+	return rs[id].Type, nil
+}
+
+// Draft resolves a remote that is not stored as given, for "Test remote"
+// on an unsaved form (Milestone 5): in is validated as Create (id zero: a
+// new remote, which gets a fresh ID that is never stored) or Update (id
+// one of actor's live remotes: in's secrets merge over the stored ones)
+// validate it, union members are resolved from the store, and the result
+// is what Resolve returns for the draft and its members, with the draft's
+// ID. Nothing is stored. Errors are those of Create and Update. The result
+// holds secrets: never log or store it.
+//
+// m5: Track C implements this; until then it fails with a wrapped
+// errors.ErrUnsupported.
+func (s *Service) Draft(_ context.Context, _ domain.Actor, _ domain.RemoteID, _ Input) (map[domain.RemoteID]Resolved, domain.RemoteID, error) {
+	return nil, domain.RemoteID{}, fmt.Errorf("draft remote: %w (m5: pending track C)", errors.ErrUnsupported)
 }
 
 // usable loads ids, which must all be live remotes of owner.

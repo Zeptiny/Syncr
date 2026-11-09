@@ -60,10 +60,11 @@ func Title(m Message) string {
 
 // Fact is one labeled detail of a notification, e.g. {"Worker",
 // "nas-01"}. Values are plain text from users and workers (not escaped),
-// on one line, at most MaxFactRunes runes.
+// on one line, at most MaxFactRunes runes. In a Message (JobInfo.Details)
+// it is encoded as {"label": ..., "value": ...}.
 type Fact struct {
-	Label string
-	Value string
+	Label string `json:"label"`
+	Value string `json:"value"`
 }
 
 // Facts returns the details of m in display order: the schedule, the

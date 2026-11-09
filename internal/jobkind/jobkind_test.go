@@ -30,17 +30,17 @@ func (echoKind) Check(def *syncrv1.JobDefinition) (jobkind.Refs, error) {
 	return jobkind.Refs{RemoteIDs: []domain.RemoteID{id}, SearchTerms: []string{src.GetPath()}}, nil
 }
 
-func (echoKind) Build(def *syncrv1.JobDefinition, remotes map[domain.RemoteID]jobkind.Remote) (*syncrv1.JobSpec, error) {
+func (echoKind) Build(def *syncrv1.JobDefinition, in jobkind.Resolved) (*syncrv1.JobSpec, error) {
 	spec := &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransfer{
 		Mode: def.GetRcloneTransfer().GetMode(),
 	}}}
-	for _, r := range remotes {
+	for _, r := range in.Remotes {
 		spec.Remotes = append(spec.Remotes, &syncrv1.RemoteDefinition{Alias: "r1", BackendType: r.Rclone.Backend})
 	}
 	return spec, nil
 }
 
-func (echoKind) Describe(def *syncrv1.JobDefinition, _ map[domain.RemoteID]string) string {
+func (echoKind) Describe(def *syncrv1.JobDefinition, _ jobkind.Names) string {
 	return "echo " + def.GetRcloneTransfer().GetSource().GetPath()
 }
 
@@ -74,19 +74,19 @@ func TestRegistry(t *testing.T) {
 		if _, _, err := r.Check(def); !isValidation(err, "definition.operation") {
 			t.Errorf("Check(%s) = %v", name, err)
 		}
-		if _, err := r.Build(def, nil); !errors.Is(err, domain.ErrInvalidArgument) {
+		if _, err := r.Build(def, jobkind.Resolved{}); !errors.Is(err, domain.ErrInvalidArgument) {
 			t.Errorf("Build(%s) = %v", name, err)
 		}
 	}
-	spec, err := r.Build(transfer("", "/src"), nil)
+	spec, err := r.Build(transfer("", "/src"), jobkind.Resolved{})
 	if err != nil || spec.GetRcloneTransfer().GetMode() != syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_SYNC {
 		t.Errorf("Build = (%v, %v)", spec, err)
 	}
 
-	if got := r.Describe(transfer("", "/src"), nil); got != "echo /src" {
+	if got := r.Describe(transfer("", "/src"), jobkind.Names{}); got != "echo /src" {
 		t.Errorf("Describe = %q, want the kind's description", got)
 	}
-	if got := r.Describe(nil, nil); got != "" {
+	if got := r.Describe(nil, jobkind.Names{}); got != "" {
 		t.Errorf("Describe(nil) = %q, want empty", got)
 	}
 
@@ -97,7 +97,7 @@ func TestRegistry(t *testing.T) {
 	if _, _, err := empty.Check(transfer("", "/src")); !isValidation(err, "definition.operation") || !strings.Contains(err.Error(), "not supported") {
 		t.Errorf("Check on an empty registry = %v", err)
 	}
-	if got := empty.Describe(transfer("", "/src"), nil); got != "rclone_transfer" {
+	if got := empty.Describe(transfer("", "/src"), jobkind.Names{}); got != "rclone_transfer" {
 		t.Errorf("Describe on an empty registry = %q, want the kind name", got)
 	}
 }
@@ -115,7 +115,7 @@ func TestBuiltin(t *testing.T) {
 	if err != nil || kind != "rclone_transfer" || len(refs.RemoteIDs) != 0 {
 		t.Errorf("Check(local to local) = (%q, %+v, %v)", kind, refs, err)
 	}
-	spec, err := r.Build(transfer("", "/src"), nil)
+	spec, err := r.Build(transfer("", "/src"), jobkind.Resolved{})
 	if err != nil || spec.GetRcloneTransfer().GetSource().GetPath() != "/src" || spec.GetRcloneTransfer().GetDestination().GetPath() != "/data/dst" {
 		t.Errorf("Build(local to local) = (%v, %v)", spec, err)
 	}
@@ -127,7 +127,7 @@ func TestNewRegistryRejects(t *testing.T) {
 		"nil":           {nil},
 		"duplicate":     {echoKind{"rclone_transfer"}, echoKind{"rclone_transfer"}},
 		"not a oneof":   {echoKind{"rclone_sync"}},
-		"spec-only op":  {echoKind{"restic_backup"}},
+		"spec-only op":  {echoKind{"restic_init"}},
 		"empty name":    {echoKind{""}},
 		"message field": {echoKind{"operation"}},
 	} {

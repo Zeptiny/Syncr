@@ -18,6 +18,8 @@ const (
 	maxTools      = 16
 	maxJobKinds   = 64
 	maxLocalRoots = 256
+	maxFeatures   = 64
+	maxProbeOps   = 64
 )
 
 // ValidEpoch checks a worker-supplied epoch: 1 to 128 printable ASCII
@@ -107,6 +109,12 @@ func sanitizeInfo(in Info) Info {
 	}
 	for _, r := range in.LocalRoots[:min(len(in.LocalRoots), maxLocalRoots)] {
 		out.LocalRoots = append(out.LocalRoots, clampString(r, maxPathLen))
+	}
+	for _, f := range in.Features[:min(len(in.Features), maxFeatures)] {
+		out.Features = append(out.Features, clampString(f, maxInfoString))
+	}
+	for _, op := range in.ProbeOps[:min(len(in.ProbeOps), maxProbeOps)] {
+		out.ProbeOps = append(out.ProbeOps, clampString(op, maxInfoString))
 	}
 	return out
 }

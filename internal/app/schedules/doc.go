@@ -29,9 +29,15 @@
 //     job and then the run); resuming clears PausedReason
 //     and sets NextRunAt to the next occurrence after now. Saving
 //     recomputes NextRunAt only when Cron, Timezone or Enabled changed.
+//   - A definition on a restic repository (Milestone 5) needs a live
+//     repository of the owner whose data is not being deleted
+//     (RepositoryChecker; ErrUnknownRepository, ErrRepositoryDeleting).
+//     Deleting a repository's data pauses its schedules
+//     (ReasonRepositoryDeleting).
 //   - Runs that cannot launch for a permanent reason (worker removed,
-//     definition no longer valid, a remote gone, owner disabled) fail and
-//     pause the schedule with PausedReason set (EndRun with pause).
+//     definition no longer valid, a remote or the repository gone, owner
+//     disabled) fail and pause the schedule with PausedReason set (EndRun
+//     with pause).
 //   - A schedule has at most one pending run: a later occurrence due
 //     before its deadline is merged into it (Coalesced), so a desktop that
 //     slept runs once when it wakes up. The run's deadline is fixed when it
@@ -69,8 +75,9 @@
 // # Service
 //
 // The Service is constructed as New(Deps{Repo Repository; Remotes
-// RemoteChecker; Contacts ContactChecker; Workers WorkerChecker; Waker
-// Waker; Clock Clock; IDs IDGenerator; Logger *slog.Logger}, Config). Its
+// RemoteChecker; Contacts ContactChecker; Workers WorkerChecker;
+// Repositories RepositoryChecker; Waker Waker; Clock Clock; IDs
+// IDGenerator; Logger *slog.Logger}, Config). Its
 // user-facing methods are scoped by the actor (owner only, admins
 // included; ErrNotFound otherwise): Create, Get, List, Update, SetEnabled,
 // Delete, RunNow, Runs, LatestRuns, and the dashboard's Upcoming,

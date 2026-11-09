@@ -29,6 +29,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/notifications"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
@@ -66,6 +67,7 @@ type store interface {
 	schedules.Repository
 	contacts.Repository
 	notifications.Repository
+	restic.Repository
 }
 
 // openStore opens and migrates the configured store. close releases it.
@@ -230,7 +232,10 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	if err != nil {
 		return nil, fmt.Errorf("workers service: %w", err)
 	}
-	specs, err := dispatch.NewSpecs(rs, kinds)
+	// m5: the integration step passes the restic service as the
+	// repositories (dispatch.Repos); without it restic jobs fail with
+	// repository_unavailable.
+	specs, err := dispatch.NewSpecs(rs, nil, kinds)
 	if err != nil {
 		return nil, err
 	}
@@ -382,17 +387,20 @@ var _ notifications.JobDescriber = jobDescriber{}
 // DescribeJob implements notifications.JobDescriber. A definition that
 // cannot be decoded, or is not of kind, gets no description; a definition
 // the current rules reject is described without remote names.
-func (d jobDescriber) DescribeJob(ctx context.Context, owner domain.UserID, kind string, definition []byte) (string, error) {
+//
+// m5: the integration step names the owner's repositories too and fills
+// KindLabel (kinds.Label) and Details (kinds.Summarize of output).
+func (d jobDescriber) DescribeJob(ctx context.Context, owner domain.UserID, kind string, definition, _ []byte) (notifications.JobDescription, error) {
 	def, err := jobkind.Unmarshal(definition)
 	if err != nil || jobkind.KindOf(def) != kind {
 		// Not an error to retry: the definition will not decode later.
-		return "", nil
+		return notifications.JobDescription{}, nil
 	}
 	names := map[domain.RemoteID]string{}
 	if _, refs, err := d.kinds.Check(def); err == nil && len(refs.RemoteIDs) > 0 {
 		rs, err := d.remotes.Names(ctx, refs.RemoteIDs)
 		if err != nil {
-			return "", fmt.Errorf("describe a %s job: %w", kind, err)
+			return notifications.JobDescription{}, fmt.Errorf("describe a %s job: %w", kind, err)
 		}
 		for id, r := range rs {
 			if r.OwnerID == owner {
@@ -400,7 +408,7 @@ func (d jobDescriber) DescribeJob(ctx context.Context, owner domain.UserID, kind
 			}
 		}
 	}
-	return d.kinds.Describe(def, names), nil
+	return notifications.JobDescription{Text: d.kinds.Describe(def, jobkind.Names{Remotes: names})}, nil
 }
 
 // workerChecker adapts the workers service to schedules.WorkerChecker: its

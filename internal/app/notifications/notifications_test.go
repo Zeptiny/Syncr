@@ -444,11 +444,11 @@ type describer struct {
 	calls []string
 }
 
-func (d *describer) DescribeJob(_ context.Context, owner domain.UserID, kind string, definition []byte) (string, error) {
+func (d *describer) DescribeJob(_ context.Context, owner domain.UserID, kind string, definition, _ []byte) (notifications.JobDescription, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls = append(d.calls, owner.String()+" "+kind+" "+string(definition))
-	return d.desc, d.err
+	return notifications.JobDescription{Text: d.desc}, d.err
 }
 
 func (d *describer) set(desc string, err error) {

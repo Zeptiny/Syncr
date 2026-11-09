@@ -75,6 +75,8 @@ func createJobParams(j jobs.Job) db.CreateJobParams {
 		Output:            j.Output,
 		Version:           j.Version,
 		ScheduleID:        pgOptID(j.ScheduleID),
+		RepositoryID:      pgOptID(j.RepositoryID),
+		ConcurrencyKeys:   textArray(j.ConcurrencyKeys),
 	}
 }
 
@@ -191,6 +193,7 @@ func (s *Store) ListJobs(ctx context.Context, f jobs.ListFilter) ([]jobs.Job, er
 		Kinds:         textArray(f.Kinds),
 		RemoteID:      pgOptID(f.RemoteID),
 		ScheduleID:    pgOptID(f.ScheduleID),
+		RepositoryID:  pgOptID(f.RepositoryID),
 		Query:         query,
 		CreatedAfter:  pgOptTime(f.CreatedAfter),
 		CreatedBefore: pgOptTime(f.CreatedBefore),
@@ -213,11 +216,34 @@ func (s *Store) ListUnfinishedJobs(ctx context.Context, workerID domain.WorkerID
 	return s.jobsWithRemotes(ctx, op, rows)
 }
 
-// ListQueuedJobs implements jobs.Repository.
+// ListQueuedJobs implements jobs.Repository. The query is key-aware (see
+// jobs.Repository): a keyed job waiting for an older sharer is no
+// candidate.
 func (s *Store) ListQueuedJobs(ctx context.Context, before time.Time, limit int) ([]jobs.Job, error) {
 	rows, err := s.q.ListQueuedJobs(ctx, db.ListQueuedJobsParams{Before: pgTime(before), RowLimit: limitArg(limit)})
 	if err != nil {
 		return nil, mapErr("list queued jobs", err)
 	}
 	return s.jobsWithRemotes(ctx, "list queued jobs", rows)
+}
+
+// errKeysPending is the error of the concurrency-key methods until Track B
+// implements them.
+var errKeysPending = fmt.Errorf("concurrency keys: %w (m5: pending track B)", errors.ErrUnsupported)
+
+// ListJobBlockers implements jobs.Repository (query ListJobBlockers).
+//
+// m5: Track B implements this: run q.ListJobBlockers(ids) and map each row
+// (job_id -> blocker_id).
+func (s *Store) ListJobBlockers(context.Context, []domain.JobID) (map[domain.JobID]domain.JobID, error) {
+	return nil, fmt.Errorf("list job blockers: %w", errKeysPending)
+}
+
+// ListWorkersWaitingOnKeys implements jobs.Repository (query
+// ListWorkersWaitingOnKeys).
+//
+// m5: Track B implements this: run q.ListWorkersWaitingOnKeys(keys) and
+// decode the worker IDs.
+func (s *Store) ListWorkersWaitingOnKeys(context.Context, []string) ([]domain.WorkerID, error) {
+	return nil, fmt.Errorf("list workers waiting on keys: %w", errKeysPending)
 }

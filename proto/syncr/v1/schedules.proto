@@ -28,7 +28,12 @@ import "syncr/v1/notify.proto";
 // Invalid input fails with INVALID_ARGUMENT carrying a ValidationError
 // detail. Field paths: "name", "cron", "timezone", "target.worker_id",
 // "target.worker_label", "missed_run.max_delay", "contacts[1].contact_id",
-// "contacts[1].events", and "definition...." as for RunJob.
+// "contacts[1].events", and "definition...." as for RunJob. Restores cannot
+// be scheduled ("definition.restic_restore": "restores cannot be
+// scheduled"), nor can repository data deletions
+// ("definition.restic_delete_data": "is started by deleting the
+// repository"). A definition on a restic repository whose data is being
+// deleted fails with FAILED_PRECONDITION.
 service ScheduleService {
   // ListSchedules lists the caller's schedules, by name.
   rpc ListSchedules(ListSchedulesRequest) returns (ListSchedulesResponse) {
@@ -228,7 +233,11 @@ message Schedule {
   // Optimistic concurrency token for UpdateSchedule.
   int64 version = 20;
 
-  reserved 21 to 39;
+  // The restic repository the definition uses, for display; unset for other
+  // kinds.
+  JobRepositoryRef repository = 21;
+
+  reserved 22 to 39;
 }
 
 // ScheduleRunStatus is where a run is.
@@ -284,8 +293,10 @@ message ScheduleRun {
 
   // Why it is MISSED, FAILED or CANCELLED, as a code: worker_offline,
   // overlap, controller_unavailable, remote_unavailable,
-  // invalid_definition, worker_removed, no_worker_with_label,
-  // owner_disabled, disabled.
+  // repository_unavailable (the restic repository was deleted),
+  // repository_deleting (its data is being deleted), invalid_definition,
+  // worker_removed, no_worker_with_label, owner_disabled, disabled.
+  // Schedule.paused_reason uses the same codes.
   string reason = 8;
 
   // Details of the reason, for display; may be empty.
@@ -314,6 +325,10 @@ message ListSchedulesRequest {
 
   // Only schedules that notify this contact; empty means any.
   string contact_id = 2;
+
+  // Only schedules whose definition uses this restic repository; empty
+  // means any.
+  string repository_id = 3;
 }
 
 // ListSchedulesResponse lists schedules by name.

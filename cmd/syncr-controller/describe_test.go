@@ -62,15 +62,15 @@ func TestJobDescriber(t *testing.T) {
 		{"another kind", "restic_backup", def("COPY", on(photos), on(b2)), ""},
 	}
 	for _, tt := range tests {
-		got, err := d.DescribeJob(t.Context(), owner, tt.kind, tt.definition)
-		if err != nil || got != tt.want {
-			t.Errorf("%s: DescribeJob = (%q, %v), want %q", tt.name, got, err, tt.want)
+		got, err := d.DescribeJob(t.Context(), owner, tt.kind, tt.definition, nil)
+		if err != nil || got.Text != tt.want {
+			t.Errorf("%s: DescribeJob = (%q, %v), want %q", tt.name, got.Text, err, tt.want)
 		}
 	}
 
 	// The names cannot be read: an error, so the outcome is planned again.
 	d.remotes = fakeRemoteNames{err: errors.New("store unavailable")}
-	if got, err := d.DescribeJob(t.Context(), owner, "rclone_transfer", def("COPY", on(photos), on(b2))); err == nil {
-		t.Errorf("DescribeJob with failing names = %q, want an error", got)
+	if got, err := d.DescribeJob(t.Context(), owner, "rclone_transfer", def("COPY", on(photos), on(b2)), nil); err == nil {
+		t.Errorf("DescribeJob with failing names = %q, want an error", got.Text)
 	}
 }

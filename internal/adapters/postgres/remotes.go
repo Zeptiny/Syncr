@@ -201,6 +201,12 @@ func (s *Store) DeleteRemote(ctx context.Context, id domain.RemoteID, at time.Ti
 		if len(unions) > 0 {
 			return fmt.Errorf("%s: it is a member of union %q: %w", op, unions[0].Name, domain.ErrFailedPrecondition)
 		}
+		// TODO(m5: Track C): refuse while a live restic repository is on
+		// the remote, in this transaction: q.RepositoryUsingRemote(id); a
+		// name (not pgx.ErrNoRows) fails with ErrFailedPrecondition "the
+		// remote holds repository %q; delete the repository first". No
+		// repository can exist on Postgres before Track C (CreateRepo is a
+		// stub), so the check is not needed yet.
 		return mapErr(op, q.SoftDeleteRemote(ctx, db.SoftDeleteRemoteParams{ID: pgID(id), DeletedAt: pgTime(at)}))
 	})
 }

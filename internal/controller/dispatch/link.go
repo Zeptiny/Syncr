@@ -95,12 +95,12 @@ func (s *Service) Ack(ctx context.Context, workerID domain.WorkerID, epoch strin
 // first (see the package documentation for how they are derived). It never
 // blocks.
 func (s *Service) Commands(ctx context.Context, workerID domain.WorkerID, epoch string) ([]*syncrv1.Command, error) {
-	sess, _, err := s.begin(ctx, workerID, epoch)
+	sess, w, err := s.begin(ctx, workerID, epoch)
 	if err != nil {
 		return nil, err
 	}
 	defer sess.mu.Unlock()
-	return s.commands(ctx, sess, workerID, epoch)
+	return s.commands(ctx, sess, workerID, w.Info, epoch)
 }
 
 // WaitCommands returns the worker's pending commands as soon as there are
@@ -302,8 +302,12 @@ func (s *Service) ack(ctx context.Context, sess *session, workerID domain.Worker
 	return nil
 }
 
-// commands implements Commands with the session locked.
-func (s *Service) commands(ctx context.Context, sess *session, workerID domain.WorkerID, epoch string) ([]*syncrv1.Command, error) {
+// commands implements Commands with the session locked; info is what the
+// worker reported in its latest Hello.
+//
+// m5: Track B adds the probe commands (first) and the concurrency-key gate
+// here: a queued job with a blocker (jobs Blockers) gets no StartJob.
+func (s *Service) commands(ctx context.Context, sess *session, workerID domain.WorkerID, info workers.Info, epoch string) ([]*syncrv1.Command, error) {
 	js, err := s.jobs.Unfinished(ctx, workerID)
 	if err != nil {
 		return nil, err
@@ -320,7 +324,7 @@ func (s *Service) commands(ctx context.Context, sess *session, workerID domain.W
 		case j.Status == domain.JobQueued:
 			// Invariant (package jobs): a queued job never has a cancel
 			// request, so no StartJob follows a cancel.
-			spec, err := s.startSpec(ctx, j)
+			spec, err := s.startSpec(ctx, j, info)
 			if err != nil {
 				return nil, err
 			}
@@ -351,15 +355,19 @@ func (s *Service) commands(ctx context.Context, sess *session, workerID domain.W
 // credentials) fails at once; startSpec then returns nil without an error.
 // Other errors are returned, so the poll fails and the next one retries.
 // The spec is only ever sent, never logged.
-func (s *Service) startSpec(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, error) {
+func (s *Service) startSpec(ctx context.Context, j jobs.Job, info workers.Info) (*syncrv1.JobSpec, error) {
 	if s.specs == nil {
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, "the controller cannot build job specs yet",
 			errors.New("no spec builder is configured"))
 	}
-	spec, err := s.specs.Build(ctx, j)
+	spec, err := s.specs.Build(ctx, j, info)
 	switch {
 	case err == nil:
 		return spec, nil
+	case errors.Is(err, errRepositoryUnavailable):
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeRepositoryUnavailable, "the repository was deleted or is not available to its owner", err)
+	case errors.Is(err, ErrWorkerOutdated):
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeWorkerOutdated, fmt.Sprintf("the worker must be upgraded to run %s jobs", j.Kind), err)
 	case errors.Is(err, domain.ErrNotFound):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeRemoteUnavailable, "a remote of the job was deleted or is not available to its owner", err)
 	case errors.Is(err, domain.ErrInvalidArgument):

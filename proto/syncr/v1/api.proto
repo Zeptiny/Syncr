@@ -23,7 +23,9 @@ import "syncr/v1/link.proto";
 //   - ALREADY_EXISTS: a name or other unique value is taken;
 //   - FAILED_PRECONDITION: the object's state forbids the call;
 //   - ABORTED: the object changed since the version the caller read;
-//   - RESOURCE_EXHAUSTED: too many attempts (logins, setup codes).
+//   - RESOURCE_EXHAUSTED: too many attempts (logins, setup codes, probes);
+//   - UNAVAILABLE: a worker the call needs is offline, busy or did not
+//     answer in time (probes); retrying later may succeed.
 
 // ValidationError is attached as an error detail to INVALID_ARGUMENT errors
 // caused by invalid input, so forms can show messages next to their fields.
@@ -192,8 +194,14 @@ message WorkerInfo {
   repeated string local_roots = 8;
   // When the worker reported this (its Hello event).
   google.protobuf.Timestamp reported_at = 9;
+  // Link features the worker implements (Hello.features), e.g. "probe",
+  // "restic.v2", "restic.delete". A worker without "restic.v2" must be
+  // upgraded to run restic jobs.
+  repeated string features = 10;
+  // Probe operations the worker can run (Hello.probe_ops).
+  repeated string probe_ops = 11;
 
-  reserved 10 to 19;
+  reserved 12 to 19;
 }
 
 // CreateEnrollmentTokenRequest configures the token.
@@ -362,11 +370,17 @@ message SetWorkerLabelsResponse {
 // user's job is NOT_FOUND.
 service JobService {
   // RunJob queues a job on a worker. The definition refers to the caller's
-  // remotes by ID and carries no secrets; it is checked for shape and path
-  // syntax (INVALID_ARGUMENT with a ValidationError detail) and its remotes
-  // must be the caller's live remotes (NOT_FOUND otherwise). The controller
-  // resolves the remotes' credentials only when it hands the job to the
+  // remotes and restic repositories by ID and carries no secrets; it is
+  // checked for shape and path syntax (INVALID_ARGUMENT with a
+  // ValidationError detail) and its remotes and repository must be the
+  // caller's live ones (NOT_FOUND otherwise). A repository whose data is
+  // being deleted accepts no new jobs (FAILED_PRECONDITION); a
+  // restic_delete_data definition is rejected (INVALID_ARGUMENT on
+  // "definition.restic_delete_data": DeleteRepository starts it). The
+  // controller resolves the credentials only when it hands the job to the
   // worker, which validates it fully and reports problems as a FAILED job.
+  // Jobs on one restic repository run one at a time, oldest first
+  // (Job.waiting_for_job_id).
   rpc RunJob(RunJobRequest) returns (RunJobResponse) {}
 
   // GetJob returns one job.
@@ -476,7 +490,47 @@ message Job {
   // hand or whose schedule was deleted.
   JobScheduleRef schedule = 20;
 
-  reserved 21 to 29;
+  // One-line description of what the job runs, e.g. "Back up /srv/photos →
+  // Photos vault" (the controller's job kind describes it).
+  string title = 21;
+
+  // The restic repository the job uses; unset for other kinds.
+  JobRepositoryRef repository = 22;
+
+  // Set while the job is queued behind an older unfinished job on the same
+  // restic repository (they share a concurrency key): the job it waits for.
+  string waiting_for_job_id = 23;
+
+  // Kind-specific results for display (e.g. "Snapshot", "Data added"), in
+  // order; empty for kinds without any.
+  repeated JobDetail details = 24;
+
+  reserved 25 to 29;
+}
+
+// JobRepositoryRef names the restic repository a job or schedule uses.
+message JobRepositoryRef {
+  // Repository ID (UUID).
+  string id = 1;
+
+  // The repository's name.
+  string name = 2;
+
+  // Whether the repository has been deleted since.
+  bool deleted = 3;
+
+  reserved 4 to 9;
+}
+
+// JobDetail is one kind-specific result of a job, for display.
+message JobDetail {
+  // What it is, e.g. "Snapshot".
+  string label = 1;
+
+  // Its value, formatted for people, e.g. "1a2b3c4d".
+  string value = 2;
+
+  reserved 3 to 5;
 }
 
 // JobScheduleRef names the schedule that launched a job.
@@ -513,10 +567,23 @@ message JobRemoteRef {
 message JobDefinition {
   oneof operation {
     RcloneTransferDefinition rclone_transfer = 10;
+
+    // Restic operations (Milestone 5) on one of the owner's repositories.
+    ResticBackupDefinition restic_backup = 21;
+    ResticForgetDefinition restic_forget = 22;
+    ResticPruneDefinition restic_prune = 23;
+    ResticCheckDefinition restic_check = 24;
+    // Restores are started from the snapshot browser; they cannot be
+    // scheduled.
+    ResticRestoreDefinition restic_restore = 25;
+    // Created only by ResticService.DeleteRepository (delete_data); RunJob
+    // and schedules reject it.
+    ResticDeleteDataDefinition restic_delete_data = 27;
   }
 
-  // Restic operations (Milestone 5).
-  reserved 20 to 29;
+  // 20 (restic init) and 26 (restic snapshots) are probe operations, not
+  // job kinds.
+  reserved 20, 26, 28 to 29;
 }
 
 // RcloneTransferDefinition copies, syncs or moves files between two
@@ -535,6 +602,132 @@ message RcloneTransferDefinition {
   RcloneTransferOptions options = 4;
 
   reserved 5 to 9;
+}
+
+// ResticBackupDefinition backs up local paths of the worker into a
+// repository (see ResticBackup).
+message ResticBackupDefinition {
+  // One of the owner's repositories (ResticService).
+  string repository_id = 1;
+
+  // Absolute local paths to back up, inside the worker's local_roots: 1 to
+  // 100, without ".." segments or duplicates.
+  repeated string paths = 2;
+
+  // --exclude patterns, at most 1000.
+  repeated string excludes = 3;
+
+  // --tag values, at most 32, each 1 to 128 bytes without commas.
+  repeated string tags = 4;
+
+  // --host override; empty uses the worker's host name.
+  string host = 5;
+
+  // --use-fs-snapshot (Windows VSS; the worker must run as a system
+  // service). Fails on other operating systems.
+  bool use_fs_snapshot = 6;
+
+  // --exclude-caches.
+  bool exclude_caches = 7;
+
+  // --one-file-system.
+  bool one_file_system = 8;
+
+  // --exclude-larger-than in bytes; greater than 0 when set.
+  optional int64 exclude_larger_than_bytes = 9;
+
+  // --dry-run.
+  bool dry_run = 10;
+
+  reserved 11 to 29;
+}
+
+// ResticForgetDefinition applies a retention policy (see ResticForget).
+message ResticForgetDefinition {
+  // One of the owner's repositories.
+  string repository_id = 1;
+
+  // Which snapshots to keep: at least one rule.
+  ResticRetentionPolicy policy = 2;
+
+  // --prune: remove unreferenced data afterwards.
+  bool prune = 3;
+
+  // Only consider snapshots with these tags.
+  repeated string tags = 4;
+
+  // Only consider snapshots of this host; empty means all hosts.
+  string host = 5;
+
+  // --dry-run.
+  bool dry_run = 6;
+
+  reserved 7 to 19;
+}
+
+// ResticPruneDefinition removes unreferenced data (see ResticPrune).
+message ResticPruneDefinition {
+  // One of the owner's repositories.
+  string repository_id = 1;
+
+  // --dry-run.
+  bool dry_run = 2;
+
+  reserved 3 to 19;
+}
+
+// ResticCheckDefinition verifies a repository (see ResticCheck).
+message ResticCheckDefinition {
+  // One of the owner's repositories.
+  string repository_id = 1;
+
+  // Percentage of pack data to read and verify, 0 to 100; 0 checks only
+  // the structure.
+  int32 read_data_percent = 2;
+
+  reserved 3 to 19;
+}
+
+// ResticRestoreDefinition restores a snapshot into a local folder of the
+// worker (see ResticRestore).
+message ResticRestoreDefinition {
+  // One of the owner's repositories.
+  string repository_id = 1;
+
+  // "latest" or a snapshot ID of 8 to 64 hex digits.
+  string snapshot_id = 2;
+
+  // Absolute local target folder inside the worker's local_roots.
+  string target = 3;
+
+  // Literal snapshot tree paths to restore (selected items), at most 1000;
+  // each starts with "/". Cannot be combined with subfolder.
+  repeated string paths = 4;
+
+  // --exclude patterns.
+  repeated string excludes = 5;
+
+  // --verify.
+  bool verify = 6;
+
+  // Restore the contents of this snapshot folder (a tree path) directly
+  // into target.
+  string subfolder = 7;
+
+  // What happens to files that exist at the target. UNSPECIFIED means
+  // NEVER: a restore never replaces files unless asked to.
+  ResticRestoreOverwrite overwrite = 8;
+
+  reserved 9 to 19;
+}
+
+// ResticDeleteDataDefinition deletes a repository's data in the backend
+// (see ResticDeleteData). Only ResticService.DeleteRepository creates it.
+message ResticDeleteDataDefinition {
+  // The repository being deleted.
+  string repository_id = 1;
+
+  reserved 2 to 19;
 }
 
 // JobLocation is a path on one of the owner's remotes, or on the worker's
@@ -633,6 +826,9 @@ message ListJobsRequest {
 
   // Only jobs launched by this schedule; empty means any.
   string schedule_id = 11;
+
+  // Only jobs on this restic repository; empty means any.
+  string repository_id = 12;
 }
 
 // ListJobsResponse is one page of jobs, newest first.

@@ -1,0 +1,348 @@
+syntax = "proto3";
+
+package syncr.v1;
+
+import "google/protobuf/timestamp.proto";
+import "syncr/v1/api.proto";
+import "syncr/v1/link.proto";
+import "syncr/v1/probe.proto";
+
+// Restic repositories (Milestone 5): a path on one of the user's remotes
+// that holds a restic repository, with its password, and the snapshot
+// browser over it. Backups, retention, checks and restores of a repository
+// are jobs (JobDefinition.restic_*).
+
+// ResticService manages the caller's restic repositories and browses their
+// snapshots.
+//
+// Repositories are private to their owner, admins included (NOT_FOUND
+// otherwise). The password is write-only: it is stored encrypted and never
+// returned. Calls that need a worker (creating, changing the password,
+// refreshing and browsing snapshots) map its failures as ProbeService
+// does. Invalid input fails with INVALID_ARGUMENT carrying a
+// ValidationError detail; field paths: "name", "description", "remote_id",
+// "path", "password", "mode", "worker_id", "snapshot_id", "confirm_name".
+service ResticService {
+  // ListRepositories lists the caller's repositories, by name. Repositories
+  // whose data is being deleted are included (deleting=true).
+  rpc ListRepositories(ListRepositoriesRequest) returns (ListRepositoriesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // GetRepository returns one of the caller's repositories.
+  rpc GetRepository(GetRepositoryRequest) returns (GetRepositoryResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // CreateRepository initializes (INIT) or connects to (CONNECT) the
+  // repository on a worker, then stores it. ALREADY_EXISTS for a taken
+  // name, location or (CONNECT) the same repository.
+  rpc CreateRepository(CreateRepositoryRequest) returns (CreateRepositoryResponse) {}
+
+  // UpdateRepository renames it or replaces the stored password (verified
+  // on a worker first). ABORTED on a stale version.
+  rpc UpdateRepository(UpdateRepositoryRequest) returns (UpdateRepositoryResponse) {}
+
+  // DeleteRepository forgets the repository in Syncr; by default its data
+  // in the backend is kept. With delete_data (and confirm_name equal to the
+  // repository's name) it starts a restic_delete_data job and returns its
+  // ID. The repository stays listed with deleting=true until the job
+  // succeeds; only then is it deleted and its password wiped. A repository
+  // whose data is being deleted accepts no new jobs or schedules
+  // (FAILED_PRECONDITION). Idempotent: repeating a delete_data request
+  // returns the same job.
+  rpc DeleteRepository(DeleteRepositoryRequest) returns (DeleteRepositoryResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // ListSnapshots returns the cached snapshot list, refreshing it through a
+  // worker when asked or when it was never listed.
+  rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse) {}
+
+  // BrowseSnapshot lists one directory of a snapshot.
+  rpc BrowseSnapshot(BrowseSnapshotRequest) returns (BrowseSnapshotResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+// RepositoryCreateMode is how CreateRepository finds the repository.
+enum RepositoryCreateMode {
+  REPOSITORY_CREATE_MODE_UNSPECIFIED = 0;
+  // Create a new repository (restic init); the location must not hold one.
+  REPOSITORY_CREATE_MODE_INIT = 1;
+  // Use an existing repository (restic cat config with the password).
+  REPOSITORY_CREATE_MODE_CONNECT = 2;
+}
+
+// Repository is one of the caller's restic repositories. The password is
+// never returned.
+message Repository {
+  // Repository ID (UUID).
+  string id = 1;
+
+  // Display name, 1 to 64 characters; unique per owner (case-insensitive).
+  string name = 2;
+
+  // Free text, at most 500 characters.
+  string description = 3;
+
+  // The remote holding it, and its path there (relative to the remote's
+  // root; empty is the root). Both are fixed: a new location is a new
+  // repository.
+  string remote_id = 4;
+  string path = 5;
+
+  // The remote, for display.
+  JobRemoteRef remote = 6;
+
+  // restic's repository ID (64 hex digits) and format version (1 or 2; 0
+  // unknown).
+  string restic_id = 7;
+  int32 format_version = 8;
+
+  // Snapshot and job statistics.
+  RepositoryStats stats = 9;
+
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+
+  // Optimistic concurrency token for UpdateRepository.
+  int64 version = 12;
+
+  // Data deletion (DeleteRepository with delete_data): deleting is set
+  // while its job (deletion_job_id) is pending. After a failed attempt
+  // deleting is false and deletion_job_id, deletion_requested_at and
+  // deletion_error describe that attempt.
+  bool deleting = 13;
+  string deletion_job_id = 14;
+  google.protobuf.Timestamp deletion_requested_at = 15;
+  string deletion_error = 16;
+
+  reserved 17 to 29;
+}
+
+// RepositoryJobRef is the newest job of a kind on a repository.
+message RepositoryJobRef {
+  string job_id = 1;
+  JobStatus status = 2;
+  google.protobuf.Timestamp created_at = 3;
+  // Unset until the job finished.
+  google.protobuf.Timestamp finished_at = 4;
+
+  reserved 5 to 9;
+}
+
+// RepositoryStats are a repository's statistics, from the cached snapshot
+// list and the job history.
+message RepositoryStats {
+  // Snapshots in the cache, the newest one's time and its processed size
+  // (0 unknown).
+  int32 snapshot_count = 1;
+  google.protobuf.Timestamp latest_snapshot_at = 2;
+  int64 latest_snapshot_bytes = 3;
+
+  // When the cache was last refreshed (unset: never); whether a backup,
+  // retention or prune succeeded since; whether only the newest snapshots
+  // are cached.
+  google.protobuf.Timestamp snapshots_refreshed_at = 4;
+  bool snapshots_stale = 5;
+  bool snapshots_truncated = 6;
+
+  // The newest backup and check job (any status); unset if none.
+  RepositoryJobRef last_backup = 7;
+  RepositoryJobRef last_check = 8;
+
+  // Schedules that use the repository.
+  int32 schedule_count = 9;
+
+  reserved 10 to 19;
+}
+
+// RepositoryInput describes a repository to create.
+message RepositoryInput {
+  // Display name, 1 to 64 characters.
+  string name = 1;
+
+  // Free text, at most 500 characters.
+  string description = 2;
+
+  // One of the caller's remotes whose backend type can hold repositories
+  // (BackendCapabilities.restic_repository).
+  string remote_id = 3;
+
+  // Path on the remote, relative to its root; empty is the root.
+  string path = 4;
+
+  // The repository password: non-empty, at most 4096 bytes, no NUL; INIT
+  // needs at least 8 characters. Write-only.
+  string password = 5;
+
+  // INIT or CONNECT (required).
+  RepositoryCreateMode mode = 6;
+
+  // The worker to initialize or verify on; empty lets the controller
+  // choose (required for a remote on a worker's local filesystem).
+  string worker_id = 7;
+
+  reserved 8 to 15;
+}
+
+// ListRepositoriesRequest filters the repository list.
+message ListRepositoriesRequest {
+  // Only repositories on this remote; empty means all.
+  string remote_id = 1;
+
+  reserved 2 to 9;
+}
+
+// ListRepositoriesResponse lists repositories by name.
+message ListRepositoriesResponse {
+  repeated Repository repositories = 1;
+}
+
+// GetRepositoryRequest names a repository.
+message GetRepositoryRequest {
+  string repository_id = 1;
+}
+
+// GetRepositoryResponse returns the repository.
+message GetRepositoryResponse {
+  Repository repository = 1;
+}
+
+// CreateRepositoryRequest describes the new repository.
+message CreateRepositoryRequest {
+  RepositoryInput input = 1;
+}
+
+// CreateRepositoryResponse returns the new repository and the worker that
+// initialized or verified it.
+message CreateRepositoryResponse {
+  Repository repository = 1;
+  ProbeWorkerRef worker = 2;
+}
+
+// UpdateRepositoryRequest changes a repository.
+message UpdateRepositoryRequest {
+  string repository_id = 1;
+
+  // The version the caller read (Repository.version).
+  int64 version = 2;
+
+  // The new name and description.
+  string name = 3;
+  string description = 4;
+
+  // A new password; empty keeps the stored one. It is verified on a worker
+  // first and must open the same repository.
+  string password = 5;
+
+  // The worker to verify the password on; empty lets the controller
+  // choose.
+  string worker_id = 6;
+
+  reserved 7 to 9;
+}
+
+// UpdateRepositoryResponse returns the updated repository.
+message UpdateRepositoryResponse {
+  Repository repository = 1;
+}
+
+// DeleteRepositoryRequest names the repository to delete and how.
+message DeleteRepositoryRequest {
+  string repository_id = 1;
+
+  // Also delete restic's files in the backend (opt-in).
+  bool delete_data = 2;
+
+  // Required with delete_data: the repository's exact name.
+  string confirm_name = 3;
+
+  // Optional with delete_data: the worker to delete through (required for
+  // a repository on a remote on a worker's local filesystem).
+  string worker_id = 4;
+
+  reserved 5 to 9;
+}
+
+// DeleteRepositoryResponse says how the deletion proceeds.
+message DeleteRepositoryResponse {
+  // The restic_delete_data job; empty for "forget only".
+  string deletion_job_id = 1;
+
+  // The worker that runs it; unset for "forget only".
+  ProbeWorkerRef worker = 2;
+
+  reserved 3 to 9;
+}
+
+// ListSnapshotsRequest names the repository.
+message ListSnapshotsRequest {
+  string repository_id = 1;
+
+  // Refresh the cached list through a worker first.
+  bool refresh = 2;
+
+  // The worker to refresh through; empty lets the controller choose.
+  string worker_id = 3;
+
+  reserved 4 to 9;
+}
+
+// ListSnapshotsResponse is the snapshot list, newest first.
+message ListSnapshotsResponse {
+  repeated ResticSnapshot snapshots = 1;
+
+  // When the list was last refreshed; unset if never.
+  google.protobuf.Timestamp refreshed_at = 2;
+
+  // A backup, retention or prune succeeded since the last refresh.
+  bool stale = 3;
+
+  // Only the newest snapshots are listed.
+  bool truncated = 4;
+
+  // Set when a refresh failed and the cached list was returned instead;
+  // scrubbed of secrets.
+  string refresh_error = 5;
+
+  // The worker that refreshed the list in this call; unset otherwise.
+  ProbeWorkerRef worker = 6;
+
+  reserved 7 to 9;
+}
+
+// BrowseSnapshotRequest names the directory to list.
+message BrowseSnapshotRequest {
+  string repository_id = 1;
+
+  // Snapshot ID: 8 to 64 hex digits.
+  string snapshot_id = 2;
+
+  // Snapshot tree path of the directory: "/" is the root, always forward
+  // slashes.
+  string path = 3;
+
+  // The worker to list through; empty lets the controller choose.
+  string worker_id = 4;
+
+  reserved 5 to 9;
+}
+
+// BrowseSnapshotResponse is the listed directory.
+message BrowseSnapshotResponse {
+  // The listed tree path.
+  string path = 1;
+
+  // Its direct children, directories first, then by name.
+  repeated ProbeEntry entries = 2;
+
+  // Only the first entries are listed.
+  bool truncated = 3;
+
+  // The worker that listed it.
+  ProbeWorkerRef worker = 4;
+
+  reserved 5 to 9;
+}

@@ -12,17 +12,19 @@ import (
 // several calls. Errors wrap the domain sentinels named below; anything else
 // is an internal error. Returned values must not alias storage.
 type Repository interface {
-	// CreateJob inserts j with its RemoteIDs, in one transaction (Version
-	// is stored as given, normally 1). ErrAlreadyExists if j.ID is taken;
+	// CreateJob inserts j with its RemoteIDs, RepositoryID and
+	// ConcurrencyKeys (stored as given), in one transaction (Version is
+	// stored as given, normally 1). ErrAlreadyExists if j.ID is taken;
 	// ErrNotFound if j.WorkerID does not exist or is removed (checked in the
 	// same statement, e.g. INSERT ... SELECT ... WHERE EXISTS (worker not
-	// removed)), or if the owner, one of the remotes or a non-zero
-	// ScheduleID does not exist (foreign keys; a deleted remote still
-	// exists).
+	// removed)), or if the owner, one of the remotes, a non-zero
+	// ScheduleID or a non-zero RepositoryID does not exist (foreign keys;
+	// deleted remotes and repositories still exist).
 	CreateJob(ctx context.Context, j Job) error
 
 	// GetJob returns a job. ErrNotFound if missing. Every method returning
-	// jobs returns them with their RemoteIDs (sorted by ID) and SearchText.
+	// jobs returns them with their RemoteIDs (sorted by ID), SearchText,
+	// RepositoryID and ConcurrencyKeys (nil when there are none).
 	GetJob(ctx context.Context, id domain.JobID) (Job, error)
 
 	// UpdateJob is an optimistic, version-checked update: if the stored
@@ -31,7 +33,8 @@ type Repository interface {
 	// FinishedAt, Requeues, Stats, Error, Warnings, ExitCode, Output), sets
 	// Version = j.Version + 1 and returns the stored job. The immutable
 	// fields (ID, WorkerID, OwnerID, Kind, Definition, CreatedAt,
-	// ScheduleID) are never written, nor are RemoteIDs and SearchText.
+	// ScheduleID, RepositoryID, ConcurrencyKeys) are never written, nor are
+	// RemoteIDs and SearchText.
 	// ErrConflict if the version differs (the caller re-reads and
 	// re-decides), ErrNotFound if missing. SQL: UPDATE jobs SET ...,
 	// version = version + 1 WHERE id = $1 AND version = $2 RETURNING *.
@@ -50,9 +53,27 @@ type Repository interface {
 	// (worker_id) WHERE status IN (...).
 	ListUnfinishedJobs(ctx context.Context, workerID domain.WorkerID) ([]Job, error)
 
-	// ListQueuedJobs returns at most limit queued jobs (any worker) with
-	// QueuedAt < before, by QueuedAt then ID ascending.
+	// ListQueuedJobs returns at most limit (negative: no limit) queued
+	// jobs (any worker) with QueuedAt < before, by QueuedAt then ID
+	// ascending: the candidates of the dispatch timeout. It is key-aware: a
+	// job with ConcurrencyKeys is a candidate only if no older job (by
+	// CreatedAt, then ID) sharing one of its keys is unfinished (queued,
+	// dispatched or running) or finished at or after before. So a job
+	// waiting behind an older sharer never times out, and its timeout
+	// counts from when it became the head of its keys.
 	ListQueuedJobs(ctx context.Context, before time.Time, limit int) ([]Job, error)
+
+	// ListJobBlockers returns, for each job of ids that has concurrency
+	// keys, the oldest unfinished (queued, dispatched or running) other job
+	// sharing one of its keys that is older than it, by (CreatedAt, ID); a
+	// job without such a blocker, without keys, or missing is omitted. One
+	// query: the dispatcher's hot path (index on concurrency_keys).
+	ListJobBlockers(ctx context.Context, ids []domain.JobID) (map[domain.JobID]domain.JobID, error)
+
+	// ListWorkersWaitingOnKeys returns the distinct workers, by ID, of the
+	// queued jobs whose ConcurrencyKeys share one of keys (they may start
+	// now that a job holding keys finished).
+	ListWorkersWaitingOnKeys(ctx context.Context, keys []string) ([]domain.WorkerID, error)
 }
 
 // SampleRepository persists progress samples. Same rules as Repository.
@@ -119,6 +140,18 @@ type RemoteChecker interface {
 	// Usable returns the names of ids, which must all be live remotes of
 	// owner: ErrNotFound if any is missing, deleted or another user's.
 	Usable(ctx context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]string, error)
+}
+
+// RepositoryChecker checks the restic repository a new job uses
+// (*restic.Service).
+type RepositoryChecker interface {
+	// UsableRepository returns the name and the remote of a live
+	// repository of owner: ErrNotFound if it is missing, deleted or
+	// another user's. A repository whose data is being deleted is usable
+	// only by its own deletion job (jobID equal to its DeletionJobID; jobID
+	// is the job's preset ID, zero for API jobs and schedules); otherwise
+	// it fails with an error matching ErrFailedPrecondition.
+	UsableRepository(ctx context.Context, owner domain.UserID, id domain.ResticRepoID, jobID domain.JobID) (name string, remoteID domain.RemoteID, err error)
 }
 
 // Broker fans job updates out to live watchers within the process.

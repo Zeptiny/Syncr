@@ -53,10 +53,19 @@ type JobInfo struct {
 	// Description says what the job does, as the web UI's jobs list shows
 	// it, e.g. "Copy Photos → B2 offsite" (remote names, or a path on the
 	// worker); empty if it could not be described.
-	Description string           `json:"description,omitempty"`
-	Status      domain.JobStatus `json:"status"`
-	WorkerID    string           `json:"worker_id"`
-	WorkerName  string           `json:"worker_name"`
+	Description string `json:"description,omitempty"`
+	// KindLabel is the kind's label for people, e.g. "Backup" (jobkind
+	// Registry.Label); empty if unknown (Milestone 5, additive within
+	// MessageVersion 1).
+	KindLabel string `json:"kind_label,omitempty"`
+	// Details are kind-specific results of the job, e.g. {"Snapshot",
+	// "1a2b3c4d"} (jobkind Registry.Summarize), in display order; empty
+	// for kinds without any (Milestone 5, additive within MessageVersion
+	// 1).
+	Details    []Fact           `json:"details,omitempty"`
+	Status     domain.JobStatus `json:"status"`
+	WorkerID   string           `json:"worker_id"`
+	WorkerName string           `json:"worker_name"`
 	// ErrorCode and ErrorMessage say why a job failed or was interrupted
 	// (see jobs.JobError).
 	ErrorCode    string `json:"error_code,omitempty"`

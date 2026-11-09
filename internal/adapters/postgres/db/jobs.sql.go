@@ -17,7 +17,8 @@ INSERT INTO jobs (
     created_at, queued_at, dispatched_at, started_at, finished_at, requeues,
     stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks,
     stat_deletes, stat_renames, stat_errors, stat_elapsed_ns,
-    error_code, error_message, warnings, exit_code, output, version, schedule_id
+    error_code, error_message, warnings, exit_code, output, version, schedule_id,
+    repository_id, concurrency_keys
 )
 SELECT
     $1::uuid, $2::uuid, $3::uuid, $4::text,
@@ -31,7 +32,7 @@ SELECT
     $22::bigint, $23::bigint, $24::bigint,
     $25::text, $26::text, $27::text[],
     $28::integer, $29::bytea, $30::bigint,
-    $31::uuid
+    $31::uuid, $32::uuid, $33::text[]
 WHERE EXISTS (
     SELECT 1 FROM workers WHERE workers.id = $2::uuid AND workers.removed_at IS NULL FOR SHARE
 )
@@ -69,6 +70,8 @@ type CreateJobParams struct {
 	Output            []byte
 	Version           int64
 	ScheduleID        pgtype.UUID
+	RepositoryID      pgtype.UUID
+	ConcurrencyKeys   []string
 }
 
 // Inserts only if the worker exists and is not removed. FOR SHARE makes a
@@ -108,6 +111,8 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (int64, er
 		arg.Output,
 		arg.Version,
 		arg.ScheduleID,
+		arg.RepositoryID,
+		arg.ConcurrencyKeys,
 	)
 	if err != nil {
 		return 0, err
@@ -116,7 +121,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (int64, er
 }
 
 const getJob = `-- name: GetJob :one
-SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at FROM jobs WHERE id = $1
+SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at, repository_id, concurrency_keys FROM jobs WHERE id = $1
 `
 
 func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
@@ -155,6 +160,8 @@ func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
 		&i.SearchText,
 		&i.ScheduleID,
 		&i.NotifiedAt,
+		&i.RepositoryID,
+		&i.ConcurrencyKeys,
 	)
 	return i, err
 }
@@ -214,8 +221,51 @@ func (q *Queries) JobExists(ctx context.Context, id pgtype.UUID) (bool, error) {
 	return exists, err
 }
 
+const listJobBlockers = `-- name: ListJobBlockers :many
+SELECT j.id AS job_id, b.id AS blocker_id
+FROM jobs j
+CROSS JOIN LATERAL (
+    SELECT o.id FROM jobs o
+    WHERE o.concurrency_keys && j.concurrency_keys AND o.id <> j.id
+      AND o.status IN ('queued', 'dispatched', 'running')
+      AND (o.created_at, o.id) < (j.created_at, j.id)
+    ORDER BY o.created_at, o.id
+    LIMIT 1
+) b
+WHERE j.id = ANY ($1::uuid[]) AND cardinality(j.concurrency_keys) > 0
+ORDER BY j.id
+`
+
+type ListJobBlockersRow struct {
+	JobID     pgtype.UUID
+	BlockerID pgtype.UUID
+}
+
+// For each job of ids with concurrency keys, the oldest unfinished older
+// job sharing one of its keys (index jobs_concurrency_keys_idx). Jobs that
+// wait for nothing have no row.
+func (q *Queries) ListJobBlockers(ctx context.Context, ids []pgtype.UUID) ([]ListJobBlockersRow, error) {
+	rows, err := q.db.Query(ctx, listJobBlockers, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListJobBlockersRow{}
+	for rows.Next() {
+		var i ListJobBlockersRow
+		if err := rows.Scan(&i.JobID, &i.BlockerID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listJobs = `-- name: ListJobs :many
-SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at FROM jobs
+SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at, repository_id, concurrency_keys FROM jobs
 WHERE ($1::uuid IS NULL OR owner_id = $1::uuid)
   AND ($2::uuid IS NULL OR worker_id = $2::uuid)
   AND (cardinality($3::text[]) = 0 OR status = ANY ($3::text[]))
@@ -225,12 +275,13 @@ WHERE ($1::uuid IS NULL OR owner_id = $1::uuid)
       WHERE job_remotes.job_id = jobs.id AND job_remotes.remote_id = $5::uuid
   ))
   AND ($6::uuid IS NULL OR schedule_id = $6::uuid)
-  AND ($7::text IS NULL OR search_text LIKE '%' || $7::text || '%' ESCAPE '\')
-  AND ($8::timestamptz IS NULL OR created_at >= $8::timestamptz)
-  AND ($9::timestamptz IS NULL OR created_at < $9::timestamptz)
-  AND ($10::uuid IS NULL OR id < $10::uuid)
+  AND ($7::uuid IS NULL OR repository_id = $7::uuid)
+  AND ($8::text IS NULL OR search_text LIKE '%' || $8::text || '%' ESCAPE '\')
+  AND ($9::timestamptz IS NULL OR created_at >= $9::timestamptz)
+  AND ($10::timestamptz IS NULL OR created_at < $10::timestamptz)
+  AND ($11::uuid IS NULL OR id < $11::uuid)
 ORDER BY id DESC
-LIMIT $11::bigint
+LIMIT $12::bigint
 `
 
 type ListJobsParams struct {
@@ -240,6 +291,7 @@ type ListJobsParams struct {
 	Kinds         []string
 	RemoteID      pgtype.UUID
 	ScheduleID    pgtype.UUID
+	RepositoryID  pgtype.UUID
 	Query         *string
 	CreatedAfter  pgtype.Timestamptz
 	CreatedBefore pgtype.Timestamptz
@@ -251,7 +303,8 @@ type ListJobsParams struct {
 // limit. query is a LIKE pattern body the caller escaped with backslashes,
 // so it matches as a plain substring of search_text (a pg_trgm index is
 // deferred). The owner filter matches jobs_owner_idx, the remote filter
-// job_remotes_remote_idx, the schedule filter jobs_schedule_idx.
+// job_remotes_remote_idx, the schedule filter jobs_schedule_idx, the
+// repository filter jobs_repository_idx.
 func (q *Queries) ListJobs(ctx context.Context, arg ListJobsParams) ([]Job, error) {
 	rows, err := q.db.Query(ctx, listJobs,
 		arg.OwnerID,
@@ -260,6 +313,7 @@ func (q *Queries) ListJobs(ctx context.Context, arg ListJobsParams) ([]Job, erro
 		arg.Kinds,
 		arg.RemoteID,
 		arg.ScheduleID,
+		arg.RepositoryID,
 		arg.Query,
 		arg.CreatedAfter,
 		arg.CreatedBefore,
@@ -306,6 +360,8 @@ func (q *Queries) ListJobs(ctx context.Context, arg ListJobsParams) ([]Job, erro
 			&i.SearchText,
 			&i.ScheduleID,
 			&i.NotifiedAt,
+			&i.RepositoryID,
+			&i.ConcurrencyKeys,
 		); err != nil {
 			return nil, err
 		}
@@ -318,9 +374,15 @@ func (q *Queries) ListJobs(ctx context.Context, arg ListJobsParams) ([]Job, erro
 }
 
 const listQueuedJobs = `-- name: ListQueuedJobs :many
-SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at FROM jobs
-WHERE status = 'queued' AND queued_at < $1::timestamptz
-ORDER BY queued_at, id
+SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at, repository_id, concurrency_keys FROM jobs j
+WHERE j.status = 'queued' AND j.queued_at < $1::timestamptz
+  AND (cardinality(j.concurrency_keys) = 0 OR NOT EXISTS (
+      SELECT 1 FROM jobs o
+      WHERE o.concurrency_keys && j.concurrency_keys AND o.id <> j.id
+        AND (o.created_at, o.id) < (j.created_at, j.id)
+        AND (o.status IN ('queued', 'dispatched', 'running') OR o.finished_at >= $1::timestamptz)
+  ))
+ORDER BY j.queued_at, j.id
 LIMIT $2::bigint
 `
 
@@ -329,6 +391,10 @@ type ListQueuedJobsParams struct {
 	RowLimit *int64
 }
 
+// The dispatch timeout's candidates. Key-aware: a job with concurrency keys
+// is a candidate only if no older sharer (by created_at, then id) is
+// unfinished or finished at or after before, so a job waiting for its keys
+// never times out and its timeout counts from when it became their head.
 // A NULL row_limit means no limit.
 func (q *Queries) ListQueuedJobs(ctx context.Context, arg ListQueuedJobsParams) ([]Job, error) {
 	rows, err := q.db.Query(ctx, listQueuedJobs, arg.Before, arg.RowLimit)
@@ -372,6 +438,8 @@ func (q *Queries) ListQueuedJobs(ctx context.Context, arg ListQueuedJobsParams) 
 			&i.SearchText,
 			&i.ScheduleID,
 			&i.NotifiedAt,
+			&i.RepositoryID,
+			&i.ConcurrencyKeys,
 		); err != nil {
 			return nil, err
 		}
@@ -384,7 +452,7 @@ func (q *Queries) ListQueuedJobs(ctx context.Context, arg ListQueuedJobsParams) 
 }
 
 const listUnfinishedJobs = `-- name: ListUnfinishedJobs :many
-SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at FROM jobs
+SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at, repository_id, concurrency_keys FROM jobs
 WHERE worker_id = $1 AND status IN ('queued', 'dispatched', 'running')
 ORDER BY id
 `
@@ -432,10 +500,40 @@ func (q *Queries) ListUnfinishedJobs(ctx context.Context, workerID pgtype.UUID) 
 			&i.SearchText,
 			&i.ScheduleID,
 			&i.NotifiedAt,
+			&i.RepositoryID,
+			&i.ConcurrencyKeys,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkersWaitingOnKeys = `-- name: ListWorkersWaitingOnKeys :many
+SELECT DISTINCT worker_id FROM jobs
+WHERE status = 'queued' AND concurrency_keys && $1::text[]
+ORDER BY worker_id
+`
+
+// The workers of the queued jobs that share one of keys (the wake-up after
+// a keyed job finished).
+func (q *Queries) ListWorkersWaitingOnKeys(ctx context.Context, keys []string) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listWorkersWaitingOnKeys, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var worker_id pgtype.UUID
+		if err := rows.Scan(&worker_id); err != nil {
+			return nil, err
+		}
+		items = append(items, worker_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -469,7 +567,7 @@ UPDATE jobs SET
     output = $22,
     version = version + 1
 WHERE id = $23 AND version = $24
-RETURNING id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at
+RETURNING id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at, repository_id, concurrency_keys
 `
 
 type UpdateJobParams struct {
@@ -563,6 +661,8 @@ func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (Job, erro
 		&i.SearchText,
 		&i.ScheduleID,
 		&i.NotifiedAt,
+		&i.RepositoryID,
+		&i.ConcurrencyKeys,
 	)
 	return i, err
 }

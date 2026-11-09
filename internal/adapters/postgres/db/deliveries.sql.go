@@ -402,7 +402,7 @@ func (q *Queries) MarkRunNotified(ctx context.Context, arg MarkRunNotifiedParams
 }
 
 const pendingJobOutcomes = `-- name: PendingJobOutcomes :many
-SELECT j.id, j.owner_id, j.kind, j.definition, j.status, j.worker_id, w.name AS worker_name,
+SELECT j.id, j.owner_id, j.kind, j.definition, j.output, j.status, j.worker_id, w.name AS worker_name,
        j.schedule_id, s.name AS schedule_name, j.error_code, j.error_message,
        j.stat_bytes, j.stat_files, j.stat_errors, j.started_at, j.finished_at
 FROM jobs j
@@ -418,6 +418,7 @@ type PendingJobOutcomesRow struct {
 	OwnerID      pgtype.UUID
 	Kind         string
 	Definition   []byte
+	Output       []byte
 	Status       string
 	WorkerID     pgtype.UUID
 	WorkerName   string
@@ -432,9 +433,9 @@ type PendingJobOutcomesRow struct {
 	FinishedAt   pgtype.Timestamptz
 }
 
-// Terminal jobs that were not notified yet, with their definition and
-// their worker's and schedule's names (the predicate matches the partial
-// index jobs_notify_idx). A NULL row_limit means no limit.
+// Terminal jobs that were not notified yet, with their definition, output
+// and their worker's and schedule's names (the predicate matches the
+// partial index jobs_notify_idx). A NULL row_limit means no limit.
 func (q *Queries) PendingJobOutcomes(ctx context.Context, rowLimit *int64) ([]PendingJobOutcomesRow, error) {
 	rows, err := q.db.Query(ctx, pendingJobOutcomes, rowLimit)
 	if err != nil {
@@ -449,6 +450,7 @@ func (q *Queries) PendingJobOutcomes(ctx context.Context, rowLimit *int64) ([]Pe
 			&i.OwnerID,
 			&i.Kind,
 			&i.Definition,
+			&i.Output,
 			&i.Status,
 			&i.WorkerID,
 			&i.WorkerName,

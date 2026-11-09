@@ -607,7 +607,13 @@ type WorkerInfo struct {
 	// Local filesystem roots jobs may touch.
 	LocalRoots []string `protobuf:"bytes,8,rep,name=local_roots,json=localRoots,proto3" json:"local_roots,omitempty"`
 	// When the worker reported this (its Hello event).
-	ReportedAt    *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=reported_at,json=reportedAt,proto3" json:"reported_at,omitempty"`
+	ReportedAt *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=reported_at,json=reportedAt,proto3" json:"reported_at,omitempty"`
+	// Link features the worker implements (Hello.features), e.g. "probe",
+	// "restic.v2", "restic.delete". A worker without "restic.v2" must be
+	// upgraded to run restic jobs.
+	Features []string `protobuf:"bytes,10,rep,name=features,proto3" json:"features,omitempty"`
+	// Probe operations the worker can run (Hello.probe_ops).
+	ProbeOps      []string `protobuf:"bytes,11,rep,name=probe_ops,json=probeOps,proto3" json:"probe_ops,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -701,6 +707,20 @@ func (x *WorkerInfo) GetLocalRoots() []string {
 func (x *WorkerInfo) GetReportedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.ReportedAt
+	}
+	return nil
+}
+
+func (x *WorkerInfo) GetFeatures() []string {
+	if x != nil {
+		return x.Features
+	}
+	return nil
+}
+
+func (x *WorkerInfo) GetProbeOps() []string {
+	if x != nil {
+		return x.ProbeOps
 	}
 	return nil
 }
@@ -1637,7 +1657,18 @@ type Job struct {
 	ScheduleId string `protobuf:"bytes,19,opt,name=schedule_id,json=scheduleId,proto3" json:"schedule_id,omitempty"`
 	// The schedule that launched the job, for display; unset for a job run by
 	// hand or whose schedule was deleted.
-	Schedule      *JobScheduleRef `protobuf:"bytes,20,opt,name=schedule,proto3" json:"schedule,omitempty"`
+	Schedule *JobScheduleRef `protobuf:"bytes,20,opt,name=schedule,proto3" json:"schedule,omitempty"`
+	// One-line description of what the job runs, e.g. "Back up /srv/photos →
+	// Photos vault" (the controller's job kind describes it).
+	Title string `protobuf:"bytes,21,opt,name=title,proto3" json:"title,omitempty"`
+	// The restic repository the job uses; unset for other kinds.
+	Repository *JobRepositoryRef `protobuf:"bytes,22,opt,name=repository,proto3" json:"repository,omitempty"`
+	// Set while the job is queued behind an older unfinished job on the same
+	// restic repository (they share a concurrency key): the job it waits for.
+	WaitingForJobId string `protobuf:"bytes,23,opt,name=waiting_for_job_id,json=waitingForJobId,proto3" json:"waiting_for_job_id,omitempty"`
+	// Kind-specific results for display (e.g. "Snapshot", "Data added"), in
+	// order; empty for kinds without any.
+	Details       []*JobDetail `protobuf:"bytes,24,rep,name=details,proto3" json:"details,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1812,6 +1843,153 @@ func (x *Job) GetSchedule() *JobScheduleRef {
 	return nil
 }
 
+func (x *Job) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *Job) GetRepository() *JobRepositoryRef {
+	if x != nil {
+		return x.Repository
+	}
+	return nil
+}
+
+func (x *Job) GetWaitingForJobId() string {
+	if x != nil {
+		return x.WaitingForJobId
+	}
+	return ""
+}
+
+func (x *Job) GetDetails() []*JobDetail {
+	if x != nil {
+		return x.Details
+	}
+	return nil
+}
+
+// JobRepositoryRef names the restic repository a job or schedule uses.
+type JobRepositoryRef struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Repository ID (UUID).
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// The repository's name.
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// Whether the repository has been deleted since.
+	Deleted       bool `protobuf:"varint,3,opt,name=deleted,proto3" json:"deleted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JobRepositoryRef) Reset() {
+	*x = JobRepositoryRef{}
+	mi := &file_syncr_v1_api_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JobRepositoryRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JobRepositoryRef) ProtoMessage() {}
+
+func (x *JobRepositoryRef) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_api_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JobRepositoryRef.ProtoReflect.Descriptor instead.
+func (*JobRepositoryRef) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *JobRepositoryRef) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *JobRepositoryRef) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *JobRepositoryRef) GetDeleted() bool {
+	if x != nil {
+		return x.Deleted
+	}
+	return false
+}
+
+// JobDetail is one kind-specific result of a job, for display.
+type JobDetail struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// What it is, e.g. "Snapshot".
+	Label string `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"`
+	// Its value, formatted for people, e.g. "1a2b3c4d".
+	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JobDetail) Reset() {
+	*x = JobDetail{}
+	mi := &file_syncr_v1_api_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JobDetail) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JobDetail) ProtoMessage() {}
+
+func (x *JobDetail) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_api_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JobDetail.ProtoReflect.Descriptor instead.
+func (*JobDetail) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *JobDetail) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *JobDetail) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
 // JobScheduleRef names the schedule that launched a job.
 type JobScheduleRef struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1825,7 +2003,7 @@ type JobScheduleRef struct {
 
 func (x *JobScheduleRef) Reset() {
 	*x = JobScheduleRef{}
-	mi := &file_syncr_v1_api_proto_msgTypes[24]
+	mi := &file_syncr_v1_api_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1837,7 +2015,7 @@ func (x *JobScheduleRef) String() string {
 func (*JobScheduleRef) ProtoMessage() {}
 
 func (x *JobScheduleRef) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[24]
+	mi := &file_syncr_v1_api_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1850,7 +2028,7 @@ func (x *JobScheduleRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobScheduleRef.ProtoReflect.Descriptor instead.
 func (*JobScheduleRef) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{24}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *JobScheduleRef) GetId() string {
@@ -1884,7 +2062,7 @@ type JobRemoteRef struct {
 
 func (x *JobRemoteRef) Reset() {
 	*x = JobRemoteRef{}
-	mi := &file_syncr_v1_api_proto_msgTypes[25]
+	mi := &file_syncr_v1_api_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1896,7 +2074,7 @@ func (x *JobRemoteRef) String() string {
 func (*JobRemoteRef) ProtoMessage() {}
 
 func (x *JobRemoteRef) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[25]
+	mi := &file_syncr_v1_api_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1909,7 +2087,7 @@ func (x *JobRemoteRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobRemoteRef.ProtoReflect.Descriptor instead.
 func (*JobRemoteRef) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{25}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *JobRemoteRef) GetId() string {
@@ -1950,6 +2128,12 @@ type JobDefinition struct {
 	// Types that are valid to be assigned to Operation:
 	//
 	//	*JobDefinition_RcloneTransfer
+	//	*JobDefinition_ResticBackup
+	//	*JobDefinition_ResticForget
+	//	*JobDefinition_ResticPrune
+	//	*JobDefinition_ResticCheck
+	//	*JobDefinition_ResticRestore
+	//	*JobDefinition_ResticDeleteData
 	Operation     isJobDefinition_Operation `protobuf_oneof:"operation"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1957,7 +2141,7 @@ type JobDefinition struct {
 
 func (x *JobDefinition) Reset() {
 	*x = JobDefinition{}
-	mi := &file_syncr_v1_api_proto_msgTypes[26]
+	mi := &file_syncr_v1_api_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1969,7 +2153,7 @@ func (x *JobDefinition) String() string {
 func (*JobDefinition) ProtoMessage() {}
 
 func (x *JobDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[26]
+	mi := &file_syncr_v1_api_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1982,7 +2166,7 @@ func (x *JobDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobDefinition.ProtoReflect.Descriptor instead.
 func (*JobDefinition) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{26}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *JobDefinition) GetOperation() isJobDefinition_Operation {
@@ -2001,6 +2185,60 @@ func (x *JobDefinition) GetRcloneTransfer() *RcloneTransferDefinition {
 	return nil
 }
 
+func (x *JobDefinition) GetResticBackup() *ResticBackupDefinition {
+	if x != nil {
+		if x, ok := x.Operation.(*JobDefinition_ResticBackup); ok {
+			return x.ResticBackup
+		}
+	}
+	return nil
+}
+
+func (x *JobDefinition) GetResticForget() *ResticForgetDefinition {
+	if x != nil {
+		if x, ok := x.Operation.(*JobDefinition_ResticForget); ok {
+			return x.ResticForget
+		}
+	}
+	return nil
+}
+
+func (x *JobDefinition) GetResticPrune() *ResticPruneDefinition {
+	if x != nil {
+		if x, ok := x.Operation.(*JobDefinition_ResticPrune); ok {
+			return x.ResticPrune
+		}
+	}
+	return nil
+}
+
+func (x *JobDefinition) GetResticCheck() *ResticCheckDefinition {
+	if x != nil {
+		if x, ok := x.Operation.(*JobDefinition_ResticCheck); ok {
+			return x.ResticCheck
+		}
+	}
+	return nil
+}
+
+func (x *JobDefinition) GetResticRestore() *ResticRestoreDefinition {
+	if x != nil {
+		if x, ok := x.Operation.(*JobDefinition_ResticRestore); ok {
+			return x.ResticRestore
+		}
+	}
+	return nil
+}
+
+func (x *JobDefinition) GetResticDeleteData() *ResticDeleteDataDefinition {
+	if x != nil {
+		if x, ok := x.Operation.(*JobDefinition_ResticDeleteData); ok {
+			return x.ResticDeleteData
+		}
+	}
+	return nil
+}
+
 type isJobDefinition_Operation interface {
 	isJobDefinition_Operation()
 }
@@ -2009,7 +2247,48 @@ type JobDefinition_RcloneTransfer struct {
 	RcloneTransfer *RcloneTransferDefinition `protobuf:"bytes,10,opt,name=rclone_transfer,json=rcloneTransfer,proto3,oneof"`
 }
 
+type JobDefinition_ResticBackup struct {
+	// Restic operations (Milestone 5) on one of the owner's repositories.
+	ResticBackup *ResticBackupDefinition `protobuf:"bytes,21,opt,name=restic_backup,json=resticBackup,proto3,oneof"`
+}
+
+type JobDefinition_ResticForget struct {
+	ResticForget *ResticForgetDefinition `protobuf:"bytes,22,opt,name=restic_forget,json=resticForget,proto3,oneof"`
+}
+
+type JobDefinition_ResticPrune struct {
+	ResticPrune *ResticPruneDefinition `protobuf:"bytes,23,opt,name=restic_prune,json=resticPrune,proto3,oneof"`
+}
+
+type JobDefinition_ResticCheck struct {
+	ResticCheck *ResticCheckDefinition `protobuf:"bytes,24,opt,name=restic_check,json=resticCheck,proto3,oneof"`
+}
+
+type JobDefinition_ResticRestore struct {
+	// Restores are started from the snapshot browser; they cannot be
+	// scheduled.
+	ResticRestore *ResticRestoreDefinition `protobuf:"bytes,25,opt,name=restic_restore,json=resticRestore,proto3,oneof"`
+}
+
+type JobDefinition_ResticDeleteData struct {
+	// Created only by ResticService.DeleteRepository (delete_data); RunJob
+	// and schedules reject it.
+	ResticDeleteData *ResticDeleteDataDefinition `protobuf:"bytes,27,opt,name=restic_delete_data,json=resticDeleteData,proto3,oneof"`
+}
+
 func (*JobDefinition_RcloneTransfer) isJobDefinition_Operation() {}
+
+func (*JobDefinition_ResticBackup) isJobDefinition_Operation() {}
+
+func (*JobDefinition_ResticForget) isJobDefinition_Operation() {}
+
+func (*JobDefinition_ResticPrune) isJobDefinition_Operation() {}
+
+func (*JobDefinition_ResticCheck) isJobDefinition_Operation() {}
+
+func (*JobDefinition_ResticRestore) isJobDefinition_Operation() {}
+
+func (*JobDefinition_ResticDeleteData) isJobDefinition_Operation() {}
 
 // RcloneTransferDefinition copies, syncs or moves files between two
 // locations (see RcloneTransfer).
@@ -2029,7 +2308,7 @@ type RcloneTransferDefinition struct {
 
 func (x *RcloneTransferDefinition) Reset() {
 	*x = RcloneTransferDefinition{}
-	mi := &file_syncr_v1_api_proto_msgTypes[27]
+	mi := &file_syncr_v1_api_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2041,7 +2320,7 @@ func (x *RcloneTransferDefinition) String() string {
 func (*RcloneTransferDefinition) ProtoMessage() {}
 
 func (x *RcloneTransferDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[27]
+	mi := &file_syncr_v1_api_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2054,7 +2333,7 @@ func (x *RcloneTransferDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RcloneTransferDefinition.ProtoReflect.Descriptor instead.
 func (*RcloneTransferDefinition) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{27}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *RcloneTransferDefinition) GetMode() RcloneTransferMode {
@@ -2085,6 +2364,498 @@ func (x *RcloneTransferDefinition) GetOptions() *RcloneTransferOptions {
 	return nil
 }
 
+// ResticBackupDefinition backs up local paths of the worker into a
+// repository (see ResticBackup).
+type ResticBackupDefinition struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One of the owner's repositories (ResticService).
+	RepositoryId string `protobuf:"bytes,1,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
+	// Absolute local paths to back up, inside the worker's local_roots: 1 to
+	// 100, without ".." segments or duplicates.
+	Paths []string `protobuf:"bytes,2,rep,name=paths,proto3" json:"paths,omitempty"`
+	// --exclude patterns, at most 1000.
+	Excludes []string `protobuf:"bytes,3,rep,name=excludes,proto3" json:"excludes,omitempty"`
+	// --tag values, at most 32, each 1 to 128 bytes without commas.
+	Tags []string `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty"`
+	// --host override; empty uses the worker's host name.
+	Host string `protobuf:"bytes,5,opt,name=host,proto3" json:"host,omitempty"`
+	// --use-fs-snapshot (Windows VSS; the worker must run as a system
+	// service). Fails on other operating systems.
+	UseFsSnapshot bool `protobuf:"varint,6,opt,name=use_fs_snapshot,json=useFsSnapshot,proto3" json:"use_fs_snapshot,omitempty"`
+	// --exclude-caches.
+	ExcludeCaches bool `protobuf:"varint,7,opt,name=exclude_caches,json=excludeCaches,proto3" json:"exclude_caches,omitempty"`
+	// --one-file-system.
+	OneFileSystem bool `protobuf:"varint,8,opt,name=one_file_system,json=oneFileSystem,proto3" json:"one_file_system,omitempty"`
+	// --exclude-larger-than in bytes; greater than 0 when set.
+	ExcludeLargerThanBytes *int64 `protobuf:"varint,9,opt,name=exclude_larger_than_bytes,json=excludeLargerThanBytes,proto3,oneof" json:"exclude_larger_than_bytes,omitempty"`
+	// --dry-run.
+	DryRun        bool `protobuf:"varint,10,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResticBackupDefinition) Reset() {
+	*x = ResticBackupDefinition{}
+	mi := &file_syncr_v1_api_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResticBackupDefinition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResticBackupDefinition) ProtoMessage() {}
+
+func (x *ResticBackupDefinition) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_api_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResticBackupDefinition.ProtoReflect.Descriptor instead.
+func (*ResticBackupDefinition) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *ResticBackupDefinition) GetRepositoryId() string {
+	if x != nil {
+		return x.RepositoryId
+	}
+	return ""
+}
+
+func (x *ResticBackupDefinition) GetPaths() []string {
+	if x != nil {
+		return x.Paths
+	}
+	return nil
+}
+
+func (x *ResticBackupDefinition) GetExcludes() []string {
+	if x != nil {
+		return x.Excludes
+	}
+	return nil
+}
+
+func (x *ResticBackupDefinition) GetTags() []string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
+func (x *ResticBackupDefinition) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *ResticBackupDefinition) GetUseFsSnapshot() bool {
+	if x != nil {
+		return x.UseFsSnapshot
+	}
+	return false
+}
+
+func (x *ResticBackupDefinition) GetExcludeCaches() bool {
+	if x != nil {
+		return x.ExcludeCaches
+	}
+	return false
+}
+
+func (x *ResticBackupDefinition) GetOneFileSystem() bool {
+	if x != nil {
+		return x.OneFileSystem
+	}
+	return false
+}
+
+func (x *ResticBackupDefinition) GetExcludeLargerThanBytes() int64 {
+	if x != nil && x.ExcludeLargerThanBytes != nil {
+		return *x.ExcludeLargerThanBytes
+	}
+	return 0
+}
+
+func (x *ResticBackupDefinition) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
+// ResticForgetDefinition applies a retention policy (see ResticForget).
+type ResticForgetDefinition struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One of the owner's repositories.
+	RepositoryId string `protobuf:"bytes,1,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
+	// Which snapshots to keep: at least one rule.
+	Policy *ResticRetentionPolicy `protobuf:"bytes,2,opt,name=policy,proto3" json:"policy,omitempty"`
+	// --prune: remove unreferenced data afterwards.
+	Prune bool `protobuf:"varint,3,opt,name=prune,proto3" json:"prune,omitempty"`
+	// Only consider snapshots with these tags.
+	Tags []string `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty"`
+	// Only consider snapshots of this host; empty means all hosts.
+	Host string `protobuf:"bytes,5,opt,name=host,proto3" json:"host,omitempty"`
+	// --dry-run.
+	DryRun        bool `protobuf:"varint,6,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResticForgetDefinition) Reset() {
+	*x = ResticForgetDefinition{}
+	mi := &file_syncr_v1_api_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResticForgetDefinition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResticForgetDefinition) ProtoMessage() {}
+
+func (x *ResticForgetDefinition) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_api_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResticForgetDefinition.ProtoReflect.Descriptor instead.
+func (*ResticForgetDefinition) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ResticForgetDefinition) GetRepositoryId() string {
+	if x != nil {
+		return x.RepositoryId
+	}
+	return ""
+}
+
+func (x *ResticForgetDefinition) GetPolicy() *ResticRetentionPolicy {
+	if x != nil {
+		return x.Policy
+	}
+	return nil
+}
+
+func (x *ResticForgetDefinition) GetPrune() bool {
+	if x != nil {
+		return x.Prune
+	}
+	return false
+}
+
+func (x *ResticForgetDefinition) GetTags() []string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
+func (x *ResticForgetDefinition) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *ResticForgetDefinition) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
+// ResticPruneDefinition removes unreferenced data (see ResticPrune).
+type ResticPruneDefinition struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One of the owner's repositories.
+	RepositoryId string `protobuf:"bytes,1,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
+	// --dry-run.
+	DryRun        bool `protobuf:"varint,2,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResticPruneDefinition) Reset() {
+	*x = ResticPruneDefinition{}
+	mi := &file_syncr_v1_api_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResticPruneDefinition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResticPruneDefinition) ProtoMessage() {}
+
+func (x *ResticPruneDefinition) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_api_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResticPruneDefinition.ProtoReflect.Descriptor instead.
+func (*ResticPruneDefinition) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *ResticPruneDefinition) GetRepositoryId() string {
+	if x != nil {
+		return x.RepositoryId
+	}
+	return ""
+}
+
+func (x *ResticPruneDefinition) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
+// ResticCheckDefinition verifies a repository (see ResticCheck).
+type ResticCheckDefinition struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One of the owner's repositories.
+	RepositoryId string `protobuf:"bytes,1,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
+	// Percentage of pack data to read and verify, 0 to 100; 0 checks only
+	// the structure.
+	ReadDataPercent int32 `protobuf:"varint,2,opt,name=read_data_percent,json=readDataPercent,proto3" json:"read_data_percent,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ResticCheckDefinition) Reset() {
+	*x = ResticCheckDefinition{}
+	mi := &file_syncr_v1_api_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResticCheckDefinition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResticCheckDefinition) ProtoMessage() {}
+
+func (x *ResticCheckDefinition) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_api_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResticCheckDefinition.ProtoReflect.Descriptor instead.
+func (*ResticCheckDefinition) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *ResticCheckDefinition) GetRepositoryId() string {
+	if x != nil {
+		return x.RepositoryId
+	}
+	return ""
+}
+
+func (x *ResticCheckDefinition) GetReadDataPercent() int32 {
+	if x != nil {
+		return x.ReadDataPercent
+	}
+	return 0
+}
+
+// ResticRestoreDefinition restores a snapshot into a local folder of the
+// worker (see ResticRestore).
+type ResticRestoreDefinition struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One of the owner's repositories.
+	RepositoryId string `protobuf:"bytes,1,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
+	// "latest" or a snapshot ID of 8 to 64 hex digits.
+	SnapshotId string `protobuf:"bytes,2,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
+	// Absolute local target folder inside the worker's local_roots.
+	Target string `protobuf:"bytes,3,opt,name=target,proto3" json:"target,omitempty"`
+	// Literal snapshot tree paths to restore (selected items), at most 1000;
+	// each starts with "/". Cannot be combined with subfolder.
+	Paths []string `protobuf:"bytes,4,rep,name=paths,proto3" json:"paths,omitempty"`
+	// --exclude patterns.
+	Excludes []string `protobuf:"bytes,5,rep,name=excludes,proto3" json:"excludes,omitempty"`
+	// --verify.
+	Verify bool `protobuf:"varint,6,opt,name=verify,proto3" json:"verify,omitempty"`
+	// Restore the contents of this snapshot folder (a tree path) directly
+	// into target.
+	Subfolder string `protobuf:"bytes,7,opt,name=subfolder,proto3" json:"subfolder,omitempty"`
+	// What happens to files that exist at the target. UNSPECIFIED means
+	// NEVER: a restore never replaces files unless asked to.
+	Overwrite     ResticRestoreOverwrite `protobuf:"varint,8,opt,name=overwrite,proto3,enum=syncr.v1.ResticRestoreOverwrite" json:"overwrite,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResticRestoreDefinition) Reset() {
+	*x = ResticRestoreDefinition{}
+	mi := &file_syncr_v1_api_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResticRestoreDefinition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResticRestoreDefinition) ProtoMessage() {}
+
+func (x *ResticRestoreDefinition) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_api_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResticRestoreDefinition.ProtoReflect.Descriptor instead.
+func (*ResticRestoreDefinition) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *ResticRestoreDefinition) GetRepositoryId() string {
+	if x != nil {
+		return x.RepositoryId
+	}
+	return ""
+}
+
+func (x *ResticRestoreDefinition) GetSnapshotId() string {
+	if x != nil {
+		return x.SnapshotId
+	}
+	return ""
+}
+
+func (x *ResticRestoreDefinition) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *ResticRestoreDefinition) GetPaths() []string {
+	if x != nil {
+		return x.Paths
+	}
+	return nil
+}
+
+func (x *ResticRestoreDefinition) GetExcludes() []string {
+	if x != nil {
+		return x.Excludes
+	}
+	return nil
+}
+
+func (x *ResticRestoreDefinition) GetVerify() bool {
+	if x != nil {
+		return x.Verify
+	}
+	return false
+}
+
+func (x *ResticRestoreDefinition) GetSubfolder() string {
+	if x != nil {
+		return x.Subfolder
+	}
+	return ""
+}
+
+func (x *ResticRestoreDefinition) GetOverwrite() ResticRestoreOverwrite {
+	if x != nil {
+		return x.Overwrite
+	}
+	return ResticRestoreOverwrite_RESTIC_RESTORE_OVERWRITE_UNSPECIFIED
+}
+
+// ResticDeleteDataDefinition deletes a repository's data in the backend
+// (see ResticDeleteData). Only ResticService.DeleteRepository creates it.
+type ResticDeleteDataDefinition struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The repository being deleted.
+	RepositoryId  string `protobuf:"bytes,1,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResticDeleteDataDefinition) Reset() {
+	*x = ResticDeleteDataDefinition{}
+	mi := &file_syncr_v1_api_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResticDeleteDataDefinition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResticDeleteDataDefinition) ProtoMessage() {}
+
+func (x *ResticDeleteDataDefinition) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_api_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResticDeleteDataDefinition.ProtoReflect.Descriptor instead.
+func (*ResticDeleteDataDefinition) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *ResticDeleteDataDefinition) GetRepositoryId() string {
+	if x != nil {
+		return x.RepositoryId
+	}
+	return ""
+}
+
 // JobLocation is a path on one of the owner's remotes, or on the worker's
 // local filesystem.
 type JobLocation struct {
@@ -2101,7 +2872,7 @@ type JobLocation struct {
 
 func (x *JobLocation) Reset() {
 	*x = JobLocation{}
-	mi := &file_syncr_v1_api_proto_msgTypes[28]
+	mi := &file_syncr_v1_api_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2113,7 +2884,7 @@ func (x *JobLocation) String() string {
 func (*JobLocation) ProtoMessage() {}
 
 func (x *JobLocation) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[28]
+	mi := &file_syncr_v1_api_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2126,7 +2897,7 @@ func (x *JobLocation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobLocation.ProtoReflect.Descriptor instead.
 func (*JobLocation) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{28}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *JobLocation) GetRemoteId() string {
@@ -2156,7 +2927,7 @@ type RunJobRequest struct {
 
 func (x *RunJobRequest) Reset() {
 	*x = RunJobRequest{}
-	mi := &file_syncr_v1_api_proto_msgTypes[29]
+	mi := &file_syncr_v1_api_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2168,7 +2939,7 @@ func (x *RunJobRequest) String() string {
 func (*RunJobRequest) ProtoMessage() {}
 
 func (x *RunJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[29]
+	mi := &file_syncr_v1_api_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2181,7 +2952,7 @@ func (x *RunJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunJobRequest.ProtoReflect.Descriptor instead.
 func (*RunJobRequest) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{29}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *RunJobRequest) GetWorkerId() string {
@@ -2208,7 +2979,7 @@ type RunJobResponse struct {
 
 func (x *RunJobResponse) Reset() {
 	*x = RunJobResponse{}
-	mi := &file_syncr_v1_api_proto_msgTypes[30]
+	mi := &file_syncr_v1_api_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2220,7 +2991,7 @@ func (x *RunJobResponse) String() string {
 func (*RunJobResponse) ProtoMessage() {}
 
 func (x *RunJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[30]
+	mi := &file_syncr_v1_api_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2233,7 +3004,7 @@ func (x *RunJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunJobResponse.ProtoReflect.Descriptor instead.
 func (*RunJobResponse) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{30}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *RunJobResponse) GetJob() *Job {
@@ -2253,7 +3024,7 @@ type GetJobRequest struct {
 
 func (x *GetJobRequest) Reset() {
 	*x = GetJobRequest{}
-	mi := &file_syncr_v1_api_proto_msgTypes[31]
+	mi := &file_syncr_v1_api_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2265,7 +3036,7 @@ func (x *GetJobRequest) String() string {
 func (*GetJobRequest) ProtoMessage() {}
 
 func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[31]
+	mi := &file_syncr_v1_api_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2278,7 +3049,7 @@ func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobRequest.ProtoReflect.Descriptor instead.
 func (*GetJobRequest) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{31}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *GetJobRequest) GetJobId() string {
@@ -2298,7 +3069,7 @@ type GetJobResponse struct {
 
 func (x *GetJobResponse) Reset() {
 	*x = GetJobResponse{}
-	mi := &file_syncr_v1_api_proto_msgTypes[32]
+	mi := &file_syncr_v1_api_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2310,7 +3081,7 @@ func (x *GetJobResponse) String() string {
 func (*GetJobResponse) ProtoMessage() {}
 
 func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[32]
+	mi := &file_syncr_v1_api_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2323,7 +3094,7 @@ func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobResponse.ProtoReflect.Descriptor instead.
 func (*GetJobResponse) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{32}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *GetJobResponse) GetJob() *Job {
@@ -2359,14 +3130,16 @@ type ListJobsRequest struct {
 	// other users.
 	AllUsers bool `protobuf:"varint,10,opt,name=all_users,json=allUsers,proto3" json:"all_users,omitempty"`
 	// Only jobs launched by this schedule; empty means any.
-	ScheduleId    string `protobuf:"bytes,11,opt,name=schedule_id,json=scheduleId,proto3" json:"schedule_id,omitempty"`
+	ScheduleId string `protobuf:"bytes,11,opt,name=schedule_id,json=scheduleId,proto3" json:"schedule_id,omitempty"`
+	// Only jobs on this restic repository; empty means any.
+	RepositoryId  string `protobuf:"bytes,12,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListJobsRequest) Reset() {
 	*x = ListJobsRequest{}
-	mi := &file_syncr_v1_api_proto_msgTypes[33]
+	mi := &file_syncr_v1_api_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2378,7 +3151,7 @@ func (x *ListJobsRequest) String() string {
 func (*ListJobsRequest) ProtoMessage() {}
 
 func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[33]
+	mi := &file_syncr_v1_api_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2391,7 +3164,7 @@ func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsRequest.ProtoReflect.Descriptor instead.
 func (*ListJobsRequest) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{33}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ListJobsRequest) GetWorkerId() string {
@@ -2471,6 +3244,13 @@ func (x *ListJobsRequest) GetScheduleId() string {
 	return ""
 }
 
+func (x *ListJobsRequest) GetRepositoryId() string {
+	if x != nil {
+		return x.RepositoryId
+	}
+	return ""
+}
+
 // ListJobsResponse is one page of jobs, newest first.
 type ListJobsResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -2483,7 +3263,7 @@ type ListJobsResponse struct {
 
 func (x *ListJobsResponse) Reset() {
 	*x = ListJobsResponse{}
-	mi := &file_syncr_v1_api_proto_msgTypes[34]
+	mi := &file_syncr_v1_api_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2495,7 +3275,7 @@ func (x *ListJobsResponse) String() string {
 func (*ListJobsResponse) ProtoMessage() {}
 
 func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[34]
+	mi := &file_syncr_v1_api_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2508,7 +3288,7 @@ func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsResponse.ProtoReflect.Descriptor instead.
 func (*ListJobsResponse) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{34}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *ListJobsResponse) GetJobs() []*Job {
@@ -2535,7 +3315,7 @@ type CancelJobRequest struct {
 
 func (x *CancelJobRequest) Reset() {
 	*x = CancelJobRequest{}
-	mi := &file_syncr_v1_api_proto_msgTypes[35]
+	mi := &file_syncr_v1_api_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2547,7 +3327,7 @@ func (x *CancelJobRequest) String() string {
 func (*CancelJobRequest) ProtoMessage() {}
 
 func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[35]
+	mi := &file_syncr_v1_api_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2560,7 +3340,7 @@ func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJobRequest.ProtoReflect.Descriptor instead.
 func (*CancelJobRequest) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{35}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *CancelJobRequest) GetJobId() string {
@@ -2580,7 +3360,7 @@ type CancelJobResponse struct {
 
 func (x *CancelJobResponse) Reset() {
 	*x = CancelJobResponse{}
-	mi := &file_syncr_v1_api_proto_msgTypes[36]
+	mi := &file_syncr_v1_api_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2592,7 +3372,7 @@ func (x *CancelJobResponse) String() string {
 func (*CancelJobResponse) ProtoMessage() {}
 
 func (x *CancelJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[36]
+	mi := &file_syncr_v1_api_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2605,7 +3385,7 @@ func (x *CancelJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJobResponse.ProtoReflect.Descriptor instead.
 func (*CancelJobResponse) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{36}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *CancelJobResponse) GetJob() *Job {
@@ -2625,7 +3405,7 @@ type WatchJobRequest struct {
 
 func (x *WatchJobRequest) Reset() {
 	*x = WatchJobRequest{}
-	mi := &file_syncr_v1_api_proto_msgTypes[37]
+	mi := &file_syncr_v1_api_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2637,7 +3417,7 @@ func (x *WatchJobRequest) String() string {
 func (*WatchJobRequest) ProtoMessage() {}
 
 func (x *WatchJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[37]
+	mi := &file_syncr_v1_api_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2650,7 +3430,7 @@ func (x *WatchJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchJobRequest.ProtoReflect.Descriptor instead.
 func (*WatchJobRequest) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{37}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *WatchJobRequest) GetJobId() string {
@@ -2674,7 +3454,7 @@ type WatchJobResponse struct {
 
 func (x *WatchJobResponse) Reset() {
 	*x = WatchJobResponse{}
-	mi := &file_syncr_v1_api_proto_msgTypes[38]
+	mi := &file_syncr_v1_api_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2686,7 +3466,7 @@ func (x *WatchJobResponse) String() string {
 func (*WatchJobResponse) ProtoMessage() {}
 
 func (x *WatchJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[38]
+	mi := &file_syncr_v1_api_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2699,7 +3479,7 @@ func (x *WatchJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchJobResponse.ProtoReflect.Descriptor instead.
 func (*WatchJobResponse) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{38}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *WatchJobResponse) GetUpdate() isWatchJobResponse_Update {
@@ -2755,7 +3535,7 @@ type ListJobSamplesRequest struct {
 
 func (x *ListJobSamplesRequest) Reset() {
 	*x = ListJobSamplesRequest{}
-	mi := &file_syncr_v1_api_proto_msgTypes[39]
+	mi := &file_syncr_v1_api_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2767,7 +3547,7 @@ func (x *ListJobSamplesRequest) String() string {
 func (*ListJobSamplesRequest) ProtoMessage() {}
 
 func (x *ListJobSamplesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[39]
+	mi := &file_syncr_v1_api_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2780,7 +3560,7 @@ func (x *ListJobSamplesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobSamplesRequest.ProtoReflect.Descriptor instead.
 func (*ListJobSamplesRequest) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{39}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ListJobSamplesRequest) GetJobId() string {
@@ -2800,7 +3580,7 @@ type ListJobSamplesResponse struct {
 
 func (x *ListJobSamplesResponse) Reset() {
 	*x = ListJobSamplesResponse{}
-	mi := &file_syncr_v1_api_proto_msgTypes[40]
+	mi := &file_syncr_v1_api_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2812,7 +3592,7 @@ func (x *ListJobSamplesResponse) String() string {
 func (*ListJobSamplesResponse) ProtoMessage() {}
 
 func (x *ListJobSamplesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[40]
+	mi := &file_syncr_v1_api_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2825,7 +3605,7 @@ func (x *ListJobSamplesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobSamplesResponse.ProtoReflect.Descriptor instead.
 func (*ListJobSamplesResponse) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{40}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ListJobSamplesResponse) GetSamples() []*JobProgress {
@@ -2849,7 +3629,7 @@ type JobProgress struct {
 
 func (x *JobProgress) Reset() {
 	*x = JobProgress{}
-	mi := &file_syncr_v1_api_proto_msgTypes[41]
+	mi := &file_syncr_v1_api_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2861,7 +3641,7 @@ func (x *JobProgress) String() string {
 func (*JobProgress) ProtoMessage() {}
 
 func (x *JobProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_api_proto_msgTypes[41]
+	mi := &file_syncr_v1_api_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2874,7 +3654,7 @@ func (x *JobProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobProgress.ProtoReflect.Descriptor instead.
 func (*JobProgress) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_api_proto_rawDescGZIP(), []int{41}
+	return file_syncr_v1_api_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *JobProgress) GetTime() *timestamppb.Timestamp {
@@ -2921,7 +3701,7 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"\x10cert_fingerprint\x18\b \x01(\tR\x0fcertFingerprint\x12(\n" +
 	"\x04info\x18\t \x01(\v2\x14.syncr.v1.WorkerInfoR\x04info\x12\x16\n" +
 	"\x06labels\x18\n" +
-	" \x03(\tR\x06labelsJ\x04\b\v\x10\x14\"\xd1\x02\n" +
+	" \x03(\tR\x06labelsJ\x04\b\v\x10\x14\"\x8a\x03\n" +
 	"\n" +
 	"WorkerInfo\x12%\n" +
 	"\x0eworker_version\x18\x01 \x01(\tR\rworkerVersion\x12\x0e\n" +
@@ -2934,8 +3714,10 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"\vlocal_roots\x18\b \x03(\tR\n" +
 	"localRoots\x12;\n" +
 	"\vreported_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"reportedAtJ\x04\b\n" +
-	"\x10\x14\"r\n" +
+	"reportedAt\x12\x1a\n" +
+	"\bfeatures\x18\n" +
+	" \x03(\tR\bfeatures\x12\x1b\n" +
+	"\tprobe_ops\x18\v \x03(\tR\bprobeOpsJ\x04\b\f\x10\x14\"r\n" +
 	"\x1cCreateEnrollmentTokenRequest\x12+\n" +
 	"\x03ttl\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x03ttl\x12%\n" +
 	"\x0econtroller_url\x18\x02 \x01(\tR\rcontrollerUrl\"\xb5\x01\n" +
@@ -2981,7 +3763,7 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x16\n" +
 	"\x06labels\x18\x02 \x03(\tR\x06labels\"C\n" +
 	"\x17SetWorkerLabelsResponse\x12(\n" +
-	"\x06worker\x18\x01 \x01(\v2\x10.syncr.v1.WorkerR\x06worker\"\xde\x06\n" +
+	"\x06worker\x18\x01 \x01(\v2\x10.syncr.v1.WorkerR\x06worker\"\x8c\b\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tworker_id\x18\x02 \x01(\tR\bworkerId\x12\x12\n" +
@@ -3009,9 +3791,23 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"\aremotes\x18\x12 \x03(\v2\x16.syncr.v1.JobRemoteRefR\aremotes\x12\x1f\n" +
 	"\vschedule_id\x18\x13 \x01(\tR\n" +
 	"scheduleId\x124\n" +
-	"\bschedule\x18\x14 \x01(\v2\x18.syncr.v1.JobScheduleRefR\bscheduleB\f\n" +
+	"\bschedule\x18\x14 \x01(\v2\x18.syncr.v1.JobScheduleRefR\bschedule\x12\x14\n" +
+	"\x05title\x18\x15 \x01(\tR\x05title\x12:\n" +
 	"\n" +
-	"_exit_codeJ\x04\b\x15\x10\x1e\"4\n" +
+	"repository\x18\x16 \x01(\v2\x1a.syncr.v1.JobRepositoryRefR\n" +
+	"repository\x12+\n" +
+	"\x12waiting_for_job_id\x18\x17 \x01(\tR\x0fwaitingForJobId\x12-\n" +
+	"\adetails\x18\x18 \x03(\v2\x13.syncr.v1.JobDetailR\adetailsB\f\n" +
+	"\n" +
+	"_exit_codeJ\x04\b\x19\x10\x1e\"V\n" +
+	"\x10JobRepositoryRef\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
+	"\adeleted\x18\x03 \x01(\bR\adeletedJ\x04\b\x04\x10\n" +
+	"\"=\n" +
+	"\tJobDetail\x12\x14\n" +
+	"\x05label\x18\x01 \x01(\tR\x05label\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05valueJ\x04\b\x03\x10\x06\"4\n" +
 	"\x0eJobScheduleRef\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"u\n" +
@@ -3020,17 +3816,61 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12!\n" +
 	"\fbackend_type\x18\x03 \x01(\tR\vbackendType\x12\x18\n" +
 	"\adeleted\x18\x04 \x01(\bR\adeletedJ\x04\b\x05\x10\n" +
-	"\"q\n" +
+	"\"\xbd\x04\n" +
 	"\rJobDefinition\x12M\n" +
 	"\x0frclone_transfer\x18\n" +
-	" \x01(\v2\".syncr.v1.RcloneTransferDefinitionH\x00R\x0ercloneTransferB\v\n" +
-	"\toperationJ\x04\b\x14\x10\x1e\"\xf5\x01\n" +
+	" \x01(\v2\".syncr.v1.RcloneTransferDefinitionH\x00R\x0ercloneTransfer\x12G\n" +
+	"\rrestic_backup\x18\x15 \x01(\v2 .syncr.v1.ResticBackupDefinitionH\x00R\fresticBackup\x12G\n" +
+	"\rrestic_forget\x18\x16 \x01(\v2 .syncr.v1.ResticForgetDefinitionH\x00R\fresticForget\x12D\n" +
+	"\frestic_prune\x18\x17 \x01(\v2\x1f.syncr.v1.ResticPruneDefinitionH\x00R\vresticPrune\x12D\n" +
+	"\frestic_check\x18\x18 \x01(\v2\x1f.syncr.v1.ResticCheckDefinitionH\x00R\vresticCheck\x12J\n" +
+	"\x0erestic_restore\x18\x19 \x01(\v2!.syncr.v1.ResticRestoreDefinitionH\x00R\rresticRestore\x12T\n" +
+	"\x12restic_delete_data\x18\x1b \x01(\v2$.syncr.v1.ResticDeleteDataDefinitionH\x00R\x10resticDeleteDataB\v\n" +
+	"\toperationJ\x04\b\x14\x10\x15J\x04\b\x1a\x10\x1bJ\x04\b\x1c\x10\x1e\"\xf5\x01\n" +
 	"\x18RcloneTransferDefinition\x120\n" +
 	"\x04mode\x18\x01 \x01(\x0e2\x1c.syncr.v1.RcloneTransferModeR\x04mode\x12-\n" +
 	"\x06source\x18\x02 \x01(\v2\x15.syncr.v1.JobLocationR\x06source\x127\n" +
 	"\vdestination\x18\x03 \x01(\v2\x15.syncr.v1.JobLocationR\vdestination\x129\n" +
 	"\aoptions\x18\x04 \x01(\v2\x1f.syncr.v1.RcloneTransferOptionsR\aoptionsJ\x04\b\x05\x10\n" +
-	"\"D\n" +
+	"\"\x8b\x03\n" +
+	"\x16ResticBackupDefinition\x12#\n" +
+	"\rrepository_id\x18\x01 \x01(\tR\frepositoryId\x12\x14\n" +
+	"\x05paths\x18\x02 \x03(\tR\x05paths\x12\x1a\n" +
+	"\bexcludes\x18\x03 \x03(\tR\bexcludes\x12\x12\n" +
+	"\x04tags\x18\x04 \x03(\tR\x04tags\x12\x12\n" +
+	"\x04host\x18\x05 \x01(\tR\x04host\x12&\n" +
+	"\x0fuse_fs_snapshot\x18\x06 \x01(\bR\ruseFsSnapshot\x12%\n" +
+	"\x0eexclude_caches\x18\a \x01(\bR\rexcludeCaches\x12&\n" +
+	"\x0fone_file_system\x18\b \x01(\bR\roneFileSystem\x12>\n" +
+	"\x19exclude_larger_than_bytes\x18\t \x01(\x03H\x00R\x16excludeLargerThanBytes\x88\x01\x01\x12\x17\n" +
+	"\adry_run\x18\n" +
+	" \x01(\bR\x06dryRunB\x1c\n" +
+	"\x1a_exclude_larger_than_bytesJ\x04\b\v\x10\x1e\"\xd3\x01\n" +
+	"\x16ResticForgetDefinition\x12#\n" +
+	"\rrepository_id\x18\x01 \x01(\tR\frepositoryId\x127\n" +
+	"\x06policy\x18\x02 \x01(\v2\x1f.syncr.v1.ResticRetentionPolicyR\x06policy\x12\x14\n" +
+	"\x05prune\x18\x03 \x01(\bR\x05prune\x12\x12\n" +
+	"\x04tags\x18\x04 \x03(\tR\x04tags\x12\x12\n" +
+	"\x04host\x18\x05 \x01(\tR\x04host\x12\x17\n" +
+	"\adry_run\x18\x06 \x01(\bR\x06dryRunJ\x04\b\a\x10\x14\"[\n" +
+	"\x15ResticPruneDefinition\x12#\n" +
+	"\rrepository_id\x18\x01 \x01(\tR\frepositoryId\x12\x17\n" +
+	"\adry_run\x18\x02 \x01(\bR\x06dryRunJ\x04\b\x03\x10\x14\"n\n" +
+	"\x15ResticCheckDefinition\x12#\n" +
+	"\rrepository_id\x18\x01 \x01(\tR\frepositoryId\x12*\n" +
+	"\x11read_data_percent\x18\x02 \x01(\x05R\x0freadDataPercentJ\x04\b\x03\x10\x14\"\xa5\x02\n" +
+	"\x17ResticRestoreDefinition\x12#\n" +
+	"\rrepository_id\x18\x01 \x01(\tR\frepositoryId\x12\x1f\n" +
+	"\vsnapshot_id\x18\x02 \x01(\tR\n" +
+	"snapshotId\x12\x16\n" +
+	"\x06target\x18\x03 \x01(\tR\x06target\x12\x14\n" +
+	"\x05paths\x18\x04 \x03(\tR\x05paths\x12\x1a\n" +
+	"\bexcludes\x18\x05 \x03(\tR\bexcludes\x12\x16\n" +
+	"\x06verify\x18\x06 \x01(\bR\x06verify\x12\x1c\n" +
+	"\tsubfolder\x18\a \x01(\tR\tsubfolder\x12>\n" +
+	"\toverwrite\x18\b \x01(\x0e2 .syncr.v1.ResticRestoreOverwriteR\toverwriteJ\x04\b\t\x10\x14\"G\n" +
+	"\x1aResticDeleteDataDefinition\x12#\n" +
+	"\rrepository_id\x18\x01 \x01(\tR\frepositoryIdJ\x04\b\x02\x10\x14\"D\n" +
 	"\vJobLocation\x12\x1b\n" +
 	"\tremote_id\x18\x01 \x01(\tR\bremoteId\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04pathJ\x04\b\x03\x10\n" +
@@ -3045,7 +3885,7 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"\rGetJobRequest\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"1\n" +
 	"\x0eGetJobResponse\x12\x1f\n" +
-	"\x03job\x18\x01 \x01(\v2\r.syncr.v1.JobR\x03job\"\xa6\x03\n" +
+	"\x03job\x18\x01 \x01(\v2\r.syncr.v1.JobR\x03job\"\xcb\x03\n" +
 	"\x0fListJobsRequest\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12/\n" +
 	"\bstatuses\x18\x02 \x03(\x0e2\x13.syncr.v1.JobStatusR\bstatuses\x12\x1b\n" +
@@ -3060,7 +3900,8 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"\tall_users\x18\n" +
 	" \x01(\bR\ballUsers\x12\x1f\n" +
 	"\vschedule_id\x18\v \x01(\tR\n" +
-	"scheduleId\"]\n" +
+	"scheduleId\x12#\n" +
+	"\rrepository_id\x18\f \x01(\tR\frepositoryId\"]\n" +
 	"\x10ListJobsResponse\x12!\n" +
 	"\x04jobs\x18\x01 \x03(\v2\r.syncr.v1.JobR\x04jobs\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\")\n" +
@@ -3137,7 +3978,7 @@ func file_syncr_v1_api_proto_rawDescGZIP() []byte {
 }
 
 var file_syncr_v1_api_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_syncr_v1_api_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
+var file_syncr_v1_api_proto_msgTypes = make([]protoimpl.MessageInfo, 50)
 var file_syncr_v1_api_proto_goTypes = []any{
 	(WorkerStatus)(0),                         // 0: syncr.v1.WorkerStatus
 	(InstallPlatform)(0),                      // 1: syncr.v1.InstallPlatform
@@ -3167,46 +4008,56 @@ var file_syncr_v1_api_proto_goTypes = []any{
 	(*SetWorkerLabelsRequest)(nil),            // 25: syncr.v1.SetWorkerLabelsRequest
 	(*SetWorkerLabelsResponse)(nil),           // 26: syncr.v1.SetWorkerLabelsResponse
 	(*Job)(nil),                               // 27: syncr.v1.Job
-	(*JobScheduleRef)(nil),                    // 28: syncr.v1.JobScheduleRef
-	(*JobRemoteRef)(nil),                      // 29: syncr.v1.JobRemoteRef
-	(*JobDefinition)(nil),                     // 30: syncr.v1.JobDefinition
-	(*RcloneTransferDefinition)(nil),          // 31: syncr.v1.RcloneTransferDefinition
-	(*JobLocation)(nil),                       // 32: syncr.v1.JobLocation
-	(*RunJobRequest)(nil),                     // 33: syncr.v1.RunJobRequest
-	(*RunJobResponse)(nil),                    // 34: syncr.v1.RunJobResponse
-	(*GetJobRequest)(nil),                     // 35: syncr.v1.GetJobRequest
-	(*GetJobResponse)(nil),                    // 36: syncr.v1.GetJobResponse
-	(*ListJobsRequest)(nil),                   // 37: syncr.v1.ListJobsRequest
-	(*ListJobsResponse)(nil),                  // 38: syncr.v1.ListJobsResponse
-	(*CancelJobRequest)(nil),                  // 39: syncr.v1.CancelJobRequest
-	(*CancelJobResponse)(nil),                 // 40: syncr.v1.CancelJobResponse
-	(*WatchJobRequest)(nil),                   // 41: syncr.v1.WatchJobRequest
-	(*WatchJobResponse)(nil),                  // 42: syncr.v1.WatchJobResponse
-	(*ListJobSamplesRequest)(nil),             // 43: syncr.v1.ListJobSamplesRequest
-	(*ListJobSamplesResponse)(nil),            // 44: syncr.v1.ListJobSamplesResponse
-	(*JobProgress)(nil),                       // 45: syncr.v1.JobProgress
-	(*timestamppb.Timestamp)(nil),             // 46: google.protobuf.Timestamp
-	(WorkerMode)(0),                           // 47: syncr.v1.WorkerMode
-	(*ToolVersion)(nil),                       // 48: syncr.v1.ToolVersion
-	(*durationpb.Duration)(nil),               // 49: google.protobuf.Duration
-	(*JobStats)(nil),                          // 50: syncr.v1.JobStats
-	(*JobError)(nil),                          // 51: syncr.v1.JobError
-	(*JobOutput)(nil),                         // 52: syncr.v1.JobOutput
-	(RcloneTransferMode)(0),                   // 53: syncr.v1.RcloneTransferMode
-	(*RcloneTransferOptions)(nil),             // 54: syncr.v1.RcloneTransferOptions
+	(*JobRepositoryRef)(nil),                  // 28: syncr.v1.JobRepositoryRef
+	(*JobDetail)(nil),                         // 29: syncr.v1.JobDetail
+	(*JobScheduleRef)(nil),                    // 30: syncr.v1.JobScheduleRef
+	(*JobRemoteRef)(nil),                      // 31: syncr.v1.JobRemoteRef
+	(*JobDefinition)(nil),                     // 32: syncr.v1.JobDefinition
+	(*RcloneTransferDefinition)(nil),          // 33: syncr.v1.RcloneTransferDefinition
+	(*ResticBackupDefinition)(nil),            // 34: syncr.v1.ResticBackupDefinition
+	(*ResticForgetDefinition)(nil),            // 35: syncr.v1.ResticForgetDefinition
+	(*ResticPruneDefinition)(nil),             // 36: syncr.v1.ResticPruneDefinition
+	(*ResticCheckDefinition)(nil),             // 37: syncr.v1.ResticCheckDefinition
+	(*ResticRestoreDefinition)(nil),           // 38: syncr.v1.ResticRestoreDefinition
+	(*ResticDeleteDataDefinition)(nil),        // 39: syncr.v1.ResticDeleteDataDefinition
+	(*JobLocation)(nil),                       // 40: syncr.v1.JobLocation
+	(*RunJobRequest)(nil),                     // 41: syncr.v1.RunJobRequest
+	(*RunJobResponse)(nil),                    // 42: syncr.v1.RunJobResponse
+	(*GetJobRequest)(nil),                     // 43: syncr.v1.GetJobRequest
+	(*GetJobResponse)(nil),                    // 44: syncr.v1.GetJobResponse
+	(*ListJobsRequest)(nil),                   // 45: syncr.v1.ListJobsRequest
+	(*ListJobsResponse)(nil),                  // 46: syncr.v1.ListJobsResponse
+	(*CancelJobRequest)(nil),                  // 47: syncr.v1.CancelJobRequest
+	(*CancelJobResponse)(nil),                 // 48: syncr.v1.CancelJobResponse
+	(*WatchJobRequest)(nil),                   // 49: syncr.v1.WatchJobRequest
+	(*WatchJobResponse)(nil),                  // 50: syncr.v1.WatchJobResponse
+	(*ListJobSamplesRequest)(nil),             // 51: syncr.v1.ListJobSamplesRequest
+	(*ListJobSamplesResponse)(nil),            // 52: syncr.v1.ListJobSamplesResponse
+	(*JobProgress)(nil),                       // 53: syncr.v1.JobProgress
+	(*timestamppb.Timestamp)(nil),             // 54: google.protobuf.Timestamp
+	(WorkerMode)(0),                           // 55: syncr.v1.WorkerMode
+	(*ToolVersion)(nil),                       // 56: syncr.v1.ToolVersion
+	(*durationpb.Duration)(nil),               // 57: google.protobuf.Duration
+	(*JobStats)(nil),                          // 58: syncr.v1.JobStats
+	(*JobError)(nil),                          // 59: syncr.v1.JobError
+	(*JobOutput)(nil),                         // 60: syncr.v1.JobOutput
+	(RcloneTransferMode)(0),                   // 61: syncr.v1.RcloneTransferMode
+	(*RcloneTransferOptions)(nil),             // 62: syncr.v1.RcloneTransferOptions
+	(*ResticRetentionPolicy)(nil),             // 63: syncr.v1.ResticRetentionPolicy
+	(ResticRestoreOverwrite)(0),               // 64: syncr.v1.ResticRestoreOverwrite
 }
 var file_syncr_v1_api_proto_depIdxs = []int32{
 	5,  // 0: syncr.v1.ValidationError.violations:type_name -> syncr.v1.FieldViolation
-	46, // 1: syncr.v1.GetInfoResponse.build_time:type_name -> google.protobuf.Timestamp
-	47, // 2: syncr.v1.Worker.mode:type_name -> syncr.v1.WorkerMode
+	54, // 1: syncr.v1.GetInfoResponse.build_time:type_name -> google.protobuf.Timestamp
+	55, // 2: syncr.v1.Worker.mode:type_name -> syncr.v1.WorkerMode
 	0,  // 3: syncr.v1.Worker.status:type_name -> syncr.v1.WorkerStatus
-	46, // 4: syncr.v1.Worker.last_seen:type_name -> google.protobuf.Timestamp
-	46, // 5: syncr.v1.Worker.created_at:type_name -> google.protobuf.Timestamp
+	54, // 4: syncr.v1.Worker.last_seen:type_name -> google.protobuf.Timestamp
+	54, // 5: syncr.v1.Worker.created_at:type_name -> google.protobuf.Timestamp
 	9,  // 6: syncr.v1.Worker.info:type_name -> syncr.v1.WorkerInfo
-	48, // 7: syncr.v1.WorkerInfo.tools:type_name -> syncr.v1.ToolVersion
-	46, // 8: syncr.v1.WorkerInfo.reported_at:type_name -> google.protobuf.Timestamp
-	49, // 9: syncr.v1.CreateEnrollmentTokenRequest.ttl:type_name -> google.protobuf.Duration
-	46, // 10: syncr.v1.CreateEnrollmentTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	56, // 7: syncr.v1.WorkerInfo.tools:type_name -> syncr.v1.ToolVersion
+	54, // 8: syncr.v1.WorkerInfo.reported_at:type_name -> google.protobuf.Timestamp
+	57, // 9: syncr.v1.CreateEnrollmentTokenRequest.ttl:type_name -> google.protobuf.Duration
+	54, // 10: syncr.v1.CreateEnrollmentTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
 	14, // 11: syncr.v1.CreateEnrollmentTokenResponse.install_commands:type_name -> syncr.v1.InstallCommand
 	14, // 12: syncr.v1.GetPassiveInstallCommandsResponse.commands:type_name -> syncr.v1.InstallCommand
 	1,  // 13: syncr.v1.InstallCommand.platform:type_name -> syncr.v1.InstallPlatform
@@ -3217,69 +4068,79 @@ var file_syncr_v1_api_proto_depIdxs = []int32{
 	8,  // 18: syncr.v1.RenameWorkerResponse.worker:type_name -> syncr.v1.Worker
 	8,  // 19: syncr.v1.SetWorkerLabelsResponse.worker:type_name -> syncr.v1.Worker
 	3,  // 20: syncr.v1.Job.status:type_name -> syncr.v1.JobStatus
-	46, // 21: syncr.v1.Job.created_at:type_name -> google.protobuf.Timestamp
-	46, // 22: syncr.v1.Job.dispatched_at:type_name -> google.protobuf.Timestamp
-	46, // 23: syncr.v1.Job.started_at:type_name -> google.protobuf.Timestamp
-	46, // 24: syncr.v1.Job.finished_at:type_name -> google.protobuf.Timestamp
-	50, // 25: syncr.v1.Job.stats:type_name -> syncr.v1.JobStats
-	51, // 26: syncr.v1.Job.error:type_name -> syncr.v1.JobError
-	52, // 27: syncr.v1.Job.output:type_name -> syncr.v1.JobOutput
-	30, // 28: syncr.v1.Job.definition:type_name -> syncr.v1.JobDefinition
-	29, // 29: syncr.v1.Job.remotes:type_name -> syncr.v1.JobRemoteRef
-	28, // 30: syncr.v1.Job.schedule:type_name -> syncr.v1.JobScheduleRef
-	31, // 31: syncr.v1.JobDefinition.rclone_transfer:type_name -> syncr.v1.RcloneTransferDefinition
-	53, // 32: syncr.v1.RcloneTransferDefinition.mode:type_name -> syncr.v1.RcloneTransferMode
-	32, // 33: syncr.v1.RcloneTransferDefinition.source:type_name -> syncr.v1.JobLocation
-	32, // 34: syncr.v1.RcloneTransferDefinition.destination:type_name -> syncr.v1.JobLocation
-	54, // 35: syncr.v1.RcloneTransferDefinition.options:type_name -> syncr.v1.RcloneTransferOptions
-	30, // 36: syncr.v1.RunJobRequest.definition:type_name -> syncr.v1.JobDefinition
-	27, // 37: syncr.v1.RunJobResponse.job:type_name -> syncr.v1.Job
-	27, // 38: syncr.v1.GetJobResponse.job:type_name -> syncr.v1.Job
-	3,  // 39: syncr.v1.ListJobsRequest.statuses:type_name -> syncr.v1.JobStatus
-	46, // 40: syncr.v1.ListJobsRequest.created_after:type_name -> google.protobuf.Timestamp
-	46, // 41: syncr.v1.ListJobsRequest.created_before:type_name -> google.protobuf.Timestamp
-	27, // 42: syncr.v1.ListJobsResponse.jobs:type_name -> syncr.v1.Job
-	27, // 43: syncr.v1.CancelJobResponse.job:type_name -> syncr.v1.Job
-	27, // 44: syncr.v1.WatchJobResponse.job:type_name -> syncr.v1.Job
-	45, // 45: syncr.v1.WatchJobResponse.progress:type_name -> syncr.v1.JobProgress
-	45, // 46: syncr.v1.ListJobSamplesResponse.samples:type_name -> syncr.v1.JobProgress
-	46, // 47: syncr.v1.JobProgress.time:type_name -> google.protobuf.Timestamp
-	50, // 48: syncr.v1.JobProgress.stats:type_name -> syncr.v1.JobStats
-	6,  // 49: syncr.v1.SystemService.GetInfo:input_type -> syncr.v1.GetInfoRequest
-	10, // 50: syncr.v1.WorkerAdminService.CreateEnrollmentToken:input_type -> syncr.v1.CreateEnrollmentTokenRequest
-	12, // 51: syncr.v1.WorkerAdminService.GetPassiveInstallCommands:input_type -> syncr.v1.GetPassiveInstallCommandsRequest
-	15, // 52: syncr.v1.WorkerAdminService.RegisterPassiveWorker:input_type -> syncr.v1.RegisterPassiveWorkerRequest
-	17, // 53: syncr.v1.WorkerAdminService.ListWorkers:input_type -> syncr.v1.ListWorkersRequest
-	19, // 54: syncr.v1.WorkerAdminService.GetWorker:input_type -> syncr.v1.GetWorkerRequest
-	21, // 55: syncr.v1.WorkerAdminService.RenameWorker:input_type -> syncr.v1.RenameWorkerRequest
-	23, // 56: syncr.v1.WorkerAdminService.RemoveWorker:input_type -> syncr.v1.RemoveWorkerRequest
-	25, // 57: syncr.v1.WorkerAdminService.SetWorkerLabels:input_type -> syncr.v1.SetWorkerLabelsRequest
-	33, // 58: syncr.v1.JobService.RunJob:input_type -> syncr.v1.RunJobRequest
-	35, // 59: syncr.v1.JobService.GetJob:input_type -> syncr.v1.GetJobRequest
-	37, // 60: syncr.v1.JobService.ListJobs:input_type -> syncr.v1.ListJobsRequest
-	39, // 61: syncr.v1.JobService.CancelJob:input_type -> syncr.v1.CancelJobRequest
-	41, // 62: syncr.v1.JobService.WatchJob:input_type -> syncr.v1.WatchJobRequest
-	43, // 63: syncr.v1.JobService.ListJobSamples:input_type -> syncr.v1.ListJobSamplesRequest
-	7,  // 64: syncr.v1.SystemService.GetInfo:output_type -> syncr.v1.GetInfoResponse
-	11, // 65: syncr.v1.WorkerAdminService.CreateEnrollmentToken:output_type -> syncr.v1.CreateEnrollmentTokenResponse
-	13, // 66: syncr.v1.WorkerAdminService.GetPassiveInstallCommands:output_type -> syncr.v1.GetPassiveInstallCommandsResponse
-	16, // 67: syncr.v1.WorkerAdminService.RegisterPassiveWorker:output_type -> syncr.v1.RegisterPassiveWorkerResponse
-	18, // 68: syncr.v1.WorkerAdminService.ListWorkers:output_type -> syncr.v1.ListWorkersResponse
-	20, // 69: syncr.v1.WorkerAdminService.GetWorker:output_type -> syncr.v1.GetWorkerResponse
-	22, // 70: syncr.v1.WorkerAdminService.RenameWorker:output_type -> syncr.v1.RenameWorkerResponse
-	24, // 71: syncr.v1.WorkerAdminService.RemoveWorker:output_type -> syncr.v1.RemoveWorkerResponse
-	26, // 72: syncr.v1.WorkerAdminService.SetWorkerLabels:output_type -> syncr.v1.SetWorkerLabelsResponse
-	34, // 73: syncr.v1.JobService.RunJob:output_type -> syncr.v1.RunJobResponse
-	36, // 74: syncr.v1.JobService.GetJob:output_type -> syncr.v1.GetJobResponse
-	38, // 75: syncr.v1.JobService.ListJobs:output_type -> syncr.v1.ListJobsResponse
-	40, // 76: syncr.v1.JobService.CancelJob:output_type -> syncr.v1.CancelJobResponse
-	42, // 77: syncr.v1.JobService.WatchJob:output_type -> syncr.v1.WatchJobResponse
-	44, // 78: syncr.v1.JobService.ListJobSamples:output_type -> syncr.v1.ListJobSamplesResponse
-	64, // [64:79] is the sub-list for method output_type
-	49, // [49:64] is the sub-list for method input_type
-	49, // [49:49] is the sub-list for extension type_name
-	49, // [49:49] is the sub-list for extension extendee
-	0,  // [0:49] is the sub-list for field type_name
+	54, // 21: syncr.v1.Job.created_at:type_name -> google.protobuf.Timestamp
+	54, // 22: syncr.v1.Job.dispatched_at:type_name -> google.protobuf.Timestamp
+	54, // 23: syncr.v1.Job.started_at:type_name -> google.protobuf.Timestamp
+	54, // 24: syncr.v1.Job.finished_at:type_name -> google.protobuf.Timestamp
+	58, // 25: syncr.v1.Job.stats:type_name -> syncr.v1.JobStats
+	59, // 26: syncr.v1.Job.error:type_name -> syncr.v1.JobError
+	60, // 27: syncr.v1.Job.output:type_name -> syncr.v1.JobOutput
+	32, // 28: syncr.v1.Job.definition:type_name -> syncr.v1.JobDefinition
+	31, // 29: syncr.v1.Job.remotes:type_name -> syncr.v1.JobRemoteRef
+	30, // 30: syncr.v1.Job.schedule:type_name -> syncr.v1.JobScheduleRef
+	28, // 31: syncr.v1.Job.repository:type_name -> syncr.v1.JobRepositoryRef
+	29, // 32: syncr.v1.Job.details:type_name -> syncr.v1.JobDetail
+	33, // 33: syncr.v1.JobDefinition.rclone_transfer:type_name -> syncr.v1.RcloneTransferDefinition
+	34, // 34: syncr.v1.JobDefinition.restic_backup:type_name -> syncr.v1.ResticBackupDefinition
+	35, // 35: syncr.v1.JobDefinition.restic_forget:type_name -> syncr.v1.ResticForgetDefinition
+	36, // 36: syncr.v1.JobDefinition.restic_prune:type_name -> syncr.v1.ResticPruneDefinition
+	37, // 37: syncr.v1.JobDefinition.restic_check:type_name -> syncr.v1.ResticCheckDefinition
+	38, // 38: syncr.v1.JobDefinition.restic_restore:type_name -> syncr.v1.ResticRestoreDefinition
+	39, // 39: syncr.v1.JobDefinition.restic_delete_data:type_name -> syncr.v1.ResticDeleteDataDefinition
+	61, // 40: syncr.v1.RcloneTransferDefinition.mode:type_name -> syncr.v1.RcloneTransferMode
+	40, // 41: syncr.v1.RcloneTransferDefinition.source:type_name -> syncr.v1.JobLocation
+	40, // 42: syncr.v1.RcloneTransferDefinition.destination:type_name -> syncr.v1.JobLocation
+	62, // 43: syncr.v1.RcloneTransferDefinition.options:type_name -> syncr.v1.RcloneTransferOptions
+	63, // 44: syncr.v1.ResticForgetDefinition.policy:type_name -> syncr.v1.ResticRetentionPolicy
+	64, // 45: syncr.v1.ResticRestoreDefinition.overwrite:type_name -> syncr.v1.ResticRestoreOverwrite
+	32, // 46: syncr.v1.RunJobRequest.definition:type_name -> syncr.v1.JobDefinition
+	27, // 47: syncr.v1.RunJobResponse.job:type_name -> syncr.v1.Job
+	27, // 48: syncr.v1.GetJobResponse.job:type_name -> syncr.v1.Job
+	3,  // 49: syncr.v1.ListJobsRequest.statuses:type_name -> syncr.v1.JobStatus
+	54, // 50: syncr.v1.ListJobsRequest.created_after:type_name -> google.protobuf.Timestamp
+	54, // 51: syncr.v1.ListJobsRequest.created_before:type_name -> google.protobuf.Timestamp
+	27, // 52: syncr.v1.ListJobsResponse.jobs:type_name -> syncr.v1.Job
+	27, // 53: syncr.v1.CancelJobResponse.job:type_name -> syncr.v1.Job
+	27, // 54: syncr.v1.WatchJobResponse.job:type_name -> syncr.v1.Job
+	53, // 55: syncr.v1.WatchJobResponse.progress:type_name -> syncr.v1.JobProgress
+	53, // 56: syncr.v1.ListJobSamplesResponse.samples:type_name -> syncr.v1.JobProgress
+	54, // 57: syncr.v1.JobProgress.time:type_name -> google.protobuf.Timestamp
+	58, // 58: syncr.v1.JobProgress.stats:type_name -> syncr.v1.JobStats
+	6,  // 59: syncr.v1.SystemService.GetInfo:input_type -> syncr.v1.GetInfoRequest
+	10, // 60: syncr.v1.WorkerAdminService.CreateEnrollmentToken:input_type -> syncr.v1.CreateEnrollmentTokenRequest
+	12, // 61: syncr.v1.WorkerAdminService.GetPassiveInstallCommands:input_type -> syncr.v1.GetPassiveInstallCommandsRequest
+	15, // 62: syncr.v1.WorkerAdminService.RegisterPassiveWorker:input_type -> syncr.v1.RegisterPassiveWorkerRequest
+	17, // 63: syncr.v1.WorkerAdminService.ListWorkers:input_type -> syncr.v1.ListWorkersRequest
+	19, // 64: syncr.v1.WorkerAdminService.GetWorker:input_type -> syncr.v1.GetWorkerRequest
+	21, // 65: syncr.v1.WorkerAdminService.RenameWorker:input_type -> syncr.v1.RenameWorkerRequest
+	23, // 66: syncr.v1.WorkerAdminService.RemoveWorker:input_type -> syncr.v1.RemoveWorkerRequest
+	25, // 67: syncr.v1.WorkerAdminService.SetWorkerLabels:input_type -> syncr.v1.SetWorkerLabelsRequest
+	41, // 68: syncr.v1.JobService.RunJob:input_type -> syncr.v1.RunJobRequest
+	43, // 69: syncr.v1.JobService.GetJob:input_type -> syncr.v1.GetJobRequest
+	45, // 70: syncr.v1.JobService.ListJobs:input_type -> syncr.v1.ListJobsRequest
+	47, // 71: syncr.v1.JobService.CancelJob:input_type -> syncr.v1.CancelJobRequest
+	49, // 72: syncr.v1.JobService.WatchJob:input_type -> syncr.v1.WatchJobRequest
+	51, // 73: syncr.v1.JobService.ListJobSamples:input_type -> syncr.v1.ListJobSamplesRequest
+	7,  // 74: syncr.v1.SystemService.GetInfo:output_type -> syncr.v1.GetInfoResponse
+	11, // 75: syncr.v1.WorkerAdminService.CreateEnrollmentToken:output_type -> syncr.v1.CreateEnrollmentTokenResponse
+	13, // 76: syncr.v1.WorkerAdminService.GetPassiveInstallCommands:output_type -> syncr.v1.GetPassiveInstallCommandsResponse
+	16, // 77: syncr.v1.WorkerAdminService.RegisterPassiveWorker:output_type -> syncr.v1.RegisterPassiveWorkerResponse
+	18, // 78: syncr.v1.WorkerAdminService.ListWorkers:output_type -> syncr.v1.ListWorkersResponse
+	20, // 79: syncr.v1.WorkerAdminService.GetWorker:output_type -> syncr.v1.GetWorkerResponse
+	22, // 80: syncr.v1.WorkerAdminService.RenameWorker:output_type -> syncr.v1.RenameWorkerResponse
+	24, // 81: syncr.v1.WorkerAdminService.RemoveWorker:output_type -> syncr.v1.RemoveWorkerResponse
+	26, // 82: syncr.v1.WorkerAdminService.SetWorkerLabels:output_type -> syncr.v1.SetWorkerLabelsResponse
+	42, // 83: syncr.v1.JobService.RunJob:output_type -> syncr.v1.RunJobResponse
+	44, // 84: syncr.v1.JobService.GetJob:output_type -> syncr.v1.GetJobResponse
+	46, // 85: syncr.v1.JobService.ListJobs:output_type -> syncr.v1.ListJobsResponse
+	48, // 86: syncr.v1.JobService.CancelJob:output_type -> syncr.v1.CancelJobResponse
+	50, // 87: syncr.v1.JobService.WatchJob:output_type -> syncr.v1.WatchJobResponse
+	52, // 88: syncr.v1.JobService.ListJobSamples:output_type -> syncr.v1.ListJobSamplesResponse
+	74, // [74:89] is the sub-list for method output_type
+	59, // [59:74] is the sub-list for method input_type
+	59, // [59:59] is the sub-list for extension type_name
+	59, // [59:59] is the sub-list for extension extendee
+	0,  // [0:59] is the sub-list for field type_name
 }
 
 func init() { file_syncr_v1_api_proto_init() }
@@ -3289,10 +4150,17 @@ func file_syncr_v1_api_proto_init() {
 	}
 	file_syncr_v1_link_proto_init()
 	file_syncr_v1_api_proto_msgTypes[23].OneofWrappers = []any{}
-	file_syncr_v1_api_proto_msgTypes[26].OneofWrappers = []any{
+	file_syncr_v1_api_proto_msgTypes[28].OneofWrappers = []any{
 		(*JobDefinition_RcloneTransfer)(nil),
+		(*JobDefinition_ResticBackup)(nil),
+		(*JobDefinition_ResticForget)(nil),
+		(*JobDefinition_ResticPrune)(nil),
+		(*JobDefinition_ResticCheck)(nil),
+		(*JobDefinition_ResticRestore)(nil),
+		(*JobDefinition_ResticDeleteData)(nil),
 	}
-	file_syncr_v1_api_proto_msgTypes[38].OneofWrappers = []any{
+	file_syncr_v1_api_proto_msgTypes[30].OneofWrappers = []any{}
+	file_syncr_v1_api_proto_msgTypes[46].OneofWrappers = []any{
 		(*WatchJobResponse_Job)(nil),
 		(*WatchJobResponse_Progress)(nil),
 	}
@@ -3302,7 +4170,7 @@ func file_syncr_v1_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_syncr_v1_api_proto_rawDesc), len(file_syncr_v1_api_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   42,
+			NumMessages:   50,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

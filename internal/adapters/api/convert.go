@@ -91,6 +91,8 @@ func workerInfoToProto(in workers.Info) *syncrv1.WorkerInfo {
 		JobKinds:          in.JobKinds,
 		MaxConcurrentJobs: int32(min(max(in.MaxConcurrentJobs, 0), 1<<31-1)),
 		LocalRoots:        in.LocalRoots,
+		Features:          in.Features,
+		ProbeOps:          in.ProbeOps,
 		ReportedAt:        ts(in.ReportedAt),
 	}
 	for _, t := range in.Tools {

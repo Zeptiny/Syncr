@@ -461,11 +461,17 @@ func (UnimplementedWorkerAdminServiceHandler) SetWorkerLabels(context.Context, *
 // JobServiceClient is a client for the syncr.v1.JobService service.
 type JobServiceClient interface {
 	// RunJob queues a job on a worker. The definition refers to the caller's
-	// remotes by ID and carries no secrets; it is checked for shape and path
-	// syntax (INVALID_ARGUMENT with a ValidationError detail) and its remotes
-	// must be the caller's live remotes (NOT_FOUND otherwise). The controller
-	// resolves the remotes' credentials only when it hands the job to the
+	// remotes and restic repositories by ID and carries no secrets; it is
+	// checked for shape and path syntax (INVALID_ARGUMENT with a
+	// ValidationError detail) and its remotes and repository must be the
+	// caller's live ones (NOT_FOUND otherwise). A repository whose data is
+	// being deleted accepts no new jobs (FAILED_PRECONDITION); a
+	// restic_delete_data definition is rejected (INVALID_ARGUMENT on
+	// "definition.restic_delete_data": DeleteRepository starts it). The
+	// controller resolves the credentials only when it hands the job to the
 	// worker, which validates it fully and reports problems as a FAILED job.
+	// Jobs on one restic repository run one at a time, oldest first
+	// (Job.waiting_for_job_id).
 	RunJob(context.Context, *connect.Request[v1.RunJobRequest]) (*connect.Response[v1.RunJobResponse], error)
 	// GetJob returns one job.
 	GetJob(context.Context, *connect.Request[v1.GetJobRequest]) (*connect.Response[v1.GetJobResponse], error)
@@ -591,11 +597,17 @@ func (c *jobServiceClient) ListJobSamples(ctx context.Context, req *connect.Requ
 // JobServiceHandler is an implementation of the syncr.v1.JobService service.
 type JobServiceHandler interface {
 	// RunJob queues a job on a worker. The definition refers to the caller's
-	// remotes by ID and carries no secrets; it is checked for shape and path
-	// syntax (INVALID_ARGUMENT with a ValidationError detail) and its remotes
-	// must be the caller's live remotes (NOT_FOUND otherwise). The controller
-	// resolves the remotes' credentials only when it hands the job to the
+	// remotes and restic repositories by ID and carries no secrets; it is
+	// checked for shape and path syntax (INVALID_ARGUMENT with a
+	// ValidationError detail) and its remotes and repository must be the
+	// caller's live ones (NOT_FOUND otherwise). A repository whose data is
+	// being deleted accepts no new jobs (FAILED_PRECONDITION); a
+	// restic_delete_data definition is rejected (INVALID_ARGUMENT on
+	// "definition.restic_delete_data": DeleteRepository starts it). The
+	// controller resolves the credentials only when it hands the job to the
 	// worker, which validates it fully and reports problems as a FAILED job.
+	// Jobs on one restic repository run one at a time, oldest first
+	// (Job.waiting_for_job_id).
 	RunJob(context.Context, *connect.Request[v1.RunJobRequest]) (*connect.Response[v1.RunJobResponse], error)
 	// GetJob returns one job.
 	GetJob(context.Context, *connect.Request[v1.GetJobRequest]) (*connect.Response[v1.GetJobResponse], error)

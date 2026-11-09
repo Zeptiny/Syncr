@@ -62,3 +62,16 @@ func TestMilestone4IDs(t *testing.T) {
 		}
 	}
 }
+
+func TestMilestone5IDs(t *testing.T) {
+	t.Parallel()
+	var g UUIDv7
+	if g.NewResticRepoID().IsZero() || g.NewProbeID().IsZero() {
+		t.Error("zero id")
+	}
+	var s Sequential
+	if r, p := s.NewResticRepoID().String(), s.NewProbeID().String(); r != "00000000-0000-7000-8000-000000000001" ||
+		p != "00000000-0000-7000-8000-000000000002" {
+		t.Errorf("repository, probe ids = %s, %s", r, p)
+	}
+}

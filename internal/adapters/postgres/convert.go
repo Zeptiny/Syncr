@@ -107,6 +107,8 @@ type infoDoc struct {
 	JobKinds          []string  `json:"job_kinds,omitempty"`
 	MaxConcurrentJobs int       `json:"max_concurrent_jobs,omitempty"`
 	LocalRoots        []string  `json:"local_roots,omitempty"`
+	Features          []string  `json:"features,omitempty"`
+	ProbeOps          []string  `json:"probe_ops,omitempty"`
 	ReportedAt        time.Time `json:"reported_at,omitzero"`
 }
 
@@ -124,6 +126,8 @@ func encodeInfo(in workers.Info) ([]byte, error) {
 		JobKinds:          cleanTexts(in.JobKinds),
 		MaxConcurrentJobs: in.MaxConcurrentJobs,
 		LocalRoots:        cleanTexts(in.LocalRoots),
+		Features:          cleanTexts(in.Features),
+		ProbeOps:          cleanTexts(in.ProbeOps),
 		ReportedAt:        in.ReportedAt.UTC(),
 	}
 	for _, t := range in.Tools {
@@ -151,6 +155,8 @@ func decodeInfo(b []byte) (workers.Info, error) {
 		JobKinds:          doc.JobKinds,
 		MaxConcurrentJobs: doc.MaxConcurrentJobs,
 		LocalRoots:        doc.LocalRoots,
+		Features:          doc.Features,
+		ProbeOps:          doc.ProbeOps,
 		ReportedAt:        doc.ReportedAt.UTC(),
 	}
 	for _, t := range doc.Tools {
@@ -281,6 +287,10 @@ func jobFrom(r db.Job) (jobs.Job, error) {
 	if err := decodeID(&j.ScheduleID, r.ScheduleID); err != nil {
 		return jobs.Job{}, err
 	}
+	if err := decodeID(&j.RepositoryID, r.RepositoryID); err != nil {
+		return jobs.Job{}, err
+	}
+	j.ConcurrencyKeys = nilIfEmpty(r.ConcurrencyKeys)
 	return j, nil
 }
 

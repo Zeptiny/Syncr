@@ -29,8 +29,8 @@ func DefaultConfig() Config {
 	return Config{SampleInterval: 5 * time.Second, MaxDefinitionBytes: 1 << 20}
 }
 
-// Deps are the service's collaborators. All are required except Remotes
-// and Logger.
+// Deps are the service's collaborators. All are required except Remotes,
+// Repositories, Activity and Logger.
 type Deps struct {
 	Jobs     Repository
 	Samples  SampleRepository
@@ -43,6 +43,10 @@ type Deps struct {
 	// that uses a remote fails with ErrUnknownRemote (fail closed); jobs
 	// on the worker's filesystem only still work.
 	Remotes RemoteChecker
+	// Repositories checks the restic repository of new jobs. Without it,
+	// creating a job on a repository fails with ErrUnknownRepository (fail
+	// closed).
+	Repositories RepositoryChecker
 	// Activity aggregates finished jobs for the dashboard (Activity,
 	// CountUnfinished); optional, those use cases fail without it.
 	Activity ActivityRepository
@@ -61,6 +65,7 @@ type Service struct {
 	notifier Notifier
 	waker    Waker
 	remotes  RemoteChecker
+	repos    RepositoryChecker
 	activity ActivityRepository
 	log      *slog.Logger
 	cfg      Config
@@ -94,7 +99,7 @@ func New(d Deps, cfg Config) (*Service, error) {
 	}
 	return &Service{
 		repo: d.Jobs, samples: d.Samples, clock: d.Clock, ids: d.IDs,
-		broker: d.Broker, notifier: d.Notifier, waker: d.Waker, remotes: d.Remotes, activity: d.Activity,
+		broker: d.Broker, notifier: d.Notifier, waker: d.Waker, remotes: d.Remotes, repos: d.Repositories, activity: d.Activity,
 		log: log, cfg: cfg,
 		lastStored: make(map[domain.JobID]lastSample), lastPrune: d.Clock.Now(),
 	}, nil
@@ -108,7 +113,15 @@ var (
 	// ErrUnknownRemote: a remote of the definition is not a live remote of
 	// the actor.
 	ErrUnknownRemote = fmt.Errorf("remote %w", domain.ErrNotFound)
+	// ErrUnknownRepository: the definition's restic repository is not a
+	// live repository of the actor.
+	ErrUnknownRepository = fmt.Errorf("repository %w", domain.ErrNotFound)
 )
+
+// ErrRepositoryDeleting reports a job on a restic repository whose data is
+// being deleted: only the deletion job itself may be created. It matches
+// domain.ErrFailedPrecondition.
+var ErrRepositoryDeleting = fmt.Errorf("the repository's data is being deleted: %w", domain.ErrFailedPrecondition)
 
 // ---------------------------------------------------------------------------
 // API use cases
@@ -119,10 +132,15 @@ var (
 // is ErrNotFound, so its existence does not leak.
 
 // Create queues a job of the actor on a worker. The definition's remotes
-// must be live remotes of the actor (ErrUnknownRemote otherwise); the
-// worker must exist and not be removed (ErrUnknownWorker otherwise). A
-// preset p.ID is used as the job's ID (ErrAlreadyExists if it is taken);
-// p.ScheduleID links the job to the schedule launching it.
+// must be live remotes of the actor (ErrUnknownRemote otherwise) and its
+// repository a live repository of the actor (ErrUnknownRepository
+// otherwise; ErrRepositoryDeleting while its data is being deleted, unless
+// p.ID is the deletion's reserved job ID); the repository's remote joins
+// RemoteIDs and its name the search text. The worker must exist and not be
+// removed (ErrUnknownWorker otherwise). The concurrency keys are validated
+// (domain.ErrInvalidArgument), sorted and deduplicated. A preset p.ID is
+// used as the job's ID (ErrAlreadyExists if it is taken); p.ScheduleID
+// links the job to the schedule launching it.
 func (s *Service) Create(ctx context.Context, actor domain.Actor, p CreateParams) (Job, error) {
 	switch {
 	case p.WorkerID.IsZero():
@@ -136,18 +154,31 @@ func (s *Service) Create(ctx context.Context, actor domain.Actor, p CreateParams
 	case len(p.Definition) > s.cfg.MaxDefinitionBytes:
 		return Job{}, fmt.Errorf("create job: %w: definition is %d bytes, at most %d allowed", domain.ErrInvalidArgument, len(p.Definition), s.cfg.MaxDefinitionBytes)
 	}
-	remoteIDs := sortedIDs(p.RemoteIDs)
-	for _, id := range remoteIDs {
+	keys, err := normalizeKeys(p.ConcurrencyKeys)
+	if err != nil {
+		return Job{}, fmt.Errorf("create job: %w", err)
+	}
+	for _, id := range p.RemoteIDs {
 		if id.IsZero() {
 			return Job{}, fmt.Errorf("create job: %w: remote id", domain.ErrInvalidID)
 		}
 	}
+	terms := p.SearchTerms
+	remoteIDs := p.RemoteIDs
+	if !p.RepositoryID.IsZero() {
+		name, remoteID, err := s.usableRepository(ctx, actor.UserID, p.RepositoryID, p.ID)
+		if err != nil {
+			return Job{}, fmt.Errorf("create job: %w", err)
+		}
+		remoteIDs = append(slices.Clone(remoteIDs), remoteID)
+		terms = append(slices.Clone(terms), name)
+	}
+	remoteIDs = sortedIDs(remoteIDs)
 	var names map[domain.RemoteID]string
 	if len(remoteIDs) > 0 {
 		if s.remotes == nil {
 			return Job{}, fmt.Errorf("create job: %w: remotes are not available", ErrUnknownRemote)
 		}
-		var err error
 		if names, err = s.remotes.Usable(ctx, actor.UserID, remoteIDs); err != nil {
 			if errors.Is(err, domain.ErrNotFound) {
 				return Job{}, fmt.Errorf("create job: %w: %w", ErrUnknownRemote, err)
@@ -162,7 +193,8 @@ func (s *Service) Create(ctx context.Context, actor domain.Actor, p CreateParams
 	now := s.clock.Now()
 	j := Job{
 		ID: id, WorkerID: p.WorkerID, OwnerID: actor.UserID, ScheduleID: p.ScheduleID, Kind: p.Kind, Status: domain.JobQueued,
-		Definition: slices.Clone(p.Definition), RemoteIDs: remoteIDs, SearchText: searchText(p.Kind, p.SearchTerms, remoteIDs, names),
+		Definition: slices.Clone(p.Definition), RemoteIDs: remoteIDs, SearchText: searchText(p.Kind, terms, remoteIDs, names),
+		RepositoryID: p.RepositoryID, ConcurrencyKeys: keys,
 		CreatedAt: now, QueuedAt: now, ExitCode: -1, Version: 1,
 	}
 	if err := s.repo.CreateJob(ctx, j); err != nil {
@@ -175,6 +207,91 @@ func (s *Service) Create(ctx context.Context, actor domain.Actor, p CreateParams
 		"owner_id", actor.UserID.String(), "kind", p.Kind)
 	s.published(ctx, Job{}, j)
 	return j, nil
+}
+
+// usableRepository checks the repository of a new job (see Create).
+func (s *Service) usableRepository(ctx context.Context, owner domain.UserID, id domain.ResticRepoID, jobID domain.JobID) (string, domain.RemoteID, error) {
+	if s.repos == nil {
+		return "", domain.RemoteID{}, fmt.Errorf("%w: repositories are not available", ErrUnknownRepository)
+	}
+	name, remoteID, err := s.repos.UsableRepository(ctx, owner, id, jobID)
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		return "", domain.RemoteID{}, fmt.Errorf("%w: %w", ErrUnknownRepository, err)
+	case errors.Is(err, domain.ErrFailedPrecondition):
+		return "", domain.RemoteID{}, fmt.Errorf("%w: %w", ErrRepositoryDeleting, err)
+	case err != nil:
+		return "", domain.RemoteID{}, fmt.Errorf("check the repository: %w", err)
+	case remoteID.IsZero():
+		return "", domain.RemoteID{}, fmt.Errorf("check the repository %s: %w: it has no remote", id, domain.ErrFailedPrecondition)
+	}
+	return name, remoteID, nil
+}
+
+// Blockers returns, for each job of ids that has concurrency keys, the
+// older unfinished job it waits for (the oldest one sharing one of its
+// keys); jobs that wait for nothing are omitted. It does not check access:
+// call it only for jobs the actor has read (the API's
+// Job.waiting_for_job_id) or from the dispatcher. At most MaxBlockerIDs
+// IDs.
+func (s *Service) Blockers(ctx context.Context, ids []domain.JobID) (map[domain.JobID]domain.JobID, error) {
+	if len(ids) == 0 {
+		return map[domain.JobID]domain.JobID{}, nil
+	}
+	if len(ids) > MaxBlockerIDs {
+		return nil, fmt.Errorf("job blockers: %w: at most %d jobs", domain.ErrInvalidArgument, MaxBlockerIDs)
+	}
+	uniq := slices.Clone(ids)
+	slices.SortFunc(uniq, func(a, b domain.JobID) int { return a.UUID().Compare(b.UUID()) })
+	uniq = slices.Compact(uniq)
+	for _, id := range uniq {
+		if id.IsZero() {
+			return nil, fmt.Errorf("job blockers: %w", domain.ErrInvalidID)
+		}
+	}
+	out, err := s.repo.ListJobBlockers(ctx, uniq)
+	if err != nil {
+		return nil, fmt.Errorf("job blockers: %w", err)
+	}
+	return out, nil
+}
+
+// ValidConcurrencyKey reports whether key is a valid concurrency key:
+// ^[a-z0-9][a-z0-9:._-]{0,199}$ (e.g. "restic-repo:<uuid>").
+func ValidConcurrencyKey(key string) bool {
+	if key == "" || len(key) > 200 {
+		return false
+	}
+	for i := range len(key) {
+		c := key[i]
+		switch {
+		case 'a' <= c && c <= 'z', '0' <= c && c <= '9':
+		case i > 0 && (c == ':' || c == '.' || c == '_' || c == '-'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// normalizeKeys validates keys and returns them sorted, without duplicates
+// (nil for none).
+func normalizeKeys(keys []string) ([]string, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	out := slices.Clone(keys)
+	slices.Sort(out)
+	out = slices.Compact(out)
+	if len(out) > MaxConcurrencyKeys {
+		return nil, fmt.Errorf("%w: %d concurrency keys, at most %d allowed", domain.ErrInvalidArgument, len(out), MaxConcurrencyKeys)
+	}
+	for _, k := range out {
+		if !ValidConcurrencyKey(k) {
+			return nil, fmt.Errorf("%w: concurrency key %q", domain.ErrInvalidArgument, k)
+		}
+	}
+	return out, nil
 }
 
 // Get returns a job the actor may see.
@@ -445,6 +562,10 @@ func (s *Service) published(ctx context.Context, prev, cur Job) {
 		return
 	}
 	s.forget(cur.ID)
+	// m5: Track B adds the key wake-up here: when a job with
+	// ConcurrencyKeys becomes terminal, wake the workers of the queued jobs
+	// sharing its keys (Repository.ListWorkersWaitingOnKeys), logging
+	// errors only.
 	s.log.InfoContext(ctx, "job finished", "job_id", cur.ID.String(), "worker_id", cur.WorkerID.String(),
 		"status", string(cur.Status), "error_code", cur.Error.Code)
 	s.notifier.JobFinished(*copyOf(cur))
@@ -455,6 +576,7 @@ func (s *Service) published(ctx context.Context, prev, cur Job) {
 func copyOf(j Job) *Job {
 	j.Definition = slices.Clone(j.Definition)
 	j.RemoteIDs = slices.Clone(j.RemoteIDs)
+	j.ConcurrencyKeys = slices.Clone(j.ConcurrencyKeys)
 	j.Warnings = slices.Clone(j.Warnings)
 	j.Output = slices.Clone(j.Output)
 	return &j

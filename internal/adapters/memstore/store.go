@@ -3,7 +3,7 @@
 // jobs.Repository, jobs.SampleRepository, jobs.ActivityRepository,
 // users.Repository, users.SessionRepository, users.APITokenRepository,
 // remotes.Repository, schedules.Repository, contacts.Repository,
-// notifications.Repository).
+// notifications.Repository, restic.Repository).
 // It backs unit tests and a
 // development controller without Postgres (dev.memory_store); everything is
 // lost when the process exits. The live job broker is a separate adapter
@@ -30,6 +30,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/notifications"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
@@ -37,7 +38,8 @@ import (
 )
 
 // Store holds workers, enrollment tokens, jobs, samples, users, sessions,
-// API tokens, remotes, schedules with their runs, contacts and deliveries.
+// API tokens, remotes, schedules with their runs, contacts, deliveries and
+// restic repositories with their snapshot caches.
 // The zero value is not usable; create it with New. Safe for concurrent
 // use.
 type Store struct {
@@ -68,6 +70,10 @@ type Store struct {
 	// schedule_runs.
 	jobNotified map[domain.JobID]time.Time
 	runNotified map[domain.ScheduleRunID]time.Time
+
+	// repos holds live and deleted restic repositories with their
+	// snapshot caches (restic.go).
+	repos map[domain.ResticRepoID]resticRow
 }
 
 // Compile-time checks that Store implements the ports.
@@ -84,6 +90,7 @@ var (
 	_ schedules.Repository     = (*Store)(nil)
 	_ contacts.Repository      = (*Store)(nil)
 	_ notifications.Repository = (*Store)(nil)
+	_ restic.Repository        = (*Store)(nil)
 )
 
 // New returns an empty Store.
@@ -104,6 +111,8 @@ func New() *Store {
 		deliveries:  make(map[domain.DeliveryID]notifications.Delivery),
 		jobNotified: make(map[domain.JobID]time.Time),
 		runNotified: make(map[domain.ScheduleRunID]time.Time),
+
+		repos: make(map[domain.ResticRepoID]resticRow),
 	}
 }
 
@@ -113,6 +122,8 @@ func cloneWorker(w workers.Worker) workers.Worker {
 	w.Info.Tools = slices.Clone(w.Info.Tools)
 	w.Info.JobKinds = slices.Clone(w.Info.JobKinds)
 	w.Info.LocalRoots = slices.Clone(w.Info.LocalRoots)
+	w.Info.Features = slices.Clone(w.Info.Features)
+	w.Info.ProbeOps = slices.Clone(w.Info.ProbeOps)
 	w.Link.PastEpochs = slices.Clone(w.Link.PastEpochs)
 	return w
 }
@@ -120,6 +131,7 @@ func cloneWorker(w workers.Worker) workers.Worker {
 func cloneJob(j jobs.Job) jobs.Job {
 	j.Definition = slices.Clone(j.Definition)
 	j.RemoteIDs = slices.Clone(j.RemoteIDs)
+	j.ConcurrencyKeys = slices.Clone(j.ConcurrencyKeys)
 	j.Warnings = slices.Clone(j.Warnings)
 	j.Output = slices.Clone(j.Output)
 	return j

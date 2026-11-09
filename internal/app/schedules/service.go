@@ -30,12 +30,17 @@ func DefaultConfig() Config {
 	return Config{FireBatch: 100, MaxDefinitionBytes: 1 << 20}
 }
 
-// Deps are the service's collaborators. All are required except Logger.
+// Deps are the service's collaborators. All are required except
+// Repositories and Logger.
 type Deps struct {
 	Repo     Repository
 	Remotes  RemoteChecker
 	Contacts ContactChecker
 	Workers  WorkerChecker
+	// Repositories checks the restic repository of a definition. Without
+	// it, a schedule on a repository fails with ErrUnknownRepository (fail
+	// closed).
+	Repositories RepositoryChecker
 	// Waker is told when a schedule was saved or a run was added, so the
 	// scheduler runs a pass soon instead of on its next tick.
 	Waker Waker
@@ -53,6 +58,7 @@ type Service struct {
 	remotes  RemoteChecker
 	contacts ContactChecker
 	workers  WorkerChecker
+	repos    RepositoryChecker
 	waker    Waker
 	clock    Clock
 	ids      IDGenerator
@@ -77,7 +83,7 @@ func New(d Deps, cfg Config) (*Service, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Service{
-		repo: d.Repo, remotes: d.Remotes, contacts: d.Contacts, workers: d.Workers,
+		repo: d.Repo, remotes: d.Remotes, contacts: d.Contacts, workers: d.Workers, repos: d.Repositories,
 		waker: d.Waker, clock: d.Clock, ids: d.IDs, log: log, cfg: cfg,
 	}, nil
 }
@@ -91,7 +97,15 @@ var (
 	ErrUnknownRemote = fmt.Errorf("remote %w", domain.ErrNotFound)
 	// ErrUnknownContact: a linked contact is not one of the actor's.
 	ErrUnknownContact = fmt.Errorf("contact %w", domain.ErrNotFound)
+	// ErrUnknownRepository: the definition's restic repository is not a
+	// live repository of the actor.
+	ErrUnknownRepository = fmt.Errorf("repository %w", domain.ErrNotFound)
 )
+
+// ErrRepositoryDeleting reports a definition on a restic repository whose
+// data is being deleted (Create, Update). It matches
+// domain.ErrFailedPrecondition.
+var ErrRepositoryDeleting = fmt.Errorf("the repository's data is being deleted: %w", domain.ErrFailedPrecondition)
 
 // errForeign reports another user's schedule (as not found).
 var errForeign = fmt.Errorf("schedule of another user: %w", domain.ErrNotFound)
@@ -310,6 +324,7 @@ func (c checked) apply(sc *Schedule, now time.Time) {
 	sc.Cron, sc.Timezone = c.expr.String(), c.in.Timezone
 	sc.Kind, sc.Definition = c.in.Kind, slices.Clone(c.in.Definition)
 	sc.RemoteIDs, sc.SearchText = c.remoteIDs, strings.Join(c.in.SearchTerms, "\n")
+	sc.RepositoryID = c.in.RepositoryID
 	sc.Target = Target{WorkerID: c.in.Target.WorkerID, Label: strings.ToLower(c.in.Target.Label)}
 	sc.Missed = c.in.Missed
 	if sc.Missed.Action == MissedSkip {
@@ -323,7 +338,8 @@ func (c checked) apply(sc *Schedule, now time.Time) {
 
 // check validates in for owner: the fields (a *domain.ValidationError with
 // the API's field paths), then the references, which must be owner's
-// (ErrUnknownRemote, ErrUnknownContact).
+// (ErrUnknownRemote, ErrUnknownRepository, ErrRepositoryDeleting,
+// ErrUnknownContact).
 func (s *Service) check(ctx context.Context, owner domain.UserID, in Input) (checked, error) {
 	var v domain.Validation
 	c := checked{in: in, name: checkName(&v, in.Name)}
@@ -379,6 +395,11 @@ func (s *Service) check(ctx context.Context, owner domain.UserID, in Input) (che
 			return checked{}, fmt.Errorf("check remotes: %w", err)
 		}
 	}
+	if !in.RepositoryID.IsZero() {
+		if err := s.checkRepository(ctx, owner, in.RepositoryID); err != nil {
+			return checked{}, err
+		}
+	}
 	if len(c.contacts) > 0 {
 		ids := make([]domain.ContactID, len(c.contacts))
 		for i, l := range c.contacts {
@@ -392,6 +413,24 @@ func (s *Service) check(ctx context.Context, owner domain.UserID, in Input) (che
 		}
 	}
 	return c, nil
+}
+
+// checkRepository checks that id is a live repository of owner whose data
+// is not being deleted.
+func (s *Service) checkRepository(ctx context.Context, owner domain.UserID, id domain.ResticRepoID) error {
+	if s.repos == nil {
+		return fmt.Errorf("%w: repositories are not available", ErrUnknownRepository)
+	}
+	_, _, err := s.repos.UsableRepository(ctx, owner, id, domain.JobID{})
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		return fmt.Errorf("%w: %w", ErrUnknownRepository, err)
+	case errors.Is(err, domain.ErrFailedPrecondition):
+		return fmt.Errorf("%w: %w", ErrRepositoryDeleting, err)
+	case err != nil:
+		return fmt.Errorf("check the repository: %w", err)
+	}
+	return nil
 }
 
 // checkTarget validates the target: exactly one of a live worker and a

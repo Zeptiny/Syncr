@@ -2,8 +2,8 @@
 // (syncr.v1.JobDefinition) is what the API accepts and stores: an operation
 // with locations on the owner's remotes, referred to by ID, without secrets.
 // A Kind checks the definition when a job is created and, at dispatch time,
-// builds the worker's syncr.v1.JobSpec from it and the resolved remotes
-// (with their credentials).
+// builds the worker's syncr.v1.JobSpec from it and the resolved remotes and
+// restic repositories (with their credentials, Resolved).
 //
 // Kind names equal the field names of the JobDefinition operation oneof,
 // which equal the JobSpec operation names the worker runners use (e.g.
@@ -19,20 +19,44 @@
 // RemoteDefinition whose union_upstreams are its members' aliases or local
 // paths.
 //
+// Locate and LocateRepository (locate.go) build the same remote
+// definitions and locations for a single path or repository; the
+// controller's probes use them too.
+//
+// # Optional behavior (Milestone 5)
+//
+// A Kind may also implement:
+//
+//   - Keyed: the concurrency keys of its jobs (Refs.ConcurrencyKeys); jobs
+//     sharing a key run one at a time, oldest first. Restic kinds use
+//     ResticRepoKey.
+//   - Unschedulable: its definitions cannot be scheduled (restores).
+//   - SystemOnly: only the controller creates its jobs, never RunJob or a
+//     schedule (restic_delete_data).
+//   - Requirer: the link features a worker must report to run it.
+//   - Labeled: a short label for people ("Backup").
+//   - Summarizer: display details of a finished job's output.
+//
+// The Registry answers these per kind name (Schedulable, UserStartable,
+// RequiredFeatures, Label, Summarize), with neutral answers for kinds that
+// do not implement them.
+//
 // The package is pure: no I/O, no logging. Specs contain secrets and exist
 // only in memory.
 //
 // Allowed dependencies: the standard library, the generated protobuf code,
-// google.golang.org/protobuf, internal/domain and internal/backend (the core
-// API).
+// google.golang.org/protobuf, internal/domain, internal/backend (the core
+// API) and internal/link (feature names).
 package jobkind
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
@@ -58,16 +82,59 @@ type Member struct {
 	Mode backend.UnionMode
 }
 
+// Repository is a resolved restic repository a spec is built with: its
+// location on one of the owner's remotes and its decrypted password. It
+// exists only in memory, at dispatch (or probe) time.
+type Repository struct {
+	ID domain.ResticRepoID
+	// RemoteID is the remote holding the repository; it must be in
+	// Resolved.Remotes (with the members of a union).
+	RemoteID domain.RemoteID
+	// Path is the repository's path on the remote, relative to its root
+	// ("" is the root).
+	Path string
+	// Password is the repository password (secret).
+	Password string
+	// ResticID is restic's repository config ID as the controller stored
+	// it (64 hex digits); restic_delete_data verifies it before deleting.
+	ResticID string
+}
+
+// Resolved is everything Build needs, with secrets: the remotes and the
+// restic repositories of the definition's Refs.
+type Resolved struct {
+	// Remotes holds every remote of Refs.RemoteIDs, the remote of the
+	// repository, and the members of the unions among them.
+	Remotes map[domain.RemoteID]Remote
+	// Repositories holds the repository of Refs.RepositoryID, if any.
+	Repositories map[domain.ResticRepoID]Repository
+}
+
+// Names are the display names Describe uses. A missing entry is "Unknown
+// remote" or "Unknown repository".
+type Names struct {
+	Remotes      map[domain.RemoteID]string
+	Repositories map[domain.ResticRepoID]string
+}
+
 // Refs is what a definition refers to.
 type Refs struct {
 	// RemoteIDs are the remotes the definition uses, in reference order,
 	// without duplicates (union members are not included: the remotes
-	// service adds them when it resolves the remotes).
+	// service adds them when it resolves the remotes). A repository's
+	// remote is not included either: the jobs service adds it.
 	RemoteIDs []domain.RemoteID
 	// SearchTerms are the texts a job list search matches (the mode and the
 	// paths, as given); the jobs service adds the kind and the remote
 	// names. They contain no secrets.
 	SearchTerms []string
+	// RepositoryID is the restic repository the definition uses; zero if
+	// the kind uses none.
+	RepositoryID domain.ResticRepoID
+	// ConcurrencyKeys are the job's concurrency keys (Keyed), sorted and
+	// without duplicates; nil if the kind has none. Registry.Check fills
+	// them in.
+	ConcurrencyKeys []string
 }
 
 // Kind is one kind of job. Implementations are stateless values and safe
@@ -82,24 +149,81 @@ type Kind interface {
 	// with field paths below "definition", e.g.
 	// "definition.rclone_transfer.source.path".
 	Check(def *syncrv1.JobDefinition) (Refs, error)
-	// Build returns the worker spec of a checked definition. remotes holds
-	// every remote of Check's Refs plus the members of the unions among
-	// them. Errors wrap domain.ErrInvalidArgument (a definition or remote
-	// that cannot be built, e.g. a path that a remote's root makes
-	// invalid, or a nested union) or domain.ErrNotFound (a remote it needs
-	// is missing from remotes). Error messages never contain option or
-	// secret values.
-	Build(def *syncrv1.JobDefinition, remotes map[domain.RemoteID]Remote) (*syncrv1.JobSpec, error)
+	// Build returns the worker spec of a checked definition. in.Remotes
+	// holds every remote of Check's Refs, the remote of its repository
+	// and the members of the unions among them; in.Repositories holds the
+	// repository of Refs.RepositoryID. Errors wrap
+	// domain.ErrInvalidArgument (a definition or remote that cannot be
+	// built, e.g. a path that a remote's root makes invalid, or a nested
+	// union) or domain.ErrNotFound (a remote or repository it needs is
+	// missing from in). Error messages never contain option or secret
+	// values.
+	Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.JobSpec, error)
 	// Describe returns a one-line description of the definition for
 	// people, as the web UI's jobs list shows it, e.g. "Copy Photos → B2
-	// offsite". names holds the display names of the remotes it refers
-	// to; a remote missing from names is "Unknown remote". It never fails:
-	// a definition it cannot describe gets a generic description.
-	Describe(def *syncrv1.JobDefinition, names map[domain.RemoteID]string) string
+	// offsite". names holds the display names of the remotes and
+	// repositories it refers to; a missing one is "Unknown remote" or
+	// "Unknown repository". It never fails: a definition it cannot
+	// describe gets a generic description.
+	Describe(def *syncrv1.JobDefinition, names Names) string
 }
 
-// Builtin returns the built-in kinds: the rclone transfer (Transfer).
-func Builtin() []Kind { return []Kind{Transfer{}} }
+// Keyed is implemented by kinds whose jobs have concurrency keys: jobs that
+// share a key are started one at a time, oldest first (by creation time,
+// then ID). Keys are set once, when a job is created.
+type Keyed interface {
+	// ConcurrencyKeys returns the keys of a checked definition, each
+	// matching ^[a-z0-9][a-z0-9:._-]{0,199}$; at most 8.
+	ConcurrencyKeys(def *syncrv1.JobDefinition) []string
+}
+
+// Unschedulable is implemented by kinds whose definitions cannot be
+// scheduled.
+type Unschedulable interface {
+	// Unschedulable returns why, for people, e.g. "restores are started
+	// from the snapshot browser".
+	Unschedulable() string
+}
+
+// SystemOnly is implemented by kinds whose jobs only the controller itself
+// creates: RunJob and schedules never accept them.
+type SystemOnly interface {
+	// SystemOnly returns why, for people (a field error message on
+	// "definition.<kind>"), e.g. "is started by deleting the repository".
+	SystemOnly() string
+}
+
+// Requirer is implemented by kinds that need link features of the worker
+// (internal/link Feature* names).
+type Requirer interface {
+	// RequiredFeatures returns the features a worker must report.
+	RequiredFeatures() []string
+}
+
+// Labeled is implemented by kinds with a short label for people.
+type Labeled interface {
+	// Label returns the label, e.g. "Backup".
+	Label() string
+}
+
+// Detail is one display detail of a finished job, e.g. {"Snapshot",
+// "1a2b3c4d"}.
+type Detail struct {
+	Label string
+	Value string
+}
+
+// Summarizer is implemented by kinds whose finished jobs have display
+// details.
+type Summarizer interface {
+	// Summarize returns the details of a job of def with output out (nil
+	// when the job has none or it cannot be decoded), in display order.
+	Summarize(def *syncrv1.JobDefinition, out *syncrv1.JobOutput) []Detail
+}
+
+// Builtin returns the built-in kinds: the rclone transfer (Transfer),
+// followed by the restic kinds (ResticKinds).
+func Builtin() []Kind { return append([]Kind{Transfer{}}, ResticKinds()...) }
 
 // Registry is an immutable set of kinds, keyed by name. It is safe for
 // concurrent use.
@@ -135,7 +259,8 @@ func (r *Registry) Get(name string) (Kind, bool) {
 }
 
 // Check validates def with its kind and returns the kind's name and what
-// def refers to. Errors are *domain.ValidationError.
+// def refers to, with the concurrency keys of a Keyed kind (sorted, without
+// duplicates). Errors are *domain.ValidationError.
 func (r *Registry) Check(def *syncrv1.JobDefinition) (kind string, refs Refs, err error) {
 	k, err := r.kindOf(def)
 	if err != nil {
@@ -145,27 +270,103 @@ func (r *Registry) Check(def *syncrv1.JobDefinition) (kind string, refs Refs, er
 	if err != nil {
 		return "", Refs{}, err
 	}
+	refs.ConcurrencyKeys = nil
+	if kk, ok := k.(Keyed); ok {
+		if keys := kk.ConcurrencyKeys(def); len(keys) > 0 {
+			keys = slices.Clone(keys)
+			slices.Sort(keys)
+			refs.ConcurrencyKeys = slices.Compact(keys)
+		}
+	}
 	return k.Name(), refs, nil
 }
 
 // Build builds the worker spec of def with its kind (see Kind.Build).
 // Errors wrap domain.ErrInvalidArgument or domain.ErrNotFound.
-func (r *Registry) Build(def *syncrv1.JobDefinition, remotes map[domain.RemoteID]Remote) (*syncrv1.JobSpec, error) {
+func (r *Registry) Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.JobSpec, error) {
 	k, err := r.kindOf(def)
 	if err != nil {
 		return nil, err
 	}
-	return k.Build(def, remotes)
+	return k.Build(def, in)
 }
 
 // Describe describes def with its kind (see Kind.Describe). A definition
 // of no registered kind is described by its kind name ("" if it has none).
-func (r *Registry) Describe(def *syncrv1.JobDefinition, names map[domain.RemoteID]string) string {
+func (r *Registry) Describe(def *syncrv1.JobDefinition, names Names) string {
 	k, err := r.kindOf(def)
 	if err != nil {
 		return KindOf(def)
 	}
 	return k.Describe(def, names)
+}
+
+// Schedulable reports whether definitions of kind may be scheduled, and if
+// not why (for people): an unregistered kind or an Unschedulable one.
+// Schedules also reject kinds that are not UserStartable.
+func (r *Registry) Schedulable(kind string) (ok bool, reason string) {
+	k, found := r.kinds[kind]
+	if !found {
+		return false, fmt.Sprintf("job kind %q is not supported", kind)
+	}
+	if u, is := k.(Unschedulable); is {
+		return false, u.Unschedulable()
+	}
+	return true, ""
+}
+
+// UserStartable reports whether users may start jobs of kind (RunJob and
+// schedules), and if not why (for people): an unregistered kind or a
+// SystemOnly one.
+func (r *Registry) UserStartable(kind string) (ok bool, reason string) {
+	k, found := r.kinds[kind]
+	if !found {
+		return false, fmt.Sprintf("job kind %q is not supported", kind)
+	}
+	if s, is := k.(SystemOnly); is {
+		return false, s.SystemOnly()
+	}
+	return true, ""
+}
+
+// RequiredFeatures returns the link features a worker must report to run
+// jobs of kind (Requirer), as a new slice; nil for kinds that need none
+// and for unregistered ones.
+func (r *Registry) RequiredFeatures(kind string) []string {
+	if req, ok := r.kinds[kind].(Requirer); ok {
+		return slices.Clone(req.RequiredFeatures())
+	}
+	return nil
+}
+
+// Label returns the label of kind (Labeled), else the kind name itself.
+func (r *Registry) Label(kind string) string {
+	if l, ok := r.kinds[kind].(Labeled); ok {
+		if label := l.Label(); label != "" {
+			return label
+		}
+	}
+	return kind
+}
+
+// Summarize returns the display details of a finished job of kind with
+// definition def and output, the encoded link JobOutput as jobs store it
+// (protobuf binary; nil when the job has none). Output that cannot be
+// decoded is passed to the kind as nil. Kinds without a Summarizer, and
+// unregistered kinds, have no details (nil).
+func (r *Registry) Summarize(kind string, def *syncrv1.JobDefinition, output []byte) []Detail {
+	s, ok := r.kinds[kind].(Summarizer)
+	if !ok {
+		return nil
+	}
+	var out *syncrv1.JobOutput
+	if len(output) > 0 {
+		out = new(syncrv1.JobOutput)
+		if err := proto.Unmarshal(output, out); err != nil {
+			out = nil
+		}
+	}
+	return s.Summarize(def, out)
 }
 
 // kindOf returns the registered kind of def's operation.

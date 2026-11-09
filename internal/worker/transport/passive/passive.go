@@ -264,3 +264,11 @@ func (h *service) Command(ctx context.Context, req *connect.Request[syncrv1.Comm
 func (h *service) Pull(_ context.Context, req *connect.Request[syncrv1.PullRequest]) (*connect.Response[syncrv1.PullResponse], error) {
 	return connect.NewResponse(h.core.HandlePull(req.Msg)), nil
 }
+
+// Probe answers Unimplemented: this worker reports no "probe" feature yet,
+// so the controller does not call it.
+//
+// m5: Track A implements this: core.HandleProbe(ctx, req.Msg).
+func (h *service) Probe(context.Context, *connect.Request[syncrv1.ProbeRequest]) (*connect.Response[syncrv1.ProbeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("this worker does not run probes yet"))
+}

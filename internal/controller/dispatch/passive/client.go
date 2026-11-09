@@ -141,6 +141,16 @@ func (c *Client) Pull(ctx context.Context, req *syncrv1.PullRequest) (*syncrv1.P
 	return resp.Msg, nil
 }
 
+// Probe runs a probe on the worker (WorkerLinkService.Probe); ctx's
+// deadline bounds the call.
+//
+// m5: Track B implements this with a second Connect client over a cloned
+// transport whose ResponseHeaderTimeout is the probe cap plus grace and
+// without an http.Client.Timeout, so the context deadline governs.
+func (c *Client) Probe(context.Context, *syncrv1.ProbeRequest) (*syncrv1.ProbeResponse, error) {
+	return nil, fmt.Errorf("probe worker %s: %w (m5: pending track B)", c.target, errors.ErrUnsupported)
+}
+
 // Close closes the client's idle connections.
 func (c *Client) Close() { c.transport.CloseIdleConnections() }
 

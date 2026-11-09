@@ -76,3 +76,11 @@ WHERE r.deleted_at IS NULL
       WHERE m.union_remote_id = r.id AND m.member_remote_id = sqlc.arg(member_remote_id)::uuid
   )
 ORDER BY lower(r.name) COLLATE "C", r.id;
+
+-- name: RepositoryUsingRemote :one
+-- A live restic repository on the remote, which blocks its deletion
+-- (DeleteRemote runs it in its transaction, after locking the remote).
+SELECT name FROM restic_repositories
+WHERE remote_id = sqlc.arg(remote_id)::uuid AND deleted_at IS NULL
+ORDER BY lower(name) COLLATE "C", id
+LIMIT 1;

@@ -7,9 +7,20 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
 )
+
+// ErrWorkerOutdated reports a worker that lacks a link feature the job's
+// kind requires (jobkind Registry.RequiredFeatures): the job fails with
+// "worker_outdated". It matches domain.ErrFailedPrecondition.
+var ErrWorkerOutdated = fmt.Errorf("the worker must be upgraded: %w", domain.ErrFailedPrecondition)
+
+// errRepositoryUnavailable reports a job whose restic repository was
+// deleted or is not its owner's any more: the job fails with
+// "repository_unavailable". It matches domain.ErrNotFound.
+var errRepositoryUnavailable = fmt.Errorf("repository unavailable: %w", domain.ErrNotFound)
 
 // Specs is the SpecBuilder of a controller: it builds a queued job's spec
 // from its stored definition with the job kinds and the owner's resolved
@@ -24,28 +35,41 @@ import (
 // no error message contains option or secret values.
 type Specs struct {
 	remotes Remotes
+	repos   Repos
 	kinds   *jobkind.Registry
 }
 
 var _ SpecBuilder = (*Specs)(nil)
 
-// NewSpecs returns a Specs over the remotes service and the job kinds.
-// remotes may be nil: jobs that use a remote then fail with
-// "remote_unavailable" (jobs on the worker's filesystem only still run).
-func NewSpecs(remotes Remotes, kinds *jobkind.Registry) (*Specs, error) {
+// NewSpecs returns a Specs over the remotes service, the restic
+// repositories (restic.Service) and the job kinds. remotes may be nil: jobs
+// that use a remote then fail with "remote_unavailable" (jobs on the
+// worker's filesystem only still run). repos may be nil: jobs on a restic
+// repository then fail with "repository_unavailable".
+func NewSpecs(remotes Remotes, repos Repos, kinds *jobkind.Registry) (*Specs, error) {
 	if kinds == nil {
 		return nil, errors.New("dispatch: specs need the job kinds")
 	}
-	return &Specs{remotes: remotes, kinds: kinds}, nil
+	return &Specs{remotes: remotes, repos: repos, kinds: kinds}, nil
 }
 
-// Build implements SpecBuilder. Errors: domain.ErrInvalidArgument when the
-// stored definition cannot be decoded, checked or built (also when its kind
-// is not the job's); domain.ErrNotFound (from Resolve or the kind) when a
-// remote is missing, deleted or not the owner's; whatever else Resolve
-// returns (domain.ErrFailedPrecondition for credentials that cannot be
-// decrypted, store errors to retry).
-func (s *Specs) Build(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, error) {
+// Build implements SpecBuilder for job j on a worker that reported w.
+// Errors: domain.ErrInvalidArgument when the stored definition cannot be
+// decoded, checked or built (also when its kind is not the job's);
+// errRepositoryUnavailable when its repository is gone; domain.ErrNotFound
+// (from Resolve or the kind) when a remote is missing, deleted or not the
+// owner's; whatever else Resolve returns (domain.ErrFailedPrecondition for
+// credentials that cannot be decrypted, store errors to retry).
+//
+// m5: Track B completes this (M5 design §2.5): the feature check
+// (ErrWorkerOutdated when w.Features lacks one of
+// kinds.RequiredFeatures(j.Kind)) and resolving the repository of
+// refs.RepositoryID with Repos.Resolve (ErrNotFound becomes
+// errRepositoryUnavailable), adding its remote to the remotes to resolve
+// and passing it in Resolved.Repositories (with its ResticID). Until then a
+// job on a repository fails with "repository_unavailable".
+func (s *Specs) Build(ctx context.Context, j jobs.Job, w workers.Info) (*syncrv1.JobSpec, error) {
+	_ = w // m5: Track B checks w.Features
 	def, err := jobkind.Unmarshal(j.Definition)
 	if err != nil {
 		return nil, fmt.Errorf("job %s: %w", j.ID, err)
@@ -56,6 +80,9 @@ func (s *Specs) Build(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, error)
 	}
 	if kind != j.Kind {
 		return nil, fmt.Errorf("job %s: %w: the definition is a %q, the job a %q", j.ID, domain.ErrInvalidArgument, kind, j.Kind)
+	}
+	if !refs.RepositoryID.IsZero() {
+		return nil, fmt.Errorf("job %s: repository %s: %w", j.ID, refs.RepositoryID, errRepositoryUnavailable)
 	}
 	resolved := make(map[domain.RemoteID]jobkind.Remote)
 	if len(refs.RemoteIDs) > 0 {
@@ -75,7 +102,7 @@ func (s *Specs) Build(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, error)
 			resolved[id] = jobkind.Remote{ID: id, Rclone: r.Rclone, Members: members}
 		}
 	}
-	spec, err := s.kinds.Build(def, resolved)
+	spec, err := s.kinds.Build(def, jobkind.Resolved{Remotes: resolved})
 	if err != nil {
 		return nil, fmt.Errorf("job %s: %w", j.ID, err)
 	}

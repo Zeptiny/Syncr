@@ -7,6 +7,7 @@ import (
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
@@ -36,13 +37,27 @@ type Jobs interface {
 //
 // Errors that fail the job instead of being retried: domain.ErrNotFound (a
 // remote was deleted or is not the owner's) fails it with
-// "remote_unavailable", domain.ErrInvalidArgument (the definition cannot be
-// decoded or built) with "invalid_spec", domain.ErrFailedPrecondition (a
+// "remote_unavailable" (an error wrapping errRepositoryUnavailable, a
+// repository that is gone, with "repository_unavailable"),
+// domain.ErrInvalidArgument (the definition cannot be decoded or built)
+// with "invalid_spec", ErrWorkerOutdated (the worker lacks a feature the
+// kind requires) with "worker_outdated", domain.ErrFailedPrecondition (a
 // remote's stored credentials cannot be used, e.g. they no longer decrypt)
 // with "internal". Any other error is returned to the worker's call and
 // retried on its next poll.
 type SpecBuilder interface {
-	Build(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, error)
+	// Build builds the spec of queued job j for its worker, which reported
+	// w in its latest Hello.
+	Build(ctx context.Context, j jobs.Job, w workers.Info) (*syncrv1.JobSpec, error)
+}
+
+// Repos resolves a job's restic repository with its password
+// (*restic.Service).
+type Repos interface {
+	// Resolve returns a live repository of owner with its decrypted
+	// password: ErrNotFound if it is missing, deleted or not owner's;
+	// ErrFailedPrecondition if its password cannot be decrypted.
+	Resolve(ctx context.Context, owner domain.UserID, id domain.ResticRepoID) (restic.Resolved, error)
 }
 
 // Remotes resolves a job's remotes with their credentials
@@ -75,8 +90,14 @@ type Clock interface {
 // PassiveClient calls one passive worker's WorkerLinkService. The passive
 // transport implements it (a Connect client with the worker's pinned
 // certificate and secret); it must return an error for any transport or
-// RPC failure and may be called from one goroutine at a time.
+// RPC failure. Command and Pull may be called from one goroutine at a time
+// (the worker's PassiveLoop); Probe may be called concurrently with them
+// and with itself (the probe broker).
 type PassiveClient interface {
 	Command(ctx context.Context, req *syncrv1.CommandRequest) (*syncrv1.CommandResponse, error)
 	Pull(ctx context.Context, req *syncrv1.PullRequest) (*syncrv1.PullResponse, error)
+	// Probe runs a probe on the worker; ctx's deadline bounds it (the
+	// client sets no shorter timeout of its own). A worker without probe
+	// support answers Unimplemented.
+	Probe(ctx context.Context, req *syncrv1.ProbeRequest) (*syncrv1.ProbeResponse, error)
 }

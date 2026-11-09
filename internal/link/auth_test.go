@@ -49,6 +49,13 @@ func TestErrorCodeNames(t *testing.T) {
 		{syncrv1.JobErrorCode_JOB_ERROR_CODE_CANCELLED, "cancelled"},
 		{syncrv1.JobErrorCode_JOB_ERROR_CODE_DISPATCH_TIMEOUT, "dispatch_timeout"},
 		{syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_REMOVED, "worker_removed"},
+		// Milestone 5: the controller's job error codes store these names.
+		{syncrv1.JobErrorCode_JOB_ERROR_CODE_ALREADY_EXISTS, "already_exists"},
+		{syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, "busy"},
+		{syncrv1.JobErrorCode_JOB_ERROR_CODE_TIMEOUT, "timeout"},
+		{syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_MISMATCH, "repository_mismatch"},
+		{syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_UNAVAILABLE, "repository_unavailable"},
+		{syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_OUTDATED, "worker_outdated"},
 		{syncrv1.JobErrorCode(999), "unspecified"},
 	}
 	for _, tt := range tests {

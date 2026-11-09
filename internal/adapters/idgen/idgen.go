@@ -1,8 +1,9 @@
 // Package idgen mints entity IDs for the controller's use cases: UUIDv7 for
 // production, Sequential for tests and fixtures. Both satisfy the
-// IDGenerator ports of internal/app/... (NewWorkerID, NewJobID, NewUserID,
-// NewAPITokenID, NewRemoteID, NewScheduleID, NewScheduleRunID,
-// NewContactID, NewDeliveryID).
+// IDGenerator ports of internal/app/... and of the controller's probes
+// (NewWorkerID, NewJobID, NewUserID, NewAPITokenID, NewRemoteID,
+// NewScheduleID, NewScheduleRunID, NewContactID, NewDeliveryID,
+// NewResticRepoID, NewProbeID).
 //
 // Allowed dependencies: the standard library and internal/domain.
 package idgen
@@ -45,6 +46,12 @@ func (UUIDv7) NewContactID() domain.ContactID { return domain.NewContactID() }
 // NewDeliveryID returns a new random DeliveryID.
 func (UUIDv7) NewDeliveryID() domain.DeliveryID { return domain.NewDeliveryID() }
 
+// NewResticRepoID returns a new random ResticRepoID.
+func (UUIDv7) NewResticRepoID() domain.ResticRepoID { return domain.NewResticRepoID() }
+
+// NewProbeID returns a new random ProbeID.
+func (UUIDv7) NewProbeID() domain.ProbeID { return domain.NewProbeID() }
+
 // Sequential mints predictable, strictly increasing IDs of the form
 // 00000000-0000-7000-8000-00000000000n, sharing one counter across entity
 // kinds. The zero value starts at 1. Safe for concurrent use.
@@ -80,6 +87,14 @@ func (s *Sequential) NewContactID() domain.ContactID { return mint(domain.ParseC
 
 // NewDeliveryID returns the next DeliveryID.
 func (s *Sequential) NewDeliveryID() domain.DeliveryID { return mint(domain.ParseDeliveryID, s.next()) }
+
+// NewResticRepoID returns the next ResticRepoID.
+func (s *Sequential) NewResticRepoID() domain.ResticRepoID {
+	return mint(domain.ParseResticRepoID, s.next())
+}
+
+// NewProbeID returns the next ProbeID.
+func (s *Sequential) NewProbeID() domain.ProbeID { return mint(domain.ParseProbeID, s.next()) }
 
 func (s *Sequential) next() string {
 	return fmt.Sprintf("00000000-0000-7000-8000-%012x", s.n.Add(1))

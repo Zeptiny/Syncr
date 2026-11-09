@@ -30,6 +30,12 @@ type Schedule struct {
 	// SearchText is the definition's search terms (jobkind.Refs), one per
 	// line, for the launched jobs' search text.
 	SearchText string
+	// RepositoryID is the restic repository the definition uses
+	// (jobkind.Refs); zero for other kinds. It was a live repository of
+	// the owner when the schedule was saved and may have been deleted
+	// since (runs then fail with ReasonRepositoryUnavailable and pause the
+	// schedule).
+	RepositoryID domain.ResticRepoID
 
 	// Target is where the jobs run.
 	Target Target
@@ -173,10 +179,18 @@ const (
 	ReasonControllerUnavailable = "controller_unavailable"
 	ReasonRemoteUnavailable     = "remote_unavailable"
 	ReasonInvalidDefinition     = "invalid_definition"
-	ReasonWorkerRemoved         = "worker_removed"
-	ReasonNoWorkerWithLabel     = "no_worker_with_label"
-	ReasonOwnerDisabled         = "owner_disabled"
-	ReasonDisabled              = "disabled"
+	// ReasonRepositoryUnavailable: the definition's restic repository was
+	// deleted or is not the owner's any more. It pauses the schedule.
+	ReasonRepositoryUnavailable = "repository_unavailable"
+	// ReasonRepositoryDeleting: the repository's data is being deleted.
+	// The deletion pauses the repository's schedules and cancels their
+	// open runs with it (restic Repository.MarkDeleting); a launch that
+	// hits it anyway fails with it and pauses the schedule.
+	ReasonRepositoryDeleting = "repository_deleting"
+	ReasonWorkerRemoved      = "worker_removed"
+	ReasonNoWorkerWithLabel  = "no_worker_with_label"
+	ReasonOwnerDisabled      = "owner_disabled"
+	ReasonDisabled           = "disabled"
 )
 
 // Run is one run of a schedule: one occurrence (or several merged ones)
@@ -261,6 +275,10 @@ type Input struct {
 	// (jobkind.Refs); the remotes must be live remotes of the actor.
 	RemoteIDs   []domain.RemoteID
 	SearchTerms []string
+	// RepositoryID is the definition's restic repository (jobkind.Refs);
+	// zero for none. It must be a live repository of the actor whose data
+	// is not being deleted.
+	RepositoryID domain.ResticRepoID
 
 	// Contacts must be the actor's contacts, each once.
 	Contacts []ContactLink
@@ -275,6 +293,8 @@ type ListFilter struct {
 	RemoteID domain.RemoteID
 	// ContactID keeps only schedules linked to this contact.
 	ContactID domain.ContactID
+	// RepositoryID keeps only schedules whose RepositoryID is it.
+	RepositoryID domain.ResticRepoID
 }
 
 // RunFilter selects runs. Zero fields do not filter.

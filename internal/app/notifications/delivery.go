@@ -92,6 +92,9 @@ type JobOutcome struct {
 	// Definition is the job's stored definition (jobs.Job.Definition), for
 	// its description (JobDescriber).
 	Definition []byte
+	// Output is the job's stored output (jobs.Job.Output, an encoded link
+	// JobOutput; nil if none), for its details (JobDescriber).
+	Output     []byte
 	Status     domain.JobStatus
 	WorkerID   domain.WorkerID
 	WorkerName string

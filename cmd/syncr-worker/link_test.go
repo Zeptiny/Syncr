@@ -335,3 +335,9 @@ func TestSetupPassiveSelfCheckProbesTheWorker(t *testing.T) {
 		t.Errorf("worker exit %d", code)
 	}
 }
+
+// CompleteProbe implements ControllerLinkService; workers of this build run
+// no probes (m5: Track A).
+func (*fakeController) CompleteProbe(context.Context, *connect.Request[syncrv1.CompleteProbeRequest]) (*connect.Response[syncrv1.CompleteProbeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, nil)
+}

@@ -140,7 +140,7 @@ func hello(seq int64) *syncrv1.Event {
 // specs from definitions, is tested in package dispatch).
 type specBuilder struct{}
 
-func (specBuilder) Build(context.Context, jobs.Job) (*syncrv1.JobSpec, error) {
+func (specBuilder) Build(context.Context, jobs.Job, workers.Info) (*syncrv1.JobSpec, error) {
 	return &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransfer{}}}, nil
 }
 

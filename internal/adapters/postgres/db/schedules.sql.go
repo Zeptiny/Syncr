@@ -99,7 +99,7 @@ const createSchedule = `-- name: CreateSchedule :exec
 INSERT INTO schedules (
     id, owner_id, name, description, cron, timezone, kind, definition, search_text,
     worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason,
-    next_run_at, last_fired_at, created_at, updated_at, version
+    next_run_at, last_fired_at, created_at, updated_at, version, repository_id
 ) VALUES (
     $1::uuid, $2::uuid, $3::text, $4::text,
     $5::text, $6::text, $7::text, $8::jsonb,
@@ -107,7 +107,8 @@ INSERT INTO schedules (
     $12::text, $13::bigint, $14::text,
     $15::boolean, $16::text,
     $17::timestamptz, $18::timestamptz,
-    $19::timestamptz, $20::timestamptz, $21::bigint
+    $19::timestamptz, $20::timestamptz, $21::bigint,
+    $22::uuid
 )
 `
 
@@ -133,6 +134,7 @@ type CreateScheduleParams struct {
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
 	Version      int64
+	RepositoryID pgtype.UUID
 }
 
 func (q *Queries) CreateSchedule(ctx context.Context, arg CreateScheduleParams) error {
@@ -158,6 +160,7 @@ func (q *Queries) CreateSchedule(ctx context.Context, arg CreateScheduleParams) 
 		arg.CreatedAt,
 		arg.UpdatedAt,
 		arg.Version,
+		arg.RepositoryID,
 	)
 	return err
 }
@@ -231,7 +234,7 @@ func (q *Queries) GetRun(ctx context.Context, id pgtype.UUID) (GetRunRow, error)
 }
 
 const getSchedule = `-- name: GetSchedule :one
-SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version FROM schedules WHERE id = $1::uuid
+SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id FROM schedules WHERE id = $1::uuid
 `
 
 func (q *Queries) GetSchedule(ctx context.Context, id pgtype.UUID) (Schedule, error) {
@@ -259,12 +262,13 @@ func (q *Queries) GetSchedule(ctx context.Context, id pgtype.UUID) (Schedule, er
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Version,
+		&i.RepositoryID,
 	)
 	return i, err
 }
 
 const getSchedules = `-- name: GetSchedules :many
-SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version FROM schedules WHERE id = ANY ($1::uuid[]) ORDER BY id
+SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id FROM schedules WHERE id = ANY ($1::uuid[]) ORDER BY id
 `
 
 func (q *Queries) GetSchedules(ctx context.Context, ids []pgtype.UUID) ([]Schedule, error) {
@@ -298,6 +302,7 @@ func (q *Queries) GetSchedules(ctx context.Context, ids []pgtype.UUID) ([]Schedu
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Version,
+			&i.RepositoryID,
 		); err != nil {
 			return nil, err
 		}
@@ -471,7 +476,7 @@ func (q *Queries) LatestRuns(ctx context.Context, scheduleIds []pgtype.UUID) ([]
 }
 
 const listDueSchedules = `-- name: ListDueSchedules :many
-SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version FROM schedules
+SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id FROM schedules
 WHERE enabled AND next_run_at IS NOT NULL AND next_run_at <= $1::timestamptz
 ORDER BY next_run_at, id
 LIMIT $2::bigint
@@ -514,6 +519,7 @@ func (q *Queries) ListDueSchedules(ctx context.Context, arg ListDueSchedulesPara
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Version,
+			&i.RepositoryID,
 		); err != nil {
 			return nil, err
 		}
@@ -704,7 +710,7 @@ func (q *Queries) ListScheduleRemotes(ctx context.Context, scheduleIds []pgtype.
 }
 
 const listSchedules = `-- name: ListSchedules :many
-SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version FROM schedules
+SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id FROM schedules
 WHERE ($1::uuid IS NULL OR owner_id = $1::uuid)
   AND ($2::uuid IS NULL OR EXISTS (
       SELECT 1 FROM schedule_remotes sr
@@ -714,20 +720,28 @@ WHERE ($1::uuid IS NULL OR owner_id = $1::uuid)
       SELECT 1 FROM schedule_contacts sc
       WHERE sc.schedule_id = schedules.id AND sc.contact_id = $3::uuid
   ))
+  AND ($4::uuid IS NULL OR repository_id = $4::uuid)
 ORDER BY lower(name) COLLATE "C", id
 `
 
 type ListSchedulesParams struct {
-	OwnerID   pgtype.UUID
-	RemoteID  pgtype.UUID
-	ContactID pgtype.UUID
+	OwnerID      pgtype.UUID
+	RemoteID     pgtype.UUID
+	ContactID    pgtype.UUID
+	RepositoryID pgtype.UUID
 }
 
 // Every NULL filter matches all schedules. The remote filter matches
 // schedule_remotes_remote_idx, the contact filter
-// schedule_contacts_contact_idx.
+// schedule_contacts_contact_idx, the repository filter
+// schedules_repository_idx.
 func (q *Queries) ListSchedules(ctx context.Context, arg ListSchedulesParams) ([]Schedule, error) {
-	rows, err := q.db.Query(ctx, listSchedules, arg.OwnerID, arg.RemoteID, arg.ContactID)
+	rows, err := q.db.Query(ctx, listSchedules,
+		arg.OwnerID,
+		arg.RemoteID,
+		arg.ContactID,
+		arg.RepositoryID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -757,6 +771,7 @@ func (q *Queries) ListSchedules(ctx context.Context, arg ListSchedulesParams) ([
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Version,
+			&i.RepositoryID,
 		); err != nil {
 			return nil, err
 		}
@@ -952,7 +967,7 @@ UPDATE schedules SET
     updated_at = $4::timestamptz,
     version = version + 1
 WHERE id = $5::uuid
-RETURNING id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version
+RETURNING id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id
 `
 
 type SetScheduleEnabledParams struct {
@@ -995,6 +1010,7 @@ func (q *Queries) SetScheduleEnabled(ctx context.Context, arg SetScheduleEnabled
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Version,
+		&i.RepositoryID,
 	)
 	return i, err
 }
@@ -1087,11 +1103,12 @@ UPDATE schedules SET
     overlap = $12::text,
     enabled = $13::boolean,
     paused_reason = $14::text,
-    next_run_at = CASE WHEN $15::boolean THEN $16::timestamptz ELSE next_run_at END,
-    updated_at = $17::timestamptz,
+    repository_id = $15::uuid,
+    next_run_at = CASE WHEN $16::boolean THEN $17::timestamptz ELSE next_run_at END,
+    updated_at = $18::timestamptz,
     version = version + 1
-WHERE id = $18::uuid AND version = $19::bigint
-RETURNING id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version
+WHERE id = $19::uuid AND version = $20::bigint
+RETURNING id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id
 `
 
 type UpdateScheduleParams struct {
@@ -1109,6 +1126,7 @@ type UpdateScheduleParams struct {
 	Overlap         string
 	Enabled         bool
 	PausedReason    string
+	RepositoryID    pgtype.UUID
 	Reschedule      bool
 	NextRunAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
@@ -1135,6 +1153,7 @@ func (q *Queries) UpdateSchedule(ctx context.Context, arg UpdateScheduleParams) 
 		arg.Overlap,
 		arg.Enabled,
 		arg.PausedReason,
+		arg.RepositoryID,
 		arg.Reschedule,
 		arg.NextRunAt,
 		arg.UpdatedAt,
@@ -1164,6 +1183,7 @@ func (q *Queries) UpdateSchedule(ctx context.Context, arg UpdateScheduleParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Version,
+		&i.RepositoryID,
 	)
 	return i, err
 }

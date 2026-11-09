@@ -1,6 +1,7 @@
 package memstore
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -12,8 +13,8 @@ import (
 )
 
 // CreateJob implements jobs.Repository. Like the database's foreign keys,
-// it requires the owner, every remote (deleted remotes exist) and a set
-// schedule to exist.
+// it requires the owner, every remote (deleted remotes exist), a set
+// schedule and a set repository (deleted repositories exist) to exist.
 func (s *Store) CreateJob(_ context.Context, j jobs.Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -36,7 +37,15 @@ func (s *Store) CreateJob(_ context.Context, j jobs.Job) error {
 			return fmt.Errorf("schedule %s of job %s: %w", j.ScheduleID, j.ID, domain.ErrNotFound)
 		}
 	}
+	if !j.RepositoryID.IsZero() {
+		if _, ok := s.repos[j.RepositoryID]; !ok {
+			return fmt.Errorf("repository %s of job %s: %w", j.RepositoryID, j.ID, domain.ErrNotFound)
+		}
+	}
 	j = cloneJob(j)
+	if len(j.ConcurrencyKeys) == 0 {
+		j.ConcurrencyKeys = nil // the stored empty array reads back as nil
+	}
 	// Stored like the job_remotes rows: a set, read back by ID.
 	slices.SortFunc(j.RemoteIDs, compareIDs)
 	j.RemoteIDs = slices.Compact(j.RemoteIDs)
@@ -69,7 +78,7 @@ func (s *Store) UpdateJob(_ context.Context, j jobs.Job) (jobs.Job, error) {
 	next := cloneJob(j)
 	// Immutable fields keep their stored values.
 	next.WorkerID, next.OwnerID, next.Kind, next.Definition, next.CreatedAt = cur.WorkerID, cur.OwnerID, cur.Kind, cur.Definition, cur.CreatedAt
-	next.ScheduleID = cur.ScheduleID
+	next.ScheduleID, next.RepositoryID, next.ConcurrencyKeys = cur.ScheduleID, cur.RepositoryID, cur.ConcurrencyKeys
 	next.RemoteIDs, next.SearchText = cur.RemoteIDs, cur.SearchText
 	next.Version = cur.Version + 1
 	s.jobs[j.ID] = next
@@ -103,6 +112,7 @@ func matchesJob(j jobs.Job, f jobs.ListFilter) bool {
 		(len(f.Statuses) == 0 || slices.Contains(f.Statuses, j.Status)) &&
 		(f.RemoteID.IsZero() || slices.Contains(j.RemoteIDs, f.RemoteID)) &&
 		(f.ScheduleID.IsZero() || j.ScheduleID == f.ScheduleID) &&
+		(f.RepositoryID.IsZero() || j.RepositoryID == f.RepositoryID) &&
 		(len(f.Kinds) == 0 || slices.Contains(f.Kinds, j.Kind)) &&
 		(f.Query == "" || strings.Contains(j.SearchText, f.Query)) &&
 		(f.CreatedAfter.IsZero() || !j.CreatedAt.Before(f.CreatedAfter)) &&
@@ -124,13 +134,21 @@ func (s *Store) ListUnfinishedJobs(_ context.Context, workerID domain.WorkerID) 
 	return out, nil
 }
 
-// ListQueuedJobs implements jobs.Repository.
+// ListQueuedJobs implements jobs.Repository, key-aware like the query: a
+// job with keys is no candidate while an older sharer is unfinished or
+// finished at or after before.
 func (s *Store) ListQueuedJobs(_ context.Context, before time.Time, limit int) ([]jobs.Job, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []jobs.Job
 	for _, j := range s.jobs {
-		if j.Status == domain.JobQueued && j.QueuedAt.Before(before) {
+		if j.Status != domain.JobQueued || !j.QueuedAt.Before(before) {
+			continue
+		}
+		waiting := slices.ContainsFunc(s.olderSharersLocked(j), func(o jobs.Job) bool {
+			return !o.Status.Terminal() || !o.FinishedAt.IsZero() && !o.FinishedAt.Before(before)
+		})
+		if !waiting {
 			out = append(out, j)
 		}
 	}
@@ -194,4 +212,65 @@ func (s *Store) ListJobSamples(_ context.Context, id domain.JobID) ([]jobs.Sampl
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return slices.Clone(s.samples[id]), nil
+}
+
+// olderJob orders jobs by (CreatedAt, ID), the order of the concurrency
+// keys.
+func olderJob(a, b jobs.Job) int {
+	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), compareIDs(a.ID, b.ID))
+}
+
+// sharesKey reports whether a and b have a key in common (Postgres &&).
+func sharesKey(a, b []string) bool {
+	return slices.ContainsFunc(a, func(k string) bool { return slices.Contains(b, k) })
+}
+
+// olderSharersLocked returns the jobs older than j (by olderJob) that share
+// one of its keys, oldest first; none for a job without keys.
+func (s *Store) olderSharersLocked(j jobs.Job) []jobs.Job {
+	if len(j.ConcurrencyKeys) == 0 {
+		return nil
+	}
+	var out []jobs.Job
+	for _, o := range s.jobs {
+		if o.ID != j.ID && sharesKey(o.ConcurrencyKeys, j.ConcurrencyKeys) && olderJob(o, j) < 0 {
+			out = append(out, o)
+		}
+	}
+	slices.SortFunc(out, olderJob)
+	return out
+}
+
+// ListJobBlockers implements jobs.Repository.
+func (s *Store) ListJobBlockers(_ context.Context, ids []domain.JobID) (map[domain.JobID]domain.JobID, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[domain.JobID]domain.JobID)
+	for _, id := range ids {
+		j, ok := s.jobs[id]
+		if !ok {
+			continue
+		}
+		for _, o := range s.olderSharersLocked(j) {
+			if !o.Status.Terminal() {
+				out[id] = o.ID
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// ListWorkersWaitingOnKeys implements jobs.Repository.
+func (s *Store) ListWorkersWaitingOnKeys(_ context.Context, keys []string) ([]domain.WorkerID, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []domain.WorkerID{}
+	for _, j := range s.jobs {
+		if j.Status == domain.JobQueued && sharesKey(j.ConcurrencyKeys, keys) && !slices.Contains(out, j.WorkerID) {
+			out = append(out, j.WorkerID)
+		}
+	}
+	slices.SortFunc(out, compareIDs)
+	return out, nil
 }

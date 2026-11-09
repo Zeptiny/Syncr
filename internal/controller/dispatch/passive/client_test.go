@@ -216,3 +216,8 @@ func TestNewClientValidates(t *testing.T) {
 		}
 	}
 }
+
+// Probe implements WorkerLinkService (m5: Track B tests Client.Probe).
+func (*fakeWorker) Probe(context.Context, *connect.Request[syncrv1.ProbeRequest]) (*connect.Response[syncrv1.ProbeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, nil)
+}

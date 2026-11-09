@@ -23,6 +23,7 @@ func TestKindOf(t *testing.T) {
 		{spec: &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_ResticCheck{ResticCheck: &syncrv1.ResticCheck{}}}, want: "restic_check"},
 		{spec: &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_ResticRestore{ResticRestore: &syncrv1.ResticRestore{}}}, want: "restic_restore"},
 		{spec: &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_ResticSnapshots{ResticSnapshots: &syncrv1.ResticSnapshots{}}}, want: "restic_snapshots"},
+		{spec: &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_ResticDeleteData{ResticDeleteData: &syncrv1.ResticDeleteData{}}}, want: "restic_delete_data"},
 	}
 	for _, tt := range tests {
 		if got := KindOf(tt.spec); got != tt.want {
@@ -36,7 +37,7 @@ func TestKinds(t *testing.T) {
 	want := []string{
 		"rclone_transfer",
 		"restic_init", "restic_backup", "restic_forget", "restic_prune",
-		"restic_check", "restic_restore", "restic_snapshots",
+		"restic_check", "restic_restore", "restic_snapshots", "restic_delete_data",
 	}
 	if got := Kinds(); !slices.Equal(got, want) {
 		t.Errorf("Kinds() = %q, want %q", got, want)

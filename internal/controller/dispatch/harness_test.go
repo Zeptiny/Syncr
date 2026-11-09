@@ -175,7 +175,7 @@ func (e *env) restart() {
 // job kinds.
 func (e *env) specs() *dispatch.Specs {
 	e.t.Helper()
-	specs, err := dispatch.NewSpecs(e.remotes, kinds(e.t))
+	specs, err := dispatch.NewSpecs(e.remotes, nil, kinds(e.t))
 	if err != nil {
 		e.t.Fatal(err)
 	}

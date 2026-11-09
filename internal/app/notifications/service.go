@@ -278,11 +278,15 @@ func (s *Service) jobDeliveries(ctx context.Context, o JobOutcome, now time.Time
 		},
 	}
 	if s.jobs != nil {
-		desc, err := s.jobs.DescribeJob(ctx, o.OwnerID, o.Kind, o.Definition)
+		desc, err := s.jobs.DescribeJob(ctx, o.OwnerID, o.Kind, o.Definition, o.Output)
 		if err != nil {
 			return nil, fmt.Errorf("describe the job: %w", err)
 		}
-		m.Job.Description = truncateRunes(desc, notify.MaxFactRunes)
+		m.Job.Description = truncateRunes(desc.Text, notify.MaxFactRunes)
+		// m5: Track C renders KindLabel and Details (notify.Title, Facts)
+		// and bounds Details here.
+		m.Job.KindLabel = truncateRunes(desc.KindLabel, notify.MaxFactRunes)
+		m.Job.Details = desc.Details
 	}
 	if m.OccurredAt.IsZero() {
 		m.OccurredAt = now
