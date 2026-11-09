@@ -121,7 +121,8 @@ func (e *Env) BackendType(alias string) (string, bool) {
 
 // Secrets returns the secret values of all remotes, in the forms they could
 // take in tool output (plain, obscured, quoted, URL-escaped), longest first.
-// Use it to scrub tool output before showing it to users; see Scrubber.
+// Use it to scrub tool output before showing it to users (see
+// internal/worker/runner/scrub).
 func (e *Env) Secrets() []string { return secretForms(e.secrets) }
 
 // Build prepares dir (see Isolate) and returns the environment that defines
