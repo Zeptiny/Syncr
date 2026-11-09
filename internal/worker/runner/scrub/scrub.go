@@ -8,14 +8,19 @@
 // by hand.
 //
 // Besides each secret as given, a Scrubber redacts the forms in which tools
-// commonly print it: Go-quoted (%q) and URL-escaped (query and path), and a
-// secret cut off at the end of a text.
+// commonly print it: Go-quoted (%q, %+q), JSON-escaped, URL-escaped (query
+// and path) and with its whitespace collapsed, each line of a multi-line
+// secret (a PEM key printed line by line), and a secret cut off at the end
+// of a text. Forms a caller cannot derive, such as rclone's randomized
+// "obscure" form, must be passed in as secrets of their own.
 //
 // Allowed dependencies: the standard library only.
 package scrub
 
 import (
+	"bytes"
 	"cmp"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"slices"
@@ -31,7 +36,8 @@ const Placeholder = "[redacted]"
 const Ellipsis = "..."
 
 // MinFragment is the length of the shortest partial secret that is
-// redacted: the start of a secret at the end of a text. Shorter pieces reveal little and would redact ordinary
+// redacted: a line of a multi-line secret, or the start of a secret at the
+// end of a text. Shorter pieces reveal little and would redact ordinary
 // words. Whole secrets are redacted whatever their length.
 const MinFragment = 6
 
@@ -81,9 +87,32 @@ func Forms(secret string) []string {
 		}
 	}
 	add(unquote(strconv.Quote(secret)))
+	add(unquote(strconv.QuoteToASCII(secret)))
+	add(unquote(jsonString(secret, true)))
+	add(unquote(jsonString(secret, false)))
 	add(url.QueryEscape(secret))
 	add(url.PathEscape(secret))
+	add(collapse(secret))
+	if strings.ContainsAny(secret, "\r\n") {
+		for line := range strings.FieldsFuncSeq(secret, func(r rune) bool { return r == '\n' || r == '\r' }) {
+			if line = strings.TrimSpace(line); len(line) >= MinFragment {
+				add(line)
+			}
+		}
+	}
 	return forms
+}
+
+// jsonString returns s as a JSON string literal, with or without escaping
+// HTML characters (encoding/json escapes them by default).
+func jsonString(s string, escapeHTML bool) string {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(escapeHTML)
+	if err := enc.Encode(s); err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 // unquote strips the quotes of a quoted literal.

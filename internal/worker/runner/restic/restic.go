@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
@@ -158,6 +159,9 @@ func (e *engine) run(ctx context.Context, kind string, job runner.Job, cmd comma
 	env, err := e.baseEnv(spec, cmd.repo.GetPassword(), viaRclone)
 	if err != nil {
 		return res, sc, err
+	}
+	if obscured := obscuredSecrets(spec, env); len(obscured) > 0 {
+		sc = scrub.New(append(slices.Clip(secrets), obscured...))
 	}
 
 	scratch, cleanup, err := e.scratchDir(job.ID)

@@ -150,6 +150,23 @@ func secretsOf(spec *syncrv1.JobSpec) []string {
 	return out
 }
 
+// obscuredSecrets returns the values that env, built by RemoteEnv, gives the
+// secrets listed in obscure_keys: rclone's obscured form of a secret is
+// randomized, so it cannot be derived from the spec, and rclone may print
+// it. The variable names follow rcloneenv.EnvName.
+func obscuredSecrets(spec *syncrv1.JobSpec, env map[string]string) []string {
+	var out []string
+	for _, r := range spec.GetRemotes() {
+		for _, key := range r.GetObscureKeys() {
+			name := "RCLONE_CONFIG_" + strings.ToUpper(r.GetAlias()+"_"+strings.ReplaceAll(key, "-", "_"))
+			if v := env[name]; v != "" {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
 // failure builds the runner error for a restic exit.
 func failure(verb string, code int, message string) error {
 	e := &ExitError{Verb: verb, ExitCode: code, Message: message}

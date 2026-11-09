@@ -405,6 +405,38 @@ func TestRunFailureMessageScrubsBeforeShortening(t *testing.T) {
 	}
 }
 
+// TestRunFailureMessageScrubsDerivedForms echoes a multi-line key line by
+// line and a password JSON-escaped: neither is the secret verbatim.
+func TestRunFailureMessageScrubsDerivedForms(t *testing.T) {
+	t.Parallel()
+	const key = "-----BEGIN KEY-----\nAAAAB3NzaC1yc2EAAAADAQAB\n-----END KEY-----"
+	const pass = `pa<ss>&word`
+	f := newFixture(t, &fakeSupervisor{
+		lines: []string{
+			"Error: bad key line AAAAB3NzaC1yc2EAAAADAQAB",
+			`Error: login {"pass":"pa<ss>&word"} rejected`,
+		},
+		result: proc.Result{ExitCode: 1},
+		err:    &proc.ExitError{Path: "rclone", ExitCode: 1, Err: errors.New("exit status 1")},
+	})
+	remote := sftpRemote("box", pass)
+	remote.Secrets["key_pem"] = key
+	job := transferJob(&syncrv1.Location{Remote: "box", Path: "x"}, &syncrv1.Location{Path: f.data}, remote)
+	_, err := f.runner.Run(t.Context(), job, nil)
+	if err == nil {
+		t.Fatal("Run() succeeded")
+	}
+	msg := err.Error()
+	for _, leak := range []string{"AAAAB3NzaC1yc2EAAAADAQAB", `pa<ss`} {
+		if strings.Contains(msg, leak) {
+			t.Errorf("message leaks %q: %q", leak, msg)
+		}
+	}
+	if strings.Count(msg, "[redacted]") != 2 {
+		t.Errorf("message %q, want both forms redacted", msg)
+	}
+}
+
 // echoSupervisor writes error lines containing the secret in several forms.
 type echoSupervisor struct {
 	*fakeSupervisor

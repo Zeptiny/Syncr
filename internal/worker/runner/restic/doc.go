@@ -28,7 +28,9 @@
 // password file would have to be written, and reliably wiped, on every job.
 // restic hands its environment to the rclone it starts, which is the same
 // trust domain. Every error message is scrubbed of the repository password
-// and of the remotes' secret options before it leaves the package.
+// and of the remotes' secret options before it leaves the package, in the
+// forms tools print them (see internal/worker/runner/scrub) and, for
+// obscure_keys, in the obscured form the child was given.
 //
 // # Outcomes
 //

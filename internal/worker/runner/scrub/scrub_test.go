@@ -1,7 +1,10 @@
 package scrub
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -41,14 +44,60 @@ func TestNilAndEmptyScrubNothing(t *testing.T) {
 	}
 }
 
-// TestWhitespace checks that collapsing white space cannot reveal a secret
-// with runs of spaces, or one printed with other spacing.
+// TestDerivedForms checks the encoded forms in which tools print secrets.
+func TestDerivedForms(t *testing.T) {
+	t.Parallel()
+	secret := "p@ss wörd/\"x\"&<y>\\z\t?"
+	sc := New([]string{secret})
+	jsonHTML, _ := json.Marshal(secret)
+	forms := map[string]string{
+		"verbatim":      secret,
+		"%q":            fmt.Sprintf("%q", secret),
+		"%+q":           fmt.Sprintf("%+q", secret),
+		"json":          string(jsonHTML),
+		"query escaped": url.QueryEscape(secret),
+		"path escaped":  url.PathEscape(secret),
+	}
+	for name, form := range forms {
+		text := "error: " + form + " (end)"
+		got := sc.String(text)
+		if strings.Contains(got, "ss w") || strings.Contains(got, "rd") || !strings.Contains(got, Placeholder) {
+			t.Errorf("%s: String(%q) = %q, want the secret redacted", name, text, got)
+		}
+	}
+	if got := sc.String(`url?key=` + url.QueryEscape(secret) + `&x=1`); got != "url?key="+Placeholder+"&x=1" {
+		t.Errorf("query escaped form: %q", got)
+	}
+}
+
+// TestWhitespace checks that collapsing white space cannot reveal a secret:
+// neither a secret with runs of spaces nor one printed with other spacing.
 func TestWhitespace(t *testing.T) {
 	t.Parallel()
-	sc := New([]string{"pass  word", "one two"})
-	for _, text := range []string{"key: pass  word end", "key: one   two end", "key: one\ttwo end"} {
+	sc := New([]string{"pass  word"})
+	for _, text := range []string{"key: pass  word end", "key: pass\tword end", "key: pass word end"} {
 		if got := sc.Line(text, 300); got != "key: "+Placeholder+" end" {
 			t.Errorf("Line(%q) = %q", text, got)
+		}
+	}
+}
+
+// TestMultiLineSecret checks a PEM-like key printed whole, quoted, or line
+// by line (each tool output line is scrubbed on its own).
+func TestMultiLineSecret(t *testing.T) {
+	t.Parallel()
+	key := "-----BEGIN KEY-----\nAAAAB3NzaC1yc2EAAAADAQAB\nQ9F0y7wJxJvTIQm1ZkL2\nab\n-----END KEY-----\n"
+	sc := New([]string{key})
+	if got := sc.Line("bad key "+key+" given", 300); got != "bad key "+Placeholder+" given" {
+		t.Errorf("Line(whole key) = %q", got)
+	}
+	if got := sc.String(fmt.Sprintf("bad key %q", key)); got != "bad key \""+Placeholder+"\"" {
+		t.Errorf("String(quoted key) = %q", got)
+	}
+	for _, line := range strings.Split(key, "\n") {
+		got := sc.String("  " + line + "  ")
+		if len(line) >= MinFragment && strings.Contains(got, line) {
+			t.Errorf("String(%q) = %q, want the line redacted", line, got)
 		}
 	}
 }
