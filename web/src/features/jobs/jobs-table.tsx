@@ -42,7 +42,7 @@ export function ScheduleChip({ job }: { job: Job }) {
       to="/schedules/$scheduleId"
       params={{ scheduleId: job.scheduleId }}
       onClick={(e) => e.stopPropagation()}
-      className="inline-flex max-w-44 items-center gap-1.5 rounded-md bg-secondary px-1.5 py-0.5 text-[12.5px] text-secondary-foreground hover:bg-accent"
+      className="inline-flex max-w-36 items-center gap-1.5 rounded-md bg-secondary px-1.5 py-0.5 text-[12.5px] text-secondary-foreground hover:bg-accent"
       title={name}
     >
       <CalendarClock className="size-3.5 shrink-0 text-primary" aria-hidden />
@@ -114,7 +114,7 @@ function RunningDuration({ job }: { job: Job }) {
 
 function DurationText({ seconds }: { seconds: number | undefined }) {
   return (
-    <span className="tabular text-[13px] text-muted-foreground">
+    <span className="tabular text-[13px] whitespace-nowrap text-muted-foreground">
       {seconds === undefined ? "–" : formatDuration(seconds)}
     </span>
   );
@@ -153,7 +153,7 @@ export function JobsTable({
           const t = transferOf(job);
           if (!t)
             return (
-              <div className="flex min-w-0 flex-col gap-0.5">
+              <div className="flex w-0 min-w-full flex-col gap-0.5">
                 <span className="truncate font-medium" title={jobTitle(job)}>
                   {jobTitle(job)}
                 </span>
@@ -164,7 +164,7 @@ export function JobsTable({
               </div>
             );
           return (
-            <div className="flex min-w-0 flex-col gap-0.5">
+            <div className="flex w-0 min-w-full flex-col gap-0.5">
               <div className="flex min-w-0 items-center gap-2">
                 <Endpoint e={endpoint(job, t.source)} className="max-w-[45%]" />
                 <ArrowRight className="size-3.5 shrink-0 text-muted-foreground" aria-label="to" />
@@ -174,7 +174,10 @@ export function JobsTable({
             </div>
           );
         },
-        meta: { className: "min-w-[18rem] max-w-[30rem]" },
+        // The column takes the width the others leave. Its content never
+        // widens it (w-0 min-w-full above): long names are cut instead of
+        // pushing the table past its container.
+        meta: { className: "w-full min-w-[18rem]" },
       }),
       ...(owners
         ? [

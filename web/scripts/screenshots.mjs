@@ -15,7 +15,8 @@
 //   SYNCR_SCREENSHOT_FULL   1 to capture whole pages instead of the viewport
 //   SYNCR_UI_MOCK           1 when the UI runs with VITE_SYNCR_MOCK=1
 //   CHROMIUM_PATH           Chromium executable (default: the cached
-//                           ~/.cache/ms-playwright/chromium-1140 build)
+//                           ~/.cache/ms-playwright/chromium-1140 build; set
+//                           it when the host caches another build)
 /* global window -- used inside page.addInitScript, which runs in the browser */
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -338,9 +339,9 @@ const m5Shots = [
       await p.getByRole("option", { name: /office-pc/ }).click();
       await p.getByRole("combobox", { name: /^Repository/ }).click();
       await p.getByRole("option", { name: /^Office laptop/ }).click();
-      await p.getByLabel("Path to back up 1").fill("C:\\Users\\ada\\Documents");
+      await p.getByLabel("Path to back up 1", { exact: true }).fill("C:\\Users\\ada\\Documents");
       await p.getByRole("button", { name: "Add a path" }).click();
-      await p.getByLabel("Path to back up 2").fill("D:\\Shared\\Projects");
+      await p.getByLabel("Path to back up 2", { exact: true }).fill("D:\\Shared\\Projects");
       await p.getByRole("switch", { name: "Use a volume snapshot (VSS)" }).click();
       await settle(p, 300);
       await scrollTo(p, p.getByRole("heading", { name: "Where it runs" }));
@@ -443,6 +444,8 @@ async function m5(browser) {
     const p = await newPage(browser, { width: 390, height: 844 });
     await signIn(p);
     await openSnapshot(p, "Photos vault", ["srv", "photos"]);
+    // The snapshot's details come first at this width: show the files.
+    await scrollTo(p, p.getByRole("button", { name: /^Restore this folder/ }), 72);
     await shot(p, "14-snapshot-browser-mobile");
     await p.context().close();
   }
