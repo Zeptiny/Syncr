@@ -108,6 +108,12 @@ type Deps struct {
 	// descriptors) and validates contacts' channel types.
 	Channels *notify.Registry
 
+	// Restic serves ResticService (*restic.Service) and names the
+	// repositories of jobs and schedules.
+	Restic ResticService
+	// Probes serves ProbeService (*probe.Service of the controller).
+	Probes ProbeService
+
 	// UI is the web UI's files (index.html at the root); nil serves no UI.
 	UI fs.FS
 	// Cookies configures the session cookie.
@@ -229,6 +235,21 @@ func mountProtected(mux *http.ServeMux, deps Deps, logger *slog.Logger, opts []c
 		disabled(syncrv1connect.RemoteServiceName)
 	}
 	mountMilestone4(mux, deps, errs, disabled, opts)
+	mountMilestone5(mux, deps, errs, disabled, opts)
+}
+
+// mountMilestone5 adds the restic repository and probe services.
+func mountMilestone5(mux *http.ServeMux, deps Deps, errs errorMapper, disabled func(string), opts []connect.HandlerOption) {
+	if deps.Restic != nil {
+		mux.Handle(syncrv1connect.NewResticServiceHandler(&resticHandler{restic: deps.Restic, errs: errs}, opts...))
+	} else {
+		disabled(syncrv1connect.ResticServiceName)
+	}
+	if deps.Probes != nil {
+		mux.Handle(syncrv1connect.NewProbeServiceHandler(&probeHandler{probes: deps.Probes, errs: errs}, opts...))
+	} else {
+		disabled(syncrv1connect.ProbeServiceName)
+	}
 }
 
 // mountMilestone4 adds the schedule, notification and dashboard services.

@@ -16,7 +16,7 @@ const (
 	// FeatureProbe: the worker runs probes (Command.run_probe in active
 	// mode, WorkerLinkService.Probe in passive mode).
 	FeatureProbe = "probe"
-	// FeatureResticV2: the worker honours the Milestone 5 restic spec
+	// FeatureResticV2: the worker honors the Milestone 5 restic spec
 	// fields (restore overwrite, subfolder and paths, forget keep_within)
 	// and reports the Milestone 5 outputs.
 	FeatureResticV2 = "restic.v2"

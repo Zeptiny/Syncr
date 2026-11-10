@@ -349,6 +349,8 @@ linters:
             - google.golang.org/protobuf
             - github.com/Zeptiny/Syncr/internal/domain
             - github.com/Zeptiny/Syncr/internal/backend$
+            # Link feature names the kinds require of a worker.
+            - github.com/Zeptiny/Syncr/internal/link$
             - github.com/Zeptiny/Syncr/internal/jobkind
 
         # The web UI's Go package only embeds the built SPA.

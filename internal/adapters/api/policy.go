@@ -64,6 +64,8 @@ func apiServices() []string {
 		syncrv1connect.ChannelServiceName,
 		syncrv1connect.ContactServiceName,
 		syncrv1connect.DashboardServiceName,
+		syncrv1connect.ResticServiceName,
+		syncrv1connect.ProbeServiceName,
 	}
 }
 
@@ -146,6 +148,22 @@ func newPolicy() map[string]access {
 		syncrv1connect.ContactServiceRetryDeliveryProcedure:        user,
 
 		syncrv1connect.DashboardServiceGetDashboardProcedure: user,
+
+		// Repositories are owner-only, admins included: the scoping is in
+		// the restic use cases.
+		syncrv1connect.ResticServiceListRepositoriesProcedure: user,
+		syncrv1connect.ResticServiceGetRepositoryProcedure:    user,
+		syncrv1connect.ResticServiceCreateRepositoryProcedure: user,
+		syncrv1connect.ResticServiceUpdateRepositoryProcedure: user,
+		syncrv1connect.ResticServiceDeleteRepositoryProcedure: user,
+		syncrv1connect.ResticServiceListSnapshotsProcedure:    user,
+		syncrv1connect.ResticServiceBrowseSnapshotProcedure:   user,
+
+		// Any user may browse a worker's local roots; remotes are the
+		// caller's own. The probe use cases scope and rate limit the calls.
+		syncrv1connect.ProbeServiceListWorkerFilesProcedure: user,
+		syncrv1connect.ProbeServiceListRemoteFilesProcedure: user,
+		syncrv1connect.ProbeServiceTestRemoteProcedure:      user,
 	}
 }
 
