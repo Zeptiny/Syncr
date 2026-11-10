@@ -5,7 +5,11 @@ import { describe, expect, it } from "vitest";
 import { JobDefinitionSchema, type JobDefinition } from "@/gen/syncr/v1/api_pb";
 import { RcloneTransferMode } from "@/gen/syncr/v1/link_pb";
 
-import { definitionState, toDefinition, validateDefinition } from "./definition";
+import {
+  transferState as definitionState,
+  toTransferDefinition as toDefinition,
+  validateTransfer as validateDefinition,
+} from "./definition";
 
 interface Limits {
   bandwidthLimitBytesPerSecond?: bigint;

@@ -5,7 +5,13 @@
 import { createRouterTransport, type ConnectRouter, type Transport } from "@connectrpc/connect";
 import { TransportProvider } from "@connectrpc/connect-query";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createMemoryHistory } from "@tanstack/react-router";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from "@tanstack/react-router";
 import { render, type RenderResult } from "@testing-library/react";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -50,4 +56,40 @@ export function renderApp(
   const app = createApp(transport, createMemoryHistory({ initialEntries: [path] }));
   const result = render(<App {...app} />);
   return { ...result, router: app.router, queryClient: app.queryClient };
+}
+
+/**
+ * renderInRouter renders a component that uses links or navigation, without
+ * the app's pages: a small router shows ui at every address, so a
+ * navigation only moves location. The returned location() reads it.
+ */
+export function renderInRouter(
+  ui: React.ReactElement,
+  { transport = mockTransport(() => {}), queryClient = testQueryClient(), path = "/" } = {},
+): RenderResult & { queryClient: QueryClient; location: () => { pathname: string; href: string } } {
+  const root = createRootRoute({ component: () => ui });
+  const any = createRoute({ getParentRoute: () => root, path: "$", component: () => null });
+  const router = createRouter({
+    routeTree: root.addChildren([any]),
+    history: createMemoryHistory({ initialEntries: [path] }),
+  });
+  const result = render(
+    <ThemeProvider>
+      <TransportProvider transport={transport}>
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <RouterProvider router={router as never} />
+          </TooltipProvider>
+        </QueryClientProvider>
+      </TransportProvider>
+    </ThemeProvider>,
+  );
+  return {
+    ...result,
+    queryClient,
+    location: () => ({
+      pathname: router.state.location.pathname,
+      href: router.state.location.href,
+    }),
+  };
 }

@@ -36,6 +36,11 @@ export interface RemoteFormProps {
   onCancel?: () => void;
   /** footer renders extra actions on the left of the footer (e.g. delete). */
   footer?: React.ReactNode;
+  /**
+   * extra renders a full-width block above the footer and gets a function
+   * that returns the form's current, unsaved input (e.g. "Test remote").
+   */
+  extra?: (input: () => RemoteInputInit) => React.ReactNode;
 }
 
 /**
@@ -52,6 +57,7 @@ export function RemoteForm({
   submitLabel,
   onCancel,
   footer,
+  extra,
 }: RemoteFormProps) {
   const idPrefix = useId().replaceAll(":", "");
   const schema = useMemo(
@@ -142,6 +148,8 @@ export function RemoteForm({
             {formError}
           </p>
         )}
+
+        {extra?.(() => toRemoteInput(backend, form.getValues()))}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-5">
           <div>{footer}</div>

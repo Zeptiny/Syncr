@@ -16,15 +16,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { WorkerAdminService } from "@/gen/syncr/v1/api_pb";
+import { WorkerAdminService, WorkerStatus } from "@/gen/syncr/v1/api_pb";
 import { DashboardService } from "@/gen/syncr/v1/dashboard_pb";
 import { ContactService } from "@/gen/syncr/v1/notify_pb";
 import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
+import { ResticService } from "@/gen/syncr/v1/restic_pb";
 import { ScheduleService, type Schedule } from "@/gen/syncr/v1/schedules_pb";
 import { useBackendMap } from "@/hooks/use-backends";
 import { errorMessage } from "@/lib/errors";
 import { invalidateService } from "@/lib/invalidate";
+import { labelledWorkers } from "@/lib/labels";
+import { sortWorkers } from "@/lib/workers";
 
+import { scheduleKinds } from "../jobs/definition";
 import { JobDefinitionEditor } from "../jobs/job-definition-editor";
 import {
   scheduleServerErrors,
@@ -47,7 +51,8 @@ export interface ScheduleFormProps {
 /**
  * ScheduleFormPage creates or edits a schedule: when it runs (cron and
  * time zone), where (a worker or a label), the job, what happens when a run
- * can't start on time, and who hears about it.
+ * can't start on time, and who hears about it. The job is a transfer, a
+ * backup, a retention run, a check or a prune; restores are never scheduled.
  */
 export function ScheduleFormPage({ initial, schedule, title, description }: ScheduleFormProps) {
   const navigate = useNavigate();
@@ -56,6 +61,7 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
   const workers = useQuery(WorkerAdminService.method.listWorkers, {});
   const remotes = useQuery(RemoteService.method.listRemotes, {});
   const contacts = useQuery(ContactService.method.listContacts, {});
+  const repositories = useQuery(ResticService.method.listRepositories, {});
   const create = useMutation(ScheduleService.method.createSchedule);
   const update = useMutation(ScheduleService.method.updateSchedule);
   const [s, setS] = useState<ScheduleFormState>(initial);
@@ -66,6 +72,13 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
   const workerList = workers.data?.workers ?? [];
   const worker =
     s.target.kind === "worker" ? workerList.find((w) => w.id === s.target.workerId) : undefined;
+  // A label has no single worker: paths are browsed on the first online one.
+  const labelWorker =
+    s.target.kind === "label"
+      ? sortWorkers(labelledWorkers(workerList, s.target.label)).find(
+          (w) => w.status === WorkerStatus.ONLINE,
+        )
+      : undefined;
   const pending = create.isPending || update.isPending;
 
   const submit = async (e: React.FormEvent) => {
@@ -78,7 +91,7 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
       return;
     }
     try {
-      const input = toScheduleInput(s);
+      const input = toScheduleInput(s, worker?.info?.os);
       const res = schedule
         ? await update.mutateAsync({ scheduleId: schedule.id, version: schedule.version, input })
         : await create.mutateAsync({ input });
@@ -86,6 +99,7 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
         invalidateService(queryClient, ScheduleService),
         invalidateService(queryClient, DashboardService),
         invalidateService(queryClient, ContactService),
+        invalidateService(queryClient, ResticService),
       ]);
       toast.success(schedule ? `Saved ${input.name}` : `Created ${input.name}`);
       const id = res.schedule?.id ?? schedule?.id;
@@ -171,7 +185,15 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
           errors={errors}
           remotes={remotes.data?.remotes ?? []}
           backends={backends}
+          repositories={repositories.data?.repositories ?? []}
+          kinds={scheduleKinds}
           worker={worker}
+          browseWorker={labelWorker}
+          browseNote={
+            labelWorker
+              ? `Absolute paths on the workers labelled ${s.target.label}. Browse shows ${labelWorker.name}, the first one online.`
+              : undefined
+          }
         />
 
         <Panel title="Where it runs">

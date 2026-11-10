@@ -15,7 +15,7 @@ export const Route = createFileRoute("/_app/schedules/new")({
 });
 
 function NewSchedule() {
-  const { from, job } = Route.useSearch();
+  const { from, job, kind, repository } = Route.useSearch();
   const src = useQuery(
     ScheduleService.method.getSchedule,
     { scheduleId: from ?? "" },
@@ -50,5 +50,11 @@ function NewSchedule() {
       />
     );
   }
-  return <ScheduleFormPage title={title} description={description} initial={emptySchedule()} />;
+  return (
+    <ScheduleFormPage
+      title={title}
+      description={description}
+      initial={emptySchedule(undefined, kind, repository)}
+    />
+  );
 }

@@ -7,8 +7,10 @@ import { RemoteForm } from "@/components/app/descriptor-form";
 import { ErrorState } from "@/components/app/error-state";
 import { PageHeader } from "@/components/app/page-header";
 import { Panel } from "@/components/app/panel";
+import { TestRemoteButton } from "@/components/app/test-remote-button";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { WorkerAdminService } from "@/gen/syncr/v1/api_pb";
 import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
 import { useBackendMap, useBackends } from "@/hooks/use-backends";
 import { invalidateService } from "@/lib/invalidate";
@@ -24,6 +26,7 @@ export function NewRemotePage({ type }: { type?: string }) {
   const backends = useBackendMap();
   const remotes = useQuery(RemoteService.method.listRemotes, {});
   const create = useMutation(RemoteService.method.createRemote);
+  const workers = useQuery(WorkerAdminService.method.listWorkers, {});
   const chosen = type ? backends.get(type) : undefined;
 
   if (backendsQ.error)
@@ -84,6 +87,13 @@ export function NewRemotePage({ type }: { type?: string }) {
           remotes={remotes.data?.remotes ?? []}
           backends={backends}
           onCancel={() => void navigate({ to: "/remotes" })}
+          extra={(input) => (
+            <TestRemoteButton
+              input={input}
+              workers={workers.data?.workers ?? []}
+              needsWorker={!!chosen.capabilities?.local}
+            />
+          )}
           onSubmit={async (input) => {
             const res = await create.mutateAsync({ input });
             await invalidateService(queryClient, RemoteService);

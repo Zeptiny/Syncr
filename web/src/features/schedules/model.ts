@@ -19,10 +19,12 @@ import {
   definitionError,
   definitionState,
   emptyDefinition,
+  forWorkerOS,
   toDefinition,
   validateDefinition,
   type DefinitionErrors,
-  type DefinitionState,
+  type EditableKind,
+  type JobDefinitionState,
 } from "../jobs/definition";
 
 const HOUR = 3600;
@@ -129,7 +131,7 @@ export interface ScheduleFormState {
   overlap: OverlapPolicy;
   enabled: boolean;
   contacts: ContactLink[];
-  definition: DefinitionState;
+  definition: JobDefinitionState;
 }
 
 /** ScheduleErrors are the form's problems, by section. */
@@ -139,8 +141,15 @@ export type ScheduleErrors = DefinitionErrors &
     contacts?: Record<number, string>;
   };
 
-/** emptySchedule is a new schedule: daily at 02:30 in the browser's zone. */
-export function emptySchedule(timezone = browserTimeZone()): ScheduleFormState {
+/**
+ * emptySchedule is a new schedule: daily at 02:30 in the browser's zone. A
+ * kind and a repository start it as that kind of job on that repository.
+ */
+export function emptySchedule(
+  timezone = browserTimeZone(),
+  kind?: EditableKind,
+  repositoryId?: string,
+): ScheduleFormState {
   return {
     name: "",
     description: "",
@@ -151,7 +160,7 @@ export function emptySchedule(timezone = browserTimeZone()): ScheduleFormState {
     overlap: OverlapPolicy.SKIP,
     enabled: true,
     contacts: [],
-    definition: emptyDefinition(),
+    definition: emptyDefinition(kind, repositoryId),
   };
 }
 
@@ -206,9 +215,14 @@ export function validateSchedule(s: ScheduleFormState): ScheduleErrors {
   return e;
 }
 
-/** toScheduleInput builds the API input from the form. */
+/**
+ * toScheduleInput builds the API input from the form. os is the target
+ * worker's OS when the target is one worker: what it cannot do (VSS off
+ * Windows) is left out.
+ */
 export function toScheduleInput(
   s: ScheduleFormState,
+  os?: string,
 ): MessageInitShape<typeof ScheduleInputSchema> {
   return {
     name: s.name.trim(),
@@ -224,7 +238,7 @@ export function toScheduleInput(
     missedRun: missedToProto(s.missed),
     overlap: s.overlap,
     enabled: s.enabled,
-    definition: toDefinition(s.definition),
+    definition: toDefinition(forWorkerOS(s.definition, os)),
     contacts: s.contacts.map((c) => ({ contactId: c.contactId, events: c.events })),
   };
 }

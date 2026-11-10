@@ -52,12 +52,15 @@ import { FieldKind } from "@/gen/syncr/v1/remotes_pb";
 import * as fx from "@/test/fixtures";
 
 import { CronError, nextRuns, parseCron } from "./cron";
+import type { M5 } from "./m5";
 
 type Violation = { field: string; message: string };
 
 /** M4Deps is what the M4 services share with the rest of the mock. */
 export interface M4Deps {
   now: number;
+  /** m5 checks and names the restic definitions of schedules. */
+  m5?: Pick<M5, "check" | "describe">;
   /** history is the seeded schedules, runs and jobs (its jobs are in jobs). */
   history: fx.History;
   me: () => User;
@@ -186,7 +189,10 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
     });
     const op = input.definition?.operation;
     if (op?.case !== "rcloneTransfer") {
-      v.push({ field: "definition", message: "Choose what to transfer." });
+      if (op?.case === undefined || !d.m5)
+        v.push({ field: "definition", message: "Choose what to transfer." });
+      else
+        v.push(...d.m5.check(input.definition, true, t?.case === "workerId" ? t.value : undefined));
     } else {
       for (const [side, loc] of [
         ["source", op.value.source],
@@ -214,6 +220,7 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
             (x): x is string => !!x,
           )
         : [];
+    const restic = d.m5?.describe(input.definition);
     return create(ScheduleSchema, {
       ...base,
       ownerId: fx.ids.admin,
@@ -227,10 +234,13 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
       enabled: input.enabled,
       pausedReason: input.enabled ? "" : (base.pausedReason ?? ""),
       definition: input.definition,
-      remotes: [...new Set(ids)].map((rid) => {
-        const r = d.remotes().find((x) => x.id === rid);
-        return { id: rid, name: r?.name ?? "?", backendType: r?.backendType ?? "" };
-      }),
+      repository: restic?.repository,
+      remotes: restic
+        ? restic.remotes
+        : [...new Set(ids)].map((rid) => {
+            const r = d.remotes().find((x) => x.id === rid);
+            return { id: rid, name: r?.name ?? "?", backendType: r?.backendType ?? "" };
+          }),
       contacts: input.contacts.map((l) => ({ contactId: l.contactId, events: l.events })),
       nextRunAt: input.enabled ? nextAt(input.cron, input.timezone) : undefined,
       updatedAt: ts(Date.now()),
@@ -244,6 +254,7 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
         schedules: schedules
           .filter((s) => !req.remoteId || s.remotes.some((r) => r.id === req.remoteId))
           .filter((s) => !req.contactId || s.contacts.some((c) => c.contactId === req.contactId))
+          .filter((s) => !req.repositoryId || s.repository?.id === req.repositoryId)
           .map(withLastRun)
           .sort((a, b) => a.name.localeCompare(b.name)),
       };

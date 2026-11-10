@@ -17,6 +17,7 @@ import { Route as AppWorkersIndexRouteImport } from "./routes/_app/workers/index
 import { Route as AppUsersIndexRouteImport } from "./routes/_app/users/index";
 import { Route as AppSettingsIndexRouteImport } from "./routes/_app/settings/index";
 import { Route as AppSchedulesIndexRouteImport } from "./routes/_app/schedules/index";
+import { Route as AppRepositoriesIndexRouteImport } from "./routes/_app/repositories/index";
 import { Route as AppRemotesIndexRouteImport } from "./routes/_app/remotes/index";
 import { Route as AppNotificationsIndexRouteImport } from "./routes/_app/notifications/index";
 import { Route as AppJobsIndexRouteImport } from "./routes/_app/jobs/index";
@@ -24,6 +25,8 @@ import { Route as AppWorkersNewRouteImport } from "./routes/_app/workers/new";
 import { Route as AppWorkersWorkerIdRouteImport } from "./routes/_app/workers/$workerId";
 import { Route as AppSchedulesNewRouteImport } from "./routes/_app/schedules/new";
 import { Route as AppSchedulesScheduleIdRouteImport } from "./routes/_app/schedules/$scheduleId";
+import { Route as AppRepositoriesNewRouteImport } from "./routes/_app/repositories/new";
+import { Route as AppRepositoriesRepositoryIdRouteImport } from "./routes/_app/repositories/$repositoryId";
 import { Route as AppRemotesNewRouteImport } from "./routes/_app/remotes/new";
 import { Route as AppRemotesRemoteIdRouteImport } from "./routes/_app/remotes/$remoteId";
 import { Route as AppNotificationsNewRouteImport } from "./routes/_app/notifications/new";
@@ -31,6 +34,7 @@ import { Route as AppNotificationsContactIdRouteImport } from "./routes/_app/not
 import { Route as AppJobsNewRouteImport } from "./routes/_app/jobs/new";
 import { Route as AppJobsJobIdRouteImport } from "./routes/_app/jobs/$jobId";
 import { Route as AppSchedulesScheduleIdEditRouteImport } from "./routes/_app/schedules/$scheduleId_.edit";
+import { Route as AppRepositoriesRepositoryIdSnapshotsSnapshotIdRouteImport } from "./routes/_app/repositories/$repositoryId_.snapshots.$snapshotId";
 
 const SetupRoute = SetupRouteImport.update({
   id: "/setup",
@@ -71,6 +75,11 @@ const AppSchedulesIndexRoute = AppSchedulesIndexRouteImport.update({
   path: "/schedules/",
   getParentRoute: () => AppRoute,
 } as any);
+const AppRepositoriesIndexRoute = AppRepositoriesIndexRouteImport.update({
+  id: "/repositories/",
+  path: "/repositories/",
+  getParentRoute: () => AppRoute,
+} as any);
 const AppRemotesIndexRoute = AppRemotesIndexRouteImport.update({
   id: "/remotes/",
   path: "/remotes/",
@@ -106,6 +115,17 @@ const AppSchedulesScheduleIdRoute = AppSchedulesScheduleIdRouteImport.update({
   path: "/schedules/$scheduleId",
   getParentRoute: () => AppRoute,
 } as any);
+const AppRepositoriesNewRoute = AppRepositoriesNewRouteImport.update({
+  id: "/repositories/new",
+  path: "/repositories/new",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppRepositoriesRepositoryIdRoute =
+  AppRepositoriesRepositoryIdRouteImport.update({
+    id: "/repositories/$repositoryId",
+    path: "/repositories/$repositoryId",
+    getParentRoute: () => AppRoute,
+  } as any);
 const AppRemotesNewRoute = AppRemotesNewRouteImport.update({
   id: "/remotes/new",
   path: "/remotes/new",
@@ -143,6 +163,12 @@ const AppSchedulesScheduleIdEditRoute =
     path: "/schedules/$scheduleId/edit",
     getParentRoute: () => AppRoute,
   } as any);
+const AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute =
+  AppRepositoriesRepositoryIdSnapshotsSnapshotIdRouteImport.update({
+    id: "/repositories/$repositoryId_/snapshots/$snapshotId",
+    path: "/repositories/$repositoryId/snapshots/$snapshotId",
+    getParentRoute: () => AppRoute,
+  } as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof AppIndexRoute;
@@ -154,6 +180,8 @@ export interface FileRoutesByFullPath {
   "/notifications/new": typeof AppNotificationsNewRoute;
   "/remotes/$remoteId": typeof AppRemotesRemoteIdRoute;
   "/remotes/new": typeof AppRemotesNewRoute;
+  "/repositories/$repositoryId": typeof AppRepositoriesRepositoryIdRoute;
+  "/repositories/new": typeof AppRepositoriesNewRoute;
   "/schedules/$scheduleId": typeof AppSchedulesScheduleIdRoute;
   "/schedules/new": typeof AppSchedulesNewRoute;
   "/workers/$workerId": typeof AppWorkersWorkerIdRoute;
@@ -161,11 +189,13 @@ export interface FileRoutesByFullPath {
   "/jobs/": typeof AppJobsIndexRoute;
   "/notifications/": typeof AppNotificationsIndexRoute;
   "/remotes/": typeof AppRemotesIndexRoute;
+  "/repositories/": typeof AppRepositoriesIndexRoute;
   "/schedules/": typeof AppSchedulesIndexRoute;
   "/settings/": typeof AppSettingsIndexRoute;
   "/users/": typeof AppUsersIndexRoute;
   "/workers/": typeof AppWorkersIndexRoute;
   "/schedules/$scheduleId/edit": typeof AppSchedulesScheduleIdEditRoute;
+  "/repositories/$repositoryId/snapshots/$snapshotId": typeof AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute;
 }
 export interface FileRoutesByTo {
   "/login": typeof LoginRoute;
@@ -177,6 +207,8 @@ export interface FileRoutesByTo {
   "/notifications/new": typeof AppNotificationsNewRoute;
   "/remotes/$remoteId": typeof AppRemotesRemoteIdRoute;
   "/remotes/new": typeof AppRemotesNewRoute;
+  "/repositories/$repositoryId": typeof AppRepositoriesRepositoryIdRoute;
+  "/repositories/new": typeof AppRepositoriesNewRoute;
   "/schedules/$scheduleId": typeof AppSchedulesScheduleIdRoute;
   "/schedules/new": typeof AppSchedulesNewRoute;
   "/workers/$workerId": typeof AppWorkersWorkerIdRoute;
@@ -184,11 +216,13 @@ export interface FileRoutesByTo {
   "/jobs": typeof AppJobsIndexRoute;
   "/notifications": typeof AppNotificationsIndexRoute;
   "/remotes": typeof AppRemotesIndexRoute;
+  "/repositories": typeof AppRepositoriesIndexRoute;
   "/schedules": typeof AppSchedulesIndexRoute;
   "/settings": typeof AppSettingsIndexRoute;
   "/users": typeof AppUsersIndexRoute;
   "/workers": typeof AppWorkersIndexRoute;
   "/schedules/$scheduleId/edit": typeof AppSchedulesScheduleIdEditRoute;
+  "/repositories/$repositoryId/snapshots/$snapshotId": typeof AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
@@ -202,6 +236,8 @@ export interface FileRoutesById {
   "/_app/notifications/new": typeof AppNotificationsNewRoute;
   "/_app/remotes/$remoteId": typeof AppRemotesRemoteIdRoute;
   "/_app/remotes/new": typeof AppRemotesNewRoute;
+  "/_app/repositories/$repositoryId": typeof AppRepositoriesRepositoryIdRoute;
+  "/_app/repositories/new": typeof AppRepositoriesNewRoute;
   "/_app/schedules/$scheduleId": typeof AppSchedulesScheduleIdRoute;
   "/_app/schedules/new": typeof AppSchedulesNewRoute;
   "/_app/workers/$workerId": typeof AppWorkersWorkerIdRoute;
@@ -209,11 +245,13 @@ export interface FileRoutesById {
   "/_app/jobs/": typeof AppJobsIndexRoute;
   "/_app/notifications/": typeof AppNotificationsIndexRoute;
   "/_app/remotes/": typeof AppRemotesIndexRoute;
+  "/_app/repositories/": typeof AppRepositoriesIndexRoute;
   "/_app/schedules/": typeof AppSchedulesIndexRoute;
   "/_app/settings/": typeof AppSettingsIndexRoute;
   "/_app/users/": typeof AppUsersIndexRoute;
   "/_app/workers/": typeof AppWorkersIndexRoute;
   "/_app/schedules/$scheduleId_/edit": typeof AppSchedulesScheduleIdEditRoute;
+  "/_app/repositories/$repositoryId_/snapshots/$snapshotId": typeof AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
@@ -227,6 +265,8 @@ export interface FileRouteTypes {
     | "/notifications/new"
     | "/remotes/$remoteId"
     | "/remotes/new"
+    | "/repositories/$repositoryId"
+    | "/repositories/new"
     | "/schedules/$scheduleId"
     | "/schedules/new"
     | "/workers/$workerId"
@@ -234,11 +274,13 @@ export interface FileRouteTypes {
     | "/jobs/"
     | "/notifications/"
     | "/remotes/"
+    | "/repositories/"
     | "/schedules/"
     | "/settings/"
     | "/users/"
     | "/workers/"
-    | "/schedules/$scheduleId/edit";
+    | "/schedules/$scheduleId/edit"
+    | "/repositories/$repositoryId/snapshots/$snapshotId";
   fileRoutesByTo: FileRoutesByTo;
   to:
     | "/login"
@@ -250,6 +292,8 @@ export interface FileRouteTypes {
     | "/notifications/new"
     | "/remotes/$remoteId"
     | "/remotes/new"
+    | "/repositories/$repositoryId"
+    | "/repositories/new"
     | "/schedules/$scheduleId"
     | "/schedules/new"
     | "/workers/$workerId"
@@ -257,11 +301,13 @@ export interface FileRouteTypes {
     | "/jobs"
     | "/notifications"
     | "/remotes"
+    | "/repositories"
     | "/schedules"
     | "/settings"
     | "/users"
     | "/workers"
-    | "/schedules/$scheduleId/edit";
+    | "/schedules/$scheduleId/edit"
+    | "/repositories/$repositoryId/snapshots/$snapshotId";
   id:
     | "__root__"
     | "/_app"
@@ -274,6 +320,8 @@ export interface FileRouteTypes {
     | "/_app/notifications/new"
     | "/_app/remotes/$remoteId"
     | "/_app/remotes/new"
+    | "/_app/repositories/$repositoryId"
+    | "/_app/repositories/new"
     | "/_app/schedules/$scheduleId"
     | "/_app/schedules/new"
     | "/_app/workers/$workerId"
@@ -281,11 +329,13 @@ export interface FileRouteTypes {
     | "/_app/jobs/"
     | "/_app/notifications/"
     | "/_app/remotes/"
+    | "/_app/repositories/"
     | "/_app/schedules/"
     | "/_app/settings/"
     | "/_app/users/"
     | "/_app/workers/"
-    | "/_app/schedules/$scheduleId_/edit";
+    | "/_app/schedules/$scheduleId_/edit"
+    | "/_app/repositories/$repositoryId_/snapshots/$snapshotId";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -352,6 +402,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AppSchedulesIndexRouteImport;
       parentRoute: typeof AppRoute;
     };
+    "/_app/repositories/": {
+      id: "/_app/repositories/";
+      path: "/repositories";
+      fullPath: "/repositories/";
+      preLoaderRoute: typeof AppRepositoriesIndexRouteImport;
+      parentRoute: typeof AppRoute;
+    };
     "/_app/remotes/": {
       id: "/_app/remotes/";
       path: "/remotes";
@@ -399,6 +456,20 @@ declare module "@tanstack/react-router" {
       path: "/schedules/$scheduleId";
       fullPath: "/schedules/$scheduleId";
       preLoaderRoute: typeof AppSchedulesScheduleIdRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/repositories/new": {
+      id: "/_app/repositories/new";
+      path: "/repositories/new";
+      fullPath: "/repositories/new";
+      preLoaderRoute: typeof AppRepositoriesNewRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/repositories/$repositoryId": {
+      id: "/_app/repositories/$repositoryId";
+      path: "/repositories/$repositoryId";
+      fullPath: "/repositories/$repositoryId";
+      preLoaderRoute: typeof AppRepositoriesRepositoryIdRouteImport;
       parentRoute: typeof AppRoute;
     };
     "/_app/remotes/new": {
@@ -450,6 +521,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AppSchedulesScheduleIdEditRouteImport;
       parentRoute: typeof AppRoute;
     };
+    "/_app/repositories/$repositoryId_/snapshots/$snapshotId": {
+      id: "/_app/repositories/$repositoryId_/snapshots/$snapshotId";
+      path: "/repositories/$repositoryId/snapshots/$snapshotId";
+      fullPath: "/repositories/$repositoryId/snapshots/$snapshotId";
+      preLoaderRoute: typeof AppRepositoriesRepositoryIdSnapshotsSnapshotIdRouteImport;
+      parentRoute: typeof AppRoute;
+    };
   }
 }
 
@@ -461,6 +539,8 @@ interface AppRouteChildren {
   AppNotificationsNewRoute: typeof AppNotificationsNewRoute;
   AppRemotesRemoteIdRoute: typeof AppRemotesRemoteIdRoute;
   AppRemotesNewRoute: typeof AppRemotesNewRoute;
+  AppRepositoriesRepositoryIdRoute: typeof AppRepositoriesRepositoryIdRoute;
+  AppRepositoriesNewRoute: typeof AppRepositoriesNewRoute;
   AppSchedulesScheduleIdRoute: typeof AppSchedulesScheduleIdRoute;
   AppSchedulesNewRoute: typeof AppSchedulesNewRoute;
   AppWorkersWorkerIdRoute: typeof AppWorkersWorkerIdRoute;
@@ -468,11 +548,13 @@ interface AppRouteChildren {
   AppJobsIndexRoute: typeof AppJobsIndexRoute;
   AppNotificationsIndexRoute: typeof AppNotificationsIndexRoute;
   AppRemotesIndexRoute: typeof AppRemotesIndexRoute;
+  AppRepositoriesIndexRoute: typeof AppRepositoriesIndexRoute;
   AppSchedulesIndexRoute: typeof AppSchedulesIndexRoute;
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute;
   AppUsersIndexRoute: typeof AppUsersIndexRoute;
   AppWorkersIndexRoute: typeof AppWorkersIndexRoute;
   AppSchedulesScheduleIdEditRoute: typeof AppSchedulesScheduleIdEditRoute;
+  AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute: typeof AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute;
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -483,6 +565,8 @@ const AppRouteChildren: AppRouteChildren = {
   AppNotificationsNewRoute: AppNotificationsNewRoute,
   AppRemotesRemoteIdRoute: AppRemotesRemoteIdRoute,
   AppRemotesNewRoute: AppRemotesNewRoute,
+  AppRepositoriesRepositoryIdRoute: AppRepositoriesRepositoryIdRoute,
+  AppRepositoriesNewRoute: AppRepositoriesNewRoute,
   AppSchedulesScheduleIdRoute: AppSchedulesScheduleIdRoute,
   AppSchedulesNewRoute: AppSchedulesNewRoute,
   AppWorkersWorkerIdRoute: AppWorkersWorkerIdRoute,
@@ -490,11 +574,14 @@ const AppRouteChildren: AppRouteChildren = {
   AppJobsIndexRoute: AppJobsIndexRoute,
   AppNotificationsIndexRoute: AppNotificationsIndexRoute,
   AppRemotesIndexRoute: AppRemotesIndexRoute,
+  AppRepositoriesIndexRoute: AppRepositoriesIndexRoute,
   AppSchedulesIndexRoute: AppSchedulesIndexRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
   AppUsersIndexRoute: AppUsersIndexRoute,
   AppWorkersIndexRoute: AppWorkersIndexRoute,
   AppSchedulesScheduleIdEditRoute: AppSchedulesScheduleIdEditRoute,
+  AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute:
+    AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute,
 };
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren);

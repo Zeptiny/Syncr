@@ -1,3 +1,5 @@
+import { FolderOpen } from "lucide-react";
+
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -10,6 +12,10 @@ export interface PathInputProps extends Omit<React.ComponentProps<"input">, "onC
   /** suggestions are offered as one-click values (e.g. local roots). */
   suggestions?: string[];
   invalid?: boolean;
+  /** onBrowse, when given, adds a button that opens a path browser. */
+  onBrowse?: () => void;
+  /** browseLabel names the browse button (default "Browse"). */
+  browseLabel?: string;
 }
 
 /** PathInput edits a path in the monospace face. */
@@ -19,6 +25,8 @@ export function PathInput({
   prefix,
   suggestions,
   invalid,
+  onBrowse,
+  browseLabel = "Browse",
   className,
   ...props
 }: PathInputProps) {
@@ -44,6 +52,18 @@ export function PathInput({
           autoComplete="off"
           className="h-full min-w-0 flex-1 rounded-none border-0 bg-transparent font-mono text-[13px] shadow-none focus-visible:ring-0 dark:bg-transparent"
         />
+        {onBrowse && (
+          <button
+            type="button"
+            onClick={onBrowse}
+            disabled={props.disabled}
+            className="flex h-full shrink-0 items-center gap-1.5 border-l bg-muted/60 px-2.5 text-xs font-medium text-foreground hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:opacity-50"
+          >
+            <FolderOpen className="size-3.5 text-muted-foreground" aria-hidden />
+            {browseLabel}
+            <span className="sr-only"> for a path</span>
+          </button>
+        )}
       </div>
       {suggestions && suggestions.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">

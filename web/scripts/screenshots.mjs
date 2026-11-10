@@ -8,7 +8,7 @@
 //                           01-setup (default: skipped unless SYNCR_UI_MOCK=1)
 //   SYNCR_UI_USER           sign-in user (default admin)
 //   SYNCR_UI_PASSWORD       sign-in password (default syncr-demo-admin)
-//   SYNCR_SCREENSHOT_SET    m4 (default) or m3: which milestone's shot list
+//   SYNCR_SCREENSHOT_SET    m5 (default), m4 or m3: which milestone's shot list
 //   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/<set>)
 //   SYNCR_SCREENSHOT_ONLY   comma-separated shot names to take (default all)
 //   SYNCR_SCREENSHOT_MOBILE 1 to also take 390px-wide shots
@@ -30,7 +30,9 @@ const mock = process.env.SYNCR_UI_MOCK === "1";
 const setupUrl = (process.env.SYNCR_SETUP_URL ?? (mock ? base : "")).replace(/\/$/, "");
 const user = process.env.SYNCR_UI_USER ?? "admin";
 const password = process.env.SYNCR_UI_PASSWORD ?? "syncr-demo-admin";
-const set = process.env.SYNCR_SCREENSHOT_SET === "m3" ? "m3" : "m4";
+const set = ["m3", "m4"].includes(process.env.SYNCR_SCREENSHOT_SET)
+  ? process.env.SYNCR_SCREENSHOT_SET
+  : "m5";
 const outDir = resolve(
   process.env.SYNCR_SCREENSHOT_DIR ?? join(here, `../../docs/screenshots/${set}`),
 );
@@ -270,10 +272,190 @@ const m4Shots = [
   ],
 ];
 
+// openSnapshot opens the newest snapshot of a repository in the browser and
+// walks into the given folders.
+async function openSnapshot(page, repository, folders) {
+  await openRow(page, "/repositories", repository, { exact: true });
+  await page.getByRole("table", { name: "Snapshots" }).locator("tbody tr").first().click();
+  await settle(page);
+  for (const f of folders) {
+    await page.getByRole("button", { name: f, exact: true }).click();
+    await settle(page, 400);
+  }
+}
+
+// The M5 shots. They expect the dev seed of the integration pass (see the
+// track D report): repositories "Photos vault" (on "B2 offsite"), "NAS
+// documents" (on "MinIO archive", with a running and a waiting backup),
+// "Office laptop" and "Old laptop" (deleting); workers nas-01 (roots /srv
+// and /mnt) and office-pc (windows); the fake probes of devseed.Probes.
+const m5Shots = [
+  ["01-repositories", async (p) => (await p.goto(`${base}/repositories`), settle(p))],
+  [
+    "02-repository-new",
+    async (p) => {
+      await p.goto(`${base}/repositories/new`);
+      await settle(p);
+      await p.getByRole("radio", { name: /^Connect to an existing one/ }).click();
+      await p.getByLabel("Name").first().fill("Legacy archive");
+      await p.getByRole("combobox", { name: "Remote" }).click();
+      await p.getByRole("option", { name: /^MinIO archive/ }).click();
+      await p.getByRole("button", { name: /^Browse/ }).click();
+      await p.getByRole("dialog").getByRole("button", { name: "restic", exact: true }).click();
+      await settle(p, 500);
+    },
+  ],
+  [
+    "03-repository-detail",
+    async (p) => openRow(p, "/repositories", "Photos vault", { exact: true }),
+  ],
+  [
+    "04-snapshot-browser",
+    async (p) => {
+      await openSnapshot(p, "Photos vault", ["srv", "photos", "2026"]);
+      for (const n of ["01", "02", "03"])
+        await p.getByRole("checkbox", { name: `Select ${n}` }).click();
+      await settle(p, 300);
+    },
+  ],
+  [
+    "05-restore-sheet",
+    async (p) => {
+      await openSnapshot(p, "Photos vault", ["srv", "photos", "2026"]);
+      for (const n of ["01", "02", "03"])
+        await p.getByRole("checkbox", { name: `Select ${n}` }).click();
+      await p.getByRole("button", { name: /^Restore selected/ }).click();
+      await p.getByRole("radiogroup", { name: "If a file already exists" }).waitFor();
+      await settle(p, 400);
+    },
+  ],
+  [
+    "06-backup-form",
+    async (p) => {
+      await p.goto(`${base}/jobs/new?kind=restic_backup`);
+      await settle(p);
+      await p.getByRole("combobox", { name: /^Worker/ }).click();
+      await p.getByRole("option", { name: /office-pc/ }).click();
+      await p.getByRole("combobox", { name: /^Repository/ }).click();
+      await p.getByRole("option", { name: /^Office laptop/ }).click();
+      await p.getByLabel("Path to back up 1").fill("C:\\Users\\ada\\Documents");
+      await p.getByRole("button", { name: "Add a path" }).click();
+      await p.getByLabel("Path to back up 2").fill("D:\\Shared\\Projects");
+      await p.getByRole("switch", { name: "Use a volume snapshot (VSS)" }).click();
+      await settle(p, 300);
+      await scrollTo(p, p.getByRole("heading", { name: "Where it runs" }));
+    },
+  ],
+  [
+    "07-path-browser-worker",
+    async (p) => {
+      await openRow(p, "/workers", "nas-01");
+      await p.getByRole("button", { name: "Browse files" }).click();
+      await p.getByRole("dialog").getByRole("button", { name: "/srv", exact: true }).click();
+      await settle(p, 500);
+    },
+  ],
+  [
+    "08-schedule-retention",
+    async (p) => {
+      await p.goto(`${base}/schedules/new?kind=restic_forget`);
+      await settle(p);
+      await p.getByLabel("Name").first().fill("Weekly retention: documents");
+      await p.getByRole("combobox", { name: /^Repository/ }).click();
+      await p.getByRole("option", { name: /^NAS documents/ }).click();
+      await settle(p, 300);
+      await scrollTo(p, p.getByRole("heading", { name: "What kind of job" }));
+    },
+  ],
+  [
+    "09-job-backup-detail",
+    async (p) => {
+      // Succeeded backups only (status 4), newest first.
+      await openRow(p, "/jobs?kind=restic_backup&status=4", "Back up /srv/photos");
+      await scrollTo(p, p.getByRole("heading", { name: "Backup summary" }), 220);
+    },
+  ],
+  [
+    "10-jobs-waiting",
+    async (p) => {
+      await p.goto(`${base}/jobs`);
+      await settle(p);
+      await p.getByRole("combobox", { name: "Repository" }).click();
+      await p.getByRole("option", { name: "NAS documents" }).click();
+      await settle(p);
+    },
+  ],
+  [
+    "11-remote-test",
+    async (p) => {
+      await openRow(p, "/remotes", "B2 offsite", { exact: true });
+      await p.getByRole("button", { name: "Test remote" }).click();
+      await p.getByText(/The remote answered|The test failed/).waitFor({ timeout: 20_000 });
+      await settle(p, 300);
+      await scrollTo(p, p.getByRole("button", { name: "Test remote" }), 420);
+    },
+  ],
+  ["12-jobs-restic", async (p) => (await p.goto(`${base}/jobs`), settle(p))],
+  [
+    "15-repository-delete-dialog",
+    async (p) => {
+      await openRow(p, "/repositories", "Photos vault", { exact: true });
+      await p.getByRole("button", { name: "Delete", exact: true }).click();
+      await p.getByRole("checkbox", { name: /Also delete the backup data/ }).click();
+      await p.getByLabel(/to confirm/).fill("Photos vault");
+      await settle(p, 300);
+    },
+  ],
+  [
+    "16-repository-deleting",
+    async (p) => {
+      await openRow(p, "/repositories", "Old laptop", { exact: true });
+      await p.getByText(/Deleting the backup data/).waitFor();
+      await settle(p, 500);
+    },
+  ],
+];
+
+// m5 takes the milestone 5 shots: light at 1440×900, then the repository
+// page in dark and the snapshot browser at phone width (and every shot at
+// 390 px with MOBILE=1).
+async function m5(browser) {
+  const variants = [{ suffix: "", width: 1440, height: 900 }];
+  if (mobile) variants.push({ suffix: "-mobile", width: 390, height: 844 });
+  for (const v of variants) {
+    const p = await newPage(browser, v);
+    await signIn(p);
+    for (const [name, go] of m5Shots) {
+      if (!wanted(name)) continue;
+      await go(p);
+      await shot(p, name + v.suffix);
+    }
+    await p.context().close();
+  }
+  if (wanted("13-repository-detail-dark")) {
+    const p = await newPage(browser, { dark: true });
+    await signIn(p);
+    await openRow(p, "/repositories", "Photos vault", { exact: true });
+    await shot(p, "13-repository-detail-dark");
+    await p.context().close();
+  }
+  if (wanted("14-snapshot-browser-mobile") && !mobile) {
+    const p = await newPage(browser, { width: 390, height: 844 });
+    await signIn(p);
+    await openSnapshot(p, "Photos vault", ["srv", "photos"]);
+    await shot(p, "14-snapshot-browser-mobile");
+    await p.context().close();
+  }
+}
+
 async function main() {
   await mkdir(outDir, { recursive: true });
   const browser = await chromium.launch({ executablePath, args: ["--no-sandbox"] });
   try {
+    if (set === "m5") {
+      await m5(browser);
+      return;
+    }
     if (set === "m4") {
       await m4(browser);
       return;

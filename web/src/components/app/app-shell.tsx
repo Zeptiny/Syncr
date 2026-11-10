@@ -2,6 +2,7 @@ import { useMutation } from "@connectrpc/connect-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import {
+  Archive,
   ArrowRightLeft,
   Bell,
   CalendarClock,
@@ -52,7 +53,15 @@ import { useTheme, type Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 interface NavItem {
-  to: "/" | "/jobs" | "/schedules" | "/remotes" | "/workers" | "/notifications" | "/users";
+  to:
+    | "/"
+    | "/jobs"
+    | "/schedules"
+    | "/remotes"
+    | "/repositories"
+    | "/workers"
+    | "/notifications"
+    | "/users";
   label: string;
   icon: LucideIcon;
   adminOnly?: boolean;
@@ -63,6 +72,7 @@ const mainNav: NavItem[] = [
   { to: "/jobs", label: "Jobs", icon: ArrowRightLeft },
   { to: "/schedules", label: "Schedules", icon: CalendarClock },
   { to: "/remotes", label: "Remotes", icon: Cloud },
+  { to: "/repositories", label: "Repositories", icon: Archive },
   { to: "/workers", label: "Workers", icon: Server },
   { to: "/notifications", label: "Notifications", icon: Bell },
 ];
