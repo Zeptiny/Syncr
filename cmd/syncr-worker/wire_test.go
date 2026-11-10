@@ -136,7 +136,7 @@ func TestBuildWorkerRegistersEveryRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"restic_backup", "restic_check", "restic_forget", "restic_init",
+		"restic_backup", "restic_check", "restic_delete_data", "restic_forget", "restic_init",
 		"restic_prune", "restic_restore", "restic_snapshots", "rclone_transfer",
 	}
 	slices.Sort(want)
@@ -263,7 +263,7 @@ func TestBuildWorkerWithoutLocalRootsDeniesEverythingAndWarns(t *testing.T) {
 		!strings.Contains(logs, "SYNCR_LOCAL_ROOTS") {
 		t.Errorf("logs lack the local_roots warning:\n%s", logs)
 	}
-	if len(w.registry.Kinds()) != 8 {
+	if len(w.registry.Kinds()) != 9 {
 		t.Errorf("Kinds() = %v: runners must be registered even without local roots (remote-to-remote jobs)", w.registry.Kinds())
 	}
 }

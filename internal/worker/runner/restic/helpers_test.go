@@ -175,6 +175,8 @@ func kindOf(spec *syncrv1.JobSpec) string {
 		return kindRestore
 	case *syncrv1.JobSpec_ResticSnapshots:
 		return kindSnapshots
+	case *syncrv1.JobSpec_ResticDeleteData:
+		return kindDeleteData
 	}
 	return ""
 }

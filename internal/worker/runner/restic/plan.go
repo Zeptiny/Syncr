@@ -3,6 +3,7 @@ package restic
 import (
 	"errors"
 	"fmt"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -36,10 +37,19 @@ type command struct {
 	// noCache disables restic's local cache (the command gains nothing from
 	// it).
 	noCache bool
+	// global are global flags placed before the verb (e.g. "--no-lock").
+	global []string
+	// collect keeps the command's standard output as text (cat config, list
+	// locks), which is not line-delimited JSON.
+	collect bool
+	// ls, if set, collects the nodes of a "restic ls" listing.
+	ls *lsFilter
 }
 
 var (
 	snapshotIDPattern = regexp.MustCompile(`^[0-9a-f]{4,64}$`)
+	keepWithinPattern = regexp.MustCompile(`^([1-9][0-9]*[ymdh])+$`)
+	resticIDPattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	aliasPattern      = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 	jobIDPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
@@ -152,6 +162,13 @@ func planForget(_ *engine, spec *syncrv1.JobSpec) (command, error) {
 	}
 	args = append(args, keepTags...)
 	rules += len(keepTags)
+	if w := pol.GetKeepWithin(); w != "" {
+		if !keepWithinPattern.MatchString(w) {
+			return command{}, invalid("keep_within must be a duration such as 1y6m or 14d")
+		}
+		args = append(args, "--keep-within="+w)
+		rules++
+	}
 	if rules == 0 {
 		// restic would refuse, but fail before starting a process; a forget
 		// without a rule must never be able to delete everything.
@@ -221,11 +238,39 @@ func planRestore(e *engine, spec *syncrv1.JobSpec) (command, error) {
 		return command{}, err
 	}
 	args := []string{"--target=" + target}
+	switch op.GetOverwrite() {
+	case syncrv1.ResticRestoreOverwrite_RESTIC_RESTORE_OVERWRITE_UNSPECIFIED:
+	case syncrv1.ResticRestoreOverwrite_RESTIC_RESTORE_OVERWRITE_ALWAYS:
+		args = append(args, "--overwrite=always")
+	case syncrv1.ResticRestoreOverwrite_RESTIC_RESTORE_OVERWRITE_IF_CHANGED:
+		args = append(args, "--overwrite=if-changed")
+	case syncrv1.ResticRestoreOverwrite_RESTIC_RESTORE_OVERWRITE_IF_NEWER:
+		args = append(args, "--overwrite=if-newer")
+	case syncrv1.ResticRestoreOverwrite_RESTIC_RESTORE_OVERWRITE_NEVER:
+		args = append(args, "--overwrite=never")
+	default:
+		return command{}, invalid("unknown overwrite behavior %d", op.GetOverwrite())
+	}
 	for _, pat := range op.GetIncludes() {
 		if err := checkText("include pattern", pat); err != nil {
 			return command{}, err
 		}
 		args = append(args, "--include="+pat)
+	}
+	sub := op.GetSubfolder()
+	if sub != "" {
+		if err := checkTreePath("subfolder", sub); err != nil {
+			return command{}, err
+		}
+		if len(op.GetPaths()) > 0 {
+			return command{}, invalid("restore takes either paths or a subfolder, not both")
+		}
+	}
+	for _, tree := range op.GetPaths() {
+		if err := checkTreePath("path", tree); err != nil {
+			return command{}, err
+		}
+		args = append(args, "--include="+includePattern(tree, e.goos))
 	}
 	for _, pat := range op.GetExcludes() {
 		if err := checkText("exclude pattern", pat); err != nil {
@@ -236,8 +281,63 @@ func planRestore(e *engine, spec *syncrv1.JobSpec) (command, error) {
 	if op.GetVerify() {
 		args = append(args, "--verify")
 	}
-	args = append(args, "--", id)
+	positional := id
+	if sub != "" {
+		// restic's "snapshotID:subfolder" form restores the folder's
+		// contents directly into the target.
+		positional = id + ":" + pathpkg.Clean(sub)
+	}
+	args = append(args, "--", positional)
 	return command{repo: op.GetRepository(), verb: "restore", args: args}, nil
+}
+
+// checkTreePath checks a snapshot tree path: absolute with forward slashes,
+// no ".." segment and no control characters.
+func checkTreePath(what, tree string) error {
+	if !strings.HasPrefix(tree, "/") {
+		return invalid("%s %q must be a snapshot path starting with /", what, tree)
+	}
+	for _, r := range tree {
+		if unicode.IsControl(r) {
+			return invalid("%s contains a control character", what)
+		}
+	}
+	for seg := range strings.SplitSeq(tree, "/") {
+		if seg == ".." {
+			return invalid("%s %q must not contain a .. segment", what, tree)
+		}
+	}
+	return nil
+}
+
+// includePattern turns a literal snapshot tree path into a restore
+// --include pattern that matches exactly that item (and, for a folder, its
+// contents): glob metacharacters are escaped with bracket classes. Tree
+// paths always use forward slashes, which is also what restic matches
+// include patterns against on Windows; elsewhere a backslash is an ordinary
+// file name character that the pattern syntax would read as an escape.
+func includePattern(tree, goos string) string {
+	tree = pathpkg.Clean(tree)
+	var b strings.Builder
+	for _, r := range tree {
+		switch r {
+		case '*':
+			b.WriteString("[*]")
+		case '?':
+			b.WriteString("[?]")
+		case '[':
+			b.WriteString("[[]")
+		case '\\':
+			if goos == "windows" {
+				b.WriteRune(r)
+			} else {
+				b.WriteString(`[\\]`)
+			}
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func planSnapshots(_ *engine, spec *syncrv1.JobSpec) (command, error) {
@@ -312,7 +412,7 @@ func (e *engine) resolve(what, path string) (string, error) {
 
 // repository returns the value of --repo for loc and whether it is served
 // by rclone.
-func (e *engine) repository(spec *syncrv1.JobSpec, repo *syncrv1.ResticRepository) (value string, viaRclone bool, err error) {
+func (e *engine) repository(remotes []*syncrv1.RemoteDefinition, repo *syncrv1.ResticRepository) (value string, viaRclone bool, err error) {
 	if repo == nil || repo.GetLocation() == nil {
 		return "", false, invalid("repository location is missing")
 	}
@@ -331,7 +431,7 @@ func (e *engine) repository(spec *syncrv1.JobSpec, repo *syncrv1.ResticRepositor
 	if !aliasPattern.MatchString(alias) {
 		return "", false, invalid("invalid remote alias %q", alias)
 	}
-	if !hasRemote(spec, alias) {
+	if !hasRemote(remotes, alias) {
 		return "", false, invalid("repository remote %q is not defined in the job", alias)
 	}
 	if err := checkRemotePath(loc.GetPath()); err != nil {
@@ -340,8 +440,8 @@ func (e *engine) repository(spec *syncrv1.JobSpec, repo *syncrv1.ResticRepositor
 	return "rclone:" + alias + ":" + loc.GetPath(), true, nil
 }
 
-func hasRemote(spec *syncrv1.JobSpec, alias string) bool {
-	for _, r := range spec.GetRemotes() {
+func hasRemote(remotes []*syncrv1.RemoteDefinition, alias string) bool {
+	for _, r := range remotes {
 		if r.GetAlias() == alias {
 			return true
 		}

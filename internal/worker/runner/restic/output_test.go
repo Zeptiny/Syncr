@@ -115,8 +115,13 @@ func TestRestoreFixture(t *testing.T) {
 	if last := snaps[1]; last.Files != 6 || last.Bytes != 24000011 {
 		t.Errorf("summary progress = %+v", last)
 	}
-	if out, err := s.output(nil); err != nil || out != nil {
-		t.Errorf("output() = %v, %v; restore has no output", out, err)
+	out, err := s.output(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := out.GetResticRestore(); got.GetTotalFiles() != 6 || got.GetFilesRestored() != 6 ||
+		got.GetTotalBytes() != 24000011 || got.GetBytesRestored() != 24000011 || got.GetFilesSkipped() != 0 {
+		t.Errorf("output = %v", got)
 	}
 }
 
