@@ -15,12 +15,13 @@ go vet -tags integration ./...                   # CI checks that integration te
 make test-integration    # fetches pinned rclone/restic, runs `go test -tags integration -count=1 ./...`
 make web-check           # web typecheck, eslint, prettier check, vitest
 cd web && npx vitest run src/lib/cron.test.ts    # single web test
-make dev-seed            # controller on the in-memory store with demo data (admin / syncr-demo-admin)
+make dev-seed            # controller on the in-memory store with demo data (admin / syncr-demo-admin); probes get canned answers (internal/devseed), so the whole UI works without workers
 npm --prefix web run dev # Vite on :5173, proxies the API to 127.0.0.1:8080 (VITE_SYNCR_MOCK=1 for an in-browser mock)
 make dev-up              # Postgres, MinIO and SFTP for local runs
 ```
 
-- Integration tests use the `//go:build integration` tag. They need `SYNCR_TEST_RCLONE` and `SYNCR_TEST_RESTIC` set to binaries of the pinned versions (tests that need a tool skip without them). Postgres, MinIO and SFTP tests start containers with testcontainers. `internal/e2e/system` builds and runs the real binaries.
+- Integration tests use the `//go:build integration` tag. They need `SYNCR_TEST_RCLONE` and `SYNCR_TEST_RESTIC` set to binaries of the pinned versions (tests that need a tool skip without them). Postgres, MinIO and SFTP tests start containers with testcontainers. `internal/e2e/system` builds and runs the real binaries (restic against MinIO end to end in `restic_test.go`).
+- PR screenshots: `node web/scripts/screenshots.mjs` against a freshly started seeded controller built with `-tags webui` (`SYNCR_UI_URL`, `CHROMIUM_PATH`; the set defaults to the newest milestone). Run it once per controller start: repeated sign-ins hit the login rate limit.
 - CI also lints with `GOOS=windows` (Windows-only files use build tags) and runs tests on Windows.
 - A plain `go build` of the controller serves a placeholder page. It embeds the UI only with `-tags webui` after `make web`.
 
@@ -54,6 +55,12 @@ Never hand-edit these files: change the source, then regenerate.
 
 **Worker jobs**: each job is a supervised rclone/restic child process (`internal/worker/proc`, env allowlist). Remotes are passed only as `RCLONE_CONFIG_<ALIAS>_*` env vars, never as connection strings. Progress is parsed from the tools' JSON output.
 
+**Restic repositories** (`internal/app/restic`): a remote plus a path and a write-only encrypted password, owner-only (admins included). Create and connect are verified on a worker before anything is stored. The restic job kinds (`internal/jobkind/restic*.go`) carry only the repository ID; the password is resolved into the spec at dispatch. Deleting a repository forgets it by default; deleting its data is an opt-in `restic_delete_data` job that only `restic.Service.Delete` can start.
+
+**Probes**: short read-only operations a worker answers within the request (folder listings, remote tests, restic snapshots and `ls`). Controller side: `internal/controller/probe` over the broker in `internal/controller/dispatch`; worker side: `internal/worker/probe`. They are rate-limited per user and bounded by `probe.timeout` and `probe.restic_timeout`. Workers report link features (`internal/link/features.go`); a job or probe that needs a feature the worker lacks fails with `worker_outdated`.
+
+**Concurrency keys**: jobs that share a key run one at a time, first in first out, decided from durable state in the dispatcher. Every restic job holds its repository's key.
+
 **Web UI** (`web/`): React, Vite, TanStack Router/Query/Table, Connect-Query over the generated TS clients, and shadcn-style primitives in `src/components/ui`. Feature code lives in `src/features/<area>`; routes in `src/routes` stay thin.
 
-Design rationale lives in `docs/adr/0001`–`0010`. Read the ADR for a subsystem before changing how it behaves. Configuration (YAML plus `SYNCR_*` env overrides; unknown keys are rejected) is documented in README.md and `docs/worker-config.md`.
+Design rationale lives in `docs/adr/0001`–`0013`. Read the ADR for a subsystem before changing how it behaves. Configuration (YAML plus `SYNCR_*` env overrides; unknown keys are rejected) is documented in README.md and `docs/worker-config.md`; restic behavior for users is in `docs/restic.md`.
