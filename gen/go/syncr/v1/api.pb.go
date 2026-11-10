@@ -2814,7 +2814,12 @@ func (x *ResticRestoreDefinition) GetOverwrite() ResticRestoreOverwrite {
 type ResticDeleteDataDefinition struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The repository being deleted.
-	RepositoryId  string `protobuf:"bytes,1,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
+	RepositoryId string `protobuf:"bytes,1,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
+	// An earlier deletion job of the repository ran on this job's worker and
+	// deleted files there (its final stats, or the last progress of a job
+	// lost without a result, count deletions). Only then may this job find
+	// nothing left and succeed (ResticDeleteData.resume).
+	Resume        bool `protobuf:"varint,2,opt,name=resume,proto3" json:"resume,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2854,6 +2859,13 @@ func (x *ResticDeleteDataDefinition) GetRepositoryId() string {
 		return x.RepositoryId
 	}
 	return ""
+}
+
+func (x *ResticDeleteDataDefinition) GetResume() bool {
+	if x != nil {
+		return x.Resume
+	}
+	return false
 }
 
 // JobLocation is a path on one of the owner's remotes, or on the worker's
@@ -3868,9 +3880,10 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"\bexcludes\x18\x05 \x03(\tR\bexcludes\x12\x16\n" +
 	"\x06verify\x18\x06 \x01(\bR\x06verify\x12\x1c\n" +
 	"\tsubfolder\x18\a \x01(\tR\tsubfolder\x12>\n" +
-	"\toverwrite\x18\b \x01(\x0e2 .syncr.v1.ResticRestoreOverwriteR\toverwriteJ\x04\b\t\x10\x14\"G\n" +
+	"\toverwrite\x18\b \x01(\x0e2 .syncr.v1.ResticRestoreOverwriteR\toverwriteJ\x04\b\t\x10\x14\"_\n" +
 	"\x1aResticDeleteDataDefinition\x12#\n" +
-	"\rrepository_id\x18\x01 \x01(\tR\frepositoryIdJ\x04\b\x02\x10\x14\"D\n" +
+	"\rrepository_id\x18\x01 \x01(\tR\frepositoryId\x12\x16\n" +
+	"\x06resume\x18\x02 \x01(\bR\x06resumeJ\x04\b\x03\x10\x14\"D\n" +
 	"\vJobLocation\x12\x1b\n" +
 	"\tremote_id\x18\x01 \x01(\tR\bremoteId\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04pathJ\x04\b\x03\x10\n" +

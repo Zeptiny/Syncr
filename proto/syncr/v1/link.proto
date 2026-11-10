@@ -1203,12 +1203,15 @@ message ResticSnapshotSummary {
   reserved 15 to 19;
 }
 
-// ResticDeleteData deletes restic's own files (config, keys/, data/,
-// index/, snapshots/, locks/) at the repository's location, after verifying
-// that the location holds the expected repository. Other files at the
-// location are kept. The directory itself is removed only if
-// remove_directory is set and it is empty afterwards; a remote's root is
-// never removed.
+// ResticDeleteData deletes restic's own files at the repository's location,
+// after verifying that the location holds the expected repository: config,
+// and the files named like restic's in its folders (keys/, locks/,
+// snapshots/ and index/ hold files named by 64 lower-case hex digits,
+// data/ such files in sub-folders named by 2 hex digits). Anything else at
+// the location or inside those folders is kept, and reported as a warning
+// when it is inside them. A folder is removed only when it is empty. The
+// directory itself is removed only if remove_directory is set and it is
+// empty afterwards; a remote's root is never removed.
 message ResticDeleteData {
   // The repository to delete, with its password (to verify it).
   ResticRepository repository = 1;
@@ -1222,7 +1225,16 @@ message ResticDeleteData {
   // controller sets it unless the repository is at the remote's root.
   bool remove_directory = 3;
 
-  reserved 4 to 19;
+  // An earlier deletion of this repository ran on this worker and deleted
+  // files at this location. Only then does a location without restic's
+  // files succeed with already_gone, and a config that no key opens while
+  // keys/ holds none get deleted (that attempt stopped between keys/ and
+  // config). Without it both fail and nothing is deleted: a location
+  // without restic's files is REPOSITORY_NOT_FOUND (the wrong worker, or
+  // changed remote settings).
+  bool resume = 4;
+
+  reserved 5 to 19;
 }
 
 // ResticDeleteDataOutput is the output of a successful restic_delete_data.
@@ -1237,7 +1249,8 @@ message ResticDeleteDataOutput {
   // The repository's directory was removed (it was empty afterwards).
   bool directory_removed = 3;
 
-  // Nothing was left to delete: an earlier attempt had deleted everything.
+  // Nothing was left to delete: an earlier attempt had deleted everything
+  // (only with ResticDeleteData.resume).
   bool already_gone = 4;
 
   reserved 5 to 9;

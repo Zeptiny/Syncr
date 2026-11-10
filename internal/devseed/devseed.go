@@ -190,6 +190,7 @@ func Run(ctx context.Context, d Deps) (*Seed, error) {
 		{"repositories", s.seedRepositories},
 		{"contacts", s.seedContacts},
 		{"history", s.seedHistory},
+		{"snapshot marks", s.markSnapshotCaches},
 	}
 	for _, step := range steps {
 		if err := step.fn(ctx, now); err != nil {

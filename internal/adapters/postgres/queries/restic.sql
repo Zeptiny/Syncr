@@ -26,11 +26,10 @@ WHERE EXISTS (
 -- name: GetRepository :one
 -- A repository (deleted ones included) with its statistics: the cached
 -- snapshots, the newest backup and check jobs (by ID: UUIDv7, creation
--- order), the schedules that use it and the newest finish of a succeeded
--- job of mutating_kinds (what makes the snapshot cache stale, as
--- RepositoryLastChange). The LEFT JOIN LATERAL columns may
--- be NULL (no snapshot, no job): coalesce gives sqlc non-null types, and
--- the job's NULL id (Valid false) means "none".
+-- order), the schedules that use it and its change mark (what makes the
+-- snapshot cache stale, as RepositoryChangeMark). The LEFT JOIN LATERAL
+-- columns may be NULL (no snapshot, no job): coalesce gives sqlc non-null
+-- types, and the job's NULL id (Valid false) means "none".
 SELECT sqlc.embed(r),
        coalesce(sn.snapshot_count, 0)::int AS snapshot_count, sn.latest_at,
        coalesce(lt.latest_bytes, 0)::bigint AS latest_bytes,
@@ -39,7 +38,7 @@ SELECT sqlc.embed(r),
        lc.id AS last_check_id, coalesce(lc.status, '')::text AS last_check_status,
        lc.created_at AS last_check_created_at, lc.finished_at AS last_check_finished_at,
        coalesce(sc.schedule_count, 0)::int AS schedule_count,
-       ch.last_change_at
+       coalesce(ch.change_jobs, 0)::bigint AS change_jobs, ch.change_finished_at
 FROM restic_repositories r
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS snapshot_count, max(s.taken_at)::timestamptz AS latest_at
@@ -62,8 +61,9 @@ LEFT JOIN LATERAL (
     SELECT count(*)::int AS schedule_count FROM schedules sch WHERE sch.repository_id = r.id
 ) sc ON true
 LEFT JOIN LATERAL (
-    SELECT max(j.finished_at)::timestamptz AS last_change_at FROM jobs j
-    WHERE j.repository_id = r.id AND j.status = 'succeeded' AND j.kind = ANY (sqlc.arg(mutating_kinds)::text[])
+    SELECT count(*)::bigint AS change_jobs, max(j.finished_at)::timestamptz AS change_finished_at FROM jobs j
+    WHERE j.repository_id = r.id AND j.status IN ('succeeded', 'failed', 'cancelled', 'interrupted')
+      AND (j.dispatched_at IS NOT NULL OR j.started_at IS NOT NULL) AND j.kind = ANY (sqlc.arg(mutating_kinds)::text[])
 ) ch ON true
 WHERE r.id = sqlc.arg(id)::uuid;
 
@@ -79,7 +79,7 @@ SELECT sqlc.embed(r),
        lc.id AS last_check_id, coalesce(lc.status, '')::text AS last_check_status,
        lc.created_at AS last_check_created_at, lc.finished_at AS last_check_finished_at,
        coalesce(sc.schedule_count, 0)::int AS schedule_count,
-       ch.last_change_at
+       coalesce(ch.change_jobs, 0)::bigint AS change_jobs, ch.change_finished_at
 FROM restic_repositories r
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS snapshot_count, max(s.taken_at)::timestamptz AS latest_at
@@ -102,9 +102,24 @@ LEFT JOIN LATERAL (
     SELECT count(*)::int AS schedule_count FROM schedules sch WHERE sch.repository_id = r.id
 ) sc ON true
 LEFT JOIN LATERAL (
-    SELECT max(j.finished_at)::timestamptz AS last_change_at FROM jobs j
-    WHERE j.repository_id = r.id AND j.status = 'succeeded' AND j.kind = ANY (sqlc.arg(mutating_kinds)::text[])
+    SELECT count(*)::bigint AS change_jobs, max(j.finished_at)::timestamptz AS change_finished_at FROM jobs j
+    WHERE j.repository_id = r.id AND j.status IN ('succeeded', 'failed', 'cancelled', 'interrupted')
+      AND (j.dispatched_at IS NOT NULL OR j.started_at IS NOT NULL) AND j.kind = ANY (sqlc.arg(mutating_kinds)::text[])
 ) ch ON true
+WHERE r.deleted_at IS NULL
+  AND (sqlc.narg(owner_id)::uuid IS NULL OR r.owner_id = sqlc.narg(owner_id)::uuid)
+  AND (sqlc.narg(remote_id)::uuid IS NULL OR r.remote_id = sqlc.narg(remote_id)::uuid)
+ORDER BY lower(r.name) COLLATE "C", r.id;
+
+-- name: GetRepositoryRow :one
+-- A repository (deleted ones included) without statistics: ownership
+-- checks and Resolve.
+SELECT * FROM restic_repositories WHERE id = sqlc.arg(id)::uuid;
+
+-- name: ListRepositoryRows :many
+-- Live repositories (deleting ones included) without statistics, in the
+-- order of ListRepositories: checks of names and locations.
+SELECT * FROM restic_repositories r
 WHERE r.deleted_at IS NULL
   AND (sqlc.narg(owner_id)::uuid IS NULL OR r.owner_id = sqlc.narg(owner_id)::uuid)
   AND (sqlc.narg(remote_id)::uuid IS NULL OR r.remote_id = sqlc.narg(remote_id)::uuid)
@@ -214,22 +229,28 @@ INSERT INTO restic_snapshots (
 );
 
 -- name: SetSnapshotsRefreshed :execrows
--- Records a cache replacement of a live repository.
+-- Records a cache replacement of a live repository, with the change mark
+-- read before the listing.
 UPDATE restic_repositories SET
-    snapshots_refreshed_at = sqlc.arg(refreshed_at)::timestamptz, snapshots_truncated = sqlc.arg(truncated)::boolean
+    snapshots_refreshed_at = sqlc.arg(refreshed_at)::timestamptz, snapshots_truncated = sqlc.arg(truncated)::boolean,
+    snapshots_mark_jobs = sqlc.arg(mark_jobs)::bigint, snapshots_mark_finished_at = sqlc.narg(mark_finished_at)::timestamptz
 WHERE id = sqlc.arg(id)::uuid AND deleted_at IS NULL;
 
 -- name: GetSnapshotsState :one
--- The cache's refresh time and truncation (ListSnapshots).
-SELECT snapshots_refreshed_at, snapshots_truncated FROM restic_repositories WHERE id = sqlc.arg(id)::uuid;
+-- The cache's refresh time, truncation and change mark (ListSnapshots).
+SELECT snapshots_refreshed_at, snapshots_truncated, snapshots_mark_jobs, snapshots_mark_finished_at
+FROM restic_repositories WHERE id = sqlc.arg(id)::uuid;
 
 -- name: ListSnapshots :many
 -- The snapshot cache, newest first (index restic_snapshots_time_idx).
 SELECT * FROM restic_snapshots WHERE repository_id = sqlc.arg(repository_id)::uuid
 ORDER BY taken_at DESC, snapshot_id;
 
--- name: RepositoryLastChange :one
--- The newest finish of a succeeded job of kinds (the mutating kinds) on the
--- repository (index jobs_repository_idx); NULL if none.
-SELECT max(finished_at)::timestamptz AS last_change_at FROM jobs
-WHERE repository_id = sqlc.arg(repository_id)::uuid AND status = 'succeeded' AND kind = ANY (sqlc.arg(kinds)::text[]);
+-- name: RepositoryChangeMark :one
+-- The repository's change mark (restic.ChangeMark, restic.IsChange): the
+-- jobs of kinds (the mutating kinds) on it that ended after a worker had
+-- accepted them, and their newest finish (NULL if none). Index
+-- jobs_repository_idx.
+SELECT count(*)::bigint AS change_jobs, max(finished_at)::timestamptz AS change_finished_at FROM jobs
+WHERE repository_id = sqlc.arg(repository_id)::uuid AND status IN ('succeeded', 'failed', 'cancelled', 'interrupted')
+  AND (dispatched_at IS NOT NULL OR started_at IS NOT NULL) AND kind = ANY (sqlc.arg(kinds)::text[]);

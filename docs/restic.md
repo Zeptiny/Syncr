@@ -39,6 +39,9 @@ repository that already exists where you asked for a new one.
 - Any remote type can hold a repository except a union.
 - A remote that holds a repository cannot be deleted. Delete or forget the
   repository first.
+- Repositories on one remote cannot be nested: a new repository's folder
+  may not lie inside another repository's folder, or hold one. A
+  repository at the remote's root is the only one on that remote.
 
 ## Jobs
 
@@ -78,8 +81,10 @@ A Windows snapshot records `C:\Users\ada\Documents` as the tree path
 
 A repository's page lists its snapshots. Listing needs a worker and takes a
 moment, so Syncr keeps the last list: it is marked out of date after a
-backup, retention or prune job, and **Refresh** lists again. The newest
-5000 snapshots are kept.
+backup, retention, prune or data deletion job on the repository ran,
+including one that failed or was cancelled part-way (it may have changed
+the snapshots), and **Refresh** lists again. The newest 5000 snapshots are
+kept.
 
 Open a snapshot to browse its folders. From there:
 
@@ -146,10 +151,12 @@ repository's name. Then:
 3. The job opens the repository with its password and checks that it is
    the repository Syncr knows (restic's repository ID) and that no other
    restic client holds a lock. If any of that fails, nothing is deleted.
-4. It deletes only restic's own files: `locks`, `snapshots`, `index`,
-   `data`, `keys`, and `config` last. Other files in the same folder are
-   kept. The folder itself is removed only if it is then empty and is not
-   the remote's root.
+4. It deletes only restic's own files: the files named like restic's in
+   `locks`, `snapshots`, `index`, `data` and `keys`, and `config` last,
+   and removes those folders once they are empty. Other files in the same
+   folder, or inside restic's folders, are kept; the job names the ones
+   inside restic's folders in a warning. The folder itself is removed only
+   if it is then empty and is not the remote's root.
 5. When the job succeeds, the repository disappears from Syncr and its
    password is wiped.
 
@@ -160,6 +167,16 @@ and says why; its schedules stay paused. Some files may already be gone,
 so the backups may no longer be readable. **Try again** finishes the
 deletion (the key and the config are deleted last, so the repository can
 still be verified), and **Forget only** removes it from Syncr as it is.
+
+**If the worker finds no repository at the location,** nothing is
+deleted and the deletion fails: "no restic repository was found at the
+location on this worker". The data is elsewhere: for a folder of a
+worker, choose the worker whose disk holds it; for a remote, check the
+remote's settings (endpoint, bucket). Or forget the repository without
+deleting its data. Finding nothing counts as done only when an earlier
+attempt already deleted files on the same worker (then that attempt
+stopped after deleting the rest). Data deletion is refused while another
+repository lies inside the repository's folder.
 
 Things to know about backends:
 

@@ -128,6 +128,12 @@ func testRepoCreateGetList(t *testing.T, s Store) {
 	}
 	_, err := s.GetRepo(ctx, repoID(t, 99))
 	wantErr(t, "GetRepo(missing)", err, domain.ErrNotFound)
+	// The plain read is the same repository without statistics.
+	if got, err := s.GetRepoRow(ctx, b.ID); err != nil || !reflect.DeepEqual(got, b) {
+		t.Errorf("GetRepoRow = %+v, %v; want %+v", got, err, b)
+	}
+	_, err = s.GetRepoRow(ctx, repoID(t, 99))
+	wantErr(t, "GetRepoRow(missing)", err, domain.ErrNotFound)
 
 	for _, tt := range []struct {
 		name string
@@ -145,6 +151,15 @@ func testRepoCreateGetList(t *testing.T, s Store) {
 		list, err := s.ListRepos(ctx, tt.f)
 		if err != nil || !slices.Equal(repoIDs(list), tt.want) {
 			t.Errorf("ListRepos(%s) = %v, %v; want %v", tt.name, repoIDs(list), err, tt.want)
+		}
+		rows, err := s.ListRepoRows(ctx, tt.f)
+		if err != nil || !slices.Equal(repoIDs(rows), tt.want) {
+			t.Errorf("ListRepoRows(%s) = %v, %v; want %v", tt.name, repoIDs(rows), err, tt.want)
+		}
+		for i := range rows {
+			if want := list[i]; rows[i].Stats != (restic.RepoStats{}) || rows[i].Name != want.Name || rows[i].Path != want.Path || rows[i].RemoteID != want.RemoteID {
+				t.Errorf("ListRepoRows(%s)[%d] = %+v, want %+v without statistics", tt.name, i, rows[i], want)
+			}
 		}
 	}
 
@@ -304,7 +319,7 @@ func testRepoSoftDelete(t *testing.T, s Store) {
 	mustCreateRepo(t, s, r)
 	mustCreateRepo(t, s, keep)
 	for _, id := range []domain.ResticRepoID{r.ID, keep.ID} {
-		if err := s.ReplaceSnapshots(ctx, id, []restic.Snapshot{testSnapshot(1, t0())}, true, t0()); err != nil {
+		if err := s.ReplaceSnapshots(ctx, id, []restic.Snapshot{testSnapshot(1, t0())}, true, t0(), restic.ChangeMark{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -326,6 +341,12 @@ func testRepoSoftDelete(t *testing.T, s Store) {
 	if list, _ := s.ListRepos(ctx, restic.ListFilter{OwnerID: alice}); !slices.Equal(repoIDs(list), []domain.ResticRepoID{keep.ID}) {
 		t.Errorf("ListRepos lists a deleted repository: %v", repoIDs(list))
 	}
+	if rows, _ := s.ListRepoRows(ctx, restic.ListFilter{OwnerID: alice}); !slices.Equal(repoIDs(rows), []domain.ResticRepoID{keep.ID}) {
+		t.Errorf("ListRepoRows lists a deleted repository: %v", repoIDs(rows))
+	}
+	if row, err := s.GetRepoRow(ctx, r.ID); err != nil || !row.Deleted() || row.PasswordEnc != nil {
+		t.Errorf("GetRepoRow(deleted) = %+v, %v; want the deleted repository", row, err)
+	}
 	if some, _ := s.GetRepos(ctx, []domain.ResticRepoID{r.ID}); len(some) != 1 || !some[0].Deleted() {
 		t.Errorf("GetRepos(deleted) = %+v, want the deleted repository", some)
 	}
@@ -335,7 +356,7 @@ func testRepoSoftDelete(t *testing.T, s Store) {
 	upd.Name, upd.PasswordEnc = "revived", []byte("x")
 	_, err := s.UpdateRepo(ctx, upd)
 	wantErr(t, "UpdateRepo(deleted)", err, domain.ErrNotFound)
-	wantErr(t, "ReplaceSnapshots(deleted)", s.ReplaceSnapshots(ctx, r.ID, nil, false, at), domain.ErrNotFound)
+	wantErr(t, "ReplaceSnapshots(deleted)", s.ReplaceSnapshots(ctx, r.ID, nil, false, at, restic.ChangeMark{}), domain.ErrNotFound)
 	_, err = s.MarkDeleting(ctx, r.ID, jobID(t, 1), at)
 	wantErr(t, "MarkDeleting(deleted)", err, domain.ErrNotFound)
 }
@@ -372,7 +393,7 @@ func testRepoSnapshotsReplace(t *testing.T, s Store) {
 
 	// Never listed.
 	list, err := s.ListSnapshots(ctx, r.ID)
-	if err != nil || len(list.Snapshots) != 0 || !list.RefreshedAt.IsZero() || list.Truncated || !list.LastChangeAt.IsZero() || list.Stale {
+	if err != nil || len(list.Snapshots) != 0 || !list.RefreshedAt.IsZero() || list.Truncated || list.Mark != (restic.ChangeMark{}) || list.CurrentMark != (restic.ChangeMark{}) || list.Stale {
 		t.Fatalf("ListSnapshots(new) = %+v, %v", list, err)
 	}
 	_, err = s.ListSnapshots(ctx, repoID(t, 99))
@@ -382,7 +403,10 @@ func testRepoSnapshotsReplace(t *testing.T, s Store) {
 	old, mid, newest := testSnapshot(1, at.Add(-2*time.Hour)), testSnapshot(2, at.Add(-time.Hour)), testSnapshot(3, at)
 	tie := testSnapshot(4, at) // the same instant as newest: the ID breaks the tie
 	bare := restic.Snapshot{ID: resticHex(5), Time: at.Add(-3 * time.Hour)}
-	if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{mid, bare, tie, old, newest}, true, at.Add(time.Minute)); err != nil {
+	// The mark is stored as given (it is the repository's when the listing
+	// started).
+	mark := restic.ChangeMark{Jobs: 3, LastFinishedAt: at.Add(-time.Minute)}
+	if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{mid, bare, tie, old, newest}, true, at.Add(time.Minute), mark); err != nil {
 		t.Fatal(err)
 	}
 	list, err = s.ListSnapshots(ctx, r.ID)
@@ -393,15 +417,15 @@ func testRepoSnapshotsReplace(t *testing.T, s Store) {
 	if !reflect.DeepEqual(list.Snapshots, want) {
 		t.Errorf("ListSnapshots =\n%+v\nwant, newest first,\n%+v", list.Snapshots, want)
 	}
-	if !list.RefreshedAt.Equal(at.Add(time.Minute)) || !list.Truncated {
-		t.Errorf("refreshed at %s, truncated %v", list.RefreshedAt, list.Truncated)
+	if !list.RefreshedAt.Equal(at.Add(time.Minute)) || !list.Truncated || !list.Mark.Equal(mark) || list.CurrentMark != (restic.ChangeMark{}) {
+		t.Errorf("refreshed at %s, truncated %v, mark %+v, current mark %+v", list.RefreshedAt, list.Truncated, list.Mark, list.CurrentMark)
 	}
 	if o, _ := s.ListSnapshots(ctx, other.ID); len(o.Snapshots) != 0 || !o.RefreshedAt.IsZero() {
 		t.Error("a replacement touched another repository's cache")
 	}
 
 	// A replacement replaces everything, also with nothing.
-	if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{old}, false, at.Add(time.Hour)); err != nil {
+	if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{old}, false, at.Add(time.Hour), restic.ChangeMark{}); err != nil {
 		t.Fatal(err)
 	}
 	list, _ = s.ListSnapshots(ctx, r.ID)
@@ -412,14 +436,14 @@ func testRepoSnapshotsReplace(t *testing.T, s Store) {
 	// A rejected replacement changes nothing.
 	badID := testSnapshot(6, at)
 	badID.ID = "not-a-snapshot-id"
-	wantErr(t, "ReplaceSnapshots(bad ID)", s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{mid, badID}, true, at.Add(2*time.Hour)), domain.ErrInvalidArgument)
-	wantErr(t, "ReplaceSnapshots(duplicate)", s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{mid, newest, mid}, true, at.Add(2*time.Hour)), domain.ErrAlreadyExists)
-	wantErr(t, "ReplaceSnapshots(missing)", s.ReplaceSnapshots(ctx, repoID(t, 99), nil, false, at), domain.ErrNotFound)
+	wantErr(t, "ReplaceSnapshots(bad ID)", s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{mid, badID}, true, at.Add(2*time.Hour), mark), domain.ErrInvalidArgument)
+	wantErr(t, "ReplaceSnapshots(duplicate)", s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{mid, newest, mid}, true, at.Add(2*time.Hour), mark), domain.ErrAlreadyExists)
+	wantErr(t, "ReplaceSnapshots(missing)", s.ReplaceSnapshots(ctx, repoID(t, 99), nil, false, at, restic.ChangeMark{}), domain.ErrNotFound)
 	list, _ = s.ListSnapshots(ctx, r.ID)
-	if !slices.Equal(snapshotIDs(list.Snapshots), []string{old.ID}) || list.Truncated || !list.RefreshedAt.Equal(at.Add(time.Hour)) {
-		t.Errorf("a rejected replacement changed the cache: %v", snapshotIDs(list.Snapshots))
+	if !slices.Equal(snapshotIDs(list.Snapshots), []string{old.ID}) || list.Truncated || !list.RefreshedAt.Equal(at.Add(time.Hour)) || list.Mark != (restic.ChangeMark{}) {
+		t.Errorf("a rejected replacement changed the cache: %v, mark %+v", snapshotIDs(list.Snapshots), list.Mark)
 	}
-	if err := s.ReplaceSnapshots(ctx, r.ID, nil, false, at.Add(3*time.Hour)); err != nil {
+	if err := s.ReplaceSnapshots(ctx, r.ID, nil, false, at.Add(3*time.Hour), restic.ChangeMark{}); err != nil {
 		t.Fatal(err)
 	}
 	if list, _ := s.ListSnapshots(ctx, r.ID); len(list.Snapshots) != 0 || !list.RefreshedAt.Equal(at.Add(3*time.Hour)) {
@@ -437,7 +461,7 @@ func testRepoSnapshotsReplace(t *testing.T, s Store) {
 	errs := make([]error, len(sets))
 	for i := range sets {
 		wg.Go(func() {
-			errs[i] = s.ReplaceSnapshots(ctx, r.ID, sets[i], i%2 == 0, at.Add(time.Duration(i+10)*time.Hour))
+			errs[i] = s.ReplaceSnapshots(ctx, r.ID, sets[i], i%2 == 0, at.Add(time.Duration(i+10)*time.Hour), restic.ChangeMark{})
 		})
 	}
 	wg.Wait()
@@ -469,7 +493,7 @@ func testRepoSnapshotsReplace(t *testing.T, s Store) {
 	}
 }
 
-func testRepoStatsAndLastChange(t *testing.T, s Store) {
+func testRepoStatsAndChangeMark(t *testing.T, s Store) {
 	alice := userID(t, 1)
 	remote := requireRepos(t, s, alice)
 	requireSchedules(t, s, alice)
@@ -487,30 +511,47 @@ func testRepoStatsAndLastChange(t *testing.T, s Store) {
 
 	at := t0()
 	noSummary := restic.Snapshot{ID: resticHex(3), Time: at.Add(-time.Hour)}
-	if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{testSnapshot(1, at.Add(-2*time.Hour)), testSnapshot(2, at), noSummary}, true, at.Add(time.Minute)); err != nil {
+	stored := restic.ChangeMark{Jobs: 1, LastFinishedAt: at.Add(10 * time.Minute)}
+	if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{testSnapshot(1, at.Add(-2*time.Hour)), testSnapshot(2, at), noSummary}, true, at.Add(time.Minute), stored); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ReplaceSnapshots(ctx, other.ID, []restic.Snapshot{testSnapshot(9, at.Add(time.Hour))}, false, at); err != nil {
+	if err := s.ReplaceSnapshots(ctx, other.ID, []restic.Snapshot{testSnapshot(9, at.Add(time.Hour))}, false, at, restic.ChangeMark{}); err != nil {
 		t.Fatal(err)
 	}
 
-	finished := func(j jobs.Job, st domain.JobStatus, at time.Time) jobs.Job {
-		j.Status, j.FinishedAt = st, at
+	// ended returns j ended in status st at finished, after a worker
+	// accepted it (ran: dispatched, and started unless st is interrupted)
+	// or while it was queued.
+	ended := func(j jobs.Job, st domain.JobStatus, finished time.Time, ran bool) jobs.Job {
+		j.Status, j.FinishedAt = st, finished
+		if ran {
+			j.DispatchedAt = at
+			if st != domain.JobInterrupted {
+				j.StartedAt = at
+			}
+		}
 		return j
 	}
 	for _, j := range []jobs.Job{
-		finished(repoJob(t, 1, w.ID, alice, r.ID, restic.KindBackup), domain.JobSucceeded, at.Add(10*time.Minute)),
-		finished(repoJob(t, 2, w.ID, alice, r.ID, "restic_forget"), domain.JobSucceeded, at.Add(30*time.Minute)),
-		finished(repoJob(t, 3, w.ID, alice, r.ID, "restic_prune"), domain.JobFailed, at.Add(50*time.Minute)),
-		finished(repoJob(t, 4, w.ID, alice, r.ID, restic.KindCheck), domain.JobSucceeded, at.Add(55*time.Minute)),
-		finished(repoJob(t, 5, w.ID, alice, r.ID, "restic_restore"), domain.JobSucceeded, at.Add(56*time.Minute)),
-		finished(repoJob(t, 6, w.ID, alice, r.ID, restic.KindCheck), domain.JobFailed, at.Add(57*time.Minute)),
-		repoJob(t, 7, w.ID, alice, r.ID, restic.KindBackup), // queued: the newest backup
-		finished(repoJob(t, 8, w.ID, alice, other.ID, restic.KindBackup), domain.JobSucceeded, at.Add(5*time.Hour)),
-		finished(newJob(t, 9, w.ID), domain.JobSucceeded, at.Add(6*time.Hour)),
+		ended(repoJob(t, 1, w.ID, alice, r.ID, restic.KindBackup), domain.JobSucceeded, at.Add(10*time.Minute), true),
+		ended(repoJob(t, 2, w.ID, alice, r.ID, "restic_forget"), domain.JobFailed, at.Add(30*time.Minute), true),
+		ended(repoJob(t, 3, w.ID, alice, r.ID, "restic_prune"), domain.JobCancelled, at.Add(40*time.Minute), true),
+		ended(repoJob(t, 4, w.ID, alice, r.ID, restic.KindDeleteData), domain.JobInterrupted, at.Add(50*time.Minute), true),
+		// A failure while queued never ran; other kinds change nothing.
+		ended(repoJob(t, 5, w.ID, alice, r.ID, "restic_prune"), domain.JobFailed, at.Add(70*time.Minute), false),
+		ended(repoJob(t, 6, w.ID, alice, r.ID, restic.KindCheck), domain.JobSucceeded, at.Add(55*time.Minute), true),
+		ended(repoJob(t, 7, w.ID, alice, r.ID, "restic_restore"), domain.JobSucceeded, at.Add(56*time.Minute), true),
+		ended(repoJob(t, 8, w.ID, alice, r.ID, restic.KindCheck), domain.JobFailed, at.Add(57*time.Minute), true),
+		repoJob(t, 9, w.ID, alice, r.ID, restic.KindBackup), // queued: the newest backup, not ended
+		ended(repoJob(t, 10, w.ID, alice, other.ID, restic.KindBackup), domain.JobSucceeded, at.Add(5*time.Hour), true),
+		ended(newJob(t, 11, w.ID), domain.JobSucceeded, at.Add(6*time.Hour), true),
 	} {
 		mustCreateJob(t, s, j)
 	}
+	// A running backup that already started counts only once it ends.
+	running := repoJob(t, 12, w.ID, alice, r.ID, restic.KindBackup)
+	running.Status, running.DispatchedAt, running.StartedAt = domain.JobRunning, at, at
+	mustCreateJob(t, s, running)
 	for n := range 2 {
 		sc := newSchedule(t, n+1, alice, fmt.Sprintf("Nightly %d", n), w.ID)
 		sc.RepositoryID = r.ID
@@ -522,40 +563,71 @@ func testRepoStatsAndLastChange(t *testing.T, s Store) {
 	}
 	mustCreateSchedule(t, s, newSchedule(t, 3, alice, "Unrelated", w.ID))
 
+	// The backup, the failed forget, the cancelled prune and the lost
+	// deletion: whatever their status, they may have changed snapshots.
+	current := restic.ChangeMark{Jobs: 4, LastFinishedAt: at.Add(50 * time.Minute)}
 	want := restic.RepoStats{
 		SnapshotCount: 3, LatestSnapshotAt: at, LatestSnapshotBytes: 2000,
 		SnapshotsRefreshedAt: at.Add(time.Minute), SnapshotsTruncated: true,
-		LastChangeAt:  at.Add(30 * time.Minute), // the forget: the failed prune and the other kinds do not count
-		LastBackup:    restic.JobRef{ID: jobID(t, 7), Status: domain.JobQueued, CreatedAt: at},
-		LastCheck:     restic.JobRef{ID: jobID(t, 6), Status: domain.JobFailed, CreatedAt: at, FinishedAt: at.Add(57 * time.Minute)},
+		SnapshotsMark: stored, ChangeMark: current,
+		LastBackup:    restic.JobRef{ID: jobID(t, 12), Status: domain.JobRunning, CreatedAt: at},
+		LastCheck:     restic.JobRef{ID: jobID(t, 8), Status: domain.JobFailed, CreatedAt: at, FinishedAt: at.Add(57 * time.Minute)},
 		ScheduleCount: 2,
 	}
-	if got := mustGetRepo(t, s, r.ID); !reflect.DeepEqual(got.Stats, want) {
+	got := mustGetRepo(t, s, r.ID)
+	if !statsEqual(got.Stats, want) {
 		t.Errorf("GetRepo stats =\n%+v\nwant\n%+v", got.Stats, want)
 	}
+	if !got.Stats.SnapshotsStale() {
+		t.Error("the cache is not stale after four changes it does not include")
+	}
 	list, err := s.ListRepos(ctx, restic.ListFilter{OwnerID: alice})
-	if err != nil || len(list) != 2 || list[1].ID != r.ID || !reflect.DeepEqual(list[1].Stats, want) {
+	if err != nil || len(list) != 2 || list[1].ID != r.ID || !statsEqual(list[1].Stats, want) {
 		t.Errorf("ListRepos stats = %+v, %v", list, err)
 	}
-	if o := list[0].Stats; o.SnapshotCount != 1 || o.LatestSnapshotBytes != 9000 || o.LastBackup.ID != jobID(t, 8) || !o.LastChangeAt.Equal(at.Add(5*time.Hour)) || o.ScheduleCount != 0 || !o.LastCheck.ID.IsZero() {
+	if o := list[0].Stats; o.SnapshotCount != 1 || o.LatestSnapshotBytes != 9000 || o.LastBackup.ID != jobID(t, 10) ||
+		!o.ChangeMark.Equal(restic.ChangeMark{Jobs: 1, LastFinishedAt: at.Add(5 * time.Hour)}) || o.ScheduleCount != 0 || !o.LastCheck.ID.IsZero() {
 		t.Errorf("the other repository's stats = %+v", o)
 	}
 	sl, err := s.ListSnapshots(ctx, r.ID)
-	if err != nil || !sl.LastChangeAt.Equal(at.Add(30*time.Minute)) || sl.Stale {
-		t.Errorf("ListSnapshots: last change %s, stale %v, %v", sl.LastChangeAt, sl.Stale, err)
+	if err != nil || !sl.Mark.Equal(stored) || !sl.CurrentMark.Equal(current) || sl.Stale {
+		t.Errorf("ListSnapshots: mark %+v, current %+v, stale %v, %v", sl.Mark, sl.CurrentMark, sl.Stale, err)
 	}
-	// GetRepos needs no statistics, but must not invent any.
-	if some, _ := s.GetRepos(ctx, []domain.ResticRepoID{r.ID}); len(some) != 1 || (some[0].Stats != restic.RepoStats{} && !reflect.DeepEqual(some[0].Stats, want)) {
+	// The plain reads have no statistics.
+	if some, _ := s.GetRepos(ctx, []domain.ResticRepoID{r.ID}); len(some) != 1 || (some[0].Stats != restic.RepoStats{} && !statsEqual(some[0].Stats, want)) {
 		t.Errorf("GetRepos stats = %+v", some)
+	}
+	if row, err := s.GetRepoRow(ctx, r.ID); err != nil || row.Stats != (restic.RepoStats{}) {
+		t.Errorf("GetRepoRow stats = %+v, %v", row.Stats, err)
+	}
+	if rows, err := s.ListRepoRows(ctx, restic.ListFilter{OwnerID: alice}); err != nil || len(rows) != 2 || rows[1].Stats != (restic.RepoStats{}) {
+		t.Errorf("ListRepoRows = %+v, %v", rows, err)
+	}
+
+	// The running backup ends: the mark moves on, whatever the clock said.
+	running.Status, running.FinishedAt = domain.JobFailed, at.Add(-time.Hour) // a worker clock far behind
+	if _, err := s.UpdateJob(ctx, running); err != nil {
+		t.Fatal(err)
+	}
+	if sl, _ := s.ListSnapshots(ctx, r.ID); !sl.CurrentMark.Equal(restic.ChangeMark{Jobs: 5, LastFinishedAt: at.Add(50 * time.Minute)}) {
+		t.Errorf("current mark after the backup ended = %+v", sl.CurrentMark)
 	}
 
 	// The newest snapshot without a summary has an unknown size.
-	if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{testSnapshot(1, at.Add(-2*time.Hour)), {ID: resticHex(4), Time: at.Add(time.Hour)}}, false, at.Add(2*time.Hour)); err != nil {
+	if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{testSnapshot(1, at.Add(-2*time.Hour)), {ID: resticHex(4), Time: at.Add(time.Hour)}}, false, at.Add(2*time.Hour), restic.ChangeMark{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := mustGetRepo(t, s, r.ID).Stats; got.SnapshotCount != 2 || got.LatestSnapshotBytes != 0 || !got.LatestSnapshotAt.Equal(at.Add(time.Hour)) || got.SnapshotsTruncated {
 		t.Errorf("stats with a summary-less newest snapshot = %+v", got)
 	}
+}
+
+// statsEqual compares statistics, times by instant.
+func statsEqual(a, b restic.RepoStats) bool {
+	return a.SnapshotsMark.Equal(b.SnapshotsMark) && a.ChangeMark.Equal(b.ChangeMark) && a.LatestSnapshotAt.Equal(b.LatestSnapshotAt) &&
+		a.SnapshotsRefreshedAt.Equal(b.SnapshotsRefreshedAt) && reflect.DeepEqual(a.LastBackup, b.LastBackup) && reflect.DeepEqual(a.LastCheck, b.LastCheck) &&
+		a.SnapshotCount == b.SnapshotCount && a.LatestSnapshotBytes == b.LatestSnapshotBytes && a.SnapshotsTruncated == b.SnapshotsTruncated &&
+		a.ScheduleCount == b.ScheduleCount
 }
 
 func testRemoteDeleteBlockedByRepo(t *testing.T, s Store) {
@@ -603,7 +675,7 @@ func testRepoMarkDeletingCAS(t *testing.T, s Store) {
 	other := newRepo(t, 2, alice, "Other", remote, "other")
 	mustCreateRepo(t, s, r)
 	mustCreateRepo(t, s, other)
-	if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{testSnapshot(1, t0())}, false, t0()); err != nil {
+	if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{testSnapshot(1, t0())}, false, t0(), restic.ChangeMark{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -704,7 +776,7 @@ func testRepoMarkDeletingCAS(t *testing.T, s Store) {
 		t.Errorf("a refused DeleteRepo changed the repository: %+v", got)
 	}
 	// Its cache can still be replaced and read.
-	if err := s.ReplaceSnapshots(ctx, r.ID, nil, false, at); err != nil {
+	if err := s.ReplaceSnapshots(ctx, r.ID, nil, false, at, restic.ChangeMark{}); err != nil {
 		t.Errorf("ReplaceSnapshots(deleting): %v", err)
 	}
 }
@@ -805,7 +877,7 @@ func testRepoFinishDeletion(t *testing.T, s Store) {
 	mustCreateRepo(t, s, ok)
 	mustCreateRepo(t, s, bad)
 	for _, r := range []restic.Repo{ok, bad} {
-		if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{testSnapshot(1, t0())}, false, t0()); err != nil {
+		if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{testSnapshot(1, t0())}, false, t0(), restic.ChangeMark{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -923,7 +995,7 @@ func testRepoNoAliasing(t *testing.T, s Store) {
 	r := newRepo(t, 1, alice, "Photos", remote, "restic/photos")
 	mustCreateRepo(t, s, r)
 	snaps := []restic.Snapshot{testSnapshot(1, t0())}
-	if err := s.ReplaceSnapshots(ctx, r.ID, snaps, false, t0()); err != nil {
+	if err := s.ReplaceSnapshots(ctx, r.ID, snaps, false, t0(), restic.ChangeMark{}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -345,6 +345,11 @@ func TestResticBuild(t *testing.T) {
 		{"delete data on a local remote", deleteDataDef(), resolved(t, LCL, "restic/photos"), &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_ResticDeleteData{ResticDeleteData: &syncrv1.ResticDeleteData{
 			Repository: onDisk, ExpectedResticId: testResticID, RemoveDirectory: true,
 		}}}},
+		{"delete data again after an attempt that ran", &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticDeleteData{ResticDeleteData: &syncrv1.ResticDeleteDataDefinition{
+			RepositoryId: testRepoID, Resume: true,
+		}}}, resolved(t, S3, "restic/photos"), &syncrv1.JobSpec{Remotes: s3Defs, Operation: &syncrv1.JobSpec_ResticDeleteData{ResticDeleteData: &syncrv1.ResticDeleteData{
+			Repository: onS3, ExpectedResticId: testResticID, RemoveDirectory: true, Resume: true,
+		}}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -580,6 +585,29 @@ func TestValidSnapshotID(t *testing.T) {
 	} {
 		if got := jobkind.ValidSnapshotID(s); got != want {
 			t.Errorf("ValidSnapshotID(%q) = %v, want %v", s, got, want)
+		}
+	}
+}
+
+// The patterns are compiled once, not on every check.
+func TestPatternsAreCompiledOnce(t *testing.T) {
+	r, err := jobkind.NewRegistry(jobkind.ResticForget{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticForget{ResticForget: &syncrv1.ResticForgetDefinition{
+		RepositoryId: testRepoID, Policy: &syncrv1.ResticRetentionPolicy{KeepWithin: "1y6m"},
+	}}}
+	checks := map[string]func(){
+		"ValidSnapshotID": func() { jobkind.ValidSnapshotID("1a2b3c4d") },
+		"keep_within":     func() { _, _, _ = r.Check(def) },
+	}
+	for name, check := range checks {
+		allocs := testing.AllocsPerRun(50, check)
+		// Compiling a pattern costs dozens of allocations; the check without
+		// it a few at most.
+		if allocs > 15 {
+			t.Errorf("%s allocates %.0f times per call: is a pattern compiled per call?", name, allocs)
 		}
 	}
 }

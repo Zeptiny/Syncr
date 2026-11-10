@@ -4789,12 +4789,15 @@ func (x *ResticSnapshotSummary) GetTotalBytesProcessed() int64 {
 	return 0
 }
 
-// ResticDeleteData deletes restic's own files (config, keys/, data/,
-// index/, snapshots/, locks/) at the repository's location, after verifying
-// that the location holds the expected repository. Other files at the
-// location are kept. The directory itself is removed only if
-// remove_directory is set and it is empty afterwards; a remote's root is
-// never removed.
+// ResticDeleteData deletes restic's own files at the repository's location,
+// after verifying that the location holds the expected repository: config,
+// and the files named like restic's in its folders (keys/, locks/,
+// snapshots/ and index/ hold files named by 64 lower-case hex digits,
+// data/ such files in sub-folders named by 2 hex digits). Anything else at
+// the location or inside those folders is kept, and reported as a warning
+// when it is inside them. A folder is removed only when it is empty. The
+// directory itself is removed only if remove_directory is set and it is
+// empty afterwards; a remote's root is never removed.
 type ResticDeleteData struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The repository to delete, with its password (to verify it).
@@ -4806,8 +4809,16 @@ type ResticDeleteData struct {
 	// Remove the repository's directory if it is empty afterwards. The
 	// controller sets it unless the repository is at the remote's root.
 	RemoveDirectory bool `protobuf:"varint,3,opt,name=remove_directory,json=removeDirectory,proto3" json:"remove_directory,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// An earlier deletion of this repository ran on this worker and deleted
+	// files at this location. Only then does a location without restic's
+	// files succeed with already_gone, and a config that no key opens while
+	// keys/ holds none get deleted (that attempt stopped between keys/ and
+	// config). Without it both fail and nothing is deleted: a location
+	// without restic's files is REPOSITORY_NOT_FOUND (the wrong worker, or
+	// changed remote settings).
+	Resume        bool `protobuf:"varint,4,opt,name=resume,proto3" json:"resume,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ResticDeleteData) Reset() {
@@ -4861,6 +4872,13 @@ func (x *ResticDeleteData) GetRemoveDirectory() bool {
 	return false
 }
 
+func (x *ResticDeleteData) GetResume() bool {
+	if x != nil {
+		return x.Resume
+	}
+	return false
+}
+
 // ResticDeleteDataOutput is the output of a successful restic_delete_data.
 type ResticDeleteDataOutput struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -4871,7 +4889,8 @@ type ResticDeleteDataOutput struct {
 	RemovedParts []string `protobuf:"bytes,2,rep,name=removed_parts,json=removedParts,proto3" json:"removed_parts,omitempty"`
 	// The repository's directory was removed (it was empty afterwards).
 	DirectoryRemoved bool `protobuf:"varint,3,opt,name=directory_removed,json=directoryRemoved,proto3" json:"directory_removed,omitempty"`
-	// Nothing was left to delete: an earlier attempt had deleted everything.
+	// Nothing was left to delete: an earlier attempt had deleted everything
+	// (only with ResticDeleteData.resume).
 	AlreadyGone   bool `protobuf:"varint,4,opt,name=already_gone,json=alreadyGone,proto3" json:"already_gone,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -6648,13 +6667,14 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\x10data_added_bytes\x18\v \x01(\x03R\x0edataAddedBytes\x125\n" +
 	"\x17data_added_packed_bytes\x18\f \x01(\x03R\x14dataAddedPackedBytes\x122\n" +
 	"\x15total_files_processed\x18\r \x01(\x03R\x13totalFilesProcessed\x122\n" +
-	"\x15total_bytes_processed\x18\x0e \x01(\x03R\x13totalBytesProcessedJ\x04\b\x0f\x10\x14\"\xad\x01\n" +
+	"\x15total_bytes_processed\x18\x0e \x01(\x03R\x13totalBytesProcessedJ\x04\b\x0f\x10\x14\"\xc5\x01\n" +
 	"\x10ResticDeleteData\x12:\n" +
 	"\n" +
 	"repository\x18\x01 \x01(\v2\x1a.syncr.v1.ResticRepositoryR\n" +
 	"repository\x12,\n" +
 	"\x12expected_restic_id\x18\x02 \x01(\tR\x10expectedResticId\x12)\n" +
-	"\x10remove_directory\x18\x03 \x01(\bR\x0fremoveDirectoryJ\x04\b\x04\x10\x14\"\xbc\x01\n" +
+	"\x10remove_directory\x18\x03 \x01(\bR\x0fremoveDirectory\x12\x16\n" +
+	"\x06resume\x18\x04 \x01(\bR\x06resumeJ\x04\b\x05\x10\x14\"\xbc\x01\n" +
 	"\x16ResticDeleteDataOutput\x12'\n" +
 	"\x0fdeleted_objects\x18\x01 \x01(\x03R\x0edeletedObjects\x12#\n" +
 	"\rremoved_parts\x18\x02 \x03(\tR\fremovedParts\x12+\n" +

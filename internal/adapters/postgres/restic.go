@@ -74,6 +74,20 @@ func getRepo(ctx context.Context, q *db.Queries, id domain.ResticRepoID) (restic
 	return r, nil
 }
 
+// GetRepoRow implements restic.Repository.
+func (s *Store) GetRepoRow(ctx context.Context, id domain.ResticRepoID) (restic.Repo, error) {
+	op := fmt.Sprintf("get repository %s", id)
+	row, err := s.q.GetRepositoryRow(ctx, pgID(id))
+	if err != nil {
+		return restic.Repo{}, mapErr(op, err)
+	}
+	r, err := repoFrom(row)
+	if err != nil {
+		return restic.Repo{}, fmt.Errorf("%s: %w", op, err)
+	}
+	return r, nil
+}
+
 // GetRepos implements restic.Repository.
 func (s *Store) GetRepos(ctx context.Context, ids []domain.ResticRepoID) ([]restic.Repo, error) {
 	const op = "get repositories"
@@ -111,6 +125,24 @@ func (s *Store) ListRepos(ctx context.Context, f restic.ListFilter) ([]restic.Re
 	out := make([]restic.Repo, 0, len(rows))
 	for _, row := range rows {
 		r, err := repoWithStats(repoStatsRow(row))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", op, err)
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// ListRepoRows implements restic.Repository.
+func (s *Store) ListRepoRows(ctx context.Context, f restic.ListFilter) ([]restic.Repo, error) {
+	const op = "list repositories"
+	rows, err := s.q.ListRepositoryRows(ctx, db.ListRepositoryRowsParams{OwnerID: pgOptID(f.OwnerID), RemoteID: pgOptID(f.RemoteID)})
+	if err != nil {
+		return nil, mapErr(op, err)
+	}
+	out := make([]restic.Repo, 0, len(rows))
+	for _, row := range rows {
+		r, err := repoFrom(row)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", op, err)
 		}
@@ -290,7 +322,7 @@ func clipRunes(s string, n int) string {
 // ReplaceSnapshots implements restic.Repository. The repository row is
 // locked for the transaction, so concurrent replacements run one after
 // the other and the cache is always one of the sets.
-func (s *Store) ReplaceSnapshots(ctx context.Context, id domain.ResticRepoID, snaps []restic.Snapshot, truncated bool, refreshedAt time.Time) error {
+func (s *Store) ReplaceSnapshots(ctx context.Context, id domain.ResticRepoID, snaps []restic.Snapshot, truncated bool, refreshedAt time.Time, mark restic.ChangeMark) error {
 	op := fmt.Sprintf("replace snapshots of repository %s", id)
 	rows := make([]db.InsertSnapshotsParams, 0, len(snaps))
 	seen := make(map[string]bool, len(snaps))
@@ -333,7 +365,10 @@ func (s *Store) ReplaceSnapshots(ctx context.Context, id domain.ResticRepoID, sn
 				return mapErr(op, err)
 			}
 		}
-		n, err := q.SetSnapshotsRefreshed(ctx, db.SetSnapshotsRefreshedParams{ID: pgID(id), RefreshedAt: pgTime(refreshedAt), Truncated: truncated})
+		n, err := q.SetSnapshotsRefreshed(ctx, db.SetSnapshotsRefreshedParams{
+			ID: pgID(id), RefreshedAt: pgTime(refreshedAt), Truncated: truncated,
+			MarkJobs: max(mark.Jobs, 0), MarkFinishedAt: pgOptTime(mark.LastFinishedAt),
+		})
 		if err != nil {
 			return mapErr(op, err)
 		}
@@ -355,15 +390,16 @@ func (s *Store) ListSnapshots(ctx context.Context, id domain.ResticRepoID) (rest
 	if err != nil {
 		return restic.SnapshotList{}, mapErr(op, err)
 	}
-	last, err := s.q.RepositoryLastChange(ctx, db.RepositoryLastChangeParams{RepositoryID: pgID(id), Kinds: restic.MutatingKinds()})
+	cur, err := s.q.RepositoryChangeMark(ctx, db.RepositoryChangeMarkParams{RepositoryID: pgID(id), Kinds: restic.MutatingKinds()})
 	if err != nil {
 		return restic.SnapshotList{}, mapErr(op, err)
 	}
 	out := restic.SnapshotList{
-		Snapshots:    make([]restic.Snapshot, 0, len(rows)),
-		RefreshedAt:  timeFrom(st.SnapshotsRefreshedAt),
-		Truncated:    st.SnapshotsTruncated,
-		LastChangeAt: timeFrom(last),
+		Snapshots:   make([]restic.Snapshot, 0, len(rows)),
+		RefreshedAt: timeFrom(st.SnapshotsRefreshedAt),
+		Truncated:   st.SnapshotsTruncated,
+		Mark:        restic.ChangeMark{Jobs: st.SnapshotsMarkJobs, LastFinishedAt: timeFrom(st.SnapshotsMarkFinishedAt)},
+		CurrentMark: restic.ChangeMark{Jobs: cur.ChangeJobs, LastFinishedAt: timeFrom(cur.ChangeFinishedAt)},
 	}
 	for _, row := range rows {
 		sn := restic.Snapshot{
@@ -488,8 +524,8 @@ func repoFrom(row db.ResticRepository) (restic.Repo, error) {
 type repoStats struct {
 	repo                                      db.ResticRepository
 	snapshotCount, scheduleCount              int32
-	latestAt, lastChangeAt                    pgtype.Timestamptz
-	latestBytes                               int64
+	latestAt, changeFinishedAt                pgtype.Timestamptz
+	latestBytes, changeJobs                   int64
 	lastBackupID, lastCheckID                 pgtype.UUID
 	lastBackupStatus, lastCheckStatus         string
 	lastBackupCreatedAt, lastBackupFinishedAt pgtype.Timestamptz
@@ -501,7 +537,7 @@ func repoStatsRow[R db.GetRepositoryRow | db.ListRepositoriesRow](row R) repoSta
 	g := db.GetRepositoryRow(row)
 	return repoStats{
 		repo: g.ResticRepository, snapshotCount: g.SnapshotCount, scheduleCount: g.ScheduleCount,
-		latestAt: g.LatestAt, lastChangeAt: g.LastChangeAt, latestBytes: g.LatestBytes,
+		latestAt: g.LatestAt, changeFinishedAt: g.ChangeFinishedAt, latestBytes: g.LatestBytes, changeJobs: g.ChangeJobs,
 		lastBackupID: g.LastBackupID, lastCheckID: g.LastCheckID,
 		lastBackupStatus: g.LastBackupStatus, lastCheckStatus: g.LastCheckStatus,
 		lastBackupCreatedAt: g.LastBackupCreatedAt, lastBackupFinishedAt: g.LastBackupFinishedAt,
@@ -521,7 +557,8 @@ func repoWithStats(row repoStats) (restic.Repo, error) {
 		LatestSnapshotBytes:  row.latestBytes,
 		SnapshotsRefreshedAt: timeFrom(row.repo.SnapshotsRefreshedAt),
 		SnapshotsTruncated:   row.repo.SnapshotsTruncated,
-		LastChangeAt:         timeFrom(row.lastChangeAt),
+		SnapshotsMark:        restic.ChangeMark{Jobs: row.repo.SnapshotsMarkJobs, LastFinishedAt: timeFrom(row.repo.SnapshotsMarkFinishedAt)},
+		ChangeMark:           restic.ChangeMark{Jobs: row.changeJobs, LastFinishedAt: timeFrom(row.changeFinishedAt)},
 		ScheduleCount:        int(row.scheduleCount),
 	}
 	jobRef := func(dst *restic.JobRef, id pgtype.UUID, status string, created, finished pgtype.Timestamptz) error {

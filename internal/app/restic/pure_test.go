@@ -107,25 +107,85 @@ func TestVerifyErrorScrubs(t *testing.T) {
 func TestStale(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	one := ChangeMark{Jobs: 1, LastFinishedAt: at}
 	tests := []struct {
 		name string
 		l    SnapshotList
 		want bool
 	}{
 		{"never listed", SnapshotList{}, true},
-		{"never listed, with a change", SnapshotList{LastChangeAt: at}, true},
+		{"never listed, with a change", SnapshotList{CurrentMark: one}, true},
 		{"listed, no change", SnapshotList{RefreshedAt: at}, false},
-		{"change before the listing", SnapshotList{RefreshedAt: at, LastChangeAt: at.Add(-time.Second)}, false},
-		{"change at the listing", SnapshotList{RefreshedAt: at, LastChangeAt: at}, false},
-		{"change after the listing", SnapshotList{RefreshedAt: at, LastChangeAt: at.Add(time.Second)}, true},
+		{"listed after the change", SnapshotList{RefreshedAt: at, Mark: one, CurrentMark: one}, false},
+		{"a change ended since", SnapshotList{RefreshedAt: at, Mark: one, CurrentMark: one.With(at.Add(time.Second))}, true},
+		// Clocks do not matter: a worker far behind the controller.
+		{"a change since, by a clock behind", SnapshotList{RefreshedAt: at, Mark: one, CurrentMark: one.With(at.Add(-time.Hour))}, true},
+		{"a change before, by a clock ahead", SnapshotList{RefreshedAt: at, Mark: one, CurrentMark: ChangeMark{Jobs: 1, LastFinishedAt: at}}, false},
+		// Fewer jobs than the cache knew (a purge) is a change too.
+		{"fewer changes", SnapshotList{RefreshedAt: at, Mark: one.With(at), CurrentMark: one}, true},
+		{"as many changes, other times", SnapshotList{RefreshedAt: at, Mark: one, CurrentMark: ChangeMark{Jobs: 1, LastFinishedAt: at.Add(time.Hour)}}, true},
+		{"the same instant in another zone", SnapshotList{RefreshedAt: at, Mark: one, CurrentMark: ChangeMark{Jobs: 1, LastFinishedAt: at.In(time.FixedZone("x", 3600))}}, false},
 	}
 	for _, tt := range tests {
 		if got := stale(tt.l); got != tt.want {
 			t.Errorf("%s: stale = %v, want %v", tt.name, got, tt.want)
 		}
-		st := RepoStats{SnapshotsRefreshedAt: tt.l.RefreshedAt, LastChangeAt: tt.l.LastChangeAt}
+		st := RepoStats{SnapshotsRefreshedAt: tt.l.RefreshedAt, SnapshotsMark: tt.l.Mark, ChangeMark: tt.l.CurrentMark}
 		if got := st.SnapshotsStale(); got != tt.want {
 			t.Errorf("%s: SnapshotsStale = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestIsChange(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	var never time.Time
+	tests := []struct {
+		name                string
+		kind                string
+		status              domain.JobStatus
+		dispatched, started time.Time
+		want                bool
+	}{
+		{"a succeeded backup", "restic_backup", domain.JobSucceeded, at, at, true},
+		{"a failed forget", "restic_forget", domain.JobFailed, at, at, true},
+		{"a cancelled prune", "restic_prune", domain.JobCancelled, at, at, true},
+		{"a lost data deletion that never reported its start", KindDeleteData, domain.JobInterrupted, at, never, true},
+		{"a failed data deletion", KindDeleteData, domain.JobFailed, at, at, true},
+		{"a backup failed while queued", "restic_backup", domain.JobFailed, never, never, false},
+		{"a prune cancelled while queued", "restic_prune", domain.JobCancelled, never, never, false},
+		{"a running backup", "restic_backup", domain.JobRunning, at, at, false},
+		{"a check", KindCheck, domain.JobSucceeded, at, at, false},
+		{"a restore", "restic_restore", domain.JobSucceeded, at, at, false},
+	}
+	for _, tt := range tests {
+		if got := IsChange(tt.kind, tt.status, tt.dispatched, tt.started); got != tt.want {
+			t.Errorf("%s: IsChange = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestWithin(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		p, dir string
+		want   bool
+	}{
+		{"data", "", true},
+		{"", "", true},
+		{"", "data", false},
+		{"data", "data", true},
+		{"data/inner", "data", true},
+		{"data2", "data", false},
+		{"data2/x", "data", false},
+		{"a/b/c", "a/b", true},
+		{"a/bc", "a/b", false},
+		{"a//b/./c", "a/b", true},
+	}
+	for _, tt := range tests {
+		if got := within(tt.p, tt.dir); got != tt.want {
+			t.Errorf("within(%q, %q) = %v, want %v", tt.p, tt.dir, got, tt.want)
 		}
 	}
 }

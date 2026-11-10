@@ -24,6 +24,12 @@ CREATE TABLE restic_repositories (
     format_version          integer     NOT NULL DEFAULT 0 CHECK (format_version >= 0),
     snapshots_refreshed_at  timestamptz,
     snapshots_truncated     boolean     NOT NULL DEFAULT false,
+    -- The repository's change mark when the snapshot cache was taken
+    -- (restic.ChangeMark): how many jobs that may have changed the
+    -- snapshots had ended, and the newest finished_at among them. The
+    -- cache is stale once the current mark differs.
+    snapshots_mark_jobs     bigint      NOT NULL DEFAULT 0 CHECK (snapshots_mark_jobs >= 0),
+    snapshots_mark_finished_at timestamptz,
     created_at              timestamptz NOT NULL,
     updated_at              timestamptz NOT NULL,
     deleted_at              timestamptz,

@@ -24,6 +24,9 @@ type DeleterJobs interface {
 	// Create queues a job for the actor; with a preset p.ID it fails with
 	// ErrAlreadyExists once that job exists.
 	Create(ctx context.Context, actor domain.Actor, p jobs.CreateParams) (jobs.Job, error)
+	// LatestSamples returns the latest stored progress sample of each of
+	// the jobs, keyed by job ID (absent: none), in one query.
+	LatestSamples(ctx context.Context, ids []domain.JobID) (map[domain.JobID]jobs.Sample, error)
 	Jobs
 }
 
@@ -143,6 +146,14 @@ func (d *DataDeleter) Pick(ctx context.Context, owner domain.UserID, remoteID do
 // through while the repository is deleting). A job that already exists
 // counts as success, so Start may be repeated.
 //
+// The job resumes an earlier attempt (ResticDeleteDataDefinition.resume)
+// only when an earlier restic_delete_data job of the repository ran on the
+// same worker and deleted something there (earlierDeletionHere): only then
+// may finding nothing at the location mean that the deletion is done.
+// Otherwise finding nothing fails the job: the data is elsewhere (another
+// worker's disk, changed remote settings), also after a first attempt that
+// failed the same way on the same worker.
+//
 // Permanent errors match domain.ErrNotFound (the worker, the repository
 // or its remote is gone) or domain.ErrFailedPrecondition (the controller
 // cannot build the job); anything else is transient and may be retried.
@@ -151,8 +162,12 @@ func (d *DataDeleter) Start(ctx context.Context, owner domain.UserID, repoID dom
 	if jobID.IsZero() || workerID.IsZero() || owner.IsZero() || repoID.IsZero() {
 		return fmt.Errorf("%s: %w", what, domain.ErrInvalidID)
 	}
+	resume, err := d.earlierDeletionHere(ctx, owner, repoID, jobID, workerID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
 	def := &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticDeleteData{
-		ResticDeleteData: &syncrv1.ResticDeleteDataDefinition{RepositoryId: repoID.String()},
+		ResticDeleteData: &syncrv1.ResticDeleteDataDefinition{RepositoryId: repoID.String(), Resume: resume},
 	}}
 	kind, refs, err := d.kinds.Check(def)
 	if err != nil {
@@ -179,4 +194,51 @@ func (d *DataDeleter) Start(ctx context.Context, owner domain.UserID, repoID dom
 	default:
 		return fmt.Errorf("%s: %w", what, err)
 	}
+}
+
+// earlierDeletionHere reports whether a restic_delete_data job of
+// repository repoID other than jobID ran on workerID and deleted at least
+// one file there, whatever came of it afterwards (failed, cancelled, lost
+// after deleting the config). Its count is the Deletes of its final stats,
+// which the worker reports for failed and cancelled runs too; a job that
+// ended without a final result (its worker was lost, or a cancel was never
+// confirmed) counts by its latest stored progress sample. Progress is
+// stored at intervals, so an attempt lost before its first stored sample
+// does not count: the retry then fails rather than accept an empty
+// location, and the repository can still be forgotten.
+func (d *DataDeleter) earlierDeletionHere(ctx context.Context, owner domain.UserID, repoID domain.ResticRepoID, jobID domain.JobID, workerID domain.WorkerID) (bool, error) {
+	f := jobs.ListFilter{RepositoryID: repoID, Kinds: []string{deleteDataKind}, Limit: jobs.MaxPageSize}
+	var unsure []domain.JobID // ran on workerID, no final deletes
+	for {
+		page, err := d.jobs.List(ctx, domain.Actor{UserID: owner, Role: domain.RoleUser}, f)
+		if err != nil {
+			return false, fmt.Errorf("find earlier deletions: %w", err)
+		}
+		for _, j := range page.Jobs {
+			switch {
+			case j.ID == jobID || j.WorkerID != workerID || j.DispatchedAt.IsZero() && j.StartedAt.IsZero():
+			case j.Stats.Deletes > 0:
+				return true, nil
+			default:
+				unsure = append(unsure, j.ID)
+			}
+		}
+		if page.Next.IsZero() {
+			break
+		}
+		f.Before = page.Next
+	}
+	if len(unsure) == 0 {
+		return false, nil
+	}
+	samples, err := d.jobs.LatestSamples(ctx, unsure)
+	if err != nil {
+		return false, fmt.Errorf("find earlier deletions: %w", err)
+	}
+	for _, smp := range samples {
+		if smp.Stats.Deletes > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }

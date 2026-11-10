@@ -155,7 +155,7 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 		{"RepoSoftDelete", testRepoSoftDelete},
 		{"RepoFKParity", testRepoFKParity},
 		{"RepoSnapshotsReplace", testRepoSnapshotsReplace},
-		{"RepoStatsAndLastChange", testRepoStatsAndLastChange},
+		{"RepoStatsAndChangeMark", testRepoStatsAndChangeMark},
 		{"RemoteDeleteBlockedByRepo", testRemoteDeleteBlockedByRepo},
 		{"RepoMarkDeletingCAS", testRepoMarkDeletingCAS},
 		{"RepoPendingDeletions", testRepoPendingDeletions},

@@ -2,6 +2,7 @@ package restic_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -63,7 +64,8 @@ func TestRepoBasics(t *testing.T) {
 	if !errors.Is(restic.ErrUnknownRepository, domain.ErrNotFound) || !errors.Is(restic.ErrRepositoryDeleting, domain.ErrFailedPrecondition) {
 		t.Error("the sentinels do not match their domain errors")
 	}
-	if got := restic.MutatingKinds(); len(got) != 3 || got[0] != restic.KindBackup {
+	// Every kind that can remove or add snapshots, the data deletion too.
+	if got := restic.MutatingKinds(); !slices.Equal(got, []string{restic.KindBackup, "restic_forget", "restic_prune", restic.KindDeleteData}) {
 		t.Errorf("MutatingKinds = %q", got)
 	}
 	pe := &restic.ProbeError{Code: "wrong_password", Message: "the password is wrong"}

@@ -49,6 +49,11 @@ version.
   twice through two remotes. The store enforces them with partial unique
   indexes; the service checks the name and location first, so that a
   doomed request never initializes a repository.
+- **Repositories on one remote are not nested.** A new location may not
+  lie inside the folder of another live repository on the same remote, or
+  hold one inside its own (folders compare whole: `data2` is not inside
+  `data`; the remote's root holds everything). Otherwise deleting the
+  outer repository's data would reach into the inner one's folder.
 
 ### Nothing is stored before a worker has seen the repository
 
@@ -96,11 +101,23 @@ read-only (`--no-lock`), answered within the request.
 
 Listing snapshots needs a worker and takes seconds. The list is cached per
 repository (`restic_snapshots`, replaced as a whole) with the time it was
-taken. It is **stale** when it was never taken, or when a backup, retention
-or prune job on the repository succeeded after it; the UI refreshes a stale
-list once. The time of a list is the moment the worker was asked, not the
-moment it answered: a backup that finishes meanwhile must leave the list
-stale. When a refresh fails, the cached list is served with the reason.
+taken and the repository's **change mark** read before the worker was
+asked. The mark counts the jobs on the repository that may have changed
+its snapshots: backup, retention, prune and data deletion jobs that ended
+after a worker had accepted them, **however they ended** (a failed forget
+may have removed snapshots, a backup may have saved its snapshot before it
+failed, a failed data deletion has usually removed `snapshots/`). Jobs that
+failed or were cancelled while queued never ran and do not count.
+
+The list is **stale** when it was never taken, or when the repository's
+mark differs from the one stored with it; the UI refreshes a stale list
+once. No clocks are compared: a job's finish time comes from its worker's
+clock, which may be minutes off the controller's. A job that ends while
+the worker lists leaves the list stale, because the mark was read before.
+Jobs are never deleted, so the count only grows; the mark also holds the
+newest finish time of those jobs, so that a future purge of old jobs
+together with as many new ones still looks like a change. When a refresh
+fails, the cached list is served with the reason.
 
 ### Deleting has two forms, and the destructive one is opt-in
 
@@ -121,6 +138,9 @@ active --delete with data--> deleting --job succeeded--> deleted
                                     or never created --> active (with the error)
 ```
 
+- It is refused while another live repository lies inside the
+  repository's folder (one stored before the nesting rule, for example):
+  delete that one first, or forget this one.
 - The request picks the worker, reserves the job's ID on the repository
   (`MarkDeleting`, which pauses the repository's schedules and cancels
   their open runs in the same transaction), then queues the job. A crash
@@ -138,9 +158,30 @@ active --delete with data--> deleting --job succeeded--> deleted
   active again, shows the error and keeps its password, so the user can
   try again or forget it. Its schedules stay paused.
 - The job kind is system-only: `RunJob` and schedules reject it. Its
-  definition holds the repository ID only. The worker deletes restic's own
-  files, never "the folder", after verifying that the location still holds
-  the repository with the stored restic ID.
+  definition holds the repository ID and whether it resumes an earlier
+  attempt. The worker deletes restic's own files, never "the folder",
+  after verifying that the location still holds the repository with the
+  stored restic ID: only files named like restic's (64 hex digits in
+  `keys/`, `locks/`, `snapshots/`, `index/`, and in `data/`'s sub-folders
+  named by 2 hex digits), then `config`, and only folders it emptied.
+  Anything else in those folders stays and is named in a warning.
+- **Nothing found is not success on a first attempt.** A repository does
+  not record its worker, and a remote's settings can change, so a
+  deletion can look at a location that does not hold the data (the wrong
+  worker's disk). The job counts a location without restic's files as
+  already deleted only when an earlier deletion job of the repository
+  **ran on the same worker and deleted files there**: its final stats
+  count deletions (failed and cancelled runs report them too), or, for a
+  job lost without a result, its last stored progress sample does. Then
+  that attempt reached this location and may have been cancelled or lost
+  after deleting the config. The decision is made when the job is created
+  (the definition's `resume`). Anything else fails with "no restic
+  repository was found at the location on this worker", deletes nothing,
+  and the repository stays with its password: a first attempt, a retry
+  after attempts that deleted nothing (one that found nothing, a wrong
+  password, a mismatch, a lock, a cancel before any deletion), and a retry
+  on another worker. A lost attempt whose progress was never stored does
+  not count either; the repository can still be forgotten.
 
 ### A remote that holds a repository cannot be deleted
 
@@ -170,8 +211,10 @@ and share-locked, so the two cannot race.
 - **Storing the repository first and verifying later.** Rejected: a typo
   in the path or the password would surface as a failed backup hours
   later, and `init` could create repositories nobody registered.
-- **Deleting data with `rclone purge` of the path.** Rejected: the path may
-  be the root of a bucket or hold unrelated files.
+- **Deleting data with `rclone purge` of the path, or `rclone delete
+  --rmdirs` of restic's folders.** Rejected: the path may be the root of a
+  bucket or hold unrelated files, and restic's folders may too (another
+  repository stored inside `data/`).
 - **Deleting the row at once and letting a job clean up.** Rejected: after
   a failed clean-up nothing would remember the password needed to try
   again, and nothing would show the user that data remains.

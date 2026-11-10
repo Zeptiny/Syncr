@@ -26,6 +26,8 @@ type resticRow struct {
 	repo        restic.Repo
 	refreshedAt time.Time
 	truncated   bool
+	// mark is the ChangeMark stored with the cache.
+	mark restic.ChangeMark
 	// snaps are newest first (Time descending, then ID).
 	snaps []restic.Snapshot
 }
@@ -130,6 +132,8 @@ func (s *Store) withStatsLocked(row resticRow) restic.Repo {
 		SnapshotCount:        len(row.snaps),
 		SnapshotsRefreshedAt: row.refreshedAt,
 		SnapshotsTruncated:   row.truncated,
+		SnapshotsMark:        row.mark,
+		ChangeMark:           s.changeMarkLocked(r.ID),
 	}
 	if len(row.snaps) > 0 {
 		st.LatestSnapshotAt = row.snaps[0].Time
@@ -137,13 +141,9 @@ func (s *Store) withStatsLocked(row resticRow) restic.Repo {
 			st.LatestSnapshotBytes = sum.TotalBytesProcessed
 		}
 	}
-	mutating := restic.MutatingKinds()
 	for _, j := range s.jobs {
 		if j.RepositoryID != r.ID {
 			continue
-		}
-		if j.Status == domain.JobSucceeded && slices.Contains(mutating, j.Kind) && j.FinishedAt.After(st.LastChangeAt) {
-			st.LastChangeAt = j.FinishedAt
 		}
 		var ref *restic.JobRef
 		switch j.Kind {
@@ -165,6 +165,17 @@ func (s *Store) withStatsLocked(row resticRow) restic.Repo {
 	}
 	r.Stats = st
 	return r
+}
+
+// changeMarkLocked returns the current ChangeMark of repository id.
+func (s *Store) changeMarkLocked(id domain.ResticRepoID) restic.ChangeMark {
+	var m restic.ChangeMark
+	for _, j := range s.jobs {
+		if j.RepositoryID == id && restic.IsChange(j.Kind, j.Status, j.DispatchedAt, j.StartedAt) {
+			m = m.With(j.FinishedAt)
+		}
+	}
+	return m
 }
 
 // CreateRepo implements restic.Repository.
@@ -204,6 +215,17 @@ func (s *Store) GetRepo(_ context.Context, id domain.ResticRepoID) (restic.Repo,
 	return s.withStatsLocked(row), nil
 }
 
+// GetRepoRow implements restic.Repository.
+func (s *Store) GetRepoRow(_ context.Context, id domain.ResticRepoID) (restic.Repo, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	row, ok := s.repos[id]
+	if !ok {
+		return restic.Repo{}, fmt.Errorf("repository %s: %w", id, domain.ErrNotFound)
+	}
+	return cloneRepo(row.repo), nil
+}
+
 // GetRepos implements restic.Repository.
 func (s *Store) GetRepos(_ context.Context, ids []domain.ResticRepoID) ([]restic.Repo, error) {
 	s.mu.RLock()
@@ -223,17 +245,30 @@ func (s *Store) GetRepos(_ context.Context, ids []domain.ResticRepoID) ([]restic
 func (s *Store) ListRepos(_ context.Context, f restic.ListFilter) ([]restic.Repo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.listReposLocked(f, s.withStatsLocked), nil
+}
+
+// ListRepoRows implements restic.Repository.
+func (s *Store) ListRepoRows(_ context.Context, f restic.ListFilter) ([]restic.Repo, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.listReposLocked(f, func(row resticRow) restic.Repo { return cloneRepo(row.repo) }), nil
+}
+
+// listReposLocked returns the live repositories matching f, read with
+// read, by lower-cased name, then ID.
+func (s *Store) listReposLocked(f restic.ListFilter, read func(resticRow) restic.Repo) []restic.Repo {
 	out := []restic.Repo{}
 	for _, row := range s.repos {
 		r := row.repo
 		if !r.Deleted() && (f.OwnerID.IsZero() || r.OwnerID == f.OwnerID) && (f.RemoteID.IsZero() || r.RemoteID == f.RemoteID) {
-			out = append(out, s.withStatsLocked(row))
+			out = append(out, read(row))
 		}
 	}
 	slices.SortFunc(out, func(a, b restic.Repo) int {
 		return cmp.Or(cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)), compareIDs(a.ID, b.ID))
 	})
-	return out, nil
+	return out
 }
 
 // UpdateRepo implements restic.Repository.
@@ -375,7 +410,7 @@ func clipRunes(s string, n int) string {
 }
 
 // ReplaceSnapshots implements restic.Repository.
-func (s *Store) ReplaceSnapshots(_ context.Context, id domain.ResticRepoID, snaps []restic.Snapshot, truncated bool, refreshedAt time.Time) error {
+func (s *Store) ReplaceSnapshots(_ context.Context, id domain.ResticRepoID, snaps []restic.Snapshot, truncated bool, refreshedAt time.Time, mark restic.ChangeMark) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row, ok := s.repos[id]
@@ -394,7 +429,7 @@ func (s *Store) ReplaceSnapshots(_ context.Context, id domain.ResticRepoID, snap
 	}
 	row.snaps = cloneSnapshots(snaps)
 	slices.SortFunc(row.snaps, compareSnapshots)
-	row.refreshedAt, row.truncated = refreshedAt, truncated
+	row.refreshedAt, row.truncated, row.mark = refreshedAt, truncated, mark
 	s.repos[id] = row
 	return nil
 }
@@ -407,14 +442,10 @@ func (s *Store) ListSnapshots(_ context.Context, id domain.ResticRepoID) (restic
 	if !ok {
 		return restic.SnapshotList{}, fmt.Errorf("repository %s: %w", id, domain.ErrNotFound)
 	}
-	out := restic.SnapshotList{Snapshots: cloneSnapshots(row.snaps), RefreshedAt: row.refreshedAt, Truncated: row.truncated}
-	mutating := restic.MutatingKinds()
-	for _, j := range s.jobs {
-		if j.RepositoryID == id && j.Status == domain.JobSucceeded && slices.Contains(mutating, j.Kind) && j.FinishedAt.After(out.LastChangeAt) {
-			out.LastChangeAt = j.FinishedAt
-		}
-	}
-	return out, nil
+	return restic.SnapshotList{
+		Snapshots: cloneSnapshots(row.snaps), RefreshedAt: row.refreshedAt, Truncated: row.truncated,
+		Mark: row.mark, CurrentMark: s.changeMarkLocked(id),
+	}, nil
 }
 
 // repositoryOnRemoteLocked returns the name of a live repository on remote

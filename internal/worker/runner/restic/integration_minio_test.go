@@ -163,6 +163,12 @@ func TestIntegrationMinIODeleteData(t *testing.T) {
 	// A second repository alone in its folder.
 	solo := at("syncr-e2e/solo/repo")
 	soloID := h.newRepository(solo)
+	// A third one inside the first one's data folder, and an object restic
+	// did not write in its keys folder.
+	nested := at("syncr-e2e/shared/repo/data/nested")
+	h.newRepository(nested)
+	h.rclone("copyto", "--", note, "minio:syncr-e2e/shared/repo/keys/notes.txt")
+	nestedObjects := h.objects("syncr-e2e/shared/repo/data/nested")
 	before := h.objects("syncr-e2e")
 
 	// The wrong expected ID deletes nothing.
@@ -184,19 +190,35 @@ func TestIntegrationMinIODeleteData(t *testing.T) {
 	if len(snaps) == 0 || res.Stats.Deletes != out.GetDeletedObjects() {
 		t.Errorf("stats = %+v with %d progress snapshots", res.Stats, len(snaps))
 	}
-	if got, want := h.objects("syncr-e2e/shared"), []string{"notes.txt", "repo/README.txt"}; !slices.Equal(got, want) {
-		t.Errorf("left in the shared folder: %v, want %v", got, want)
+	if got := h.objects("syncr-e2e/shared/repo/data/nested"); !slices.Equal(got, nestedObjects) {
+		t.Errorf("the nested repository changed: %v, was %v", got, nestedObjects)
 	}
-	// The other repository is untouched and still opens.
-	if _, err := h.prober().Config(t.Context(), itProbeID, h.remotes(), &syncrv1.ProbeResticConfig{Repository: solo}); err != nil {
-		t.Errorf("the other repository no longer opens: %v", err)
+	var rest []string
+	for _, o := range h.objects("syncr-e2e/shared") {
+		if !strings.HasPrefix(o, "repo/data/nested/") {
+			rest = append(rest, o)
+		}
+	}
+	if want := []string{"notes.txt", "repo/README.txt", "repo/keys/notes.txt"}; !slices.Equal(rest, want) {
+		t.Errorf("left in the shared folder: %v, want %v and the nested repository", rest, want)
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "keys/notes.txt") || !strings.Contains(res.Warnings[0], "data/nested/") {
+		t.Errorf("warnings = %q, want what was kept", res.Warnings)
+	}
+	// The other repositories are untouched and still open.
+	for _, other := range []*syncrv1.ResticRepository{solo, nested} {
+		if _, err := h.prober().Config(t.Context(), itProbeID, h.remotes(), &syncrv1.ProbeResticConfig{Repository: other}); err != nil {
+			t.Errorf("repository %s no longer opens: %v", other.GetLocation().GetPath(), err)
+		}
 	}
 
-	// Again: nothing is left to delete.
-	res, _, err = h.deleteData(shared, sharedID, true)
+	// Again: nothing is left to delete, which is done only for a retry.
+	res, _, err = h.resumeDeleteData(shared, sharedID, true)
 	if err != nil || !res.Output.GetResticDeleteData().GetAlreadyGone() {
 		t.Errorf("second run = %v, %v; want already_gone", res.Output, err)
 	}
+	_, _, err = h.deleteData(shared, sharedID, true)
+	mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_NOT_FOUND)
 
 	// Resume: an attempt that stopped after keys/ finishes with the config.
 	for _, key := range h.objects("syncr-e2e/solo/repo/keys") {
@@ -205,14 +227,14 @@ func TestIntegrationMinIODeleteData(t *testing.T) {
 	for _, part := range []string{"locks", "snapshots", "index", "data"} {
 		h.rclone("delete", "--", "minio:syncr-e2e/solo/repo/"+part)
 	}
-	res, _, err = h.deleteData(solo, soloID, true)
+	res, _, err = h.resumeDeleteData(solo, soloID, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out := res.Output.GetResticDeleteData(); !slices.Equal(out.GetRemovedParts(), []string{"config"}) || !out.GetDirectoryRemoved() {
 		t.Errorf("resumed output = %v, want only the config deleted and the folder gone", out)
 	}
-	if got := h.objects("syncr-e2e"); !slices.Equal(got, []string{"shared/notes.txt", "shared/repo/README.txt"}) {
-		t.Errorf("left in the bucket: %v", got)
+	if got := h.objects("syncr-e2e/solo"); len(got) != 0 {
+		t.Errorf("left of the resumed repository: %v", got)
 	}
 }

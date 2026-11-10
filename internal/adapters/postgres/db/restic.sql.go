@@ -181,7 +181,7 @@ func (q *Queries) FinishRepositoryDeletionSucceeded(ctx context.Context, arg Fin
 }
 
 const getRepositories = `-- name: GetRepositories :many
-SELECT id, owner_id, name, description, remote_id, path, password_enc, restic_id, format_version, snapshots_refreshed_at, snapshots_truncated, created_at, updated_at, deleted_at, version, deleting, deletion_job_id, deletion_requested_at, deletion_error, deletion_cancelled, data_deleted_at FROM restic_repositories WHERE id = ANY ($1::uuid[]) ORDER BY id
+SELECT id, owner_id, name, description, remote_id, path, password_enc, restic_id, format_version, snapshots_refreshed_at, snapshots_truncated, snapshots_mark_jobs, snapshots_mark_finished_at, created_at, updated_at, deleted_at, version, deleting, deletion_job_id, deletion_requested_at, deletion_error, deletion_cancelled, data_deleted_at FROM restic_repositories WHERE id = ANY ($1::uuid[]) ORDER BY id
 `
 
 // The repositories of ids that exist (deleted ones included), by ID,
@@ -207,6 +207,8 @@ func (q *Queries) GetRepositories(ctx context.Context, ids []pgtype.UUID) ([]Res
 			&i.FormatVersion,
 			&i.SnapshotsRefreshedAt,
 			&i.SnapshotsTruncated,
+			&i.SnapshotsMarkJobs,
+			&i.SnapshotsMarkFinishedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
@@ -229,7 +231,7 @@ func (q *Queries) GetRepositories(ctx context.Context, ids []pgtype.UUID) ([]Res
 }
 
 const getRepository = `-- name: GetRepository :one
-SELECT r.id, r.owner_id, r.name, r.description, r.remote_id, r.path, r.password_enc, r.restic_id, r.format_version, r.snapshots_refreshed_at, r.snapshots_truncated, r.created_at, r.updated_at, r.deleted_at, r.version, r.deleting, r.deletion_job_id, r.deletion_requested_at, r.deletion_error, r.deletion_cancelled, r.data_deleted_at,
+SELECT r.id, r.owner_id, r.name, r.description, r.remote_id, r.path, r.password_enc, r.restic_id, r.format_version, r.snapshots_refreshed_at, r.snapshots_truncated, r.snapshots_mark_jobs, r.snapshots_mark_finished_at, r.created_at, r.updated_at, r.deleted_at, r.version, r.deleting, r.deletion_job_id, r.deletion_requested_at, r.deletion_error, r.deletion_cancelled, r.data_deleted_at,
        coalesce(sn.snapshot_count, 0)::int AS snapshot_count, sn.latest_at,
        coalesce(lt.latest_bytes, 0)::bigint AS latest_bytes,
        lb.id AS last_backup_id, coalesce(lb.status, '')::text AS last_backup_status,
@@ -237,7 +239,7 @@ SELECT r.id, r.owner_id, r.name, r.description, r.remote_id, r.path, r.password_
        lc.id AS last_check_id, coalesce(lc.status, '')::text AS last_check_status,
        lc.created_at AS last_check_created_at, lc.finished_at AS last_check_finished_at,
        coalesce(sc.schedule_count, 0)::int AS schedule_count,
-       ch.last_change_at
+       coalesce(ch.change_jobs, 0)::bigint AS change_jobs, ch.change_finished_at
 FROM restic_repositories r
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS snapshot_count, max(s.taken_at)::timestamptz AS latest_at
@@ -260,8 +262,9 @@ LEFT JOIN LATERAL (
     SELECT count(*)::int AS schedule_count FROM schedules sch WHERE sch.repository_id = r.id
 ) sc ON true
 LEFT JOIN LATERAL (
-    SELECT max(j.finished_at)::timestamptz AS last_change_at FROM jobs j
-    WHERE j.repository_id = r.id AND j.status = 'succeeded' AND j.kind = ANY ($1::text[])
+    SELECT count(*)::bigint AS change_jobs, max(j.finished_at)::timestamptz AS change_finished_at FROM jobs j
+    WHERE j.repository_id = r.id AND j.status IN ('succeeded', 'failed', 'cancelled', 'interrupted')
+      AND (j.dispatched_at IS NOT NULL OR j.started_at IS NOT NULL) AND j.kind = ANY ($1::text[])
 ) ch ON true
 WHERE r.id = $2::uuid
 `
@@ -285,16 +288,16 @@ type GetRepositoryRow struct {
 	LastCheckCreatedAt   pgtype.Timestamptz
 	LastCheckFinishedAt  pgtype.Timestamptz
 	ScheduleCount        int32
-	LastChangeAt         pgtype.Timestamptz
+	ChangeJobs           int64
+	ChangeFinishedAt     pgtype.Timestamptz
 }
 
 // A repository (deleted ones included) with its statistics: the cached
 // snapshots, the newest backup and check jobs (by ID: UUIDv7, creation
-// order), the schedules that use it and the newest finish of a succeeded
-// job of mutating_kinds (what makes the snapshot cache stale, as
-// RepositoryLastChange). The LEFT JOIN LATERAL columns may
-// be NULL (no snapshot, no job): coalesce gives sqlc non-null types, and
-// the job's NULL id (Valid false) means "none".
+// order), the schedules that use it and its change mark (what makes the
+// snapshot cache stale, as RepositoryChangeMark). The LEFT JOIN LATERAL
+// columns may be NULL (no snapshot, no job): coalesce gives sqlc non-null
+// types, and the job's NULL id (Valid false) means "none".
 func (q *Queries) GetRepository(ctx context.Context, arg GetRepositoryParams) (GetRepositoryRow, error) {
 	row := q.db.QueryRow(ctx, getRepository, arg.MutatingKinds, arg.ID)
 	var i GetRepositoryRow
@@ -310,6 +313,8 @@ func (q *Queries) GetRepository(ctx context.Context, arg GetRepositoryParams) (G
 		&i.ResticRepository.FormatVersion,
 		&i.ResticRepository.SnapshotsRefreshedAt,
 		&i.ResticRepository.SnapshotsTruncated,
+		&i.ResticRepository.SnapshotsMarkJobs,
+		&i.ResticRepository.SnapshotsMarkFinishedAt,
 		&i.ResticRepository.CreatedAt,
 		&i.ResticRepository.UpdatedAt,
 		&i.ResticRepository.DeletedAt,
@@ -332,7 +337,45 @@ func (q *Queries) GetRepository(ctx context.Context, arg GetRepositoryParams) (G
 		&i.LastCheckCreatedAt,
 		&i.LastCheckFinishedAt,
 		&i.ScheduleCount,
-		&i.LastChangeAt,
+		&i.ChangeJobs,
+		&i.ChangeFinishedAt,
+	)
+	return i, err
+}
+
+const getRepositoryRow = `-- name: GetRepositoryRow :one
+SELECT id, owner_id, name, description, remote_id, path, password_enc, restic_id, format_version, snapshots_refreshed_at, snapshots_truncated, snapshots_mark_jobs, snapshots_mark_finished_at, created_at, updated_at, deleted_at, version, deleting, deletion_job_id, deletion_requested_at, deletion_error, deletion_cancelled, data_deleted_at FROM restic_repositories WHERE id = $1::uuid
+`
+
+// A repository (deleted ones included) without statistics: ownership
+// checks and Resolve.
+func (q *Queries) GetRepositoryRow(ctx context.Context, id pgtype.UUID) (ResticRepository, error) {
+	row := q.db.QueryRow(ctx, getRepositoryRow, id)
+	var i ResticRepository
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Name,
+		&i.Description,
+		&i.RemoteID,
+		&i.Path,
+		&i.PasswordEnc,
+		&i.ResticID,
+		&i.FormatVersion,
+		&i.SnapshotsRefreshedAt,
+		&i.SnapshotsTruncated,
+		&i.SnapshotsMarkJobs,
+		&i.SnapshotsMarkFinishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.Version,
+		&i.Deleting,
+		&i.DeletionJobID,
+		&i.DeletionRequestedAt,
+		&i.DeletionError,
+		&i.DeletionCancelled,
+		&i.DataDeletedAt,
 	)
 	return i, err
 }
@@ -357,19 +400,27 @@ func (q *Queries) GetRepositoryState(ctx context.Context, id pgtype.UUID) (GetRe
 }
 
 const getSnapshotsState = `-- name: GetSnapshotsState :one
-SELECT snapshots_refreshed_at, snapshots_truncated FROM restic_repositories WHERE id = $1::uuid
+SELECT snapshots_refreshed_at, snapshots_truncated, snapshots_mark_jobs, snapshots_mark_finished_at
+FROM restic_repositories WHERE id = $1::uuid
 `
 
 type GetSnapshotsStateRow struct {
-	SnapshotsRefreshedAt pgtype.Timestamptz
-	SnapshotsTruncated   bool
+	SnapshotsRefreshedAt    pgtype.Timestamptz
+	SnapshotsTruncated      bool
+	SnapshotsMarkJobs       int64
+	SnapshotsMarkFinishedAt pgtype.Timestamptz
 }
 
-// The cache's refresh time and truncation (ListSnapshots).
+// The cache's refresh time, truncation and change mark (ListSnapshots).
 func (q *Queries) GetSnapshotsState(ctx context.Context, id pgtype.UUID) (GetSnapshotsStateRow, error) {
 	row := q.db.QueryRow(ctx, getSnapshotsState, id)
 	var i GetSnapshotsStateRow
-	err := row.Scan(&i.SnapshotsRefreshedAt, &i.SnapshotsTruncated)
+	err := row.Scan(
+		&i.SnapshotsRefreshedAt,
+		&i.SnapshotsTruncated,
+		&i.SnapshotsMarkJobs,
+		&i.SnapshotsMarkFinishedAt,
+	)
 	return i, err
 }
 
@@ -445,7 +496,7 @@ func (q *Queries) ListPendingDeletions(ctx context.Context, arg ListPendingDelet
 }
 
 const listRepositories = `-- name: ListRepositories :many
-SELECT r.id, r.owner_id, r.name, r.description, r.remote_id, r.path, r.password_enc, r.restic_id, r.format_version, r.snapshots_refreshed_at, r.snapshots_truncated, r.created_at, r.updated_at, r.deleted_at, r.version, r.deleting, r.deletion_job_id, r.deletion_requested_at, r.deletion_error, r.deletion_cancelled, r.data_deleted_at,
+SELECT r.id, r.owner_id, r.name, r.description, r.remote_id, r.path, r.password_enc, r.restic_id, r.format_version, r.snapshots_refreshed_at, r.snapshots_truncated, r.snapshots_mark_jobs, r.snapshots_mark_finished_at, r.created_at, r.updated_at, r.deleted_at, r.version, r.deleting, r.deletion_job_id, r.deletion_requested_at, r.deletion_error, r.deletion_cancelled, r.data_deleted_at,
        coalesce(sn.snapshot_count, 0)::int AS snapshot_count, sn.latest_at,
        coalesce(lt.latest_bytes, 0)::bigint AS latest_bytes,
        lb.id AS last_backup_id, coalesce(lb.status, '')::text AS last_backup_status,
@@ -453,7 +504,7 @@ SELECT r.id, r.owner_id, r.name, r.description, r.remote_id, r.path, r.password_
        lc.id AS last_check_id, coalesce(lc.status, '')::text AS last_check_status,
        lc.created_at AS last_check_created_at, lc.finished_at AS last_check_finished_at,
        coalesce(sc.schedule_count, 0)::int AS schedule_count,
-       ch.last_change_at
+       coalesce(ch.change_jobs, 0)::bigint AS change_jobs, ch.change_finished_at
 FROM restic_repositories r
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS snapshot_count, max(s.taken_at)::timestamptz AS latest_at
@@ -476,8 +527,9 @@ LEFT JOIN LATERAL (
     SELECT count(*)::int AS schedule_count FROM schedules sch WHERE sch.repository_id = r.id
 ) sc ON true
 LEFT JOIN LATERAL (
-    SELECT max(j.finished_at)::timestamptz AS last_change_at FROM jobs j
-    WHERE j.repository_id = r.id AND j.status = 'succeeded' AND j.kind = ANY ($1::text[])
+    SELECT count(*)::bigint AS change_jobs, max(j.finished_at)::timestamptz AS change_finished_at FROM jobs j
+    WHERE j.repository_id = r.id AND j.status IN ('succeeded', 'failed', 'cancelled', 'interrupted')
+      AND (j.dispatched_at IS NOT NULL OR j.started_at IS NOT NULL) AND j.kind = ANY ($1::text[])
 ) ch ON true
 WHERE r.deleted_at IS NULL
   AND ($2::uuid IS NULL OR r.owner_id = $2::uuid)
@@ -505,7 +557,8 @@ type ListRepositoriesRow struct {
 	LastCheckCreatedAt   pgtype.Timestamptz
 	LastCheckFinishedAt  pgtype.Timestamptz
 	ScheduleCount        int32
-	LastChangeAt         pgtype.Timestamptz
+	ChangeJobs           int64
+	ChangeFinishedAt     pgtype.Timestamptz
 }
 
 // Live repositories (deleting ones included) with their statistics (see
@@ -532,6 +585,8 @@ func (q *Queries) ListRepositories(ctx context.Context, arg ListRepositoriesPara
 			&i.ResticRepository.FormatVersion,
 			&i.ResticRepository.SnapshotsRefreshedAt,
 			&i.ResticRepository.SnapshotsTruncated,
+			&i.ResticRepository.SnapshotsMarkJobs,
+			&i.ResticRepository.SnapshotsMarkFinishedAt,
 			&i.ResticRepository.CreatedAt,
 			&i.ResticRepository.UpdatedAt,
 			&i.ResticRepository.DeletedAt,
@@ -554,7 +609,67 @@ func (q *Queries) ListRepositories(ctx context.Context, arg ListRepositoriesPara
 			&i.LastCheckCreatedAt,
 			&i.LastCheckFinishedAt,
 			&i.ScheduleCount,
-			&i.LastChangeAt,
+			&i.ChangeJobs,
+			&i.ChangeFinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRepositoryRows = `-- name: ListRepositoryRows :many
+SELECT id, owner_id, name, description, remote_id, path, password_enc, restic_id, format_version, snapshots_refreshed_at, snapshots_truncated, snapshots_mark_jobs, snapshots_mark_finished_at, created_at, updated_at, deleted_at, version, deleting, deletion_job_id, deletion_requested_at, deletion_error, deletion_cancelled, data_deleted_at FROM restic_repositories r
+WHERE r.deleted_at IS NULL
+  AND ($1::uuid IS NULL OR r.owner_id = $1::uuid)
+  AND ($2::uuid IS NULL OR r.remote_id = $2::uuid)
+ORDER BY lower(r.name) COLLATE "C", r.id
+`
+
+type ListRepositoryRowsParams struct {
+	OwnerID  pgtype.UUID
+	RemoteID pgtype.UUID
+}
+
+// Live repositories (deleting ones included) without statistics, in the
+// order of ListRepositories: checks of names and locations.
+func (q *Queries) ListRepositoryRows(ctx context.Context, arg ListRepositoryRowsParams) ([]ResticRepository, error) {
+	rows, err := q.db.Query(ctx, listRepositoryRows, arg.OwnerID, arg.RemoteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResticRepository{}
+	for rows.Next() {
+		var i ResticRepository
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.Name,
+			&i.Description,
+			&i.RemoteID,
+			&i.Path,
+			&i.PasswordEnc,
+			&i.ResticID,
+			&i.FormatVersion,
+			&i.SnapshotsRefreshedAt,
+			&i.SnapshotsTruncated,
+			&i.SnapshotsMarkJobs,
+			&i.SnapshotsMarkFinishedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.Version,
+			&i.Deleting,
+			&i.DeletionJobID,
+			&i.DeletionRequestedAt,
+			&i.DeletionError,
+			&i.DeletionCancelled,
+			&i.DataDeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -659,40 +774,58 @@ func (q *Queries) PauseRepositorySchedules(ctx context.Context, arg PauseReposit
 	return err
 }
 
-const repositoryLastChange = `-- name: RepositoryLastChange :one
-SELECT max(finished_at)::timestamptz AS last_change_at FROM jobs
-WHERE repository_id = $1::uuid AND status = 'succeeded' AND kind = ANY ($2::text[])
+const repositoryChangeMark = `-- name: RepositoryChangeMark :one
+SELECT count(*)::bigint AS change_jobs, max(finished_at)::timestamptz AS change_finished_at FROM jobs
+WHERE repository_id = $1::uuid AND status IN ('succeeded', 'failed', 'cancelled', 'interrupted')
+  AND (dispatched_at IS NOT NULL OR started_at IS NOT NULL) AND kind = ANY ($2::text[])
 `
 
-type RepositoryLastChangeParams struct {
+type RepositoryChangeMarkParams struct {
 	RepositoryID pgtype.UUID
 	Kinds        []string
 }
 
-// The newest finish of a succeeded job of kinds (the mutating kinds) on the
-// repository (index jobs_repository_idx); NULL if none.
-func (q *Queries) RepositoryLastChange(ctx context.Context, arg RepositoryLastChangeParams) (pgtype.Timestamptz, error) {
-	row := q.db.QueryRow(ctx, repositoryLastChange, arg.RepositoryID, arg.Kinds)
-	var last_change_at pgtype.Timestamptz
-	err := row.Scan(&last_change_at)
-	return last_change_at, err
+type RepositoryChangeMarkRow struct {
+	ChangeJobs       int64
+	ChangeFinishedAt pgtype.Timestamptz
+}
+
+// The repository's change mark (restic.ChangeMark, restic.IsChange): the
+// jobs of kinds (the mutating kinds) on it that ended after a worker had
+// accepted them, and their newest finish (NULL if none). Index
+// jobs_repository_idx.
+func (q *Queries) RepositoryChangeMark(ctx context.Context, arg RepositoryChangeMarkParams) (RepositoryChangeMarkRow, error) {
+	row := q.db.QueryRow(ctx, repositoryChangeMark, arg.RepositoryID, arg.Kinds)
+	var i RepositoryChangeMarkRow
+	err := row.Scan(&i.ChangeJobs, &i.ChangeFinishedAt)
+	return i, err
 }
 
 const setSnapshotsRefreshed = `-- name: SetSnapshotsRefreshed :execrows
 UPDATE restic_repositories SET
-    snapshots_refreshed_at = $1::timestamptz, snapshots_truncated = $2::boolean
-WHERE id = $3::uuid AND deleted_at IS NULL
+    snapshots_refreshed_at = $1::timestamptz, snapshots_truncated = $2::boolean,
+    snapshots_mark_jobs = $3::bigint, snapshots_mark_finished_at = $4::timestamptz
+WHERE id = $5::uuid AND deleted_at IS NULL
 `
 
 type SetSnapshotsRefreshedParams struct {
-	RefreshedAt pgtype.Timestamptz
-	Truncated   bool
-	ID          pgtype.UUID
+	RefreshedAt    pgtype.Timestamptz
+	Truncated      bool
+	MarkJobs       int64
+	MarkFinishedAt pgtype.Timestamptz
+	ID             pgtype.UUID
 }
 
-// Records a cache replacement of a live repository.
+// Records a cache replacement of a live repository, with the change mark
+// read before the listing.
 func (q *Queries) SetSnapshotsRefreshed(ctx context.Context, arg SetSnapshotsRefreshedParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setSnapshotsRefreshed, arg.RefreshedAt, arg.Truncated, arg.ID)
+	result, err := q.db.Exec(ctx, setSnapshotsRefreshed,
+		arg.RefreshedAt,
+		arg.Truncated,
+		arg.MarkJobs,
+		arg.MarkFinishedAt,
+		arg.ID,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -707,7 +840,7 @@ UPDATE restic_repositories SET
     updated_at = $4::timestamptz,
     version = version + 1
 WHERE id = $5::uuid AND version = $6::bigint AND deleted_at IS NULL
-RETURNING id, owner_id, name, description, remote_id, path, password_enc, restic_id, format_version, snapshots_refreshed_at, snapshots_truncated, created_at, updated_at, deleted_at, version, deleting, deletion_job_id, deletion_requested_at, deletion_error, deletion_cancelled, data_deleted_at
+RETURNING id, owner_id, name, description, remote_id, path, password_enc, restic_id, format_version, snapshots_refreshed_at, snapshots_truncated, snapshots_mark_jobs, snapshots_mark_finished_at, created_at, updated_at, deleted_at, version, deleting, deletion_job_id, deletion_requested_at, deletion_error, deletion_cancelled, data_deleted_at
 `
 
 type UpdateRepositoryParams struct {
@@ -742,6 +875,8 @@ func (q *Queries) UpdateRepository(ctx context.Context, arg UpdateRepositoryPara
 		&i.FormatVersion,
 		&i.SnapshotsRefreshedAt,
 		&i.SnapshotsTruncated,
+		&i.SnapshotsMarkJobs,
+		&i.SnapshotsMarkFinishedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,

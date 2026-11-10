@@ -384,7 +384,7 @@ func TestRepositoryToProto(t *testing.T) {
 		CreatedAt: convT0, UpdatedAt: convT0.Add(time.Minute), Version: 4,
 		Stats: restic.RepoStats{
 			SnapshotCount: 3, LatestSnapshotAt: convT0, LatestSnapshotBytes: 12345, SnapshotsRefreshedAt: convT0.Add(time.Minute),
-			SnapshotsTruncated: true, LastChangeAt: convT0.Add(2 * time.Minute),
+			SnapshotsTruncated: true, SnapshotsMark: restic.ChangeMark{Jobs: 1, LastFinishedAt: convT0}, ChangeMark: restic.ChangeMark{Jobs: 2, LastFinishedAt: convT0},
 			LastBackup:    restic.JobRef{ID: backup, Status: domain.JobSucceeded, CreatedAt: convT0, FinishedAt: convT0.Add(2 * time.Minute)},
 			LastCheck:     restic.JobRef{ID: check, Status: domain.JobRunning, CreatedAt: convT0},
 			ScheduleCount: 2,

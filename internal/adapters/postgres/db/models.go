@@ -134,27 +134,29 @@ type Remote struct {
 }
 
 type ResticRepository struct {
-	ID                   pgtype.UUID
-	OwnerID              pgtype.UUID
-	Name                 string
-	Description          string
-	RemoteID             pgtype.UUID
-	Path                 string
-	PasswordEnc          []byte
-	ResticID             string
-	FormatVersion        int32
-	SnapshotsRefreshedAt pgtype.Timestamptz
-	SnapshotsTruncated   bool
-	CreatedAt            pgtype.Timestamptz
-	UpdatedAt            pgtype.Timestamptz
-	DeletedAt            pgtype.Timestamptz
-	Version              int64
-	Deleting             bool
-	DeletionJobID        pgtype.UUID
-	DeletionRequestedAt  pgtype.Timestamptz
-	DeletionError        string
-	DeletionCancelled    bool
-	DataDeletedAt        pgtype.Timestamptz
+	ID                      pgtype.UUID
+	OwnerID                 pgtype.UUID
+	Name                    string
+	Description             string
+	RemoteID                pgtype.UUID
+	Path                    string
+	PasswordEnc             []byte
+	ResticID                string
+	FormatVersion           int32
+	SnapshotsRefreshedAt    pgtype.Timestamptz
+	SnapshotsTruncated      bool
+	SnapshotsMarkJobs       int64
+	SnapshotsMarkFinishedAt pgtype.Timestamptz
+	CreatedAt               pgtype.Timestamptz
+	UpdatedAt               pgtype.Timestamptz
+	DeletedAt               pgtype.Timestamptz
+	Version                 int64
+	Deleting                bool
+	DeletionJobID           pgtype.UUID
+	DeletionRequestedAt     pgtype.Timestamptz
+	DeletionError           string
+	DeletionCancelled       bool
+	DataDeletedAt           pgtype.Timestamptz
 }
 
 type ResticSnapshot struct {

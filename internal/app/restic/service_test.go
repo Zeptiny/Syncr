@@ -502,7 +502,7 @@ func TestOwnerScoping(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	r := e.create()
-	if err := e.store.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{snap(1, t0)}, false, t0); err != nil {
+	if err := e.store.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{snap(1, t0)}, false, t0, restic.ChangeMark{}); err != nil {
 		t.Fatal(err)
 	}
 	calls := func() int {
@@ -640,7 +640,7 @@ func TestForgetOnly(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	r := e.create()
-	if err := e.store.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{snap(1, t0)}, false, t0); err != nil {
+	if err := e.store.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{snap(1, t0)}, false, t0, restic.ChangeMark{}); err != nil {
 		t.Fatal(err)
 	}
 	e.clock.Advance(time.Hour)
@@ -902,7 +902,7 @@ func TestFinishDeletions(t *testing.T) {
 	e.deletionJob(cancelled, domain.JobCancelled, jobs.JobError{Code: "cancelled"})
 	e.deletionJob(interrupted, domain.JobInterrupted, jobs.JobError{Code: "worker_lost", Message: "the worker did not come back"})
 	e.deletionJob(running, domain.JobRunning, jobs.JobError{})
-	if err := e.store.ReplaceSnapshots(ctx, ok.ID, []restic.Snapshot{snap(1, t0)}, false, t0); err != nil {
+	if err := e.store.ReplaceSnapshots(ctx, ok.ID, []restic.Snapshot{snap(1, t0)}, false, t0, restic.ChangeMark{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1068,23 +1068,17 @@ func TestSnapshots(t *testing.T) {
 		t.Errorf("cached Snapshots = %+v, %v (%d probes)", list, err, len(e.prober.snapCalls))
 	}
 
-	// A succeeded backup makes it stale; other kinds and failures do not.
-	job := func(kind string, st domain.JobStatus, finished time.Time) {
-		j := jobs.Job{ID: e.ids.NewJobID(), WorkerID: e.worker, OwnerID: e.alice.UserID, Kind: kind, Status: st, Definition: []byte(`{}`),
-			RepositoryID: r.ID, CreatedAt: t0, QueuedAt: t0, FinishedAt: finished, ExitCode: -1, Version: 1}
-		if err := e.store.CreateJob(ctx, j); err != nil {
-			t.Fatal(err)
-		}
-	}
-	job("restic_check", domain.JobSucceeded, e.clock.Now())
-	job("restic_backup", domain.JobFailed, e.clock.Now())
+	// A backup that ran makes it stale; other kinds and jobs that never
+	// left the queue do not.
+	e.endedJob(r, restic.KindCheck, domain.JobSucceeded, e.clock.Now(), true)
+	e.endedJob(r, restic.KindBackup, domain.JobFailed, e.clock.Now(), false)
 	if list, _ := e.svc.Snapshots(ctx, e.alice, r.ID, restic.SnapshotsOptions{}); list.Stale {
-		t.Error("a check or a failed backup made the cache stale")
+		t.Error("a check or a backup that failed while queued made the cache stale")
 	}
-	job("restic_backup", domain.JobSucceeded, e.clock.Now())
+	e.endedJob(r, restic.KindBackup, domain.JobSucceeded, e.clock.Now(), true)
 	list, _ = e.svc.Snapshots(ctx, e.alice, r.ID, restic.SnapshotsOptions{})
-	if !list.Stale || !list.LastChangeAt.Equal(e.clock.Now()) {
-		t.Errorf("after a backup: stale=%v last change %s", list.Stale, list.LastChangeAt)
+	if !list.Stale || list.CurrentMark.Jobs != 1 || list.Mark.Jobs != 0 {
+		t.Errorf("after a backup: stale=%v mark %+v current %+v", list.Stale, list.Mark, list.CurrentMark)
 	}
 	if got, _ := e.svc.Get(ctx, e.alice, r.ID); !got.Stats.SnapshotsStale() || got.Stats.SnapshotCount != 2 || got.Stats.LastBackup.ID.IsZero() {
 		t.Errorf("stats after a backup: %+v", got.Stats)
@@ -1133,24 +1127,194 @@ func TestSnapshotsFirstRefreshFails(t *testing.T) {
 	}
 }
 
-// A backup that finishes while the worker lists the snapshots must leave
-// the cache stale: the list may not contain its snapshot.
-func TestSnapshotsRefreshTimeIsWhenTheWorkerWasAsked(t *testing.T) {
+// endedJob stores a job of kind on r that ended in st at finished (the
+// worker's clock); ran says a worker had accepted it.
+func (e *env) endedJob(r restic.Repo, kind string, st domain.JobStatus, finished time.Time, ran bool) {
+	e.t.Helper()
+	j := jobs.Job{ID: e.ids.NewJobID(), WorkerID: e.worker, OwnerID: r.OwnerID, Kind: kind, Status: st, Definition: []byte(`{}`),
+		RepositoryID: r.ID, CreatedAt: t0, QueuedAt: t0, FinishedAt: finished, ExitCode: -1, Version: 1}
+	if ran {
+		j.DispatchedAt, j.StartedAt = finished, finished
+	}
+	if err := e.store.CreateJob(context.Background(), j); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// refreshed refreshes r's snapshot cache and fails unless it is fresh.
+func (e *env) refreshed(r restic.Repo) {
+	e.t.Helper()
+	list, err := e.svc.Snapshots(context.Background(), e.alice, r.ID, restic.SnapshotsOptions{Refresh: true})
+	if err != nil || list.Stale {
+		e.t.Fatalf("refresh = stale %v, %v", list.Stale, err)
+	}
+}
+
+// stale reports whether r's snapshot cache is stale, and checks that its
+// statistics say the same.
+func (e *env) stale(r restic.Repo) bool {
+	e.t.Helper()
+	list, err := e.svc.Snapshots(context.Background(), e.alice, r.ID, restic.SnapshotsOptions{})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	got, err := e.svc.Get(context.Background(), e.alice, r.ID)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if got.Stats.SnapshotsStale() != list.Stale {
+		e.t.Errorf("the statistics say stale %v, the snapshot list %v", got.Stats.SnapshotsStale(), list.Stale)
+	}
+	return list.Stale
+}
+
+// A job that ends while the worker lists the snapshots must leave the
+// cache stale: the list may not contain what it did.
+func TestSnapshotsJobEndingDuringTheListing(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	r := e.create()
 	e.prober.onSnapshots = func() {
 		e.clock.Advance(time.Minute)
-		j := jobs.Job{ID: e.ids.NewJobID(), WorkerID: e.worker, OwnerID: e.alice.UserID, Kind: "restic_backup", Status: domain.JobSucceeded,
-			Definition: []byte(`{}`), RepositoryID: r.ID, CreatedAt: t0, QueuedAt: t0, FinishedAt: t0.Add(30 * time.Second), ExitCode: -1, Version: 1}
-		if err := e.store.CreateJob(ctx, j); err != nil {
-			t.Error(err)
-		}
+		e.endedJob(r, restic.KindBackup, domain.JobSucceeded, t0.Add(30*time.Second), true)
 	}
 	list, err := e.svc.Snapshots(ctx, e.alice, r.ID, restic.SnapshotsOptions{Refresh: true})
 	if err != nil || !list.RefreshedAt.Equal(t0) || !list.Stale {
 		t.Errorf("Snapshots = refreshed %s stale %v, %v; want refreshed at the request and stale", list.RefreshedAt, list.Stale, err)
+	}
+	// The next refresh includes it.
+	e.prober.onSnapshots = nil
+	e.refreshed(r)
+}
+
+// Any job that may have changed the snapshots makes the cache stale when it
+// ends, however it ended: a forget or prune that failed or was cancelled
+// part-way, a backup that saved its snapshot and then failed, a data
+// deletion that failed after removing snapshots/. Only jobs that never
+// left the queue cannot have.
+func TestSnapshotsStaleAfterAnyChangeThatRan(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		kind string
+		st   domain.JobStatus
+		ran  bool
+		want bool
+	}{
+		{restic.KindBackup, domain.JobSucceeded, true, true},
+		{restic.KindBackup, domain.JobFailed, true, true},
+		{"restic_forget", domain.JobFailed, true, true},
+		{"restic_forget", domain.JobCancelled, true, true},
+		{"restic_prune", domain.JobInterrupted, true, true},
+		{restic.KindDeleteData, domain.JobFailed, true, true},
+		{restic.KindDeleteData, domain.JobCancelled, true, true},
+		{restic.KindBackup, domain.JobFailed, false, false},
+		{"restic_prune", domain.JobCancelled, false, false},
+		{restic.KindCheck, domain.JobFailed, true, false},
+		{"restic_restore", domain.JobSucceeded, true, false},
+	}
+	for _, tt := range tests {
+		name := fmt.Sprintf("%s %s ran=%v", tt.kind, tt.st, tt.ran)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			r := e.create()
+			e.refreshed(r)
+			e.clock.Advance(time.Minute)
+			e.endedJob(r, tt.kind, tt.st, e.clock.Now(), tt.ran)
+			if got := e.stale(r); got != tt.want {
+				t.Errorf("stale = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// A failed or cancelled data deletion has usually removed snapshots/
+// already: the repository is active again with a stale cache.
+func TestSnapshotsStaleAfterAFailedDataDeletion(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	r := e.create()
+	e.refreshed(r)
+	r = e.deleting2(r)
+	j := jobs.Job{ID: r.DeletionJobID, WorkerID: e.worker, OwnerID: r.OwnerID, Kind: restic.KindDeleteData, Status: domain.JobCancelled,
+		Definition: []byte(`{}`), RepositoryID: r.ID, CreatedAt: t0, QueuedAt: t0, DispatchedAt: t0, StartedAt: t0,
+		FinishedAt: t0.Add(-time.Hour), ExitCode: -1, Version: 1, Error: jobs.JobError{Code: "cancelled"}}
+	if err := e.store.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := e.svc.FinishDeletions(ctx); err != nil || n != 1 {
+		t.Fatalf("FinishDeletions = %d, %v", n, err)
+	}
+	if got := e.get(r.ID); got.Deleting || got.Deleted() || !got.DeletionCancelled {
+		t.Fatalf("after the cancelled deletion: %+v", got)
+	}
+	if !e.stale(r) {
+		t.Error("the cache of a repository whose deletion ran and was cancelled is not stale")
+	}
+}
+
+// deleting2 starts a data deletion of r.
+func (e *env) deleting2(r restic.Repo) restic.Repo {
+	e.t.Helper()
+	if _, err := e.svc.Delete(context.Background(), e.alice, r.ID, restic.DeleteOptions{DeleteData: true, ConfirmName: r.Name}); err != nil {
+		e.t.Fatal(err)
+	}
+	return e.get(r.ID)
+}
+
+// Staleness does not depend on the worker's clock: its jobs' FinishedAt
+// may be far behind or ahead of the controller's.
+func TestSnapshotsStaleUnderClockSkew(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	r := e.create()
+	e.refreshed(r)
+
+	// A worker 10 minutes behind: the backup ends after the refresh, with
+	// a FinishedAt before it.
+	e.clock.Advance(time.Minute)
+	e.endedJob(r, restic.KindBackup, domain.JobSucceeded, e.clock.Now().Add(-10*time.Minute), true)
+	if !e.stale(r) {
+		t.Error("a backup that ended after the refresh, on a clock behind, left the cache fresh")
+	}
+	e.refreshed(r)
+
+	// A worker an hour ahead: once refreshed after its backup, the cache
+	// is fresh, not stale until its clock is reached.
+	e.clock.Advance(time.Minute)
+	e.endedJob(r, restic.KindBackup, domain.JobSucceeded, e.clock.Now().Add(time.Hour), true)
+	if !e.stale(r) {
+		t.Error("the backup did not make the cache stale")
+	}
+	e.refreshed(r)
+	if e.stale(r) {
+		t.Error("a cache refreshed after a job from a clock ahead stays stale")
+	}
+}
+
+// The patterns are compiled once, not for every listed snapshot.
+func TestSnapshotsRefreshCompilesNoPatternPerSnapshot(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	r := e.create()
+	refresh := func(n int) float64 {
+		e.prober.snapshots.Snapshots = nil
+		for i := range n {
+			e.prober.snapshots.Snapshots = append(e.prober.snapshots.Snapshots, snap(i+1, t0.Add(time.Duration(i)*time.Minute)))
+		}
+		return testing.AllocsPerRun(5, func() {
+			if _, err := e.svc.Snapshots(ctx, e.alice, r.ID, restic.SnapshotsOptions{Refresh: true}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	few, many := refresh(1), refresh(101)
+	// Storing and reading a snapshot costs a few allocations; compiling a
+	// pattern hundreds.
+	if perSnapshot := (many - few) / 100; perSnapshot > 50 {
+		t.Errorf("a refresh allocates %.0f times per snapshot", perSnapshot)
 	}
 }
 
@@ -1201,4 +1365,199 @@ func TestBrowse(t *testing.T) {
 		t.Errorf("Browse failure = %v", err)
 	}
 	noSecret(t, err)
+}
+
+// Repositories on one remote cannot be nested: a data deletion of the
+// outer one could reach the inner one. Paths compare by whole folders.
+func TestCreateRejectsNestedLocations(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, mode := range []restic.Mode{restic.ModeInit, restic.ModeConnect} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			first := e.create() // at restic/photos on e.s3
+			calls := len(e.prober.verifies)
+			for _, path := range []string{"restic", "/restic/", "", "restic/photos/inner", "restic//photos/./inner/deeper"} {
+				in := restic.Input{Name: "Other", RemoteID: e.s3, Path: path, Password: sentinel, Mode: mode}
+				_, err := e.svc.Create(ctx, e.alice, in)
+				if got := fieldsOf(err); !slices.Equal(got, []string{"path"}) || !strings.Contains(err.Error(), `"Photos vault"`) {
+					t.Errorf("Create at %q = %v, want a problem on path naming the repository", path, err)
+				}
+			}
+			if len(e.prober.verifies) != calls {
+				t.Error("a nested location reached the worker")
+			}
+			// A sibling that only shares a prefix, the same path on another
+			// remote, and a nested path once the outer one is forgotten.
+			e.prober.config.ResticID = strings.Repeat("b", 64)
+			if _, err := e.svc.Create(ctx, e.alice, restic.Input{Name: "Sibling", RemoteID: e.s3, Path: "restic/photos2", Password: sentinel, Mode: mode}); err != nil {
+				t.Errorf("Create at restic/photos2: %v", err)
+			}
+			e.prober.config.ResticID = strings.Repeat("c", 64)
+			if _, err := e.svc.Create(ctx, e.alice, restic.Input{Name: "Elsewhere", RemoteID: e.local, WorkerID: e.worker, Path: "restic/photos/inner", Password: sentinel, Mode: mode}); err != nil {
+				t.Errorf("Create on another remote: %v", err)
+			}
+			if _, err := e.svc.Delete(ctx, e.alice, first.ID, restic.DeleteOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			e.prober.config.ResticID = strings.Repeat("d", 64)
+			if _, err := e.svc.Create(ctx, e.alice, restic.Input{Name: "Inner", RemoteID: e.s3, Path: "restic/photos/inner", Password: sentinel, Mode: mode}); err != nil {
+				t.Errorf("Create inside a forgotten repository's folder: %v", err)
+			}
+		})
+	}
+
+	// A repository at the remote's root holds every other location.
+	e := newEnv(t)
+	e.create(func(in *restic.Input) { in.Path = "/" })
+	_, err := e.svc.Create(ctx, e.alice, restic.Input{Name: "Other", RemoteID: e.s3, Path: "anything", Password: sentinel, Mode: restic.ModeInit})
+	if got := fieldsOf(err); !slices.Equal(got, []string{"path"}) || !strings.Contains(err.Error(), "the remote's root") {
+		t.Errorf("Create below a repository at the root = %v", err)
+	}
+}
+
+// storedRepo stores a repository of alice directly (as one stored before
+// the nesting rule would be).
+func (e *env) storedRepo(name, path string) restic.Repo {
+	e.t.Helper()
+	id := e.ids.NewResticRepoID()
+	enc, err := e.cipher.Encrypt([]byte(sentinel), restic.PasswordAD(id))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	r := restic.Repo{
+		ID: id, OwnerID: e.alice.UserID, Name: name, RemoteID: e.s3, Path: path, PasswordEnc: enc,
+		ResticID: fmt.Sprintf("%x", sha256.Sum256([]byte(name))), CreatedAt: t0, UpdatedAt: t0, Version: 1,
+	}
+	if err := e.store.CreateRepo(context.Background(), r); err != nil {
+		e.t.Fatal(err)
+	}
+	return r
+}
+
+// Deleting a repository's data is refused while another repository lies
+// inside its folder.
+func TestDeleteWithDataRefusesANestedRepository(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	outer, inner, sibling := e.storedRepo("Outer", "data"), e.storedRepo("Inner", "data/inner"), e.storedRepo("Sibling", "data2")
+	_, err := e.svc.Delete(ctx, e.alice, outer.ID, restic.DeleteOptions{DeleteData: true, ConfirmName: "Outer"})
+	if !errors.Is(err, domain.ErrFailedPrecondition) || !strings.Contains(err.Error(), `repository "Inner" is stored inside this repository's folder`) ||
+		!strings.Contains(err.Error(), "without deleting its data") {
+		t.Errorf("Delete(outer, with data) = %v", err)
+	}
+	if got := e.get(outer.ID); got.Deleting || got.Version != 1 || len(e.deletions.picks)+len(e.deletions.starts) != 0 {
+		t.Errorf("a refused deletion changed something: %+v", got)
+	}
+	// The inner one and a sibling that only shares a prefix may go.
+	for _, r := range []restic.Repo{inner, sibling} {
+		if _, err := e.svc.Delete(ctx, e.alice, r.ID, restic.DeleteOptions{DeleteData: true, ConfirmName: r.Name}); err != nil {
+			t.Errorf("Delete(%s, with data) = %v", r.Name, err)
+		}
+	}
+	// Forgetting is always possible.
+	if _, err := e.svc.Delete(ctx, e.alice, outer.ID, restic.DeleteOptions{}); err != nil {
+		t.Errorf("forget the outer repository: %v", err)
+	}
+}
+
+// statsReads counts the reads that compute statistics.
+type statsReads struct {
+	restic.Repository
+	mu sync.Mutex
+	n  int
+}
+
+func (c *statsReads) GetRepo(ctx context.Context, id domain.ResticRepoID) (restic.Repo, error) {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	return c.Repository.GetRepo(ctx, id)
+}
+
+func (c *statsReads) ListRepos(ctx context.Context, f restic.ListFilter) ([]restic.Repo, error) {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	return c.Repository.ListRepos(ctx, f)
+}
+
+func (c *statsReads) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+// Ownership checks, Resolve and the uniqueness checks read plain rows:
+// only Get and List compute statistics.
+func TestOnlyGetAndListReadStatistics(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	repo := &statsReads{Repository: e.store}
+	svc, err := restic.New(restic.Deps{
+		Repo: repo, Remotes: storeRemotes{e.store}, Prober: e.prober, Backends: mustRegistry(t), Deletions: e.deletions,
+		Cipher: e.cipher, Clock: e.clock, IDs: e.ids,
+	}, restic.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := svc.Create(ctx, e.alice, input(e.s3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := created.Repo
+	e.prober.config.ResticID = strings.Repeat("b", 64)
+	if _, err := svc.Create(ctx, e.alice, restic.Input{Name: "Second", RemoteID: e.s3, Path: "second", Password: sentinel, Mode: restic.ModeInit}); err != nil {
+		t.Fatal(err)
+	}
+	checks := map[string]error{}
+	_, checks["Resolve"] = svc.Resolve(ctx, e.alice.UserID, r.ID)
+	_, _, checks["UsableRepository"] = svc.UsableRepository(ctx, e.alice.UserID, r.ID, domain.JobID{})
+	_, checks["Update"] = svc.Update(ctx, e.alice, r.ID, r.Version, restic.Update{Name: "Renamed"})
+	_, checks["Snapshots"] = svc.Snapshots(ctx, e.alice, r.ID, restic.SnapshotsOptions{})
+	_, checks["Browse"] = svc.Browse(ctx, e.alice, r.ID, "1a2b3c4d", "/", domain.WorkerID{})
+	_, checks["Delete"] = svc.Delete(ctx, e.alice, r.ID, restic.DeleteOptions{DeleteData: true, ConfirmName: "Renamed"})
+	for what, err := range checks {
+		if err != nil {
+			t.Errorf("%s: %v", what, err)
+		}
+	}
+	if n := repo.count(); n != 0 {
+		t.Errorf("%d reads computed statistics for ownership or uniqueness checks", n)
+	}
+	if _, err := svc.Get(ctx, e.alice, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.List(ctx, e.alice, restic.ListFilter{}); err != nil {
+		t.Fatal(err)
+	}
+	if n := repo.count(); n != 2 {
+		t.Errorf("Get and List computed statistics %d times, want 2", n)
+	}
+}
+
+// A first deletion attempt that finds no repository at the location fails
+// on the worker (the data is elsewhere): the repository is active again
+// with its password and a reason that says what to check.
+func TestFinishDeletionsNothingFound(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	r := e.deleting("elsewhere")
+	const msg = "no restic repository was found at the location on this worker, so nothing was deleted; check the worker and the remote's settings, or delete the repository without deleting its data"
+	e.deletionJob(r, domain.JobFailed, jobs.JobError{Code: "repository_not_found", Message: msg})
+	if n, err := e.svc.FinishDeletions(ctx); err != nil || n != 1 {
+		t.Fatalf("FinishDeletions = %d, %v", n, err)
+	}
+	got := e.get(r.ID)
+	if got.Deleting || got.Deleted() || !got.DataDeletedAt.IsZero() || got.PasswordEnc == nil || got.DeletionCancelled ||
+		got.DeletionError != "deleting the data failed: repository_not_found: "+msg {
+		t.Errorf("after a deletion that found nothing: %+v", got)
+	}
+	if rr, err := e.svc.Resolve(ctx, e.alice.UserID, r.ID); err != nil || rr.Password != sentinel {
+		t.Errorf("Resolve after it: %v", err)
+	}
 }

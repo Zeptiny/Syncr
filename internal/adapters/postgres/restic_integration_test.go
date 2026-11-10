@@ -47,7 +47,7 @@ func TestResticSummaryIsStoredWithResticFieldNames(t *testing.T) {
 	at := testTime()
 	snap := restic.Snapshot{ID: resticTestHex(1), Time: at, Hostname: "nas\x00-01", Paths: []string{"/srv"},
 		Summary: &restic.SnapshotSummary{BackupStart: at.Add(-time.Minute), BackupEnd: at, FilesNew: 3, DataAdded: 10, DataAddedPacked: 7, TotalFilesProcessed: 5, TotalBytesProcessed: 12345}}
-	if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{snap, {ID: resticTestHex(2), Time: at.Add(-time.Hour)}}, false, at); err != nil {
+	if err := s.ReplaceSnapshots(ctx, r.ID, []restic.Snapshot{snap, {ID: resticTestHex(2), Time: at.Add(-time.Hour)}}, false, at, restic.ChangeMark{}); err != nil {
 		t.Fatal(err)
 	}
 	var bytes, files, added int64
@@ -94,7 +94,7 @@ func TestResticReplaceFullSizeAcrossPools(t *testing.T) {
 	errs := make([]error, 2)
 	for i, s := range []*Store{s1, s2} {
 		wg.Go(func() {
-			errs[i] = s.ReplaceSnapshots(ctx, r.ID, sets[i], i == 0, testTime().Add(time.Duration(i+1)*time.Hour))
+			errs[i] = s.ReplaceSnapshots(ctx, r.ID, sets[i], i == 0, testTime().Add(time.Duration(i+1)*time.Hour), restic.ChangeMark{})
 		})
 	}
 	wg.Wait()

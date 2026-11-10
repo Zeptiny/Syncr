@@ -28,12 +28,68 @@ func repositoryParts() []string {
 	return []string{"locks", "snapshots", "index", "data", "keys"}
 }
 
-const configPart = "config"
+const (
+	configPart = "config"
+	// dataPart holds its files in sub-folders.
+	dataPart = "data"
+)
+
+// restic's file names, as rclone filter rules relative to the folder they
+// apply to. A {{ }} segment is a regular expression matched,
+// case-sensitively, against one whole path segment.
+const (
+	// fileRule: a file named by 64 lower-case hex digits, as in keys/,
+	// locks/, snapshots/ and index/.
+	fileRule = "/{{[0-9a-f]{64}}}"
+	// packRule: such a file in a sub-folder named by 2 hex digits, as in
+	// data/.
+	packRule = "/{{[0-9a-f]{2}}}/{{[0-9a-f]{64}}}"
+	// packDirContentRule: whatever lies directly in a sub-folder of data/
+	// named by 2 hex digits. rclone rmdirs sees nothing else, so it removes
+	// only those sub-folders, and only the ones that hold no file;
+	// one that holds only a folder looks empty to it, and the backend
+	// refuses to remove it.
+	packDirContentRule = "/{{[0-9a-f]{2}}}/*"
+)
+
+// partRule returns the filter rule of restic's files in part (relative to
+// the part's folder) and the depth of those files below it.
+func partRule(part string) (rule string, depth int) {
+	if part == dataPart {
+		return packRule, 2
+	}
+	return fileRule, 1
+}
+
+// layoutRules are the filter flags of every file of restic's layout,
+// relative to the repository's location (three levels deep at most).
+func layoutRules() []string {
+	return []string{
+		"--include=/" + configPart,
+		"--include=/{{locks|snapshots|index|keys}}" + fileRule,
+		"--include=/" + dataPart + packRule,
+	}
+}
+
+// isPackDir reports whether name is the name of one of data/'s
+// sub-folders: two lower-case hex digits.
+func isPackDir(name string) bool {
+	return len(name) == 2 && isLowerHex(name[0]) && isLowerHex(name[1])
+}
+
+func isLowerHex(c byte) bool { return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' }
+
+// maxKeptNames is how many of the entries kept inside restic's folders the
+// warning names.
+const maxKeptNames = 8
 
 // deleteRunner runs restic_delete_data: it deletes restic's own files at a
 // repository's location, after verifying that the location still holds the
-// expected repository. Other files there are never touched, and the
-// location itself is removed only when asked to and empty.
+// expected repository. Only files named like restic's, in restic's
+// folders, are deleted, and only folders left empty are removed: other
+// files there are never touched (also another repository stored inside
+// one of those folders), and the ones inside restic's folders are named in
+// a warning. The location itself is removed only when asked to and empty.
 //
 // restic has no "delete repository" command, so the files are deleted with
 // the pinned rclone, started directly with the job's remotes in its
@@ -65,6 +121,9 @@ func (r *deleteRunner) Run(ctx context.Context, job runner.Job, emit runner.Emit
 	}
 	res.ExitCode = exitOK
 	res.Output = &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticDeleteData{ResticDeleteData: out}}
+	if w := d.keptWarning(); w != "" {
+		res.Warnings = runner.LimitWarnings([]string{d.sc.String(w)})
+	}
 	return res, nil
 }
 
@@ -87,6 +146,9 @@ type deletion struct {
 
 	deleted int64 // objects deleted so far
 	removed []string
+	// kept are the entries inside restic's folders that are not restic's,
+	// relative to the location ("data/notes.txt", "keys/old/").
+	kept []string
 }
 
 func (d *deletion) run(ctx context.Context) (*syncrv1.ResticDeleteDataOutput, error) {
@@ -121,31 +183,41 @@ func (d *deletion) run(ctx context.Context) (*syncrv1.ResticDeleteDataOutput, er
 		return nil, verr
 	case errors.Is(verr, ErrWrongPassword):
 		// An earlier attempt may have stopped between keys/ and config:
-		// then no key is left and only the config remains to delete.
-		names, err := d.list(ctx, d.loc, false)
+		// then no key is left and only the config remains to delete. A
+		// first attempt cannot tell that from a config it may not delete.
+		wrong := runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_WRONG_PASSWORD,
+			"the stored password does not open the repository; nothing was deleted")
+		if !d.op.GetResume() {
+			return nil, wrong
+		}
+		top, err := d.ls(ctx, d.loc, "--max-depth=1")
 		if err != nil {
 			return nil, err
 		}
-		keys, err := d.list(ctx, d.part("keys"), true)
+		keys, err := d.ls(ctx, d.part("keys"), "--max-depth=1", "--files-only", "--include="+fileRule)
 		if err != nil {
 			return nil, err
 		}
-		if !slices.Contains(names, configPart) || len(keys) > 0 {
-			return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_WRONG_PASSWORD,
-				"the stored password does not open the repository; nothing was deleted")
+		if !slices.Contains(top.paths(), configPart) || len(keys.entries) > 0 {
+			return nil, wrong
 		}
 		return d.finish(ctx, nil)
 	case errors.Is(verr, ErrRepositoryNotFound):
-		names, err := d.list(ctx, d.loc, false)
+		files, err := d.ls(ctx, d.loc, append([]string{"-R", "--files-only", "--max-depth=3"}, layoutRules()...)...)
 		if err != nil {
 			return nil, err
 		}
-		left := remaining(names)
-		if len(left) == 0 {
-			return &syncrv1.ResticDeleteDataOutput{AlreadyGone: true}, nil
+		if left := remaining(files.paths()); len(left) > 0 {
+			return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_NOT_FOUND,
+				"restic's config is missing but other repository files remain (%s); nothing was deleted", strings.Join(left, ", "))
 		}
-		return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_NOT_FOUND,
-			"restic's config is missing but other repository files remain (%s); nothing was deleted", strings.Join(left, ", "))
+		if !d.op.GetResume() {
+			// Nothing was ever deleted here: the repository is elsewhere
+			// (another worker's disk, or changed remote settings).
+			return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_NOT_FOUND,
+				"no restic repository was found at the location on this worker, so nothing was deleted; check the worker and the remote's settings, or delete the repository without deleting its data")
+		}
+		return &syncrv1.ResticDeleteDataOutput{AlreadyGone: true}, nil
 	default:
 		return nil, verr
 	}
@@ -156,11 +228,11 @@ func (d *deletion) run(ctx context.Context) (*syncrv1.ResticDeleteDataOutput, er
 	}
 
 	// 3. Delete the parts in order.
-	names, err := d.list(ctx, d.loc, false)
+	top, err := d.ls(ctx, d.loc, "--max-depth=1")
 	if err != nil {
 		return nil, err
 	}
-	return d.finish(ctx, names)
+	return d.finish(ctx, top.paths())
 }
 
 // finish deletes the parts that exist (names; nil deletes none), then the
@@ -186,14 +258,14 @@ func (d *deletion) finish(ctx context.Context, names []string) (*syncrv1.ResticD
 	out := &syncrv1.ResticDeleteDataOutput{DeletedObjects: d.deleted, RemovedParts: d.removed}
 	// 5. Remove the directory when it is empty; never the remote's root.
 	if d.op.GetRemoveDirectory() && d.op.GetRepository().GetLocation().GetPath() != "" {
-		rest, err := d.listAll(ctx, d.loc)
+		rest, err := d.ls(ctx, d.loc, "--max-depth=1")
 		switch {
 		case err != nil && runner.Canceled(err):
 			return nil, err
 		case err != nil:
 			// The data is gone; an unreadable directory is only left behind.
 			d.e.log.Warn("cannot list the repository directory after the deletion", "job_id", d.job.ID, "error", d.sc.String(err.Error()))
-		case len(rest.names) == 0:
+		case len(rest.entries) == 0:
 			out.DirectoryRemoved = true
 			if rest.exists {
 				_, _, rmErr := d.rclone(ctx, nil, "rmdir", "--", d.loc)
@@ -219,11 +291,12 @@ func (d *deletion) partial(part string, err error) error {
 	return runner.Errorf(runner.CodeOf(err), "%s; failed while deleting %s: %w", done, part, err)
 }
 
-// remaining returns the entries of restic's layout among names.
-func remaining(names []string) []string {
+// remaining returns the parts of restic's layout (config and the folders)
+// that paths, relative to the location, lie in, in layout order.
+func remaining(paths []string) []string {
 	var left []string
 	for _, part := range append([]string{configPart}, repositoryParts()...) {
-		if slices.Contains(names, part) {
+		if slices.ContainsFunc(paths, func(p string) bool { return p == part || strings.HasPrefix(p, part+"/") }) {
 			left = append(left, part)
 		}
 	}
@@ -315,8 +388,9 @@ func (d *deletion) checkLocks(ctx context.Context) error {
 	return nil
 }
 
-// deletePart deletes every file under one directory of the repository and
-// then the emptied directory.
+// deletePart deletes restic's files in one folder of the repository
+// (partRule), then the sub-folders of data/ and the folder itself if they
+// are empty. Whatever else the folder holds stays and is noted in d.kept.
 func (d *deletion) deletePart(ctx context.Context, name string) error {
 	base := d.deleted
 	onLine := func(l proc.Line) {
@@ -330,15 +404,82 @@ func (d *deletion) deletePart(ctx context.Context, name string) error {
 			d.publish()
 		}
 	}
-	_, detail, err := d.rclone(ctx, onLine, "delete", "--rmdirs", "--use-json-log", "--stats=1s", "--stats-log-level=NOTICE", "--", d.part(name))
+	dir := d.part(name)
+	rule, depth := partRule(name)
+	_, detail, err := d.rclone(ctx, onLine, "delete", "--include="+rule, fmt.Sprintf("--max-depth=%d", depth),
+		"--use-json-log", "--stats=1s", "--stats-log-level=NOTICE", "--", dir)
 	if err != nil && !isNotFound(detail) {
 		return err
 	}
-	// --rmdirs leaves the directory itself; object stores have none.
-	if _, _, err := d.rclone(ctx, nil, "rmdir", "--", d.part(name)); err != nil && runner.Canceled(err) {
+	if name == dataPart {
+		// The emptied sub-folders (object stores have none). One that still
+		// holds something stays, and the backend's refusal is no error.
+		_, _, err := d.rclone(ctx, nil, "rmdirs", "--leave-root", "--include="+packDirContentRule, "--max-depth=2", "--retries=1", "--", dir)
+		if err != nil && runner.Canceled(err) {
+			return err
+		}
+	}
+	rest, err := d.ls(ctx, dir, "-R", fmt.Sprintf("--max-depth=%d", depth))
+	if err != nil {
 		return err
 	}
+	kept := foreign(name, rest)
+	d.kept = append(d.kept, kept...)
+	if len(kept) > 0 {
+		d.e.log.Warn("kept entries in a repository folder that restic did not write", "job_id", d.job.ID, "part", name,
+			"count", len(kept), "entries", d.sc.String(strings.Join(kept[:min(len(kept), maxKeptNames)], ", ")))
+	}
+	if rest.exists && len(rest.entries) == 0 {
+		if _, _, err := d.rclone(ctx, nil, "rmdir", "--", dir); err != nil && runner.Canceled(err) {
+			return err
+		}
+	}
 	return nil
+}
+
+// foreign returns what a part's listing after its deletion holds that is
+// not restic's, relative to the location (folders with a trailing "/").
+// In data/ the sub-folders named by 2 hex digits are restic's: their
+// entries are named instead (an empty one is nobody's concern).
+func foreign(part string, l listing) []string {
+	packDirs := map[string]bool{}
+	if part == dataPart {
+		for _, e := range l.entries {
+			if e.dir && isPackDir(e.path) {
+				packDirs[e.path] = true
+			}
+		}
+	}
+	var out []string
+	for _, e := range l.entries {
+		parent, _, nested := strings.Cut(e.path, "/")
+		if packDirs[e.path] || nested && !packDirs[parent] {
+			continue
+		}
+		name := part + "/" + e.path
+		if e.dir {
+			name += "/"
+		}
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// keptWarning describes the entries kept inside restic's folders, or "".
+func (d *deletion) keptWarning() string {
+	if len(d.kept) == 0 {
+		return ""
+	}
+	names := strings.Join(d.kept[:min(len(d.kept), maxKeptNames)], ", ")
+	if more := len(d.kept) - maxKeptNames; more > 0 {
+		names += fmt.Sprintf(" and %d more", more)
+	}
+	noun := "entries"
+	if len(d.kept) == 1 {
+		noun = "entry"
+	}
+	return fmt.Sprintf("kept %d %s inside restic's folders that restic did not write: %s", len(d.kept), noun, names)
 }
 
 func (d *deletion) publish() {
@@ -347,26 +488,29 @@ func (d *deletion) publish() {
 
 // listing is the outcome of listing a directory.
 type listing struct {
-	names  []string
-	exists bool
+	entries []entry
+	exists  bool
 }
 
-// list returns the names of the direct children of dir (only files with
-// filesOnly); a directory that does not exist has none.
-func (d *deletion) list(ctx context.Context, dir string, filesOnly bool) ([]string, error) {
-	args := []string{"lsjson", "--max-depth=1", "--no-mimetype", "--no-modtime"}
-	if filesOnly {
-		args = append(args, "--files-only")
+// entry is one listed entry: its path relative to the listed directory
+// ("/" separated) and whether it is a directory.
+type entry struct {
+	path string
+	dir  bool
+}
+
+// paths returns the paths of l's entries.
+func (l listing) paths() []string {
+	out := make([]string, len(l.entries))
+	for i, e := range l.entries {
+		out[i] = e.path
 	}
-	l, err := d.lsjson(ctx, append(args, "--", dir))
-	return l.names, err
+	return out
 }
 
-func (d *deletion) listAll(ctx context.Context, dir string) (listing, error) {
-	return d.lsjson(ctx, []string{"lsjson", "--max-depth=1", "--no-mimetype", "--no-modtime", "--", dir})
-}
-
-func (d *deletion) lsjson(ctx context.Context, args []string) (listing, error) {
+// ls lists dir with rclone lsjson and the flags (depth, filters); a
+// directory that does not exist has no entries.
+func (d *deletion) ls(ctx context.Context, dir string, flags ...string) (listing, error) {
 	var out listing
 	onLine := func(l proc.Line) {
 		data := bytes.TrimSuffix(bytes.TrimSpace(l.Data), []byte(","))
@@ -374,13 +518,15 @@ func (d *deletion) lsjson(ctx context.Context, args []string) (listing, error) {
 			return
 		}
 		var e struct {
-			Name string `json:"Name"`
+			Path  string `json:"Path"`
+			IsDir bool   `json:"IsDir"`
 		}
-		if json.Unmarshal(data, &e) == nil && e.Name != "" {
-			out.names = append(out.names, e.Name)
+		if json.Unmarshal(data, &e) == nil && e.Path != "" {
+			out.entries = append(out.entries, entry{path: e.Path, dir: e.IsDir})
 		}
 	}
-	_, detail, err := d.rclone(ctx, onLine, args...)
+	args := append([]string{"lsjson", "--no-mimetype", "--no-modtime"}, flags...)
+	_, detail, err := d.rclone(ctx, onLine, append(args, "--", dir)...)
 	if err != nil {
 		if isNotFound(detail) {
 			return listing{}, nil

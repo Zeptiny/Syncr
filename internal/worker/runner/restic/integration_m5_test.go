@@ -61,6 +61,25 @@ func exists(path string) bool {
 	return err == nil
 }
 
+// filesBelow returns the files below dir, relative to it, sorted.
+func filesBelow(t *testing.T, dir string) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		out = append(out, filepath.ToSlash(rel))
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(out)
+	return out
+}
+
 // TestIntegrationProbesAndRestore runs the probe operations and the
 // Milestone 5 restore options against the real tools: init and config
 // probes, a snapshot listing with summaries, browsing a snapshot one folder
@@ -251,13 +270,23 @@ func TestIntegrationProbesAndRestore(t *testing.T) {
 	}
 }
 
-// deleteData runs restic_delete_data on repo.
+// deleteData runs restic_delete_data on repo, as a first attempt.
 func (h *harness) deleteData(repo *syncrv1.ResticRepository, expectedID string, removeDir bool) (runner.Result, []runner.Progress, error) {
 	h.t.Helper()
+	return h.runDeleteData(&syncrv1.ResticDeleteData{Repository: repo, ExpectedResticId: expectedID, RemoveDirectory: removeDir})
+}
+
+// resumeDeleteData runs restic_delete_data on repo after an attempt that
+// may have deleted files.
+func (h *harness) resumeDeleteData(repo *syncrv1.ResticRepository, expectedID string, removeDir bool) (runner.Result, []runner.Progress, error) {
+	h.t.Helper()
+	return h.runDeleteData(&syncrv1.ResticDeleteData{Repository: repo, ExpectedResticId: expectedID, RemoveDirectory: removeDir, Resume: true})
+}
+
+func (h *harness) runDeleteData(op *syncrv1.ResticDeleteData) (runner.Result, []runner.Progress, error) {
+	h.t.Helper()
 	return h.run(h.t.Context(), func(s *syncrv1.JobSpec) {
-		s.Operation = &syncrv1.JobSpec_ResticDeleteData{ResticDeleteData: &syncrv1.ResticDeleteData{
-			Repository: repo, ExpectedResticId: expectedID, RemoveDirectory: removeDir,
-		}}
+		s.Operation = &syncrv1.JobSpec_ResticDeleteData{ResticDeleteData: op}
 	})
 }
 
@@ -315,13 +344,86 @@ func runDeleteDataOnDisk(t *testing.T, h *harness, base string, repoAt func(dir 
 			t.Errorf("stats = %+v with %d progress snapshots", res.Stats, len(snaps))
 		}
 
-		// Running again finds nothing left.
-		res, _, err = h.deleteData(repo, id, true)
+		// Running again finds nothing left: done, when the run before may
+		// have deleted the files; otherwise the repository is elsewhere.
+		res, _, err = h.resumeDeleteData(repo, id, true)
 		if err != nil || !res.Output.GetResticDeleteData().GetAlreadyGone() {
 			t.Errorf("second run = %v, %v; want already_gone", res.Output, err)
 		}
+		_, _, err = h.deleteData(repo, id, true)
+		mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_NOT_FOUND)
+		if !strings.Contains(err.Error(), "no restic repository was found at the location on this worker") {
+			t.Errorf("first attempt at an empty location = %v", err)
+		}
 		if !exists(filepath.Join(dir, "README.txt")) {
 			t.Error("the second run deleted an unrelated file")
+		}
+	})
+
+	t.Run("nothing at the location", func(t *testing.T) {
+		// A first attempt that finds no repository (the wrong worker, or
+		// changed remote settings) deletes nothing and fails.
+		dir := filepath.Join(base, "empty", "repo")
+		writeFile(t, filepath.Join(dir, "notes.txt"), []byte("not restic's"))
+		_, _, err := h.deleteData(repoAt(dir), strings.Repeat("ab", 32), true)
+		mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_NOT_FOUND)
+		if !exists(filepath.Join(dir, "notes.txt")) {
+			t.Error("a failed deletion deleted a file")
+		}
+	})
+
+	t.Run("nested repository and foreign files in restic's folders", func(t *testing.T) {
+		// Repository B lives in A's data folder (where A's packs are), and
+		// files restic did not write lie in A's folders.
+		dirA := filepath.Join(base, "nest", "repo")
+		dirB := filepath.Join(dirA, "data", "inner")
+		repoA, repoB := repoAt(dirA), repoAt(dirB)
+		idA := h.newRepository(repoA)
+		h.newRepository(repoB)
+		foreign := []string{
+			filepath.Join(dirA, "keys", "notes.txt"),
+			filepath.Join(dirA, "snapshots", strings.Repeat("A", 64)),
+			filepath.Join(dirA, "data", "zz", strings.Repeat("a", 64)),
+			filepath.Join(dirA, "data", "0f", "readme.txt"),
+		}
+		for _, f := range foreign {
+			writeFile(t, f, []byte("not restic's"))
+		}
+		nested := filesBelow(t, dirB)
+
+		res, _, err := h.deleteData(repoA, idA, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range foreign {
+			if !exists(f) {
+				t.Errorf("%s was deleted", f)
+			}
+		}
+		if got := filesBelow(t, dirB); !slices.Equal(got, nested) {
+			t.Errorf("the nested repository changed:\n%v\nwas\n%v", got, nested)
+		}
+		// B is intact: it opens and checks clean.
+		check, _ := h.mustRun(func(s *syncrv1.JobSpec) {
+			s.Operation = &syncrv1.JobSpec_ResticCheck{ResticCheck: &syncrv1.ResticCheck{Repository: repoB, ReadDataPercent: 100}}
+		})
+		if c := check.Output.GetResticCheck(); c.GetNumErrors() != 0 {
+			t.Errorf("the nested repository's check = %v", c)
+		}
+		// A's own files are gone, and its folders only where emptied.
+		if exists(filepath.Join(dirA, "config")) || exists(filepath.Join(dirA, "index")) || exists(filepath.Join(dirA, "locks")) ||
+			exists(filepath.Join(dirA, "data", "00")) || !exists(filepath.Join(dirA, "data", "0f")) {
+			t.Error("restic's files or emptied folders of A remain, or a folder holding a file went")
+		}
+		if keys, _ := os.ReadDir(filepath.Join(dirA, "keys")); len(keys) != 1 {
+			t.Errorf("A's keys folder holds %d entries, want only notes.txt", len(keys))
+		}
+		out := res.Output.GetResticDeleteData()
+		if out.GetDirectoryRemoved() || out.GetDeletedObjects() < 4 {
+			t.Errorf("output = %v", out)
+		}
+		if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "data/inner/") || !strings.Contains(res.Warnings[0], "keys/notes.txt") {
+			t.Errorf("warnings = %q, want what was kept", res.Warnings)
 		}
 	})
 
@@ -390,7 +492,14 @@ func runDeleteDataOnDisk(t *testing.T, h *harness, base string, repoAt func(dir 
 				t.Fatal(err)
 			}
 		}
-		res, _, err := h.deleteData(repo, id, true)
+		// Only a deletion that resumes an earlier attempt may delete a
+		// config that no key opens.
+		_, _, err := h.deleteData(repo, id, true)
+		mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_WRONG_PASSWORD)
+		if !exists(filepath.Join(dir, "config")) {
+			t.Fatal("a first attempt deleted an unverified config")
+		}
+		res, _, err := h.resumeDeleteData(repo, id, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -407,8 +516,11 @@ func runDeleteDataOnDisk(t *testing.T, h *harness, base string, repoAt func(dir 
 		if err := os.Remove(filepath.Join(dir, "config")); err != nil {
 			t.Fatal(err)
 		}
-		_, _, err := h.deleteData(repo, id, true)
+		_, _, err := h.resumeDeleteData(repo, id, true)
 		mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_NOT_FOUND)
+		if !strings.Contains(err.Error(), "other repository files remain") {
+			t.Errorf("message = %q", err)
+		}
 		if !exists(filepath.Join(dir, "data")) {
 			t.Error("data was deleted although the repository could not be verified")
 		}

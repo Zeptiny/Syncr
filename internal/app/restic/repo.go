@@ -2,6 +2,7 @@ package restic
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -26,10 +27,55 @@ const (
 // Valid reports whether m is a known mode.
 func (m Mode) Valid() bool { return m == ModeInit || m == ModeConnect }
 
-// MutatingKinds returns the job kinds whose success makes the snapshot
-// cache stale (SnapshotList.LastChangeAt): backup, forget and prune.
+// MutatingKinds returns the job kinds that can change a repository's
+// snapshots: backup, forget, prune and the deletion of its data. A job of
+// these kinds changes the snapshot cache's ChangeMark when it ends after a
+// worker accepted it, however it ended: a failed forget or prune may have
+// removed snapshots, a backup may have saved its snapshot before it failed,
+// and a failed or cancelled data deletion has usually removed snapshots/
+// first (IsChange).
 func MutatingKinds() []string {
-	return []string{"restic_backup", "restic_forget", "restic_prune"}
+	return []string{"restic_backup", "restic_forget", "restic_prune", KindDeleteData}
+}
+
+// IsChange reports whether a job counts in its repository's ChangeMark: it
+// is of one of MutatingKinds, it ended (status terminal), and a worker had
+// accepted it (dispatchedAt or startedAt set), so it may have run. A job
+// that failed or was cancelled while queued never ran.
+func IsChange(kind string, status domain.JobStatus, dispatchedAt, startedAt time.Time) bool {
+	return status.Terminal() && (!dispatchedAt.IsZero() || !startedAt.IsZero()) && slices.Contains(MutatingKinds(), kind)
+}
+
+// ChangeMark tells whether a repository's snapshots may have changed since
+// the snapshot cache was taken, without comparing clocks: the cache stores
+// the repository's mark read before the worker was asked to list, and is
+// stale once the repository's current mark differs.
+//
+// The mark counts the jobs on the repository that IsChange (jobs are never
+// deleted and an ended job never changes, so the count only grows: every
+// change that ends after the mark was read makes it differ), with the
+// newest FinishedAt among them. The time is the worker's and is only
+// compared for equality; it keeps a purge of old jobs together with as
+// many new ones from looking like no change.
+type ChangeMark struct {
+	// Jobs is the number of such jobs.
+	Jobs int64
+	// LastFinishedAt is their newest FinishedAt; zero if there is none.
+	LastFinishedAt time.Time
+}
+
+// Equal reports whether m and o are the same mark.
+func (m ChangeMark) Equal(o ChangeMark) bool {
+	return m.Jobs == o.Jobs && m.LastFinishedAt.Equal(o.LastFinishedAt)
+}
+
+// With returns m with one more change that finished at finishedAt.
+func (m ChangeMark) With(finishedAt time.Time) ChangeMark {
+	m.Jobs++
+	if finishedAt.After(m.LastFinishedAt) {
+		m.LastFinishedAt = finishedAt
+	}
+	return m
 }
 
 // Job kinds the repository statistics name (RepoStats.LastBackup,
@@ -89,8 +135,9 @@ type Repo struct {
 	// version 1.
 	Version int64
 
-	// Stats are computed by the store when it reads the repository
-	// (GetRepo, ListRepos); they are never written.
+	// Stats are computed by the store when it reads the repository with
+	// them (GetRepo, ListRepos; zero from GetRepoRow, ListRepoRows); they
+	// are never written.
 	Stats RepoStats
 }
 
@@ -112,10 +159,10 @@ type RepoStats struct {
 	// snapshots.
 	SnapshotsRefreshedAt time.Time
 	SnapshotsTruncated   bool
-	// LastChangeAt is the newest FinishedAt of a succeeded job of one of
-	// MutatingKinds on the repository; zero if none (as
-	// SnapshotList.LastChangeAt).
-	LastChangeAt time.Time
+	// SnapshotsMark is the ChangeMark stored with the cache, ChangeMark the
+	// repository's current one (as SnapshotList.Mark and CurrentMark).
+	SnapshotsMark ChangeMark
+	ChangeMark    ChangeMark
 	// LastBackup and LastCheck are the newest job of kind restic_backup
 	// and restic_check on the repository (any status, by job ID); zero if
 	// none.
@@ -126,10 +173,11 @@ type RepoStats struct {
 	ScheduleCount int
 }
 
-// SnapshotsStale reports whether the snapshot cache may miss snapshots: it
-// was never filled, or a backup, retention or prune succeeded since.
+// SnapshotsStale reports whether the snapshot cache may be out of date: it
+// was never filled, or a job that may have changed the snapshots ended
+// since it was taken (its ChangeMark differs).
 func (s RepoStats) SnapshotsStale() bool {
-	return s.SnapshotsRefreshedAt.IsZero() || s.LastChangeAt.After(s.SnapshotsRefreshedAt)
+	return s.SnapshotsRefreshedAt.IsZero() || !s.SnapshotsMark.Equal(s.ChangeMark)
 }
 
 // JobRef names a job for the repository statistics.
@@ -226,11 +274,12 @@ type SnapshotList struct {
 	RefreshedAt time.Time
 	// Truncated: the worker listed only the newest MaxSnapshots.
 	Truncated bool
-	// LastChangeAt is the newest FinishedAt of a succeeded job of one of
-	// MutatingKinds on the repository; zero if none.
-	LastChangeAt time.Time
-	// Stale is RefreshedAt.IsZero() || LastChangeAt.After(RefreshedAt),
-	// computed by the service (stores leave it false).
+	// Mark is the repository's ChangeMark when the cache was taken (read
+	// before the worker was asked); CurrentMark is the current one.
+	Mark        ChangeMark
+	CurrentMark ChangeMark
+	// Stale is RefreshedAt.IsZero() || !Mark.Equal(CurrentMark), computed
+	// by the service (stores leave it false).
 	Stale bool
 	// RefreshError is set when a refresh failed and the cache was
 	// returned instead (scrubbed).

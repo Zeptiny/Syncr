@@ -30,6 +30,10 @@ type Repository interface {
 	// Stats. ErrNotFound if it never existed.
 	GetRepo(ctx context.Context, id domain.ResticRepoID) (Repo, error)
 
+	// GetRepoRow is GetRepo without the Stats (zero): the cheap read of
+	// ownership checks and of Resolve.
+	GetRepoRow(ctx context.Context, id domain.ResticRepoID) (Repo, error)
+
 	// GetRepos returns the repositories of ids that exist (deleted ones
 	// included), by ID; missing ones are omitted and duplicates returned
 	// once. Their Stats are not needed (zero is fine).
@@ -38,6 +42,10 @@ type Repository interface {
 	// ListRepos returns the live repositories matching f, deleting ones
 	// included, by lower-cased name, then ID, with their Stats.
 	ListRepos(ctx context.Context, f ListFilter) ([]Repo, error)
+
+	// ListRepoRows is ListRepos without the Stats (zero): for checks of
+	// names and locations.
+	ListRepoRows(ctx context.Context, f ListFilter) ([]Repo, error)
 
 	// UpdateRepo writes Name, Description, PasswordEnc and UpdatedAt of a
 	// live repository if its stored Version equals r.Version, sets Version
@@ -87,16 +95,18 @@ type Repository interface {
 
 	// ReplaceSnapshots atomically replaces the snapshot cache of a live
 	// repository (deleting ones included) with snaps and records
-	// refreshedAt and truncated. ErrNotFound if missing or deleted;
+	// refreshedAt, truncated and mark (the repository's ChangeMark when the
+	// listing started). ErrNotFound if missing or deleted;
 	// ErrInvalidArgument for a snapshot ID that is not 64 lower-case hex
 	// digits, ErrAlreadyExists for one listed twice (nothing changes then).
 	// Concurrent replaces leave one of the sets, never a mix.
-	ReplaceSnapshots(ctx context.Context, id domain.ResticRepoID, snaps []Snapshot, truncated bool, refreshedAt time.Time) error
+	ReplaceSnapshots(ctx context.Context, id domain.ResticRepoID, snaps []Snapshot, truncated bool, refreshedAt time.Time, mark ChangeMark) error
 
 	// ListSnapshots returns the cache, newest first (by Time descending,
-	// then ID), with RefreshedAt, Truncated and LastChangeAt (Stale is
-	// left to the service). It works for deleted repositories too (their
-	// cache is empty). ErrNotFound if the repository never existed.
+	// then ID), with RefreshedAt, Truncated and Mark as stored, and the
+	// repository's CurrentMark (Stale is left to the service). It works for
+	// deleted repositories too (their cache is empty). ErrNotFound if the
+	// repository never existed.
 	ListSnapshots(ctx context.Context, id domain.ResticRepoID) (SnapshotList, error)
 }
 
@@ -207,6 +217,11 @@ type Deletions interface {
 	Pick(ctx context.Context, owner domain.UserID, remoteID domain.RemoteID, workerID domain.WorkerID) (domain.WorkerID, error)
 	// Start queues the job with the preset jobID on workerID. It is
 	// idempotent by jobID: a job that already exists counts as success.
+	// The job counts a location without restic's files as already deleted
+	// only when an earlier deletion job of the repository ran on the same
+	// worker and deleted files there; otherwise (a first attempt, or
+	// earlier ones that deleted nothing or ran elsewhere) the job then
+	// fails, deleting nothing, and the repository becomes active again.
 	// Errors: as Pick, plus transient store errors.
 	Start(ctx context.Context, owner domain.UserID, repoID domain.ResticRepoID, jobID domain.JobID, workerID domain.WorkerID) error
 }

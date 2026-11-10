@@ -727,7 +727,13 @@ message ResticDeleteDataDefinition {
   // The repository being deleted.
   string repository_id = 1;
 
-  reserved 2 to 19;
+  // An earlier deletion job of the repository ran on this job's worker and
+  // deleted files there (its final stats, or the last progress of a job
+  // lost without a result, count deletions). Only then may this job find
+  // nothing left and succeed (ResticDeleteData.resume).
+  bool resume = 2;
+
+  reserved 3 to 19;
 }
 
 // JobLocation is a path on one of the owner's remotes, or on the worker's

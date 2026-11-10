@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -155,6 +156,31 @@ type fakeJobs struct {
 	lastByRem  map[domain.RemoteID]domain.WorkerID
 	created    []jobs.CreateParams
 	createErr  error
+	// deletions are the restic_delete_data jobs per repository, newest
+	// first; pageSize, if set, pages them in pages that small.
+	deletions map[domain.ResticRepoID][]jobs.Job
+	pageSize  int
+	listErr   error
+	// samples are the latest progress samples by job.
+	samples    map[domain.JobID]jobs.Sample
+	sampleErr  error
+	sampleAsks [][]domain.JobID
+}
+
+func (f *fakeJobs) LatestSamples(_ context.Context, ids []domain.JobID) (map[domain.JobID]jobs.Sample, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sampleAsks = append(f.sampleAsks, slices.Clone(ids))
+	if f.sampleErr != nil {
+		return nil, f.sampleErr
+	}
+	out := map[domain.JobID]jobs.Sample{}
+	for _, id := range ids {
+		if smp, ok := f.samples[id]; ok {
+			out[id] = smp
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeJobs) Unfinished(_ context.Context, id domain.WorkerID) ([]jobs.Job, error) {
@@ -166,6 +192,9 @@ func (f *fakeJobs) Unfinished(_ context.Context, id domain.WorkerID) ([]jobs.Job
 func (f *fakeJobs) List(_ context.Context, actor domain.Actor, flt jobs.ListFilter) (jobs.Page, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if slices.Equal(flt.Kinds, []string{"restic_delete_data"}) && !flt.RepositoryID.IsZero() && len(flt.Statuses) == 0 && actor.Role == domain.RoleUser {
+		return f.deletionPage(flt)
+	}
 	if len(flt.Statuses) != 1 || flt.Statuses[0] != domain.JobSucceeded || flt.Limit != 1 || actor.Role != domain.RoleUser {
 		return jobs.Page{}, fmt.Errorf("unexpected job query %+v as %+v", flt, actor)
 	}
@@ -180,6 +209,29 @@ func (f *fakeJobs) List(_ context.Context, actor domain.Actor, flt jobs.ListFilt
 		return jobs.Page{}, nil
 	}
 	return jobs.Page{Jobs: []jobs.Job{{WorkerID: w, Status: domain.JobSucceeded}}}, nil
+}
+
+// deletionPage pages the deletion jobs of flt's repository by ID cursor.
+func (f *fakeJobs) deletionPage(flt jobs.ListFilter) (jobs.Page, error) {
+	if f.listErr != nil {
+		return jobs.Page{}, f.listErr
+	}
+	size := flt.Limit
+	if f.pageSize > 0 {
+		size = f.pageSize
+	}
+	var page jobs.Page
+	for _, j := range f.deletions[flt.RepositoryID] {
+		if !flt.Before.IsZero() && j.ID.String() >= flt.Before.String() {
+			continue
+		}
+		if len(page.Jobs) == size {
+			page.Next = page.Jobs[size-1].ID
+			break
+		}
+		page.Jobs = append(page.Jobs, j)
+	}
+	return page, nil
 }
 
 func (f *fakeJobs) Create(_ context.Context, actor domain.Actor, p jobs.CreateParams) (jobs.Job, error) {

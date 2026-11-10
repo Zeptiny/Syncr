@@ -414,9 +414,9 @@ func (ResticForget) ConcurrencyKeys(def *syncrv1.JobDefinition) []string {
 	return repositoryKeys(def.GetResticForget().GetRepositoryId())
 }
 
-// keepWithin matches restic's duration syntax of --keep-within, e.g.
-// "1y6m" or "14d".
-func keepWithin() *regexp.Regexp { return regexp.MustCompile(`^([1-9][0-9]*[ymdh])+$`) }
+// keepWithinPattern matches restic's duration syntax of --keep-within,
+// e.g. "1y6m" or "14d".
+var keepWithinPattern = regexp.MustCompile(`^([1-9][0-9]*[ymdh])+$`)
 
 // keepRule is one keep_* count of a policy.
 type keepRule struct {
@@ -461,7 +461,7 @@ func (ResticForget) Check(def *syncrv1.JobDefinition) (Refs, error) {
 	checkTags(&v, forgetField+".policy.keep_tags", pol.GetKeepTags())
 	rules += len(pol.GetKeepTags())
 	if w := pol.GetKeepWithin(); w != "" {
-		if !keepWithin().MatchString(w) {
+		if !keepWithinPattern.MatchString(w) {
 			v.Add(forgetField+".policy.keep_within", `must be a duration such as "1y6m" or "14d"`)
 		}
 		rules++
@@ -758,13 +758,13 @@ func (ResticRestore) ConcurrencyKeys(def *syncrv1.JobDefinition) []string {
 	return repositoryKeys(def.GetResticRestore().GetRepositoryId())
 }
 
-// snapshotID matches a snapshot ID as the API accepts it: 8 to 64 hex
-// digits.
-func snapshotID() *regexp.Regexp { return regexp.MustCompile(`^[0-9a-f]{8,64}$`) }
+// snapshotIDPattern matches a snapshot ID as the API accepts it: 8 to 64
+// hex digits.
+var snapshotIDPattern = regexp.MustCompile(`^[0-9a-f]{8,64}$`)
 
 // ValidSnapshotID reports whether s is a snapshot ID of 8 to 64 lower-case
 // hex digits.
-func ValidSnapshotID(s string) bool { return snapshotID().MatchString(s) }
+func ValidSnapshotID(s string) bool { return snapshotIDPattern.MatchString(s) }
 
 // Check implements Kind: the repository ID, the snapshot ("latest" or 8
 // to 64 hex digits), the absolute local target, at most 1000 selected

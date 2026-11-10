@@ -15,6 +15,10 @@
 //     (case-insensitive), the location (RemoteID, Path), and the restic ID
 //     (the repository's config ID) per owner, so one repository cannot be
 //     imported twice under two remotes.
+//   - Repositories on one remote are not nested: Create refuses a path
+//     inside another live repository's folder, or one that holds another
+//     repository in its own (a *domain.ValidationError on "path"; the
+//     remote's root holds every path). Paths compare by whole folders.
 //   - The path is relative to the remote's root ("" is the root) and
 //     normalized by NormalizePath. Location and remote never change: a new
 //     location is a new repository.
@@ -32,9 +36,10 @@
 // then fails with ErrFailedPrecondition ("data deletion is not
 // available"). Its use cases:
 //
-//	// Create validates in, pre-checks the name and location against the
-//	// owner's live repositories (so a taken name is never initialized
-//	// first), runs Prober.Verify (init or cat config) on a worker, maps a
+//	// Create validates in, pre-checks the name, the location and nesting
+//	// against the owner's live repositories (ListRepoRows, so a taken name
+//	// is never initialized first), runs Prober.Verify (init or cat config)
+//	// on a worker, maps a
 //	// *ProbeError to field errors ("password", "path", "mode",
 //	// "worker_id"; anything else ErrFailedPrecondition), then seals the
 //	// password and stores the repository with the probe's ResticID and
@@ -60,7 +65,10 @@
 //	// Snapshots serves the cached list, refreshing it through a worker
 //	// (Prober.Snapshots, then ReplaceSnapshots) when o.Refresh is set or it
 //	// was never listed; a failed refresh returns the cache with
-//	// RefreshError when it has rows.
+//	// RefreshError when it has rows. The cache is stale when the
+//	// repository's ChangeMark differs from the one read before the listing
+//	// (any job of MutatingKinds that a worker accepted and that ended since,
+//	// whatever its status); no clocks are compared.
 //	Snapshots(ctx, actor domain.Actor, id domain.ResticRepoID, o SnapshotsOptions) (SnapshotList, error)
 //	// Browse lists one directory of a snapshot (Prober.List).
 //	Browse(ctx, actor domain.Actor, id domain.ResticRepoID, snapshotID, path string, workerID domain.WorkerID) (Listing, error)
@@ -80,6 +88,9 @@
 //	// password (ErrNotFound otherwise; ErrFailedPrecondition if the
 //	// password does not decrypt), for job and probe specs.
 //	Resolve(ctx, owner domain.UserID, id domain.ResticRepoID) (Resolved, error)
+//
+// Ownership checks and Resolve read the plain row (GetRepoRow); only Get
+// and List read the statistics (GetRepo, ListRepos).
 //
 // # Data deletion
 //
@@ -101,6 +112,15 @@
 // While deleting, only the deletion job may use the repository
 // (UsableRepository); Update, a refreshing Snapshots and Browse fail with
 // ErrRepositoryDeleting; a repeated DeleteData returns the same job.
+//
+// DeleteData is refused (ErrFailedPrecondition) while another live
+// repository lies inside the repository's folder. The job deletes only
+// files named like restic's and folders it emptied. It counts a location
+// without restic's files as already deleted only when an earlier deletion
+// job of the repository ran on the same worker and deleted files there
+// (Deletions.Start decides); otherwise it fails, deleting nothing (the
+// wrong worker, or changed remote settings), and the repository becomes
+// active again with its password.
 //
 // Allowed dependencies: the standard library, internal/domain and
 // internal/backend (the core API); every other collaborator is a port

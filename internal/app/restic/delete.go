@@ -18,7 +18,10 @@ import (
 //
 // With o.DeleteData it also deletes restic's files in the backend:
 // o.ConfirmName must equal the repository's name exactly (a
-// *domain.ValidationError on "confirm_name" otherwise). It picks the
+// *domain.ValidationError on "confirm_name" otherwise), and no other live
+// repository may lie inside the repository's folder on the same remote
+// (ErrFailedPrecondition naming it: the deletion must not reach it). It
+// picks the
 // worker (Deletions.Pick; a *domain.ValidationError on "worker_id" when
 // the remote needs an explicit one), moves the repository to Deleting,
 // which pauses its schedules, and queues the restic_delete_data job,
@@ -46,7 +49,7 @@ func (s *Service) Delete(ctx context.Context, actor domain.Actor, id domain.Rest
 		switch {
 		case errors.Is(err, domain.ErrFailedPrecondition):
 			// A deletion started meanwhile.
-			if cur, gerr := s.repo.GetRepo(ctx, id); gerr == nil && cur.Deleting {
+			if cur, gerr := s.repo.GetRepoRow(ctx, id); gerr == nil && cur.Deleting {
 				return DeleteResult{}, deletingError(op, cur)
 			}
 			return DeleteResult{}, fmt.Errorf("%s %s: %w", op, id, ErrRepositoryDeleting)
@@ -62,6 +65,11 @@ func (s *Service) Delete(ctx context.Context, actor domain.Actor, id domain.Rest
 	}
 	if s.deletions == nil {
 		return DeleteResult{}, fmt.Errorf("%s %s: %w: data deletion is not available", op, id, domain.ErrFailedPrecondition)
+	}
+	if !r.Deleting {
+		if err := s.checkNothingInside(ctx, r); err != nil {
+			return DeleteResult{}, fmt.Errorf("%s %s: %w", op, id, err)
+		}
 	}
 	// Two rounds: a concurrent request may mark the repository between
 	// the read and MarkDeleting; the second round then resumes its job.
@@ -92,6 +100,25 @@ func (s *Service) Delete(ctx context.Context, actor domain.Actor, id domain.Rest
 		return DeleteResult{DeletionJobID: jobID, WorkerID: worker}, nil
 	}
 	return DeleteResult{}, fmt.Errorf("%s %s: %w: its deletion state keeps changing; try again", op, id, domain.ErrConflict)
+}
+
+// checkNothingInside fails with ErrFailedPrecondition when another live
+// repository lies inside r's folder on r's remote (any owner's: remotes
+// are private, so it is the owner's). The worker deletes only files named
+// like restic's and folders it emptied; this keeps a deletion from
+// reaching into another repository's folder at all.
+func (s *Service) checkNothingInside(ctx context.Context, r Repo) error {
+	rs, err := s.repo.ListRepoRows(ctx, ListFilter{RemoteID: r.RemoteID})
+	if err != nil {
+		return err
+	}
+	for _, o := range rs {
+		if o.ID != r.ID && !o.Deleted() && within(o.Path, r.Path) {
+			return fmt.Errorf("%w: repository %q is stored inside this repository's folder (at %s), so this repository's data cannot be deleted; delete that repository first, or forget this one without deleting its data",
+				domain.ErrFailedPrecondition, o.Name, displayPath(o.Path))
+		}
+	}
+	return nil
 }
 
 // deletingError is the failure of "forget only" on a deleting repository.

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -170,7 +171,9 @@ func (s *Service) Create(ctx context.Context, actor domain.Actor, in Input) (Cre
 		return Created{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	mine, err := s.repo.ListRepos(ctx, ListFilter{OwnerID: actor.UserID})
+	// The owner's repositories are all the repositories on the owner's
+	// remote: remotes are private.
+	mine, err := s.repo.ListRepoRows(ctx, ListFilter{OwnerID: actor.UserID})
 	if err != nil {
 		return Created{}, fmt.Errorf("%s: %w", op, err)
 	}
@@ -182,12 +185,15 @@ func (s *Service) Create(ctx context.Context, actor domain.Actor, in Input) (Cre
 			return Created{}, fmt.Errorf("%s: %w", op, ErrLocationTaken)
 		}
 	}
+	if err := checkOverlap(mine, in.RemoteID, path); err != nil {
+		return Created{}, fmt.Errorf("%s: %w", op, err)
+	}
 
 	res, err := s.prober.Verify(ctx, actor.UserID, Target{RemoteID: in.RemoteID, Path: path, Password: in.Password, WorkerID: in.WorkerID}, in.Mode == ModeInit)
 	if err != nil {
 		return Created{}, fmt.Errorf("%s: %w", op, verifyError(in.Mode, err, in.Password))
 	}
-	if !hex64().MatchString(res.ResticID) {
+	if !hex64Pattern.MatchString(res.ResticID) {
 		return Created{}, fmt.Errorf("%s: %w: the worker reported an invalid repository ID", op, domain.ErrUnavailable)
 	}
 	for _, r := range mine {
@@ -221,19 +227,26 @@ func (s *Service) Create(ctx context.Context, actor domain.Actor, in Input) (Cre
 // with its statistics: ErrNotFound for a deleted repository or another
 // user's, admins included.
 func (s *Service) Get(ctx context.Context, actor domain.Actor, id domain.ResticRepoID) (Repo, error) {
-	r, err := s.owned(ctx, actor.UserID, id)
+	r, err := ownedBy(ctx, s.repo.GetRepo, actor.UserID, id)
 	if err != nil {
 		return Repo{}, fmt.Errorf("get repository: %w", err)
 	}
 	return r, nil
 }
 
-// owned returns the live repository id of owner, or ErrUnknownRepository.
+// owned returns the live repository id of owner without its statistics,
+// or ErrUnknownRepository.
 func (s *Service) owned(ctx context.Context, owner domain.UserID, id domain.ResticRepoID) (Repo, error) {
+	return ownedBy(ctx, s.repo.GetRepoRow, owner, id)
+}
+
+// ownedBy reads repository id with get and returns it if it is a live
+// repository of owner, or ErrUnknownRepository.
+func ownedBy(ctx context.Context, get func(context.Context, domain.ResticRepoID) (Repo, error), owner domain.UserID, id domain.ResticRepoID) (Repo, error) {
 	if id.IsZero() {
 		return Repo{}, fmt.Errorf("repository: %w", domain.ErrInvalidID)
 	}
-	r, err := s.repo.GetRepo(ctx, id)
+	r, err := get(ctx, id)
 	switch {
 	case errors.Is(err, domain.ErrNotFound):
 		return Repo{}, fmt.Errorf("%s: %w", id, ErrUnknownRepository)
@@ -287,7 +300,7 @@ func (s *Service) Update(ctx context.Context, actor domain.Actor, id domain.Rest
 		return Repo{}, fmt.Errorf("%s %s: %w", op, id, err)
 	}
 	if !strings.EqualFold(name, cur.Name) {
-		mine, err := s.repo.ListRepos(ctx, ListFilter{OwnerID: actor.UserID})
+		mine, err := s.repo.ListRepoRows(ctx, ListFilter{OwnerID: actor.UserID})
 		if err != nil {
 			return Repo{}, fmt.Errorf("%s %s: %w", op, id, err)
 		}
@@ -345,7 +358,9 @@ func (s *Service) Snapshots(ctx context.Context, actor domain.Actor, id domain.R
 		return list, nil
 	}
 
-	res, err := s.refresh(ctx, r, o.WorkerID)
+	// list.CurrentMark was read before the worker is asked: a job that ends
+	// while it lists makes the next read refresh again.
+	res, err := s.refresh(ctx, r, o.WorkerID, list.CurrentMark)
 	if err != nil {
 		if list.RefreshedAt.IsZero() || ctx.Err() != nil {
 			return SnapshotList{}, fmt.Errorf("%s of repository %s: %w", op, id, err)
@@ -364,14 +379,15 @@ func (s *Service) Snapshots(ctx context.Context, actor domain.Actor, id domain.R
 }
 
 // refresh lists r's snapshots on a worker and replaces the cache with the
-// newest MaxSnapshots of them.
-func (s *Service) refresh(ctx context.Context, r Repo, workerID domain.WorkerID) (SnapshotsResult, error) {
+// newest MaxSnapshots of them, stored with mark: r's ChangeMark, read
+// before this call.
+func (s *Service) refresh(ctx context.Context, r Repo, workerID domain.WorkerID, mark ChangeMark) (SnapshotsResult, error) {
 	password, err := s.open(r)
 	if err != nil {
 		return SnapshotsResult{}, err
 	}
-	// The cache is as old as the moment the worker was asked: a backup
-	// that finishes while the worker lists must still make it stale.
+	// The cache is as old as the moment the worker was asked (shown to
+	// people; staleness comes from the mark, not from clocks).
 	asked := s.clock.Now()
 	res, err := s.prober.Snapshots(ctx, r.OwnerID, Target{RepositoryID: r.ID, RemoteID: r.RemoteID, Path: r.Path, Password: password, WorkerID: workerID})
 	if err != nil {
@@ -382,7 +398,7 @@ func (s *Service) refresh(ctx context.Context, r Repo, workerID domain.WorkerID)
 	for _, sn := range res.Snapshots {
 		// The store accepts full IDs once; a worker never reports
 		// anything else.
-		if hex64().MatchString(sn.ID) && !seen[sn.ID] {
+		if hex64Pattern.MatchString(sn.ID) && !seen[sn.ID] {
 			seen[sn.ID] = true
 			snaps = append(snaps, sn)
 		}
@@ -392,7 +408,7 @@ func (s *Service) refresh(ctx context.Context, r Repo, workerID domain.WorkerID)
 	if len(snaps) > MaxSnapshots {
 		snaps, truncated = snaps[:MaxSnapshots], true
 	}
-	if err := s.repo.ReplaceSnapshots(ctx, r.ID, snaps, truncated, asked); err != nil {
+	if err := s.repo.ReplaceSnapshots(ctx, r.ID, snaps, truncated, asked, mark); err != nil {
 		return SnapshotsResult{}, err
 	}
 	return res, nil
@@ -427,7 +443,7 @@ func (s *Service) Browse(ctx context.Context, actor domain.Actor, id domain.Rest
 		return Listing{}, fmt.Errorf("%s: %w", op, err)
 	}
 	var v domain.Validation
-	if !snapshotIDPattern().MatchString(snapshotID) {
+	if !snapshotIDPattern.MatchString(snapshotID) {
 		v.Add("snapshot_id", "must be a snapshot ID of 8 to 64 hex digits")
 	}
 	if path == "" {
@@ -526,8 +542,59 @@ func (s *Service) open(r Repo) (string, error) {
 // Pure helpers
 // ---------------------------------------------------------------------------
 
-func hex64() *regexp.Regexp             { return regexp.MustCompile(`^[0-9a-f]{64}$`) }
-func snapshotIDPattern() *regexp.Regexp { return regexp.MustCompile(`^[0-9a-f]{8,64}$`) }
+var (
+	// hex64Pattern matches a full restic or snapshot ID.
+	hex64Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	// snapshotIDPattern matches a snapshot ID as callers may give it.
+	snapshotIDPattern = regexp.MustCompile(`^[0-9a-f]{8,64}$`)
+)
+
+// segments returns the folders of a repository path, without empty and "."
+// segments ("" is the remote's root: no segment).
+func segments(p string) []string {
+	var out []string
+	for seg := range strings.SplitSeq(p, "/") {
+		if seg != "" && seg != "." {
+			out = append(out, seg)
+		}
+	}
+	return out
+}
+
+// within reports whether path p is dir or lies inside it, comparing whole
+// folders ("data2" is not inside "data"; everything is inside the root).
+func within(p, dir string) bool {
+	ps, ds := segments(p), segments(dir)
+	return len(ps) >= len(ds) && slices.Equal(ps[:len(ds)], ds)
+}
+
+// displayPath names a repository path for a message.
+func displayPath(p string) string {
+	if p == "" {
+		return "the remote's root"
+	}
+	return strconv.Quote(p)
+}
+
+// checkOverlap returns a *domain.ValidationError on "path" if a repository
+// at path on remote would lie inside the folder of one of rs on the same
+// remote, or hold one inside its own: a data deletion of the outer one
+// could reach the inner one. An equal location is ErrLocationTaken,
+// checked before.
+func checkOverlap(rs []Repo, remote domain.RemoteID, path string) error {
+	for _, r := range rs {
+		if r.RemoteID != remote || r.Deleted() {
+			continue
+		}
+		switch {
+		case within(path, r.Path):
+			return fieldError("path", fmt.Sprintf("is inside the folder of repository %q (at %s); repositories on a remote cannot be nested", r.Name, displayPath(r.Path)))
+		case within(r.Path, path):
+			return fieldError("path", fmt.Sprintf("holds repository %q (at %s) in its folder; repositories on a remote cannot be nested", r.Name, displayPath(r.Path)))
+		}
+	}
+	return nil
+}
 
 // addFields adds the fields of a validation error to v.
 func addFields(v *domain.Validation, err error) {
@@ -670,10 +737,11 @@ func scrubError(err error, secret string) error {
 	return errors.New(clean)
 }
 
-// stale reports whether l's cache may miss snapshots: it was never
-// filled, or a backup, retention or prune succeeded since.
+// stale reports whether l's cache may be out of date: it was never
+// filled, or a job that may have changed the snapshots ended since it was
+// taken (its mark differs from the repository's).
 func stale(l SnapshotList) bool {
-	return l.RefreshedAt.IsZero() || l.LastChangeAt.After(l.RefreshedAt)
+	return l.RefreshedAt.IsZero() || !l.Mark.Equal(l.CurrentMark)
 }
 
 // clipRunes returns s cut to at most n runes.

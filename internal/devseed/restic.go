@@ -7,6 +7,7 @@ import (
 	"time"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
@@ -46,12 +47,55 @@ func (s *Seed) seedRepositories(ctx context.Context, now time.Time) error {
 		if d.count == 0 {
 			continue
 		}
-		if err := s.d.Store.ReplaceSnapshots(ctx, id, d.snapshots(now), false, now.Add(-d.refreshedAgo)); err != nil {
+		// The change mark is set once the history exists (markSnapshotCaches).
+		if err := s.d.Store.ReplaceSnapshots(ctx, id, d.snapshots(now), false, now.Add(-d.refreshedAgo), restic.ChangeMark{}); err != nil {
 			return fmt.Errorf("repository %q: snapshots: %w", d.name, err)
 		}
 	}
 	return nil
 }
+
+// markSnapshotCaches stores each demo snapshot cache again with the change
+// mark a refresh at its time would have read: the history's jobs that
+// ended before it count, so only the ones that ended after it make the
+// cache out of date.
+func (s *Seed) markSnapshotCaches(ctx context.Context, _ time.Time) error {
+	for _, d := range demoRepos() {
+		id, ok := s.Repositories[d.name]
+		if !ok || d.count == 0 {
+			continue
+		}
+		r, err := s.d.Store.GetRepoRow(ctx, id)
+		if err != nil {
+			return fmt.Errorf("repository %q: %w", d.name, err)
+		}
+		if r.Deleted() {
+			continue
+		}
+		list, err := s.d.Store.ListSnapshots(ctx, id)
+		if err != nil {
+			return fmt.Errorf("repository %q: snapshots: %w", d.name, err)
+		}
+		js, err := s.d.Store.ListJobs(ctx, jobs.ListFilter{RepositoryID: id, Limit: maxRepoJobs})
+		if err != nil {
+			return fmt.Errorf("repository %q: jobs: %w", d.name, err)
+		}
+		var mark restic.ChangeMark
+		for _, j := range js {
+			if restic.IsChange(j.Kind, j.Status, j.DispatchedAt, j.StartedAt) && !j.FinishedAt.After(list.RefreshedAt) {
+				mark = mark.With(j.FinishedAt)
+			}
+		}
+		if err := s.d.Store.ReplaceSnapshots(ctx, id, list.Snapshots, list.Truncated, list.RefreshedAt, mark); err != nil {
+			return fmt.Errorf("repository %q: snapshots: %w", d.name, err)
+		}
+	}
+	return nil
+}
+
+// maxRepoJobs bounds the jobs of one demo repository that
+// markSnapshotCaches reads; the history has far fewer.
+const maxRepoJobs = 10000
 
 // bindProbes tells the canned probes the seed's start and the local roots
 // of the workers that answer probes.

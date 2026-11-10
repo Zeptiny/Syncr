@@ -15,9 +15,11 @@ const deleteDataField = "definition.restic_delete_data"
 // files of a repository from its backend. Only the controller creates its
 // jobs, when the owner deletes a repository with its data (SystemOnly):
 // RunJob and schedules reject it. The definition carries the repository ID
-// only; the worker verifies the repository's restic ID (from the resolved
-// repository) before it deletes anything, and removes the repository's
-// folder only when the repository is not at the remote's root.
+// and whether an earlier deletion of it already deleted files at the
+// location on the same worker (resume); the worker verifies the repository's restic ID (from the
+// resolved repository) before it deletes anything, and removes the
+// repository's folder only when the repository is not at the remote's
+// root.
 type ResticDeleteData struct{}
 
 var (
@@ -71,8 +73,9 @@ func (ResticDeleteData) Check(def *syncrv1.JobDefinition) (Refs, error) {
 }
 
 // Build implements Kind: the deletion of the located repository, expecting
-// the restic ID the controller stored, and removing the repository's
-// folder only if it is not the remote's root.
+// the restic ID the controller stored, removing the repository's folder
+// only if it is not the remote's root, and resuming an earlier attempt
+// when the definition says one may have deleted files.
 func (k ResticDeleteData) Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.JobSpec, error) {
 	if _, err := k.Check(def); err != nil {
 		return nil, err
@@ -85,6 +88,7 @@ func (k ResticDeleteData) Build(def *syncrv1.JobDefinition, in Resolved) (*syncr
 		Repository:       rr,
 		ExpectedResticId: repo.ResticID,
 		RemoveDirectory:  repo.Path != "",
+		Resume:           def.GetResticDeleteData().GetResume(),
 	}
 	return &syncrv1.JobSpec{Remotes: defs, Operation: &syncrv1.JobSpec_ResticDeleteData{ResticDeleteData: op}}, nil
 }
