@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -30,14 +31,18 @@ type fakeTools struct {
 	entries, snapshots int
 	entryName          string
 
+	// mu guards calls and bound: concurrent probes share one fake.
+	mu    sync.Mutex
 	calls []string
 	// bound is the max_entries or max_snapshots the last call was given.
 	bound int
 }
 
 func (f *fakeTools) wait(ctx context.Context, op string, bound int) error {
+	f.mu.Lock()
 	f.calls = append(f.calls, op)
 	f.bound = bound
+	f.mu.Unlock()
 	if f.delay > 0 {
 		select {
 		case <-ctx.Done():
