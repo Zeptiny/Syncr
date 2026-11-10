@@ -101,6 +101,12 @@ func demoRepos() []demoRepo {
 	}
 }
 
+// addedBytes is what the n-th backup of processed bytes added: between
+// 0.5 and 3 GiB for a 120 GiB source, in proportion for others.
+func addedBytes(n int, processed int64) int64 {
+	return varied(n, 500, 3000) * (processed / (120 * 1024))
+}
+
 // snapshotID is the fixed ID of a repository's n-th snapshot (0 is the
 // oldest).
 func snapshotID(key string, n int) string {
@@ -115,7 +121,7 @@ func (d demoRepo) snapshots(start time.Time) []restic.Snapshot {
 	for i := range d.count {
 		n := d.count - 1 - i // 0 is the oldest
 		at := start.Add(-d.newestAgo - time.Duration(i)*d.every).Truncate(time.Second)
-		added := varied(n, 500, 3000) * mib * d.processed / (120 * gib)
+		added := addedBytes(n, d.processed)
 		changed := varied(n+3, 0, 9)
 		fresh := varied(n+5, 2, 40)
 		total := d.fileCount - int64(i)*3
@@ -215,7 +221,7 @@ func deleteDataDef(repo string) defFunc {
 // backupOutput is the result of the n-th backup of processed bytes in
 // files files.
 func backupOutput(key string, n int, processed, files int64) *syncrv1.JobOutput {
-	added := varied(n, 500, 3000) * mib * processed / (120 * gib)
+	added := addedBytes(n, processed)
 	changed, fresh := varied(n+3, 0, 9), varied(n+5, 2, 40)
 	return &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticBackup{ResticBackup: &syncrv1.ResticBackupOutput{
 		SnapshotId: snapshotID(key+" job", n), DataAddedBytes: added, DataAddedPackedBytes: added * 7 / 10,

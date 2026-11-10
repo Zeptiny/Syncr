@@ -367,7 +367,6 @@ func remoteTree(backend string, start time.Time) (tree, error) {
 			{"photos/2024/IMG_0001.jpg", 4 * mib},
 			{"photos/2026/11/IMG_1100.jpg", 3 * mib},
 			{"pool/nextcloud/data.tar", 9 * gib},
-			{"documents/thesis.pdf", 12 * mib},
 		})), nil
 	case "sftp":
 		return newTree(start, slices.Concat(resticLayout("backups/office"), resticLayout("backups/old-laptop"), []demoFile{
