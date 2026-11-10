@@ -3,7 +3,7 @@
 // jobs.Repository, jobs.SampleRepository, jobs.ActivityRepository,
 // users.Repository, users.SessionRepository, users.APITokenRepository,
 // remotes.Repository, schedules.Repository, contacts.Repository,
-// notifications.Repository).
+// notifications.Repository, restic.Repository).
 // Every store adapter runs it from its tests:
 //
 //	func TestContract(t *testing.T) {
@@ -40,6 +40,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/notifications"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
@@ -60,6 +61,7 @@ type Store interface {
 	schedules.Repository
 	contacts.Repository
 	notifications.Repository
+	restic.Repository
 }
 
 // Run runs the suite; open returns a new, empty store for each subtest.
@@ -145,6 +147,22 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 		{"JobBlockers", testJobBlockers},
 		{"JobQueuedIsKeyAware", testJobQueuedIsKeyAware},
 		{"JobWorkersWaitingOnKeys", testJobWorkersWaitingOnKeys},
+
+		// Milestone 5: restic repositories.
+		{"RepoCreateGetList", testRepoCreateGetList},
+		{"RepoUniqueAmongLive", testRepoUniqueAmongLive},
+		{"RepoUpdateVersioned", testRepoUpdateVersioned},
+		{"RepoSoftDelete", testRepoSoftDelete},
+		{"RepoFKParity", testRepoFKParity},
+		{"RepoSnapshotsReplace", testRepoSnapshotsReplace},
+		{"RepoStatsAndLastChange", testRepoStatsAndLastChange},
+		{"RemoteDeleteBlockedByRepo", testRemoteDeleteBlockedByRepo},
+		{"RepoMarkDeletingCAS", testRepoMarkDeletingCAS},
+		{"RepoPendingDeletions", testRepoPendingDeletions},
+		{"RepoFinishDeletion", testRepoFinishDeletion},
+		{"RepoListShowsDeleting", testRepoListShowsDeleting},
+		{"RepoNoAliasing", testRepoNoAliasing},
+		{"JobAndScheduleRepository", testJobAndScheduleRepository},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -137,9 +137,13 @@ func (s *Store) withStatsLocked(row resticRow) restic.Repo {
 			st.LatestSnapshotBytes = sum.TotalBytesProcessed
 		}
 	}
+	mutating := restic.MutatingKinds()
 	for _, j := range s.jobs {
 		if j.RepositoryID != r.ID {
 			continue
+		}
+		if j.Status == domain.JobSucceeded && slices.Contains(mutating, j.Kind) && j.FinishedAt.After(st.LastChangeAt) {
+			st.LastChangeAt = j.FinishedAt
 		}
 		var ref *restic.JobRef
 		switch j.Kind {

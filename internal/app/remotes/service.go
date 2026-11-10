@@ -188,28 +188,10 @@ func (s *Service) Update(ctx context.Context, actor domain.Actor, id domain.Remo
 		v.Add("type", "cannot be changed")
 	}
 
-	secrets, err := s.open(cur)
+	secrets, err := s.mergeSecrets(&v, typ, cur, in)
 	if err != nil {
 		return Remote{}, fmt.Errorf("update remote %s: %w", id, err)
 	}
-	fields := map[string]backend.Field{}
-	for _, f := range typ.Fields() {
-		fields[f.Name] = f
-	}
-	for i, key := range in.ClearSecrets {
-		path := fmt.Sprintf("clear_secrets[%d]", i)
-		switch f, ok := fields[key]; {
-		case !ok || !f.Secret:
-			v.Add(path, "is not a secret field of this backend")
-		case f.Required:
-			v.Add(path, "is required and cannot be cleared")
-		case in.Secrets[key] != "":
-			v.Add(path, "is also set in secrets")
-		default:
-			delete(secrets, key)
-		}
-	}
-	maps.Copy(secrets, nonEmpty(in.Secrets))
 
 	cfg := backend.Config{Options: nonEmpty(in.Options), Secrets: secrets}
 	addConfigErrors(&v, typ.Validate(cfg))
@@ -299,19 +281,119 @@ func (s *Service) RemoteType(ctx context.Context, owner domain.UserID, id domain
 	return rs[id].Type, nil
 }
 
-// Draft resolves a remote that is not stored as given, for "Test remote"
-// on an unsaved form (Milestone 5): in is validated as Create (id zero: a
-// new remote, which gets a fresh ID that is never stored) or Update (id
-// one of actor's live remotes: in's secrets merge over the stored ones)
-// validate it, union members are resolved from the store, and the result
-// is what Resolve returns for the draft and its members, with the draft's
-// ID. Nothing is stored. Errors are those of Create and Update. The result
-// holds secrets: never log or store it.
+// mergeSecrets returns the secrets of cur (a stored remote of type typ)
+// with in's merged over them, as Update stores them: a non-empty value
+// replaces the stored one, an absent or empty one keeps it, and
+// in.ClearSecrets removes optional ones (problems are added to v).
+func (s *Service) mergeSecrets(v *domain.Validation, typ backend.Type, cur Remote, in Input) (map[string]string, error) {
+	secrets, err := s.open(cur)
+	if err != nil {
+		return nil, err
+	}
+	fields := map[string]backend.Field{}
+	for _, f := range typ.Fields() {
+		fields[f.Name] = f
+	}
+	for i, key := range in.ClearSecrets {
+		path := fmt.Sprintf("clear_secrets[%d]", i)
+		switch f, ok := fields[key]; {
+		case !ok || !f.Secret:
+			v.Add(path, "is not a secret field of this backend")
+		case f.Required:
+			v.Add(path, "is required and cannot be cleared")
+		case in.Secrets[key] != "":
+			v.Add(path, "is also set in secrets")
+		default:
+			delete(secrets, key)
+		}
+	}
+	maps.Copy(secrets, nonEmpty(in.Secrets))
+	return secrets, nil
+}
+
+// Draft resolves a remote as a form describes it, without storing
+// anything, for "Test remote" on unsaved values. With a zero id, in is a
+// new remote: it is validated as Create validates it and gets a fresh ID
+// that is never stored. Otherwise id is one of actor's live remotes
+// (ErrNotFound otherwise) and in its edited values, validated as Update
+// validates them: the type cannot change, options and members are
+// replaced, and in's secrets merge over the stored ones. The name is not
+// checked in either case: a remote can be tested before it is named.
 //
-// m5: Track C implements this; until then it fails with a wrapped
-// errors.ErrUnsupported.
-func (s *Service) Draft(_ context.Context, _ domain.Actor, _ domain.RemoteID, _ Input) (map[domain.RemoteID]Resolved, domain.RemoteID, error) {
-	return nil, domain.RemoteID{}, fmt.Errorf("draft remote: %w (m5: pending track C)", errors.ErrUnsupported)
+// The result is what Resolve returns for the draft and, for a union, its
+// members (which must be stored remotes of actor), together with the
+// draft's ID. Errors are those of Create and Update (a
+// *domain.ValidationError with their field paths) and of Resolve. The
+// result holds secrets: never log or store it.
+func (s *Service) Draft(ctx context.Context, actor domain.Actor, id domain.RemoteID, in Input) (map[domain.RemoteID]Resolved, domain.RemoteID, error) {
+	const op = "draft remote"
+	if actor.UserID.IsZero() {
+		return nil, domain.RemoteID{}, fmt.Errorf("%s: %w: remotes belong to a user account", op, domain.ErrPermissionDenied)
+	}
+	var (
+		v       domain.Validation
+		typ     backend.Type
+		secrets map[string]string
+	)
+	if id.IsZero() {
+		var ok bool
+		typ, ok = s.backends.Get(in.Type)
+		switch {
+		case in.Type == "":
+			v.Add("type", "is required")
+		case !ok:
+			v.Add("type", "is not a known backend type")
+		}
+		for i := range in.ClearSecrets {
+			v.Add(fmt.Sprintf("clear_secrets[%d]", i), "is only used when updating a remote")
+		}
+		if !ok {
+			return nil, domain.RemoteID{}, fmt.Errorf("%s: %w", op, v.Err())
+		}
+		id = s.ids.NewRemoteID()
+		secrets = nonEmpty(in.Secrets)
+	} else {
+		cur, err := s.owned(ctx, actor, id)
+		if err != nil {
+			return nil, domain.RemoteID{}, fmt.Errorf("%s: %w", op, err)
+		}
+		var ok bool
+		if typ, ok = s.backends.Get(cur.Type); !ok {
+			return nil, domain.RemoteID{}, fmt.Errorf("%s %s: %w: backend type %q is no longer available", op, id, domain.ErrFailedPrecondition, cur.Type)
+		}
+		if in.Type != "" && in.Type != cur.Type {
+			v.Add("type", "cannot be changed")
+		}
+		if secrets, err = s.mergeSecrets(&v, typ, cur, in); err != nil {
+			return nil, domain.RemoteID{}, fmt.Errorf("%s %s: %w: its credentials cannot be read: %w", op, id, domain.ErrFailedPrecondition, err)
+		}
+	}
+	cfg := backend.Config{Options: nonEmpty(in.Options), Secrets: secrets}
+	addConfigErrors(&v, typ.Validate(cfg))
+	members, err := s.checkMembers(ctx, &v, actor.UserID, id, typ, in.Members)
+	if err != nil {
+		return nil, domain.RemoteID{}, fmt.Errorf("%s: %w", op, err)
+	}
+	if err := v.Err(); err != nil {
+		return nil, domain.RemoteID{}, fmt.Errorf("%s: %w", op, err)
+	}
+	rc, err := typ.ToRclone(cfg)
+	if err != nil {
+		return nil, domain.RemoteID{}, fmt.Errorf("%s: %w: the configuration cannot be mapped: %w", op, domain.ErrInvalidArgument, err)
+	}
+	memberIDs := make([]domain.RemoteID, 0, len(members))
+	for _, m := range members {
+		memberIDs = append(memberIDs, m.RemoteID)
+	}
+	// The members are stored remotes: Resolve checks that they are the
+	// actor's and decrypts them. They are never unions (checkMembers), so
+	// the draft's own ID cannot be among them.
+	out, err := s.Resolve(ctx, actor.UserID, memberIDs)
+	if err != nil {
+		return nil, domain.RemoteID{}, fmt.Errorf("%s: %w", op, err)
+	}
+	out[id] = Resolved{ID: id, Name: strings.TrimSpace(in.Name), Type: typ.ID(), Rclone: rc, Members: slices.Clone(members)}
+	return out, id, nil
 }
 
 // usable loads ids, which must all be live remotes of owner.

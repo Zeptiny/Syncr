@@ -114,6 +114,14 @@ type Deps struct {
 	// Probes serves ProbeService (*probe.Service of the controller).
 	Probes ProbeService
 
+	// ProbeTimeout is the longest a worker probe may take (the larger of
+	// the controller's probe timeouts; default 60s). The calls that wait
+	// for one (ProbeService, and the ResticService calls that create,
+	// verify, list and browse through a worker) get this long plus a
+	// margin instead of RequestTimeout, and their connection deadlines are
+	// extended like a WatchJob's.
+	ProbeTimeout time.Duration
+
 	// UI is the web UI's files (index.html at the root); nil serves no UI.
 	UI fs.FS
 	// Cookies configures the session cookie.
@@ -160,7 +168,7 @@ func NewHandler(deps Deps) http.Handler {
 		connect.WithReadMaxBytes(maxRequestBytes),
 		connect.WithInterceptors(
 			guard,
-			unaryTimeout(cmp.Or(deps.RequestTimeout, defaultRequestTimeout)),
+			unaryTimeout(cmp.Or(deps.RequestTimeout, defaultRequestTimeout), deps.ProbeTimeout),
 		),
 	}
 
@@ -214,6 +222,8 @@ func mountProtected(mux *http.ServeMux, deps Deps, logger *slog.Logger, opts []c
 			kinds:     deps.Kinds,
 			remotes:   deps.Remotes,
 			schedules: deps.Schedules,
+			repos:     repositoryNames(deps),
+			workers:   workerNames(deps),
 			errs:      errs,
 			log:       logger,
 			base:      base,
@@ -241,12 +251,16 @@ func mountProtected(mux *http.ServeMux, deps Deps, logger *slog.Logger, opts []c
 // mountMilestone5 adds the restic repository and probe services.
 func mountMilestone5(mux *http.ServeMux, deps Deps, errs errorMapper, disabled func(string), opts []connect.HandlerOption) {
 	if deps.Restic != nil {
-		mux.Handle(syncrv1connect.NewResticServiceHandler(&resticHandler{restic: deps.Restic, errs: errs}, opts...))
+		path, handler := syncrv1connect.NewResticServiceHandler(&resticHandler{
+			restic: deps.Restic, remotes: remoteNames(deps), workers: workerNames(deps), errs: errs,
+		}, opts...)
+		mux.Handle(path, extendProbeDeadlines(handler, deps.ProbeTimeout, errs.log))
 	} else {
 		disabled(syncrv1connect.ResticServiceName)
 	}
 	if deps.Probes != nil {
-		mux.Handle(syncrv1connect.NewProbeServiceHandler(&probeHandler{probes: deps.Probes, errs: errs}, opts...))
+		path, handler := syncrv1connect.NewProbeServiceHandler(&probeHandler{probes: deps.Probes, errs: errs}, opts...)
+		mux.Handle(path, extendProbeDeadlines(handler, deps.ProbeTimeout, errs.log))
 	} else {
 		disabled(syncrv1connect.ProbeServiceName)
 	}
@@ -256,7 +270,8 @@ func mountMilestone5(mux *http.ServeMux, deps Deps, errs errorMapper, disabled f
 func mountMilestone4(mux *http.ServeMux, deps Deps, errs errorMapper, disabled func(string), opts []connect.HandlerOption) {
 	if deps.Schedules != nil {
 		mux.Handle(syncrv1connect.NewScheduleServiceHandler(&scheduleHandler{
-			schedules: deps.Schedules, kinds: deps.Kinds, remotes: deps.Remotes, contacts: deps.Contacts, errs: errs,
+			schedules: deps.Schedules, kinds: deps.Kinds, remotes: deps.Remotes, contacts: deps.Contacts,
+			repos: repositoryNames(deps), workers: workerNames(deps), errs: errs,
 		}, opts...))
 	} else {
 		disabled(syncrv1connect.ScheduleServiceName)
@@ -276,7 +291,8 @@ func mountMilestone4(mux *http.ServeMux, deps Deps, errs errorMapper, disabled f
 	activity, ok := deps.Jobs.(DashboardJobs)
 	if ok && deps.Workers != nil && deps.Schedules != nil {
 		mux.Handle(syncrv1connect.NewDashboardServiceHandler(&dashboardHandler{
-			jobs: deps.Jobs, activity: activity, workers: deps.Workers, schedules: deps.Schedules, remotes: deps.Remotes, errs: errs,
+			jobs: deps.Jobs, activity: activity, workers: deps.Workers, schedules: deps.Schedules, remotes: deps.Remotes,
+			kinds: deps.Kinds, repos: repositoryNames(deps), errs: errs,
 		}, opts...))
 	} else {
 		disabled(syncrv1connect.DashboardServiceName)
@@ -305,10 +321,17 @@ func extendWatchDeadlines(next http.Handler, limit time.Duration, logger *slog.L
 	})
 }
 
-// unaryTimeout bounds unary calls; streams are bounded by their handlers.
-func unaryTimeout(d time.Duration) connect.Interceptor {
+// unaryTimeout bounds unary calls with d, and the calls that wait for a
+// worker's probe (probeProcedure) with the probe's time limit if that is
+// longer (see probeCallTimeout); streams are bounded by their handlers.
+func unaryTimeout(d, probe time.Duration) connect.Interceptor {
+	slow := max(d, probeCallTimeout(probe))
 	return connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			d := d
+			if probeProcedure(req.Spec().Procedure) {
+				d = slow
+			}
 			ctx, cancel := context.WithTimeout(ctx, d)
 			defer cancel()
 			return next(ctx, req)

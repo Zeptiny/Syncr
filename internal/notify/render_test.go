@@ -48,11 +48,37 @@ func renderCases() map[string]notify.Message {
 	evil.URL = `https://syncr.example/jobs/1"><img src=x onerror=alert(1)>`
 	evil.Title = notify.Title(evil)
 
+	// A restic backup: the kind's label and its details (Milestone 5).
+	backup := notifytest.SampleMessage()
+	backup.Event = domain.EventSucceeded
+	backup.Schedule = &notify.ScheduleInfo{ID: backup.Schedule.ID, Name: "Nightly photos backup"}
+	backup.Job.Kind, backup.Job.KindLabel, backup.Job.Description = "restic_backup", "Backup", "Back up /srv/photos → Photos vault"
+	backup.Job.Status, backup.Job.ErrorCode, backup.Job.ErrorMessage, backup.Job.Errors = domain.JobSucceeded, "", "", 0
+	backup.Job.Bytes, backup.Job.Files = 51646976819, 1219
+	backup.Job.Details = []notify.Fact{
+		{Label: "Snapshot", Value: "1a2b3c4d"},
+		{Label: "Files", Value: "12 new, 3 changed, 1,204 unmodified"},
+		{Label: "Data added", Value: "1.2 GiB (840.0 MiB stored)"},
+		{Label: "Processed", Value: "48.1 GiB in 1,219 files"},
+	}
+	backup.Title = notify.Title(backup)
+
+	// A failed check started by hand: the label, no details.
+	check := notifytest.SampleMessage()
+	check.Schedule = nil
+	check.Job.Kind, check.Job.KindLabel, check.Job.Description = "restic_check", "Check", "Check Photos vault (read 10% of the data)"
+	check.Job.ErrorCode, check.Job.ErrorMessage = "execution_failed", "the check found 2 error(s)"
+	check.Job.Bytes, check.Job.Files, check.Job.Errors = 0, 0, 0
+	check.Title = notify.Title(check)
+
 	test := notify.Message{Version: notify.MessageVersion, ID: "d3", Event: domain.EventTest, Test: true,
 		OccurredAt: finished, URL: "https://syncr.example/notifications"}
 	test.Title = notify.Title(test)
 
-	return map[string]notify.Message{"failed": failed, "succeeded": succeeded, "missed": missed, "hostile": evil, "test": test}
+	return map[string]notify.Message{
+		"failed": failed, "succeeded": succeeded, "missed": missed, "hostile": evil, "test": test,
+		"backup": backup, "check_failed": check,
+	}
 }
 
 func golden(t *testing.T, name, got string) {
@@ -146,9 +172,82 @@ func TestTitleNamesTheJob(t *testing.T) {
 		{"manual", notify.Message{Event: domain.EventFailed, Job: job("rclone_transfer", "Copy Photos → B2")}, "Job failed: Copy Photos → B2"},
 		{"manual without a description", notify.Message{Event: domain.EventFailed, Job: job("rclone_transfer", "")}, "Job failed: rclone_transfer"},
 	}
+	labeled := func(label, description string) *notify.JobInfo {
+		j := job("restic_backup", description)
+		j.KindLabel = label
+		return j
+	}
+	tests = append(tests, []struct {
+		name string
+		m    notify.Message
+		want string
+	}{
+		{"labeled, scheduled", notify.Message{Event: domain.EventFailed, Schedule: &notify.ScheduleInfo{Name: "Nightly photos backup"},
+			Job: labeled("Backup", "Back up /srv/photos → Photos vault")}, "Backup failed: Nightly photos backup"},
+		{"labeled, manual", notify.Message{Event: domain.EventSucceeded, Job: labeled("Check", "Check Photos vault")}, "Check succeeded: Check Photos vault"},
+		{"labeled, interrupted", notify.Message{Event: domain.EventInterrupted, Job: labeled("Delete data", "Delete the data of Photos vault")},
+			"Delete data interrupted: Delete the data of Photos vault"},
+		{"a label of white space", notify.Message{Event: domain.EventFailed, Job: labeled(" \n", "x")}, "Job failed: x"},
+		{"a run never takes the label", notify.Message{Event: domain.EventMissed, Schedule: &notify.ScheduleInfo{Name: "Nightly"}}, "Scheduled run missed: Nightly"},
+	}...)
 	for _, tt := range tests {
 		if got := notify.Title(tt.m); got != tt.want {
 			t.Errorf("%s: Title = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestFactsOfALabeledJob(t *testing.T) {
+	t.Parallel()
+	value := func(fs []notify.Fact, label string) (string, bool) {
+		for _, f := range fs {
+			if f.Label == label {
+				return f.Value, true
+			}
+		}
+		return "", false
+	}
+	m := renderCases()["backup"]
+	facts := notify.Facts(m)
+	if v, _ := value(facts, "Type"); v != "Backup" {
+		t.Errorf("Type = %q, want the kind's label", v)
+	}
+	if _, ok := value(facts, "Kind"); ok {
+		t.Error("the raw kind is shown next to its label")
+	}
+	if v, _ := value(facts, "Snapshot"); v != "1a2b3c4d" {
+		t.Errorf("Snapshot = %q, want the detail", v)
+	}
+	if _, ok := value(facts, "Transferred"); ok {
+		t.Error("the generic transfer counters are shown along with the details")
+	}
+	// Without details the counters stay; without a label, the raw kind.
+	m.Job.Details, m.Job.KindLabel = nil, ""
+	facts = notify.Facts(m)
+	if v, _ := value(facts, "Transferred"); v != "48.1 GiB in 1219 files" {
+		t.Errorf("Transferred = %q", v)
+	}
+	if v, _ := value(facts, "Kind"); v != "restic_backup" {
+		t.Errorf("Kind = %q", v)
+	}
+
+	// Details are bounded, flattened and cannot blank out the counters.
+	m.Job.Details = []notify.Fact{{Label: " ", Value: "no label"}, {Label: "Empty", Value: " "}}
+	if _, ok := value(notify.Facts(m), "Transferred"); !ok {
+		t.Error("empty details dropped the transfer counters")
+	}
+	m.Job.Details = nil
+	for i := range 40 {
+		m.Job.Details = append(m.Job.Details, notify.Fact{Label: strings.Repeat("l", 100) + string(rune('a'+i%26)), Value: "line one\nline two" + strings.Repeat("é", 1200)})
+	}
+	base := len(notify.Facts(renderCases()["backup"])) - len(renderCases()["backup"].Job.Details)
+	facts = notify.Facts(m)
+	if got := len(facts) - base; got != notify.MaxDetails {
+		t.Errorf("%d details rendered, want at most %d", got, notify.MaxDetails)
+	}
+	for _, f := range facts {
+		if utf8.RuneCountInString(f.Label) > notify.MaxDetailLabelRunes || utf8.RuneCountInString(f.Value) > notify.MaxFactRunes || strings.ContainsAny(f.Value, "\r\n") {
+			t.Errorf("fact %q is not bounded to one line", f.Label)
 		}
 	}
 }

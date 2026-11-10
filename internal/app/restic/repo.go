@@ -108,6 +108,10 @@ type RepoStats struct {
 	// snapshots.
 	SnapshotsRefreshedAt time.Time
 	SnapshotsTruncated   bool
+	// LastChangeAt is the newest FinishedAt of a succeeded job of one of
+	// MutatingKinds on the repository; zero if none (as
+	// SnapshotList.LastChangeAt).
+	LastChangeAt time.Time
 	// LastBackup and LastCheck are the newest job of kind restic_backup
 	// and restic_check on the repository (any status, by job ID); zero if
 	// none.
@@ -116,6 +120,12 @@ type RepoStats struct {
 	// ScheduleCount counts the schedules whose RepositoryID is the
 	// repository.
 	ScheduleCount int
+}
+
+// SnapshotsStale reports whether the snapshot cache may miss snapshots: it
+// was never filled, or a backup, retention or prune succeeded since.
+func (s RepoStats) SnapshotsStale() bool {
+	return s.SnapshotsRefreshedAt.IsZero() || s.LastChangeAt.After(s.SnapshotsRefreshedAt)
 }
 
 // JobRef names a job for the repository statistics.

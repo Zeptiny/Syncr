@@ -1,6 +1,5 @@
--- Restic repositories and their snapshot cache (migration 00007). Written by
--- the contracts step (Milestone 5); the Go adapter (restic.go) is Track C's,
--- which may tune these queries but not add or remove :copyfrom queries.
+-- Restic repositories and their snapshot cache (migration 00007), for the Go
+-- adapter in restic.go.
 
 -- name: CreateRepository :execrows
 -- Inserts a live repository that is not deleting (the statistics and the
@@ -27,7 +26,9 @@ WHERE EXISTS (
 -- name: GetRepository :one
 -- A repository (deleted ones included) with its statistics: the cached
 -- snapshots, the newest backup and check jobs (by ID: UUIDv7, creation
--- order) and the schedules that use it. The LEFT JOIN LATERAL columns may
+-- order), the schedules that use it and the newest finish of a succeeded
+-- job of mutating_kinds (what makes the snapshot cache stale, as
+-- RepositoryLastChange). The LEFT JOIN LATERAL columns may
 -- be NULL (no snapshot, no job): coalesce gives sqlc non-null types, and
 -- the job's NULL id (Valid false) means "none".
 SELECT sqlc.embed(r),
@@ -37,7 +38,8 @@ SELECT sqlc.embed(r),
        lb.created_at AS last_backup_created_at, lb.finished_at AS last_backup_finished_at,
        lc.id AS last_check_id, coalesce(lc.status, '')::text AS last_check_status,
        lc.created_at AS last_check_created_at, lc.finished_at AS last_check_finished_at,
-       coalesce(sc.schedule_count, 0)::int AS schedule_count
+       coalesce(sc.schedule_count, 0)::int AS schedule_count,
+       ch.last_change_at
 FROM restic_repositories r
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS snapshot_count, max(s.taken_at)::timestamptz AS latest_at
@@ -59,6 +61,10 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS schedule_count FROM schedules sch WHERE sch.repository_id = r.id
 ) sc ON true
+LEFT JOIN LATERAL (
+    SELECT max(j.finished_at)::timestamptz AS last_change_at FROM jobs j
+    WHERE j.repository_id = r.id AND j.status = 'succeeded' AND j.kind = ANY (sqlc.arg(mutating_kinds)::text[])
+) ch ON true
 WHERE r.id = sqlc.arg(id)::uuid;
 
 -- name: ListRepositories :many
@@ -72,7 +78,8 @@ SELECT sqlc.embed(r),
        lb.created_at AS last_backup_created_at, lb.finished_at AS last_backup_finished_at,
        lc.id AS last_check_id, coalesce(lc.status, '')::text AS last_check_status,
        lc.created_at AS last_check_created_at, lc.finished_at AS last_check_finished_at,
-       coalesce(sc.schedule_count, 0)::int AS schedule_count
+       coalesce(sc.schedule_count, 0)::int AS schedule_count,
+       ch.last_change_at
 FROM restic_repositories r
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS snapshot_count, max(s.taken_at)::timestamptz AS latest_at
@@ -94,6 +101,10 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS schedule_count FROM schedules sch WHERE sch.repository_id = r.id
 ) sc ON true
+LEFT JOIN LATERAL (
+    SELECT max(j.finished_at)::timestamptz AS last_change_at FROM jobs j
+    WHERE j.repository_id = r.id AND j.status = 'succeeded' AND j.kind = ANY (sqlc.arg(mutating_kinds)::text[])
+) ch ON true
 WHERE r.deleted_at IS NULL
   AND (sqlc.narg(owner_id)::uuid IS NULL OR r.owner_id = sqlc.narg(owner_id)::uuid)
   AND (sqlc.narg(remote_id)::uuid IS NULL OR r.remote_id = sqlc.narg(remote_id)::uuid)

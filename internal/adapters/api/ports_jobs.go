@@ -9,7 +9,7 @@ import (
 )
 
 // JobService is the part of the jobs use cases the API calls (implemented
-// by *jobs.Service). Every use case but LatestSamples takes the caller's
+// by *jobs.Service). Every use case but LatestSamples and Blockers takes the caller's
 // actor and scopes by it: a user's own jobs, any job for an admin, and
 // domain.ErrNotFound for another user's job.
 type JobService interface {
@@ -22,6 +22,11 @@ type JobService interface {
 	// LatestSamples is only called for jobs the actor has just read; one
 	// store query for all of them.
 	LatestSamples(ctx context.Context, ids []domain.JobID) (map[domain.JobID]jobs.Sample, error)
+	// Blockers returns, for the keyed jobs of ids, the older unfinished job
+	// each waits for (Job.waiting_for_job_id); like LatestSamples it is
+	// only called for jobs the actor has just read, at most
+	// jobs.MaxBlockerIDs at a time.
+	Blockers(ctx context.Context, ids []domain.JobID) (map[domain.JobID]domain.JobID, error)
 }
 
 var _ JobService = (*jobs.Service)(nil)

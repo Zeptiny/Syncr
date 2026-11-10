@@ -257,6 +257,22 @@ func (s *Service) planRuns(ctx context.Context) (int, error) {
 	}
 }
 
+// boundDetails returns at most notify.MaxDetails of a job's details, each
+// with a label and a value, bounded like every other fact.
+func boundDetails(in []notify.Fact) []notify.Fact {
+	var out []notify.Fact
+	for _, d := range in {
+		if len(out) == notify.MaxDetails {
+			break
+		}
+		d.Label, d.Value = truncateRunes(d.Label, notify.MaxDetailLabelRunes), truncateRunes(d.Value, notify.MaxFactRunes)
+		if d.Label != "" && d.Value != "" {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // jobDeliveries returns the deliveries of a finished job: one per
 // subscriber of its event. Cancelled jobs have none. The job is described
 // only when it has deliveries.
@@ -283,10 +299,10 @@ func (s *Service) jobDeliveries(ctx context.Context, o JobOutcome, now time.Time
 			return nil, fmt.Errorf("describe the job: %w", err)
 		}
 		m.Job.Description = truncateRunes(desc.Text, notify.MaxFactRunes)
-		// m5: Track C renders KindLabel and Details (notify.Title, Facts)
-		// and bounds Details here.
-		m.Job.KindLabel = truncateRunes(desc.KindLabel, notify.MaxFactRunes)
-		m.Job.Details = desc.Details
+		// The label and the details are rendered by notify.Title and
+		// notify.Facts; the stored payload is bounded here.
+		m.Job.KindLabel = truncateRunes(desc.KindLabel, notify.MaxDetailLabelRunes)
+		m.Job.Details = boundDetails(desc.Details)
 	}
 	if m.OccurredAt.IsZero() {
 		m.OccurredAt = now

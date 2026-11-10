@@ -23,13 +23,14 @@
 //     repository on a local remote is tied to the worker whose disk holds
 //     it: creating it needs a WorkerID.
 //
-// # Service (m5: Track C implements it in service.go and delete.go)
+// # Service
 //
 // The Service is constructed as New(Deps{Repo Repository; Remotes
 // RemoteChecker; Prober Prober; Backends *backend.Registry; Deletions
 // Deletions; Cipher Cipher; Clock Clock; IDs IDGenerator; Logger
-// *slog.Logger}, Config). Deletions may be nil: DeleteData then fails with
-// ErrFailedPrecondition ("data deletion is not available"). Its use cases:
+// *slog.Logger}, Config{FinishInterval}). Deletions may be nil: DeleteData
+// then fails with ErrFailedPrecondition ("data deletion is not
+// available"). Its use cases:
 //
 //	// Create validates in, pre-checks the name and location against the
 //	// owner's live repositories (so a taken name is never initialized
@@ -37,8 +38,10 @@
 //	// *ProbeError to field errors ("password", "path", "mode",
 //	// "worker_id"; anything else ErrFailedPrecondition), then seals the
 //	// password and stores the repository with the probe's ResticID and
-//	// FormatVersion.
-//	Create(ctx, actor domain.Actor, in Input) (Repo, error)
+//	// FormatVersion. A taken name, location or restic ID is ErrNameTaken,
+//	// ErrLocationTaken or ErrSameRepository (each ErrAlreadyExists).
+//	// Created carries the repository and the worker that verified it.
+//	Create(ctx, actor domain.Actor, in Input) (Created, error)
 //	Get(ctx, actor domain.Actor, id domain.ResticRepoID) (Repo, error)
 //	List(ctx, actor domain.Actor, f ListFilter) ([]Repo, error)
 //	// Update renames it; a new password is verified (cat config) first and
@@ -48,7 +51,8 @@
 //	// o.DeleteData starts a restic_delete_data job (MarkDeleting, then
 //	// Deletions.Start); see "Data deletion" below.
 //	Delete(ctx, actor domain.Actor, id domain.ResticRepoID, o DeleteOptions) (DeleteResult, error)
-//	// Run completes data deletions every 30s and on Wake (non-blocking);
+//	// Run completes data deletions every Config.FinishInterval (30s) and
+//	// on Wake (non-blocking);
 //	// FinishDeletions runs one pass.
 //	Run(ctx) error
 //	Wake()

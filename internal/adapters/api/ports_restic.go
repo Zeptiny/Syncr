@@ -14,8 +14,8 @@ import (
 // write-only: no method returns it.
 type ResticService interface {
 	// Create initializes or connects to the repository on a worker, then
-	// stores it.
-	Create(ctx context.Context, actor domain.Actor, in restic.Input) (restic.Repo, error)
+	// stores it; the result names the worker.
+	Create(ctx context.Context, actor domain.Actor, in restic.Input) (restic.Created, error)
 	Get(ctx context.Context, actor domain.Actor, id domain.ResticRepoID) (restic.Repo, error)
 	List(ctx context.Context, actor domain.Actor, f restic.ListFilter) ([]restic.Repo, error)
 	// Update renames the repository or replaces its password (verified on
@@ -31,6 +31,8 @@ type ResticService interface {
 	Browse(ctx context.Context, actor domain.Actor, id domain.ResticRepoID, snapshotID, path string, workerID domain.WorkerID) (restic.Listing, error)
 	RepositoryNames
 }
+
+var _ ResticService = (*restic.Service)(nil)
 
 // RepositoryNames names repositories for display: a job's or a schedule's
 // repository (Job.repository, Schedule.repository).

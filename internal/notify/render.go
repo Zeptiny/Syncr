@@ -19,16 +19,21 @@ const (
 	MaxTitleRunes = 200
 	// MaxFactRunes bounds a Fact's Value (an error message, a name).
 	MaxFactRunes = 1000
+	// MaxDetails bounds the kind-specific details of a job (JobInfo.Details)
+	// that are rendered; MaxDetailLabelRunes bounds the label of each.
+	MaxDetails          = 16
+	MaxDetailLabelRunes = 64
 )
 
 // TestText is the body of a test notification.
 const TestText = "This is a test notification from Syncr. The contact is set up correctly."
 
-// Title returns the one-line summary of m, e.g. "Job failed: Nightly
-// photos", "Job failed: Copy Photos → B2" (a job without a schedule, by its
-// description) or "Scheduled run missed: Office docs", at most
-// MaxTitleRunes runes. Names come from users and are not escaped:
-// renderers escape for their format.
+// Title returns the one-line summary of m, e.g. "Backup failed: Nightly
+// photos", "Transfer failed: Copy Photos → B2" (a job without a schedule,
+// by its description) or "Scheduled run missed: Office docs", at most
+// MaxTitleRunes runes. A job is named by its kind's label
+// (JobInfo.KindLabel), or "Job" without one. Names come from users and
+// are not escaped: renderers escape for their format.
 func Title(m Message) string {
 	subject := ""
 	switch {
@@ -48,7 +53,13 @@ func Title(m Message) string {
 	case m.Run != nil && m.Event == domain.EventFailed:
 		title = "Scheduled run failed to start"
 	case m.Event != "":
-		title = "Job " + string(m.Event)
+		what := "Job"
+		if m.Job != nil {
+			if label := oneLine(m.Job.KindLabel); label != "" {
+				what = label
+			}
+		}
+		title = what + " " + string(m.Event)
 	default:
 		title = "Syncr notification"
 	}
@@ -68,9 +79,10 @@ type Fact struct {
 }
 
 // Facts returns the details of m in display order: the schedule, the
-// job's description, worker, kind, status, error, transfer counters,
-// duration and end, or the run's occurrence, reason and merged
-// occurrences.
+// job's description, worker, type (the kind's label; the raw kind without
+// one), status, error, the kind-specific details (or, without any, the
+// transfer counters), duration and end, or the run's occurrence, reason
+// and merged occurrences.
 func Facts(m Message) []Fact {
 	var out []Fact
 	add := func(label, value string) {
@@ -87,7 +99,11 @@ func Facts(m Message) []Fact {
 	if j := m.Job; j != nil {
 		add("Job", j.Description)
 		add("Worker", j.WorkerName)
-		add("Kind", j.Kind)
+		if oneLine(j.KindLabel) != "" {
+			add("Type", j.KindLabel)
+		} else {
+			add("Kind", j.Kind)
+		}
 		add("Status", string(j.Status))
 		switch {
 		case j.ErrorCode != "" && j.ErrorMessage != "":
@@ -95,7 +111,17 @@ func Facts(m Message) []Fact {
 		default:
 			add("Error", j.ErrorCode+j.ErrorMessage)
 		}
-		if j.Bytes > 0 || j.Files > 0 {
+		details := 0
+		for _, d := range j.Details {
+			label := truncateRunes(oneLine(d.Label), MaxDetailLabelRunes)
+			if label == "" || details == MaxDetails {
+				continue
+			}
+			before := len(out)
+			add(label, d.Value)
+			details += len(out) - before
+		}
+		if details == 0 && (j.Bytes > 0 || j.Files > 0) {
 			add("Transferred", FormatBytes(j.Bytes)+" in "+plural(j.Files, "file"))
 		}
 		if j.Errors > 0 {

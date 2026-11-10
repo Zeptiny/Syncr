@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func newScheduleEnv(t *testing.T) *scheduleEnv {
 		d.Contacts = fc
 	})
 	svc, err := schedules.New(schedules.Deps{
-		Repo: e.store, Remotes: e.remotes, Contacts: fc, Workers: apiWorkerChecker{e.wsvc},
+		Repo: e.store, Remotes: e.remotes, Repositories: e.repos, Contacts: fc, Workers: apiWorkerChecker{e.wsvc},
 		Waker: nopScheduleWaker{}, Clock: e.clock, IDs: &idgen.Sequential{},
 	}, schedules.Config{})
 	if err != nil {
@@ -501,3 +502,110 @@ func (c apiWorkerChecker) CheckWorker(ctx context.Context, id domain.WorkerID) e
 type nopScheduleWaker struct{}
 
 func (nopScheduleWaker) Wake() {}
+
+// TestScheduleResticDefinitions: a schedule on a repository refers to it;
+// restores and data deletions cannot be scheduled.
+func TestScheduleResticDefinitions(t *testing.T) {
+	t.Parallel()
+	late := &lateSchedules{}
+	re := newResticEnv(t, func(d *Deps) { d.Schedules = late })
+	// The schedules service over the same env (as newScheduleEnv builds it).
+	e := lateScheduleEnv(t, re.testEnv, late)
+	ctx := t.Context()
+	c := e.schedulesFor(testUser)
+	repo := re.createRepo("Photos vault")
+
+	in := e.scheduleInput("Nightly backup")
+	in.Definition = apiBackupDef(repo.GetId())
+	sc := e.createSchedule(testUser, in)
+	if sc.GetRepository().GetId() != repo.GetId() || sc.GetRepository().GetName() != "Photos vault" || sc.GetRepository().GetDeleted() ||
+		sc.GetDefinition().GetResticBackup().GetRepositoryId() != repo.GetId() {
+		t.Errorf("a backup schedule = %v", sc)
+	}
+	plain := e.createSchedule(testUser, e.scheduleInput("Copy"))
+	if plain.GetRepository() != nil {
+		t.Errorf("a transfer schedule has the repository %v", plain.GetRepository())
+	}
+	list, err := c.ListSchedules(ctx, connect.NewRequest(&syncrv1.ListSchedulesRequest{RepositoryId: repo.GetId()}))
+	if err != nil || len(list.Msg.GetSchedules()) != 1 || list.Msg.GetSchedules()[0].GetId() != sc.GetId() {
+		t.Errorf("ListSchedules(repository) = %v, %v", list, err)
+	}
+	_, err = c.ListSchedules(ctx, connect.NewRequest(&syncrv1.ListSchedulesRequest{RepositoryId: "nope"}))
+	if codeOf(t, err) != connect.CodeInvalidArgument || violation(err, "repository_id") == "" {
+		t.Errorf("ListSchedules(malformed repository) = %v", err)
+	}
+	got, _ := re.resticFor(testUser).GetRepository(ctx, connect.NewRequest(&syncrv1.GetRepositoryRequest{RepositoryId: repo.GetId()}))
+	if n := got.Msg.GetRepository().GetStats().GetScheduleCount(); n != 1 {
+		t.Errorf("schedule_count = %d, want 1", n)
+	}
+
+	create := func(def *syncrv1.JobDefinition, a domain.Actor) error {
+		in := e.scheduleInput("Other")
+		in.Definition = def
+		_, err := e.schedulesFor(a).CreateSchedule(ctx, connect.NewRequest(&syncrv1.CreateScheduleRequest{Input: in}))
+		return err
+	}
+	err = create(&syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticRestore{ResticRestore: &syncrv1.ResticRestoreDefinition{
+		RepositoryId: repo.GetId(), SnapshotId: "latest", Target: "/srv/restore",
+	}}}, testUser)
+	if codeOf(t, err) != connect.CodeInvalidArgument || violation(err, "definition.restic_restore") != "restores cannot be scheduled" {
+		t.Errorf("a scheduled restore = %v", err)
+	}
+	err = create(&syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticDeleteData{ResticDeleteData: &syncrv1.ResticDeleteDataDefinition{RepositoryId: repo.GetId()}}}, testUser)
+	if codeOf(t, err) != connect.CodeInvalidArgument || violation(err, "definition.restic_delete_data") != "is started by deleting the repository" {
+		t.Errorf("a scheduled data deletion = %v", err)
+	}
+	// Updating a schedule to one is rejected too.
+	upd := e.scheduleInput("Nightly backup")
+	upd.Definition = &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticDeleteData{ResticDeleteData: &syncrv1.ResticDeleteDataDefinition{RepositoryId: repo.GetId()}}}
+	_, err = c.UpdateSchedule(ctx, connect.NewRequest(&syncrv1.UpdateScheduleRequest{ScheduleId: sc.GetId(), Version: sc.GetVersion(), Input: upd}))
+	wantCode(t, err, connect.CodeInvalidArgument)
+
+	// Unknown and foreign repositories look the same.
+	wantCode(t, create(apiBackupDef(domain.NewResticRepoID().String()), testUser), connect.CodeNotFound)
+	err = create(apiBackupDef(repo.GetId()), testOther)
+	if codeOf(t, err) != connect.CodeNotFound || !strings.Contains(err.Error(), "repository not found") {
+		t.Errorf("a schedule on another user's repository = %v", err)
+	}
+
+	// Windows VSS only on a target worker known to run Windows.
+	vss := apiBackupDef(repo.GetId())
+	vss.GetResticBackup().UseFsSnapshot = true
+	re.setWorkerOS("linux")
+	err = create(vss, testUser)
+	if codeOf(t, err) != connect.CodeInvalidArgument || violation(err, "definition.restic_backup.use_fs_snapshot") == "" {
+		t.Errorf("a VSS schedule on a Linux worker = %v", err)
+	}
+
+	// While the repository's data is being deleted: its schedule is
+	// paused, and no schedule can be created or changed on it.
+	if _, err := re.resticFor(testUser).DeleteRepository(ctx, connect.NewRequest(&syncrv1.DeleteRepositoryRequest{
+		RepositoryId: repo.GetId(), DeleteData: true, ConfirmName: "Photos vault",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	paused, err := c.GetSchedule(ctx, connect.NewRequest(&syncrv1.GetScheduleRequest{ScheduleId: sc.GetId()}))
+	if s := paused.Msg.GetSchedule(); err != nil || s.GetEnabled() || s.GetPausedReason() != "repository_deleting" || s.GetNextRunAt() != nil {
+		t.Errorf("the schedule of a deleting repository = %v, %v", s, err)
+	}
+	err = create(apiBackupDef(repo.GetId()), testUser)
+	if codeOf(t, err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "data is being deleted") {
+		t.Errorf("a new schedule on a deleting repository = %v", err)
+	}
+}
+
+// lateScheduleEnv builds the schedules service over e, whose Deps.Schedules
+// is late, as newScheduleEnv does.
+func lateScheduleEnv(t *testing.T, e *testEnv, late *lateSchedules) *scheduleEnv {
+	t.Helper()
+	fc := &fakeScheduleContacts{refs: map[domain.ContactID]contacts.Ref{}, owner: map[domain.ContactID]domain.UserID{}}
+	svc, err := schedules.New(schedules.Deps{
+		Repo: e.store, Remotes: e.remotes, Repositories: e.repos, Contacts: fc, Workers: apiWorkerChecker{e.wsvc},
+		Waker: nopScheduleWaker{}, Clock: e.clock, IDs: &idgen.Sequential{},
+	}, schedules.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	late.ScheduleService = svc
+	return &scheduleEnv{testEnv: e, contacts: fc, svc: svc}
+}

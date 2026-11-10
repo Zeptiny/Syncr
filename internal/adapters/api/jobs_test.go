@@ -17,6 +17,7 @@ import (
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
 )
@@ -817,3 +818,208 @@ func TestListJobsSearchFilters(t *testing.T) {
 		}
 	}
 }
+
+// setWorkerOS makes the env's worker report an operating system.
+func (e *testEnv) setWorkerOS(os string) {
+	e.t.Helper()
+	if err := e.store.SetWorkerInfo(e.t.Context(), e.worker, "", workers.Info{Version: "v2", OS: os, ReportedAt: e.clock.Now()}); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// TestRunResticJobs: a restic job refers to one of the caller's
+// repositories, is titled by its kind, holds the repository's concurrency
+// key (so a second one waits for the first) and shows its kind's details
+// once it has an output.
+func TestRunResticJobs(t *testing.T) {
+	t.Parallel()
+	e := newResticEnv(t)
+	ctx := t.Context()
+	c := e.jobsFor(testUser)
+	repo := e.createRepo("Photos vault")
+	get := func(id string) *syncrv1.Job {
+		t.Helper()
+		resp, err := c.GetJob(ctx, connect.NewRequest(&syncrv1.GetJobRequest{JobId: id}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Msg.GetJob()
+	}
+
+	first, err := e.runAs(testUser, apiBackupDef(repo.GetId()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.GetKind() != "restic_backup" || first.GetTitle() != "Back up /srv/photos → Photos vault" ||
+		first.GetRepository().GetId() != repo.GetId() || first.GetRepository().GetName() != "Photos vault" || first.GetRepository().GetDeleted() ||
+		first.GetWaitingForJobId() != "" || len(first.GetDetails()) != 0 {
+		t.Errorf("the first backup = %v", first)
+	}
+	// The repository's remote is one of the job's remotes.
+	if rs := first.GetRemotes(); len(rs) != 1 || rs[0].GetId() != e.remote.String() || rs[0].GetName() != "B2 offsite" {
+		t.Errorf("remotes of a backup = %v", rs)
+	}
+	stored, err := e.store.GetJob(ctx, e.jobID(first))
+	if err != nil || stored.RepositoryID.String() != repo.GetId() || !slices.Equal(stored.ConcurrencyKeys, []string{"restic-repo:" + repo.GetId()}) {
+		t.Errorf("the stored job: repository %s, keys %v, %v", stored.RepositoryID, stored.ConcurrencyKeys, err)
+	}
+
+	// A second job on the repository waits for the first, whatever its
+	// kind.
+	e.clock.Advance(time.Second)
+	check := &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticCheck{ResticCheck: &syncrv1.ResticCheckDefinition{RepositoryId: repo.GetId(), ReadDataPercent: 10}}}
+	second, err := e.runAs(testUser, check)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.GetWaitingForJobId() != first.GetId() || second.GetTitle() != "Check Photos vault (read 10% of the data)" {
+		t.Errorf("the second job = waiting for %q, title %q", second.GetWaitingForJobId(), second.GetTitle())
+	}
+	list, err := c.ListJobs(ctx, connect.NewRequest(&syncrv1.ListJobsRequest{RepositoryId: repo.GetId()}))
+	if err != nil || len(list.Msg.GetJobs()) != 2 || list.Msg.GetJobs()[0].GetWaitingForJobId() != first.GetId() || list.Msg.GetJobs()[1].GetWaitingForJobId() != "" {
+		t.Errorf("ListJobs(repository) = %v, %v", list, err)
+	}
+	// A transfer is no job of the repository.
+	plain, err := e.runAs(testUser, testDefinition())
+	if err != nil || plain.GetRepository() != nil || plain.GetTitle() != "Copy /data/src → /data/dst" || plain.GetWaitingForJobId() != "" {
+		t.Errorf("a transfer = %v, %v", plain, err)
+	}
+	if list, err := c.ListJobs(ctx, connect.NewRequest(&syncrv1.ListJobsRequest{RepositoryId: repo.GetId()})); err != nil || len(list.Msg.GetJobs()) != 2 {
+		t.Errorf("ListJobs(repository) with a transfer around = %v, %v", list, err)
+	}
+	if list, err := c.ListJobs(ctx, connect.NewRequest(&syncrv1.ListJobsRequest{RepositoryId: domain.NewResticRepoID().String()})); err != nil || len(list.Msg.GetJobs()) != 0 {
+		t.Errorf("ListJobs(another repository) = %v, %v", list, err)
+	}
+	_, err = c.ListJobs(ctx, connect.NewRequest(&syncrv1.ListJobsRequest{RepositoryId: "nope"}))
+	if codeOf(t, err) != connect.CodeInvalidArgument || violation(err, "repository_id") == "" {
+		t.Errorf("ListJobs(malformed repository) = %v", err)
+	}
+
+	// Finished: the kind's details; the next job no longer waits.
+	e.startRunning(first)
+	out, err := proto.Marshal(&syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticBackup{ResticBackup: &syncrv1.ResticBackupOutput{
+		SnapshotId: "1a2b3c4d5e6f", FilesNew: 12, FilesUnmodified: 1204, DataAddedBytes: 2048, TotalFilesProcessed: 1216, TotalBytesProcessed: 5 << 30,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.jsvc.Finish(ctx, e.worker, e.jobID(first), testEpoch, jobs.Outcome{Status: domain.JobSucceeded, Output: out}); err != nil {
+		t.Fatal(err)
+	}
+	done := get(first.GetId())
+	want := []*syncrv1.JobDetail{
+		{Label: "Snapshot", Value: "1a2b3c4d"},
+		{Label: "Files", Value: "12 new, 0 changed, 1,204 unmodified"},
+		{Label: "Folders", Value: "0 new, 0 changed, 0 unmodified"},
+		{Label: "Data added", Value: "2.0 KiB"},
+		{Label: "Processed", Value: "5.0 GiB in 1,216 files"},
+	}
+	if len(done.GetDetails()) != len(want) {
+		t.Fatalf("details = %v", done.GetDetails())
+	}
+	for i, w := range want {
+		if !proto.Equal(done.GetDetails()[i], w) {
+			t.Errorf("detail %d = %v, want %v", i, done.GetDetails()[i], w)
+		}
+	}
+	if got := get(second.GetId()); got.GetWaitingForJobId() != "" {
+		t.Errorf("the second job still waits for %s", got.GetWaitingForJobId())
+	}
+
+	// An admin sees the job with its repository's name; a deleted
+	// repository stays named.
+	resp, err := e.jobsFor(testAdmin).GetJob(ctx, connect.NewRequest(&syncrv1.GetJobRequest{JobId: first.GetId()}))
+	if err != nil || resp.Msg.GetJob().GetRepository().GetName() != "Photos vault" {
+		t.Errorf("an admin's view = %v, %v", resp, err)
+	}
+	if _, err := e.jsvc.Cancel(ctx, testUser, e.jobID(second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.resticFor(testUser).DeleteRepository(ctx, connect.NewRequest(&syncrv1.DeleteRepositoryRequest{RepositoryId: repo.GetId()})); err != nil {
+		t.Fatal(err)
+	}
+	if got := get(first.GetId()); !got.GetRepository().GetDeleted() || got.GetRepository().GetName() != "Photos vault" || got.GetTitle() != "Back up /srv/photos → Photos vault" {
+		t.Errorf("a job of a deleted repository = %v", got.GetRepository())
+	}
+	_, err = e.runAs(testUser, apiBackupDef(repo.GetId()))
+	if codeOf(t, err) != connect.CodeNotFound || !strings.Contains(err.Error(), "repository not found") {
+		t.Errorf("RunJob on a deleted repository = %v", err)
+	}
+}
+
+func TestRunResticJobRejections(t *testing.T) {
+	t.Parallel()
+	e := newResticEnv(t)
+	repo := e.createRepo("Photos vault")
+
+	// Only deleting the repository starts a data deletion.
+	_, err := e.runAs(testUser, &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticDeleteData{
+		ResticDeleteData: &syncrv1.ResticDeleteDataDefinition{RepositoryId: repo.GetId()},
+	}})
+	if codeOf(t, err) != connect.CodeInvalidArgument || violation(err, "definition.restic_delete_data") != "is started by deleting the repository" {
+		t.Errorf("RunJob(restic_delete_data) = %v", err)
+	}
+	// Admins included.
+	_, err = e.runAs(testAdmin, &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticDeleteData{
+		ResticDeleteData: &syncrv1.ResticDeleteDataDefinition{RepositoryId: repo.GetId()},
+	}})
+	wantCode(t, err, connect.CodeInvalidArgument)
+
+	// The kind's field errors.
+	_, err = e.runAs(testUser, &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticBackup{ResticBackup: &syncrv1.ResticBackupDefinition{RepositoryId: repo.GetId()}}})
+	if violation(err, "definition.restic_backup.paths") == "" {
+		t.Errorf("a backup without paths = %v", err)
+	}
+	// Unknown and foreign repositories look the same.
+	_, err = e.runAs(testUser, apiBackupDef(domain.NewResticRepoID().String()))
+	wantCode(t, err, connect.CodeNotFound)
+	_, err = e.runAs(testOther, apiBackupDef(repo.GetId()))
+	wantCode(t, err, connect.CodeNotFound)
+	if n, _ := e.jsvc.Unfinished(t.Context(), e.worker); len(n) != 0 {
+		t.Errorf("a rejected RunJob queued %d jobs", len(n))
+	}
+
+	// A restore never replaces files unless asked to; it is a job like
+	// the others.
+	restore, err := e.runAs(testUser, &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticRestore{ResticRestore: &syncrv1.ResticRestoreDefinition{
+		RepositoryId: repo.GetId(), SnapshotId: "1a2b3c4d", Target: "/srv/restore", Subfolder: "/srv/photos/2025",
+	}}})
+	if err != nil || restore.GetTitle() != "Restore /srv/photos/2025 from Photos vault @ 1a2b3c4d → /srv/restore" ||
+		restore.GetDefinition().GetResticRestore().GetOverwrite() != syncrv1.ResticRestoreOverwrite_RESTIC_RESTORE_OVERWRITE_UNSPECIFIED {
+		t.Errorf("RunJob(restore) = %v, %v", restore, err)
+	}
+
+	// Windows VSS only on a worker known to run Windows.
+	vss := apiBackupDef(repo.GetId())
+	vss.GetResticBackup().UseFsSnapshot = true
+	if _, err := e.runAs(testUser, vss); err != nil {
+		t.Errorf("VSS on a worker that has not reported its system = %v, want it accepted", err)
+	}
+	e.setWorkerOS("linux")
+	_, err = e.runAs(testUser, vss)
+	if codeOf(t, err) != connect.CodeInvalidArgument || !strings.Contains(violation(err, "definition.restic_backup.use_fs_snapshot"), "only available on Windows workers") {
+		t.Errorf("VSS on a Linux worker = %v", err)
+	}
+	e.setWorkerOS("windows")
+	if _, err := e.runAs(testUser, vss); err != nil {
+		t.Errorf("VSS on a Windows worker = %v", err)
+	}
+}
+
+// TestBlockersAreLookedUpForQueuedKeyedJobsOnly: listing transfers never
+// asks for blockers.
+func TestBlockersAreLookedUpForQueuedKeyedJobsOnly(t *testing.T) {
+	t.Parallel()
+	h := &jobHandler{jobs: panicJobs{}}
+	got, err := h.blockers(t.Context(), []jobs.Job{
+		{ID: domain.NewJobID(), Status: domain.JobQueued},
+		{ID: domain.NewJobID(), Status: domain.JobRunning, ConcurrencyKeys: []string{"k"}},
+		{ID: domain.NewJobID(), Status: domain.JobSucceeded, ConcurrencyKeys: []string{"k"}},
+	})
+	if err != nil || len(got) != 0 {
+		t.Errorf("blockers = %v, %v", got, err)
+	}
+}
+
+// panicJobs is a JobService none of whose methods may be called.
+type panicJobs struct{ JobService }

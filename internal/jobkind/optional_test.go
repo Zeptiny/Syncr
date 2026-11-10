@@ -13,7 +13,7 @@ import (
 )
 
 // fullKind is a restic_check stand-in implementing every optional
-// interface (the restic kinds arrive with Track C).
+// interface.
 type fullKind struct {
 	echoKind
 	keys []string

@@ -127,6 +127,9 @@ type testEnv struct {
 	// remotes are the remotes jobs may use (jobs.RemoteChecker and the
 	// Names of Deps.Remotes).
 	remotes *fakeJobRemotes
+	// repos checks the repositories of jobs (jobs.RepositoryChecker): none
+	// exists until a test sets its service (newResticEnv).
+	repos *lateRepositories
 }
 
 // newEnv starts a server authenticating with testAuth. mutate may adjust
@@ -156,6 +159,7 @@ func newEnvServer(t *testing.T, configure func(*http.Server), mutate ...func(*De
 		clock:   clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)),
 		logs:    &logBuffer{},
 		remotes: newFakeJobRemotes(),
+		repos:   &lateRepositories{},
 	}
 	for _, a := range []domain.Actor{testAdmin, testUser, testOther} {
 		u := users.User{ID: a.UserID, Username: "user-" + a.UserID.String()[32:], Role: a.Role, PasswordHash: "x", Version: 1}
@@ -166,7 +170,7 @@ func newEnvServer(t *testing.T, configure func(*http.Server), mutate ...func(*De
 	ids := &idgen.Sequential{}
 	e.jsvc, err = jobs.New(jobs.Deps{
 		Jobs: e.store, Samples: e.store, Clock: e.clock, IDs: ids,
-		Broker: e.broker, Notifier: jobs.NopNotifier{}, Waker: nopWaker{}, Remotes: e.remotes,
+		Broker: e.broker, Notifier: jobs.NopNotifier{}, Waker: nopWaker{}, Remotes: e.remotes, Repositories: e.repos,
 		Logger: newTestLogger(e.logs),
 	}, jobs.Config{})
 	if err != nil {

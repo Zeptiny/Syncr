@@ -61,9 +61,8 @@ type CreateRepositoryParams struct {
 	Version       int64
 }
 
-// Restic repositories and their snapshot cache (migration 00007). Written by
-// the contracts step (Milestone 5); the Go adapter (restic.go) is Track C's,
-// which may tune these queries but not add or remove :copyfrom queries.
+// Restic repositories and their snapshot cache (migration 00007), for the Go
+// adapter in restic.go.
 // Inserts a live repository that is not deleting (the statistics and the
 // deletion columns keep their defaults), only if the remote exists and is
 // not deleted. FOR SHARE makes a concurrent DeleteRemote (which locks the
@@ -233,7 +232,8 @@ SELECT r.id, r.owner_id, r.name, r.description, r.remote_id, r.path, r.password_
        lb.created_at AS last_backup_created_at, lb.finished_at AS last_backup_finished_at,
        lc.id AS last_check_id, coalesce(lc.status, '')::text AS last_check_status,
        lc.created_at AS last_check_created_at, lc.finished_at AS last_check_finished_at,
-       coalesce(sc.schedule_count, 0)::int AS schedule_count
+       coalesce(sc.schedule_count, 0)::int AS schedule_count,
+       ch.last_change_at
 FROM restic_repositories r
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS snapshot_count, max(s.taken_at)::timestamptz AS latest_at
@@ -255,8 +255,17 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS schedule_count FROM schedules sch WHERE sch.repository_id = r.id
 ) sc ON true
-WHERE r.id = $1::uuid
+LEFT JOIN LATERAL (
+    SELECT max(j.finished_at)::timestamptz AS last_change_at FROM jobs j
+    WHERE j.repository_id = r.id AND j.status = 'succeeded' AND j.kind = ANY ($1::text[])
+) ch ON true
+WHERE r.id = $2::uuid
 `
+
+type GetRepositoryParams struct {
+	MutatingKinds []string
+	ID            pgtype.UUID
+}
 
 type GetRepositoryRow struct {
 	ResticRepository     ResticRepository
@@ -272,15 +281,18 @@ type GetRepositoryRow struct {
 	LastCheckCreatedAt   pgtype.Timestamptz
 	LastCheckFinishedAt  pgtype.Timestamptz
 	ScheduleCount        int32
+	LastChangeAt         pgtype.Timestamptz
 }
 
 // A repository (deleted ones included) with its statistics: the cached
 // snapshots, the newest backup and check jobs (by ID: UUIDv7, creation
-// order) and the schedules that use it. The LEFT JOIN LATERAL columns may
+// order), the schedules that use it and the newest finish of a succeeded
+// job of mutating_kinds (what makes the snapshot cache stale, as
+// RepositoryLastChange). The LEFT JOIN LATERAL columns may
 // be NULL (no snapshot, no job): coalesce gives sqlc non-null types, and
 // the job's NULL id (Valid false) means "none".
-func (q *Queries) GetRepository(ctx context.Context, id pgtype.UUID) (GetRepositoryRow, error) {
-	row := q.db.QueryRow(ctx, getRepository, id)
+func (q *Queries) GetRepository(ctx context.Context, arg GetRepositoryParams) (GetRepositoryRow, error) {
+	row := q.db.QueryRow(ctx, getRepository, arg.MutatingKinds, arg.ID)
 	var i GetRepositoryRow
 	err := row.Scan(
 		&i.ResticRepository.ID,
@@ -315,6 +327,7 @@ func (q *Queries) GetRepository(ctx context.Context, id pgtype.UUID) (GetReposit
 		&i.LastCheckCreatedAt,
 		&i.LastCheckFinishedAt,
 		&i.ScheduleCount,
+		&i.LastChangeAt,
 	)
 	return i, err
 }
@@ -434,7 +447,8 @@ SELECT r.id, r.owner_id, r.name, r.description, r.remote_id, r.path, r.password_
        lb.created_at AS last_backup_created_at, lb.finished_at AS last_backup_finished_at,
        lc.id AS last_check_id, coalesce(lc.status, '')::text AS last_check_status,
        lc.created_at AS last_check_created_at, lc.finished_at AS last_check_finished_at,
-       coalesce(sc.schedule_count, 0)::int AS schedule_count
+       coalesce(sc.schedule_count, 0)::int AS schedule_count,
+       ch.last_change_at
 FROM restic_repositories r
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS snapshot_count, max(s.taken_at)::timestamptz AS latest_at
@@ -456,15 +470,20 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS schedule_count FROM schedules sch WHERE sch.repository_id = r.id
 ) sc ON true
+LEFT JOIN LATERAL (
+    SELECT max(j.finished_at)::timestamptz AS last_change_at FROM jobs j
+    WHERE j.repository_id = r.id AND j.status = 'succeeded' AND j.kind = ANY ($1::text[])
+) ch ON true
 WHERE r.deleted_at IS NULL
-  AND ($1::uuid IS NULL OR r.owner_id = $1::uuid)
-  AND ($2::uuid IS NULL OR r.remote_id = $2::uuid)
+  AND ($2::uuid IS NULL OR r.owner_id = $2::uuid)
+  AND ($3::uuid IS NULL OR r.remote_id = $3::uuid)
 ORDER BY lower(r.name) COLLATE "C", r.id
 `
 
 type ListRepositoriesParams struct {
-	OwnerID  pgtype.UUID
-	RemoteID pgtype.UUID
+	MutatingKinds []string
+	OwnerID       pgtype.UUID
+	RemoteID      pgtype.UUID
 }
 
 type ListRepositoriesRow struct {
@@ -481,13 +500,14 @@ type ListRepositoriesRow struct {
 	LastCheckCreatedAt   pgtype.Timestamptz
 	LastCheckFinishedAt  pgtype.Timestamptz
 	ScheduleCount        int32
+	LastChangeAt         pgtype.Timestamptz
 }
 
 // Live repositories (deleting ones included) with their statistics (see
 // GetRepository). Every NULL filter matches all; the owner filter matches
 // restic_repositories_owner_idx.
 func (q *Queries) ListRepositories(ctx context.Context, arg ListRepositoriesParams) ([]ListRepositoriesRow, error) {
-	rows, err := q.db.Query(ctx, listRepositories, arg.OwnerID, arg.RemoteID)
+	rows, err := q.db.Query(ctx, listRepositories, arg.MutatingKinds, arg.OwnerID, arg.RemoteID)
 	if err != nil {
 		return nil, err
 	}
@@ -528,6 +548,7 @@ func (q *Queries) ListRepositories(ctx context.Context, arg ListRepositoriesPara
 			&i.LastCheckCreatedAt,
 			&i.LastCheckFinishedAt,
 			&i.ScheduleCount,
+			&i.LastChangeAt,
 		); err != nil {
 			return nil, err
 		}
