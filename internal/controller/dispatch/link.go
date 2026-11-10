@@ -218,11 +218,18 @@ func (s *Service) ingest(ctx context.Context, sess *session, w workers.Worker, e
 		if applyErr = s.apply(ctx, w.ID, epoch, ev); applyErr != nil {
 			break
 		}
-		if ev.GetHello() != nil && sess.awaitsHello {
-			// A derivation held back StartJob and probe commands for this
-			// Hello (see commands): wake the worker's long poll.
-			sess.awaitsHello = false
-			s.hub.Wake(w.ID)
+		if h := ev.GetHello(); h != nil {
+			if s.probes != nil {
+				// The probes this process cannot run fail now instead of
+				// waiting for their timeout.
+				s.probes.refuse(w.ID, w.Name, infoFromHello(h, timeOf(ev.GetTime())))
+			}
+			if sess.awaitsHello {
+				// A derivation held back StartJob and probe commands for
+				// this Hello (see commands): wake the worker's long poll.
+				sess.awaitsHello = false
+				s.hub.Wake(w.ID)
+			}
 		}
 		applied = ev.GetSeq()
 	}
@@ -334,7 +341,9 @@ func (s *Service) ack(ctx context.Context, sess *session, workerID domain.Worker
 // can run (link features, operating system), so they wait until the Hello
 // of epoch is stored (Worker.InfoCurrent): until then the stored Info is
 // the previous process's, maybe another version. Storing the Hello wakes
-// the worker's long poll if a derivation was held back.
+// the worker's long poll if a derivation was held back, and fails the
+// probes the process cannot run (ProbeBroker.refuse; derivations repeat
+// that for probes queued on the previous process's Info meanwhile).
 func (s *Service) commands(ctx context.Context, sess *session, w workers.Worker, epoch string) ([]*syncrv1.Command, error) {
 	js, err := s.jobs.Unfinished(ctx, w.ID)
 	if err != nil {
@@ -359,12 +368,19 @@ func (s *Service) commands(ctx context.Context, sess *session, w workers.Worker,
 		sess.awaitsHello = true
 		return cancels, nil
 	}
+	if s.probes != nil {
+		// Storing the Hello failed the probes this process cannot run; this
+		// also catches one queued meanwhile on the previous process's Info.
+		s.probes.refuse(w.ID, w.Name, w.Info)
+	}
 	room := s.cfg.MaxCommands - len(cancels)
 	if room == 0 {
 		return cancels, nil
 	}
 	var probes []*syncrv1.Command
 	if s.probes != nil && w.Info.HasFeatures(link.FeatureProbe) {
+		// Every run_probe derived here counts as sent, also one the
+		// budget below leaves out (see ProbeBroker.commands).
 		probes = s.probes.commands(w.ID, room)
 	}
 	starts, err := s.starts(ctx, js, w.Info, room-min(len(probes), room/2))

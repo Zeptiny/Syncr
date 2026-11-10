@@ -26,10 +26,9 @@ import (
 
 // Limits of Config.
 const (
-	// MinTimeout and MaxTimeout bound the probe timeouts (workers cap them
-	// at MaxTimeout too).
+	// MinTimeout is the shortest probe timeout; the longest is
+	// link.MaxProbeTimeout, which workers enforce too.
 	MinTimeout = time.Second
-	MaxTimeout = 90 * time.Second
 	// MaxListEntries is the most entries a listing may ask for.
 	MaxListEntries = 5000
 	// maxFailureRunes bounds a worker's failure message.
@@ -54,7 +53,7 @@ const localRemoteHint = "choose the worker whose disk holds this remote"
 // Config tunes a Runner. Zero fields take the DefaultConfig values.
 type Config struct {
 	// Timeout bounds listings and usage requests, ResticTimeout the restic
-	// operations; each between MinTimeout and MaxTimeout.
+	// operations; each between MinTimeout and link.MaxProbeTimeout.
 	Timeout       time.Duration
 	ResticTimeout time.Duration
 	// MaxEntries is the most entries a listing returns (at most
@@ -107,8 +106,8 @@ func NewRunner(d Deps, cfg Config) (*Runner, error) {
 	cfg.MaxEntries = cmp.Or(cfg.MaxEntries, def.MaxEntries)
 	cfg.MaxSnapshots = cmp.Or(cfg.MaxSnapshots, def.MaxSnapshots)
 	for _, t := range []time.Duration{cfg.Timeout, cfg.ResticTimeout} {
-		if t < MinTimeout || t > MaxTimeout {
-			return nil, fmt.Errorf("probe: invalid config: timeout %v is not between %v and %v", t, MinTimeout, MaxTimeout)
+		if t < MinTimeout || t > link.MaxProbeTimeout {
+			return nil, fmt.Errorf("probe: invalid config: timeout %v is not between %v and %v", t, MinTimeout, link.MaxProbeTimeout)
 		}
 	}
 	if cfg.MaxEntries < 1 || cfg.MaxEntries > MaxListEntries || cfg.MaxSnapshots < 1 {

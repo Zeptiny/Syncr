@@ -33,16 +33,17 @@ type Rclone interface {
 	About(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeAbout) (*syncrv1.ProbeUsage, error)
 }
 
-// Local lists folders inside the worker's local_roots (*localfs.Policy).
+// Local lists folders inside the worker's local_roots (*localfs.Policy). List
+// should return ctx's error soon after ctx ends; a call it cannot interrupt
+// is handled by the Executor (see Probe).
 type Local interface {
-	List(path string, limit int, dirsOnly bool) (localfs.Listing, error)
+	List(ctx context.Context, path string, limit int, dirsOnly bool) (localfs.Listing, error)
 }
 
 // Defaults of Config.
 const (
 	DefaultMaxConcurrent  = 4
 	DefaultTimeout        = 30 * time.Second
-	DefaultMaxTimeout     = 90 * time.Second
 	DefaultMaxEntries     = 5000
 	DefaultEntries        = 2000
 	DefaultMaxSnapshots   = 5000
@@ -62,7 +63,8 @@ type Config struct {
 	// BUSY. Zero means DefaultMaxConcurrent.
 	MaxConcurrent int
 	// DefaultTimeout applies when RunProbe.timeout is unset, MaxTimeout
-	// caps it. Zero means DefaultTimeout and DefaultMaxTimeout.
+	// caps it. Zero means DefaultTimeout and link.MaxProbeTimeout, the cap
+	// the controller applies too; MaxTimeout may not exceed it.
 	DefaultTimeout time.Duration
 	MaxTimeout     time.Duration
 	// MaxEntries caps the entries of a listing whatever the request asks
@@ -101,6 +103,9 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.DefaultTimeout < 0 || cfg.MaxTimeout < 0 {
 		return nil, errors.New("probe: a timeout is negative")
 	}
+	if cfg.MaxTimeout > link.MaxProbeTimeout {
+		return nil, fmt.Errorf("probe: Config.MaxTimeout is above %v", link.MaxProbeTimeout)
+	}
 	if cfg.MaxConcurrent == 0 {
 		cfg.MaxConcurrent = DefaultMaxConcurrent
 	}
@@ -108,7 +113,7 @@ func New(cfg Config) (*Executor, error) {
 		cfg.DefaultTimeout = DefaultTimeout
 	}
 	if cfg.MaxTimeout == 0 {
-		cfg.MaxTimeout = DefaultMaxTimeout
+		cfg.MaxTimeout = link.MaxProbeTimeout
 	}
 	if cfg.MaxEntries == 0 {
 		cfg.MaxEntries = DefaultMaxEntries
@@ -158,6 +163,14 @@ func (e *Executor) MaxTimeout() time.Duration { return e.cfg.MaxTimeout }
 // tool's prober; a probe stopped through ctx has status CANCELLED; one that
 // outlives its timeout fails with TIMEOUT; one refused because too many are
 // running fails with BUSY.
+//
+// A probe holds one of the MaxConcurrent slots while it runs. The tools'
+// probes end their child process with their context. A local listing runs
+// in a goroutine of its own that holds the slot: a filesystem call blocked
+// in the kernel (a hung network mount) cannot be interrupted, so Probe
+// answers at the deadline or cancellation and the listing gives the slot
+// back only when that call returns. Stuck listings are thus bounded by the
+// slots, and a worker whose slots are all stuck answers BUSY.
 func (e *Executor) Probe(ctx context.Context, p *syncrv1.RunProbe) *syncrv1.ProbeResult {
 	start := time.Now()
 	res := &syncrv1.ProbeResult{ProbeId: p.GetProbeId()}
@@ -182,10 +195,11 @@ func (e *Executor) Probe(ctx context.Context, p *syncrv1.RunProbe) *syncrv1.Prob
 	}
 	select {
 	case e.slot <- struct{}{}:
-		defer func() { <-e.slot }()
 	default:
 		return finish(runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, "the worker is running too many probes; try again"))
 	}
+	s := &slot{ch: e.slot}
+	defer s.release()
 
 	timeout := e.cfg.DefaultTimeout
 	if d := p.GetTimeout().AsDuration(); p.GetTimeout() != nil && d > 0 {
@@ -195,7 +209,7 @@ func (e *Executor) Probe(ctx context.Context, p *syncrv1.RunProbe) *syncrv1.Prob
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	err := e.run(runCtx, op, p, res)
+	err := e.run(runCtx, op, p, res, s)
 	switch {
 	case err == nil:
 		e.fit(res)
@@ -213,9 +227,28 @@ func (e *Executor) Probe(ctx context.Context, p *syncrv1.RunProbe) *syncrv1.Prob
 	return finish(err)
 }
 
+// slot is the concurrency slot a probe holds. Probe releases it when it
+// returns, unless an operation took it over to release it itself.
+type slot struct {
+	ch    chan struct{}
+	taken bool
+}
+
+// take hands the slot over to the caller, which must call release once.
+func (s *slot) take() (release func()) {
+	s.taken = true
+	return func() { <-s.ch }
+}
+
+func (s *slot) release() {
+	if !s.taken {
+		<-s.ch
+	}
+}
+
 // run dispatches the op and stores its output in res. A panic in a prober
 // becomes an error.
-func (e *Executor) run(ctx context.Context, op string, p *syncrv1.RunProbe, res *syncrv1.ProbeResult) (err error) {
+func (e *Executor) run(ctx context.Context, op string, p *syncrv1.RunProbe, res *syncrv1.ProbeResult, s *slot) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			e.log.Error("probe panicked", "probe_id", p.GetProbeId(), "op", op, "panic", fmt.Sprint(r))
@@ -226,8 +259,7 @@ func (e *Executor) run(ctx context.Context, op string, p *syncrv1.RunProbe, res 
 	remotes := spec.GetRemotes()
 	switch op {
 	case "list_local":
-		o := spec.GetListLocal()
-		l, err := e.cfg.Local.List(o.GetPath(), e.entries(o.GetMaxEntries()), o.GetDirsOnly())
+		l, err := e.listLocal(ctx, spec.GetListLocal(), s)
 		if err != nil {
 			return err
 		}
@@ -278,6 +310,43 @@ func (e *Executor) run(ctx context.Context, op string, p *syncrv1.RunProbe, res 
 		res.Output = &syncrv1.ProbeResult_RepositoryConfig{RepositoryConfig: c}
 	}
 	return nil
+}
+
+// listLocal runs the local listing o in a goroutine that takes over the
+// probe's slot s, and returns its outcome, or ctx's error as soon as ctx
+// ends: a filesystem call blocked in the kernel cannot be interrupted, so
+// the listing may outlive the probe. The goroutine releases the slot when
+// the listing returns, before it hands over the outcome: a probe answered
+// with the listing's outcome has freed its slot, and one answered at its
+// deadline frees it once the listing notices the context or its stuck call
+// returns. A panic becomes an error.
+func (e *Executor) listLocal(ctx context.Context, o *syncrv1.ProbeListLocal, s *slot) (localfs.Listing, error) {
+	type outcome struct {
+		l   localfs.Listing
+		err error
+	}
+	release := s.take()
+	done := make(chan outcome, 1)
+	go func() {
+		var out outcome
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					e.log.Error("local listing panicked", "panic", fmt.Sprint(r))
+					out.err = runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "the probe failed unexpectedly")
+				}
+			}()
+			out.l, out.err = e.cfg.Local.List(ctx, o.GetPath(), e.entries(o.GetMaxEntries()), o.GetDirsOnly())
+		}()
+		release()
+		done <- out
+	}()
+	select {
+	case out := <-done:
+		return out.l, out.err
+	case <-ctx.Done():
+		return localfs.Listing{}, ctx.Err()
+	}
 }
 
 // entries returns the bound of a listing: the request's, DefaultEntries

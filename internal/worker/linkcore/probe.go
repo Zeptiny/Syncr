@@ -6,6 +6,7 @@ import (
 	"time"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/link"
 )
 
 // Prober runs probes: short requests answered outside the job slots
@@ -23,20 +24,24 @@ func WithProber(p Prober) Option {
 	return func(c *Core) { c.probes.prober = p }
 }
 
-// Retention of probe state (active mode).
+// Retention of probe state (active mode), in multiples of the longest
+// probe (link.MaxProbeTimeout).
 const (
 	// ProbeResultRetention is how long a finished probe's result waits for
-	// delivery before it is dropped: the controller has long stopped
-	// waiting by then (its own bound is the probe timeout, at most 90s,
-	// plus a grace period).
-	ProbeResultRetention = 2 * time.Minute
+	// delivery before it is dropped: twice the longest probe. The
+	// controller has long stopped waiting by then (its own bound is the
+	// probe's timeout plus link.ProbeGrace).
+	ProbeResultRetention = 2 * link.MaxProbeTimeout
 	// ProbeDedupeRetention is how long a probe ID is remembered after the
-	// probe started, so a redelivered run_probe never runs twice: three
-	// times the longest probe.
-	ProbeDedupeRetention = 270 * time.Second
+	// probe started, or after a cancel_probe for an ID the worker did not
+	// know, so a redelivered or late run_probe never runs twice or after
+	// its cancel: three times the longest probe.
+	ProbeDedupeRetention = 3 * link.MaxProbeTimeout
 )
 
-// probeState is one active-mode probe.
+// probeState is one active-mode probe, or the tombstone of a probe that
+// was cancelled before its run_probe arrived (cancel is nil, started and
+// finished are the time of the cancel).
 type probeState struct {
 	started time.Time
 	cancel  context.CancelFunc
@@ -104,7 +109,8 @@ func (p *probes) purge(now time.Time) {
 	}
 }
 
-// start runs rp in the background unless its ID is already known.
+// start runs rp in the background unless its ID is already known: running,
+// finished or cancelled (also cancelled before it arrived).
 func (p *probes) start(rp *syncrv1.RunProbe) {
 	id := rp.GetProbeId()
 	if id == "" {
@@ -133,11 +139,24 @@ func (p *probes) start(rp *syncrv1.RunProbe) {
 	})
 }
 
-// cancel stops a running probe; unknown and finished ones are ignored.
+// cancel stops a running probe; a finished one is left alone. An unknown
+// ID is remembered for ProbeDedupeRetention, so its run_probe never starts
+// if it arrives later: the controller cancels a probe it gave up on as
+// soon as its run_probe may have been sent, and the cancel can overtake it
+// (a lost Poll response, a redelivery).
 func (p *probes) cancel(id string) {
+	if id == "" {
+		return
+	}
+	now := time.Now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if st, ok := p.byID[id]; ok && st.finished.IsZero() {
+	p.purge(now)
+	st, ok := p.byID[id]
+	switch {
+	case !ok:
+		p.byID[id] = &probeState{started: now, finished: now}
+	case st.finished.IsZero():
 		st.cancel()
 	}
 }
@@ -212,15 +231,22 @@ func (c *Core) Close() {
 }
 
 // takeProbeCommands handles the probe commands among cmds and returns their
-// acks and the remaining commands, for the agent.
+// acks and the remaining commands, for the agent. The cancel_probe
+// commands are applied first, so a run_probe and its cancel in one batch
+// never start the probe, whatever their order.
 func (c *Core) takeProbeCommands(cmds []*syncrv1.Command) (acks []*syncrv1.CommandAck, rest []*syncrv1.Command) {
+	for _, cmd := range cmds {
+		if cp := cmd.GetCancelProbe(); cp != nil {
+			c.probes.cancel(cp.GetProbeId())
+		}
+	}
 	rest = make([]*syncrv1.Command, 0, len(cmds))
 	for _, cmd := range cmds {
 		switch {
 		case cmd.GetRunProbe() != nil:
 			c.probes.start(cmd.GetRunProbe())
 		case cmd.GetCancelProbe() != nil:
-			c.probes.cancel(cmd.GetCancelProbe().GetProbeId())
+			// Applied above.
 		default:
 			rest = append(rest, cmd)
 			continue

@@ -33,9 +33,10 @@ const (
 	// DefaultReadMaxBytes caps a worker's response: Pulls carry about 4
 	// MiB of events by default (8 MiB at most) and single events far less.
 	DefaultReadMaxBytes = 16 << 20
-	// DefaultProbeTimeout is the longest probe (90 s) plus the probe
-	// broker's grace (5 s).
-	DefaultProbeTimeout = 95 * time.Second
+	// DefaultProbeTimeout is the longest probe any setting allows plus the
+	// probe broker's grace. The composition root sets the configured
+	// longest instead (dispatch.ProbeConfig.Wait).
+	DefaultProbeTimeout = link.MaxProbeTimeout + link.ProbeGrace
 )
 
 // ErrFingerprintMismatch reports a worker certificate that does not match
@@ -59,8 +60,9 @@ type ClientConfig struct {
 	// ReadMaxBytes caps a decoded response message.
 	ReadMaxBytes int
 	// ProbeTimeout bounds the wait for a Probe's response headers: the
-	// longest probe plus the controller's grace. A Probe has no other
-	// timeout of its own; its context's deadline governs.
+	// longest probe plus the controller's grace (the probe broker's
+	// ProbeConfig.Wait). A Probe has no other timeout of its own; its
+	// context's deadline governs.
 	ProbeTimeout time.Duration
 }
 

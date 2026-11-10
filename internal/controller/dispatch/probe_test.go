@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/link"
@@ -577,10 +578,226 @@ func TestProbeBrokerConfig(t *testing.T) {
 		t.Error("negative cap accepted")
 	}
 	b, err := dispatch.NewProbeBroker(deps, dispatch.ProbeConfig{})
-	if err != nil || b.MaxTimeout() != 90*time.Second {
+	if err != nil || b.MaxTimeout() != link.MaxProbeTimeout {
 		t.Errorf("defaults: %v, %v", b, err)
 	}
 	if !errors.Is(dispatch.ErrProbeUnsupported, domain.ErrFailedPrecondition) || !slices.Contains(link.Features(), link.FeatureProbe) {
 		t.Error("ErrProbeUnsupported must be a failed precondition")
+	}
+}
+
+// TestProbeCancelBeforeTheAck: a caller that gives up once the run_probe
+// went out leaves a cancel_probe behind even though the worker did not ack
+// it yet: the worker may have it and would otherwise run it to the end
+// (a restic init creating a repository nobody stores).
+func TestProbeCancelBeforeTheAck(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		e := newEnv(t)
+		w := e.newProbeWorker(e.enroll("one"))
+		w.report()
+
+		ctx, cancel := context.WithCancel(t.Context())
+		answer := goProbe(ctx, e, w.id, runProbe("init"))
+		synctest.Wait()
+		if got := probeCommands(w.poll()); !slices.Equal(got, []string{"probe:init"}) { // its ack is not sent yet
+			t.Fatalf("commands = %v", got)
+		}
+		cancel()
+		if a := <-answer; !errors.Is(a.err, context.Canceled) {
+			t.Fatalf("probe = %v", a.err)
+		}
+		// The next poll carries the late ack of the run_probe and gets the
+		// cancel, until that is acked.
+		if got := probeCommands(w.poll()); !slices.Equal(got, []string{"probe-cancel:init"}) {
+			t.Fatalf("after giving up: %v", got)
+		}
+		if got := probeCommands(w.poll()); len(got) != 0 || !slices.Equal(w.probeCancels, []string{"init"}) {
+			t.Fatalf("after the cancel's ack: %v, cancels %v", got, w.probeCancels)
+		}
+
+		// A run_probe the budget left out of the response counts as sent:
+		// the cancel costs nothing if the worker never saw it.
+		e.cfg.MaxCommands = 2
+		e.restart()
+		w = e.newProbeWorker(e.enroll("two"))
+		w.report()
+		e.run(w.id)
+		e.run(w.id)
+		ctx, cancel = context.WithCancel(t.Context())
+		first := goProbe(ctx, e, w.id, runProbe("a"))
+		synctest.Wait()
+		second := goProbe(ctx, e, w.id, runProbe("b"))
+		synctest.Wait()
+		cmds := w.commands()
+		if got := probeCommands(cmds); !slices.Equal(got, []string{"probe:a"}) || len(started(cmds)) != 1 {
+			t.Fatalf("commands = %v, want one run_probe and one StartJob", cmds)
+		}
+		cancel()
+		<-first
+		<-second
+		for range 3 { // the budget sends them one per round
+			w.poll()
+		}
+		// Both callers end with one context, in either order.
+		if got := slices.Sorted(slices.Values(w.probeCancels)); !slices.Equal(got, []string{"a", "b"}) {
+			t.Errorf("cancels after giving up: %v", got)
+		}
+	})
+}
+
+// TestProbeCancelAfterRestart: a run_probe sent to a process that died
+// never reaches its successor until derived for it, so giving up before
+// that sends nothing.
+func TestProbeCancelAfterRestart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		e := newEnv(t)
+		w := e.newProbeWorker(e.enroll("one"))
+		w.report()
+		ctx, cancel := context.WithCancel(t.Context())
+		answer := goProbe(ctx, e, w.id, runProbe("p"))
+		synctest.Wait()
+		w.poll() // sent to the first process, never acked
+		w.restart()
+		w.report()
+		cancel()
+		<-answer
+		if got := probeCommands(w.poll()); len(got) != 0 {
+			t.Errorf("the new process was sent %v", got)
+		}
+	})
+}
+
+// TestHelloRefusesProbes: probes waiting for a worker whose new process
+// cannot run them (a downgrade, or an op it does not have) fail as
+// outdated as soon as its Hello is stored, not after their timeout.
+func TestHelloRefusesProbes(t *testing.T) {
+	t.Run("without the probe feature", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			e := newEnv(t)
+			w := e.newProbeWorker(e.enroll("nas"))
+			w.report()
+			w.downgrade()
+			w.poll() // adopts the new epoch; its Hello is not stored yet
+			start := time.Now()
+			answer := goProbe(t.Context(), e, w.id, runProbe("p1")) // checked on the old Hello
+			synctest.Wait()
+			w.report() // the Hello: no features
+			a := <-answer
+			if !errors.Is(a.err, domain.ErrFailedPrecondition) || !strings.Contains(a.err.Error(), `worker "nas" (version v2.0.0-test) cannot run restic_config; upgrade it`) {
+				t.Fatalf("probe = %v", a.err)
+			}
+			if d := time.Since(start); d != 0 {
+				t.Errorf("failed after %v, want at once", d)
+			}
+			if got := probeCommands(w.poll()); len(got) != 0 {
+				t.Errorf("commands = %v", got)
+			}
+		})
+	})
+
+	t.Run("without the op", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			e := newEnv(t)
+			w := e.newProbeWorker(e.enroll("nas"))
+			w.report()
+			w.probeOps = []string{"list_local"}
+			w.restart()
+			w.poll()
+			restic := goProbe(t.Context(), e, w.id, runProbe("restic"))
+			synctest.Wait()
+			local := runProbe("local")
+			local.Spec = &syncrv1.ProbeSpec{Op: &syncrv1.ProbeSpec_ListLocal{ListLocal: &syncrv1.ProbeListLocal{Path: "/data"}}}
+			listing := goProbe(t.Context(), e, w.id, local)
+			synctest.Wait()
+			w.report()
+			if a := <-restic; !errors.Is(a.err, domain.ErrFailedPrecondition) || !strings.Contains(a.err.Error(), "cannot run restic_config") {
+				t.Fatalf("restic probe = %v", a.err)
+			}
+			// The op it has goes out as usual.
+			if got := probeCommands(w.poll()); !slices.Equal(got, []string{"probe:local"}) {
+				t.Fatalf("commands = %v", got)
+			}
+			if err := w.complete(okResult("local")); err != nil {
+				t.Fatal(err)
+			}
+			if a := <-listing; a.err != nil {
+				t.Fatal(a.err)
+			}
+		})
+	})
+
+	t.Run("queued on the previous Hello meanwhile", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			e := newEnv(t)
+			w := e.newProbeWorker(e.enroll("nas"))
+			w.report()
+			w.downgrade()
+			w.poll()
+			answer := goProbe(t.Context(), e, w.id, runProbe("p1"))
+			synctest.Wait()
+			// The Hello is stored without the broker seeing the call (it
+			// was queued on the previous process's Info in between): the
+			// next derivation refuses it.
+			if err := e.workers.SetInfo(t.Context(), w.id, w.epoch, workers.Info{Version: "v1.0.0"}); err != nil {
+				t.Fatal(err)
+			}
+			w.poll()
+			if a := <-answer; !errors.Is(a.err, domain.ErrFailedPrecondition) || !strings.Contains(a.err.Error(), "(version v1.0.0) cannot run") {
+				t.Fatalf("probe = %v", a.err)
+			}
+		})
+	})
+}
+
+// TestPassiveProbeCallerGivesUp: in passive mode a probe is the worker's
+// Probe call; a caller that gives up ends it, and with it the probe on the
+// worker. No probe command is ever derived.
+func TestPassiveProbeCallerGivesUp(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		e := newEnv(t)
+		wid := registerPassive(t, e)
+		c, stop := startLoopOf(t, e, wid, e.newProbeWorker(wid))
+		defer stop()
+		synctest.Wait()
+		ended := make(chan error, 1)
+		c.do(func(*fakeWorker) {
+			c.probe = func(ctx context.Context, _ *syncrv1.ProbeRequest) (*syncrv1.ProbeResponse, error) {
+				<-ctx.Done()
+				ended <- ctx.Err()
+				return nil, ctx.Err()
+			}
+		})
+		ctx, cancel := context.WithCancel(t.Context())
+		answer := goProbe(ctx, e, wid, runProbe("p"))
+		synctest.Wait()
+		cancel()
+		if err := <-ended; !errors.Is(err, context.Canceled) {
+			t.Errorf("the worker's call ended with %v", err)
+		}
+		if a := <-answer; !errors.Is(a.err, context.Canceled) {
+			t.Errorf("probe = %v", a.err)
+		}
+		cmds, err := e.disp.Commands(t.Context(), wid, c.w.epoch)
+		if err != nil || len(probeCommands(cmds)) != 0 {
+			t.Errorf("commands = %v, %v", cmds, err)
+		}
+	})
+}
+
+// TestProbeConfigFollowsTheCap: the defaults are the shared cap and grace,
+// a longer cap is refused, and Wait is what a passive client must allow.
+func TestProbeConfigFollowsTheCap(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	deps := dispatch.ProbeBrokerDeps{Workers: e.workers, Hub: e.hub, Clock: e.clock}
+	b, err := dispatch.NewProbeBroker(deps, dispatch.ProbeConfig{})
+	if err != nil || b.MaxTimeout() != link.MaxProbeTimeout || b.Wait() != link.MaxProbeTimeout+link.ProbeGrace {
+		t.Errorf("defaults: %v, %v", b, err)
+	}
+	if got := (dispatch.ProbeConfig{MaxTimeout: 75 * time.Second}).Wait(); got != 75*time.Second+link.ProbeGrace {
+		t.Errorf("Wait() = %v", got)
+	}
+	if _, err := dispatch.NewProbeBroker(deps, dispatch.ProbeConfig{MaxTimeout: link.MaxProbeTimeout + time.Second}); err == nil {
+		t.Error("a cap above link.MaxProbeTimeout was accepted")
 	}
 }

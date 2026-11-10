@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/Zeptiny/Syncr/internal/link"
 )
 
 // Probe configures the short operations the controller asks workers to run
@@ -18,12 +20,10 @@ type Probe struct {
 	ResticTimeout time.Duration `yaml:"restic_timeout" env:"SYNCR_PROBE_RESTIC_TIMEOUT"`
 }
 
-// Limits of probe.timeout and probe.restic_timeout (workers cap a probe at
-// the same maximum).
-const (
-	MinProbeTimeout = time.Second
-	MaxProbeTimeout = 90 * time.Second
-)
+// MinProbeTimeout is the shortest probe.timeout and probe.restic_timeout;
+// the longest is link.MaxProbeTimeout, the cap both sides of the link
+// enforce.
+const MinProbeTimeout = time.Second
 
 func defaultProbe() Probe {
 	return Probe{Timeout: 30 * time.Second, ResticTimeout: 60 * time.Second}
@@ -35,11 +35,11 @@ func (p Probe) Longest() time.Duration { return max(p.Timeout, p.ResticTimeout) 
 
 func (p Probe) validate() error {
 	var errs []error
-	if p.Timeout < MinProbeTimeout || p.Timeout > MaxProbeTimeout {
-		errs = append(errs, fmt.Errorf("probe.timeout must be between %v and %v", MinProbeTimeout, MaxProbeTimeout))
+	if p.Timeout < MinProbeTimeout || p.Timeout > link.MaxProbeTimeout {
+		errs = append(errs, fmt.Errorf("probe.timeout must be between %v and %v", MinProbeTimeout, link.MaxProbeTimeout))
 	}
-	if p.ResticTimeout < MinProbeTimeout || p.ResticTimeout > MaxProbeTimeout {
-		errs = append(errs, fmt.Errorf("probe.restic_timeout must be between %v and %v", MinProbeTimeout, MaxProbeTimeout))
+	if p.ResticTimeout < MinProbeTimeout || p.ResticTimeout > link.MaxProbeTimeout {
+		errs = append(errs, fmt.Errorf("probe.restic_timeout must be between %v and %v", MinProbeTimeout, link.MaxProbeTimeout))
 	}
 	return errors.Join(errs...)
 }

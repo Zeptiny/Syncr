@@ -78,18 +78,107 @@ export function matchingPreset(policy: RetentionPolicyState): string | undefined
   return retentionPresets.find((p) => same(p.policy, policy))?.id;
 }
 
-/** hasRetentionRule reports whether the policy keeps anything at all. */
+// The limits below are the controller's (internal/jobkind, ResticForget
+// and its tag and host checks); the form checks them so their problems show
+// next to the fields instead of coming back from the server.
+
+/** MAX_KEEP is the largest keep-N count. */
+export const MAX_KEEP = 100000;
+/** MAX_RESTIC_TAGS is how many tags a list may have, MAX_TAG_BYTES how long one may be. */
+export const MAX_RESTIC_TAGS = 32;
+export const MAX_TAG_BYTES = 128;
+/** MAX_HOST_BYTES is how long a host name may be. */
+export const MAX_HOST_BYTES = 255;
+
+/**
+ * KEEP_WITHIN_RE is the --keep-within syntax the controller accepts: one or
+ * more numbers from 1 (no leading zero), each followed by y, m, d or h, in
+ * any order (1y6m, 2y5m7d3h, 1d1y).
+ */
+const KEEP_WITHIN_RE = /^([1-9][0-9]*[ymdh])+$/;
+
+/**
+ * keepCount reads a keep-N field: 0 when it is empty, NaN when it is not a
+ * whole number.
+ */
+export function keepCount(text: string): number {
+  const t = text.trim();
+  if (t === "") return 0;
+  return /^\d+$/.test(t) ? Number(t) : NaN;
+}
+
+/** cleanTags is a tag list as it is sent: trimmed, without empty tags or repeats. */
+export function cleanTags(tags: string[]): string[] {
+  return [...new Set(tags.map((t) => t.trim()).filter(Boolean))];
+}
+
+const utf8Length = (s: string) => new TextEncoder().encode(s).length;
+
+/** hasControl reports a control character (Unicode Cc), as the controller does. */
+const hasControl = (s: string) =>
+  [...s].some((ch) => {
+    const c = ch.codePointAt(0) ?? 0;
+    return c < 0x20 || (c >= 0x7f && c < 0xa0);
+  });
+
+/** tagsProblem explains why restic tags (cleaned) are refused; undefined when they are fine. */
+export function tagsProblem(tags: string[]): string | undefined {
+  if (tags.length > MAX_RESTIC_TAGS) return `Use at most ${MAX_RESTIC_TAGS} tags.`;
+  for (const t of tags) {
+    if (utf8Length(t) > MAX_TAG_BYTES)
+      return `The tag “${t}” is too long: a tag may have at most ${MAX_TAG_BYTES} bytes.`;
+    if (t.includes(",")) return `The tag “${t}” contains a comma, which restic cannot store.`;
+    if (hasControl(t)) return "Tags cannot contain control characters.";
+  }
+  return undefined;
+}
+
+/** hostProblem explains why a host name (trimmed) is refused; undefined when it is fine. */
+export function hostProblem(host: string): string | undefined {
+  if (utf8Length(host) > MAX_HOST_BYTES)
+    return `The host name may have at most ${MAX_HOST_BYTES} bytes.`;
+  if (hasControl(host)) return "The host name cannot contain control characters.";
+  return undefined;
+}
+
+/**
+ * hasRetentionRule reports whether the policy keeps anything at all, as the
+ * controller counts rules: a keep-N count above zero, a keep-within period
+ * or a keep tag (blank tags are dropped before sending, so they do not
+ * count).
+ */
 export function hasRetentionRule(p: RetentionPolicyState): boolean {
   return (
-    retentionCounts.some((c) => Number(p[c.key]) > 0) ||
+    retentionCounts.some((c) => keepCount(p[c.key]) > 0) ||
     p.keepWithin.trim() !== "" ||
-    p.keepTags.length > 0
+    cleanTags(p.keepTags).length > 0
   );
 }
 
-/** validRetentionDuration reports whether text is a restic duration (1y6m2d3h). */
+/** validRetentionDuration reports whether text is a keep-within period the controller accepts. */
 export function validRetentionDuration(text: string): boolean {
-  return /^(\d+y)?(\d+m)?(\d+d)?(\d+h)?$/.test(text) && text !== "";
+  return KEEP_WITHIN_RE.test(text);
+}
+
+/**
+ * retentionPolicyProblem explains what the controller would refuse in a
+ * policy, in the order it checks: the counts, the keep tags, the period,
+ * then whether any rule is left. Undefined when it would accept it.
+ */
+export function retentionPolicyProblem(p: RetentionPolicyState): string | undefined {
+  for (const c of retentionCounts) {
+    const n = keepCount(p[c.key]);
+    if (!Number.isInteger(n) || n > MAX_KEEP)
+      return `Keep ${c.label.toLowerCase()} must be a whole number from 0 to ${MAX_KEEP}.`;
+  }
+  const tags = tagsProblem(cleanTags(p.keepTags));
+  if (tags) return tags;
+  const within = p.keepWithin.trim();
+  if (within && !validRetentionDuration(within))
+    return "Write the period as years, months, days and hours, such as 1y6m, 30d or 12h; each number is at least 1, without leading zeros.";
+  if (!hasRetentionRule(p))
+    return "Set at least one rule. Without one, every snapshot would be removed.";
+  return undefined;
 }
 
 /**
@@ -99,13 +188,14 @@ export function validRetentionDuration(text: string): boolean {
  */
 export function describeRetention(p: RetentionPolicyState): string {
   const parts = retentionCounts
-    .filter((c) => Number(p[c.key]) > 0)
+    .filter((c) => keepCount(p[c.key]) > 0)
     .map((c) =>
-      c.key === "keepLast" ? `the last ${Number(p[c.key])}` : `${Number(p[c.key])} ${c.noun}`,
+      c.key === "keepLast" ? `the last ${keepCount(p[c.key])}` : `${keepCount(p[c.key])} ${c.noun}`,
     );
   const extra: string[] = [];
+  const tags = cleanTags(p.keepTags);
   if (p.keepWithin.trim()) extra.push(`everything from the last ${p.keepWithin.trim()}`);
-  if (p.keepTags.length) extra.push(`snapshots tagged ${p.keepTags.join(", ")}`);
+  if (tags.length) extra.push(`snapshots tagged ${tags.join(", ")}`);
   if (!parts.length && !extra.length) return "Keeps nothing yet: set at least one rule.";
   const list = (items: string[]) =>
     items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;

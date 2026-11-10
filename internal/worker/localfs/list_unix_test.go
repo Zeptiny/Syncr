@@ -23,7 +23,7 @@ func TestListSymlinks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	l, err := p.List(root, 0, false)
+	l, err := p.List(t.Context(), root, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,13 +38,13 @@ func TestListSymlinks(t *testing.T) {
 		}
 	}
 	// A link is followed only into a root.
-	if in, err := p.List(filepath.Join(root, "in"), 0, false); err != nil || !slices.Equal(names(in), []string{"inner.txt"}) {
+	if in, err := p.List(t.Context(), filepath.Join(root, "in"), 0, false); err != nil || !slices.Equal(names(in), []string{"inner.txt"}) {
 		t.Errorf("link inside the roots = %v, %v", names(in), err)
 	}
-	if _, err := p.List(filepath.Join(root, "out"), 0, false); !errors.Is(err, ErrNotAllowed) {
+	if _, err := p.List(t.Context(), filepath.Join(root, "out"), 0, false); !errors.Is(err, ErrNotAllowed) {
 		t.Errorf("link outside the roots = %v, want ErrNotAllowed", err)
 	}
-	if dirs, _ := p.List(root, 0, true); !slices.Equal(names(dirs), []string{"Z", "b", "in", "out"}) {
+	if dirs, _ := p.List(t.Context(), root, 0, true); !slices.Equal(names(dirs), []string{"Z", "b", "in", "out"}) {
 		t.Errorf("dirs only = %v", names(dirs))
 	}
 }
@@ -60,7 +60,7 @@ func TestListUnreadableFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
-	if _, err := p.List(locked, 0, false); !errors.Is(err, os.ErrPermission) {
+	if _, err := p.List(t.Context(), locked, 0, false); !errors.Is(err, os.ErrPermission) {
 		t.Errorf("err = %v, want a permission error", err)
 	}
 }

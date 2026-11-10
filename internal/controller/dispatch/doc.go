@@ -252,22 +252,41 @@
 //
 //	Probe call                                     Command
 //	waiting, RunProbe not acked                    RunProbe, id "probe:<probe>"
-//	given up by its caller after the ack           CancelProbe, id "probe-cancel:<probe>", until acked
-//	given up before the ack                        none
+//	given up by its caller once a derivation for
+//	  the current process included its RunProbe
+//	  (acked or not)                               CancelProbe, id "probe-cancel:<probe>", until acked
+//	given up before that                           none
+//
+// A RunProbe counts as sent as soon as a derivation includes it, also when
+// the command budget then leaves it out of the response: the caller may
+// give up between the two, and a worker ignores a CancelProbe for a probe
+// it never saw. Workers remember a cancelled probe ID, so a CancelProbe
+// that overtakes its RunProbe keeps the probe from starting.
 //
 // The result arrives with CompleteProbe, which authenticates the worker
 // and adopts its epoch like Report; it is matched by probe ID and worker,
 // and an unknown, late or another worker's result is ignored. When the
 // worker's epoch changes, the probes its previous process had acked fail
-// (domain.ErrUnavailable) and the others are sent to the new process. A
-// call ends with domain.ErrUnavailable after its timeout plus
-// ProbeConfig.Grace, and at most ProbeConfig.MaxInFlightPerWorker calls
-// wait per worker.
+// (domain.ErrUnavailable) and the others are sent to the new process. When
+// the Hello of the worker's current process is stored, the waiting probes
+// it cannot run (no "probe" feature, or not the operation: a downgrade)
+// fail at once with the same domain.ErrFailedPrecondition as an up-front
+// refusal; derivations repeat that check for a probe queued on the
+// previous process's Hello meanwhile. A call ends with
+// domain.ErrUnavailable after its timeout plus ProbeConfig.Grace, and at
+// most ProbeConfig.MaxInFlightPerWorker calls wait per worker.
 //
 // Passive workers: a running PassiveLoop registers its client with the
 // broker, and Probe calls the worker's Probe RPC directly with the
-// caller's context and the same deadline. A worker that answers
+// caller's context and the same deadline; a caller that gives up ends the
+// call and with it the probe on the worker. A worker that answers
 // Unimplemented (ErrProbeUnsupported) is reported as outdated.
+//
+// Time limits: the cap on a probe's timeout and the grace come from
+// internal/link (MaxProbeTimeout, ProbeGrace), which the workers use too;
+// the composition root caps the broker at the longer of the controller's
+// probe settings and lets the passive client wait that long plus the
+// grace for a Probe's answer (ProbeConfig.Wait).
 //
 // Allowed dependencies: the standard library, protobuf, the generated link
 // code, internal/link, internal/domain, internal/jobkind and the

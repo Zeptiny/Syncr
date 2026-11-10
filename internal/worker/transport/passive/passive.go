@@ -52,8 +52,10 @@ import (
 const (
 	DefaultReadHeaderTimeout = 10 * time.Second
 	DefaultReadTimeout       = 2 * time.Minute
-	DefaultWriteTimeout      = 2 * time.Minute
-	DefaultIdleTimeout       = 2 * time.Minute
+	// DefaultWriteTimeout covers a Probe answered at the longest probe
+	// timeout, with room to write the response.
+	DefaultWriteTimeout = link.MaxProbeTimeout + 30*time.Second
+	DefaultIdleTimeout  = 2 * time.Minute
 	// DefaultReadMaxBytes caps a request: a CommandRequest carries up to 64
 	// commands with job specs of up to 1 MiB each.
 	DefaultReadMaxBytes = 64 << 20

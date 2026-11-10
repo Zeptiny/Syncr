@@ -58,8 +58,9 @@ describe("describeRetention", () => {
     expect(matchingPreset({ ...defaultRetention(), keepLast: "1" })).toBeUndefined();
     expect(hasRetentionRule(emptyRetention())).toBe(false);
     expect(hasRetentionRule({ ...emptyRetention(), keepTags: ["x"] })).toBe(true);
-    expect(["30d", "1y6m", "12h", "2y3m4d5h"].every(validRetentionDuration)).toBe(true);
-    expect(["", "30", "d", "two weeks", "6m1y"].some(validRetentionDuration)).toBe(false);
+    // The controller's syntax: units in any order, numbers from 1.
+    expect(["30d", "1y6m", "12h", "2y3m4d5h", "6m1y"].every(validRetentionDuration)).toBe(true);
+    expect(["", "30", "d", "two weeks", "0d", "01d"].some(validRetentionDuration)).toBe(false);
   });
 });
 

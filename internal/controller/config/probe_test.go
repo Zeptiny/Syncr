@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Zeptiny/Syncr/internal/link"
 	platformconfig "github.com/Zeptiny/Syncr/internal/platform/config"
 )
 
@@ -29,11 +30,11 @@ func TestValidateProbe(t *testing.T) {
 		wantErr string
 	}{
 		{"shortest", func(c *Config) { c.Probe = Probe{Timeout: time.Second, ResticTimeout: time.Second} }, ""},
-		{"longest", func(c *Config) { c.Probe = Probe{Timeout: 90 * time.Second, ResticTimeout: 90 * time.Second} }, ""},
+		{"longest", func(c *Config) { c.Probe = Probe{Timeout: link.MaxProbeTimeout, ResticTimeout: link.MaxProbeTimeout} }, ""},
 		{"timeout too short", func(c *Config) { c.Probe.Timeout = 999 * time.Millisecond }, "probe.timeout"},
-		{"timeout too long", func(c *Config) { c.Probe.Timeout = 91 * time.Second }, "probe.timeout"},
+		{"timeout too long", func(c *Config) { c.Probe.Timeout = link.MaxProbeTimeout + time.Second }, "probe.timeout"},
 		{"restic timeout zero", func(c *Config) { c.Probe.ResticTimeout = 0 }, "probe.restic_timeout"},
-		{"restic timeout too long", func(c *Config) { c.Probe.ResticTimeout = 2 * time.Minute }, "probe.restic_timeout"},
+		{"restic timeout too long", func(c *Config) { c.Probe.ResticTimeout = link.MaxProbeTimeout + time.Second }, "probe.restic_timeout"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -2,6 +2,9 @@ package localfs
 
 import (
 	"cmp"
+	"context"
+	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -40,51 +43,126 @@ type Listing struct {
 	Truncated bool
 }
 
+// listBatch is how many directory entries List reads at a time; it checks
+// its context between batches.
+const listBatch = 512
+
 // List lists the direct children of path, which Resolve must accept; an
 // empty path lists the roots themselves. Directories come first, then names
 // in order (case-insensitively on Windows); at most limit entries are
 // returned (limit <= 0 means no bound). With dirsOnly, only directories and
 // links to directories are listed. Hidden files are included.
 //
-// Errors are those of Resolve, or the filesystem's (fs.ErrNotExist,
+// The folder is read in batches. Ordering needs every name and whether it
+// is a folder (the directory entry's type; a symbolic link's target is
+// stat'ed), but only the entries returned are stat'ed for their size, time
+// and mode, and at most about twice limit names are held at once. List
+// checks ctx between batches and before each stat and returns ctx's error
+// once it ends. A single system call blocked in the kernel (a hung network
+// mount) cannot be interrupted from Go: List returns when that call does.
+//
+// Errors are ctx's, those of Resolve, or the filesystem's (fs.ErrNotExist,
 // fs.ErrPermission, a path that is not a directory).
-func (p *Policy) List(path string, limit int, dirsOnly bool) (Listing, error) {
+func (p *Policy) List(ctx context.Context, path string, limit int, dirsOnly bool) (Listing, error) {
+	if err := ctx.Err(); err != nil {
+		return Listing{}, err
+	}
 	if path == "" {
-		return p.listRoots(limit), nil
+		return p.listRoots(ctx, limit)
 	}
 	clean, err := p.Resolve(path)
 	if err != nil {
 		return Listing{}, err
 	}
-	des, err := os.ReadDir(clean)
+	names, truncated, err := readNames(ctx, clean, limit, dirsOnly)
 	if err != nil {
 		return Listing{}, err
 	}
-	entries := make([]Entry, 0, len(des))
-	for _, de := range des {
-		e, ok := entryOf(clean, de)
-		if !ok || (dirsOnly && !e.Dir) {
-			continue
+	out := Listing{Path: clean, Entries: make([]Entry, 0, len(names)), Truncated: truncated}
+	for _, n := range names {
+		if limit > 0 && len(out.Entries) == limit {
+			out.Truncated = true // more names remain
+			break
 		}
-		entries = append(entries, e)
-	}
-	sortEntries(entries)
-	out := Listing{Path: clean, Entries: entries}
-	if limit > 0 && len(entries) > limit {
-		out.Entries, out.Truncated = entries[:limit], true
+		if err := ctx.Err(); err != nil {
+			return Listing{}, err
+		}
+		e, ok := describe(clean, n)
+		if !ok || (dirsOnly && !e.Dir) {
+			continue // vanished or changed since the folder was read
+		}
+		out.Entries = append(out.Entries, e)
 	}
 	return out, nil
 }
 
-// entryOf describes one directory entry; false if it vanished meanwhile.
-func entryOf(dir string, de fs.DirEntry) (Entry, bool) {
-	info, err := de.Info() // Lstat
+// dirName is a directory entry as read, before it is stat'ed: what
+// ordering needs.
+type dirName struct {
+	name string
+	// dir reports a directory, or a symbolic link to one.
+	dir bool
+}
+
+// readNames reads the folder dir in batches and returns its entries in
+// listing order: all of them when limit <= 0, else at least the first
+// limit (truncated reports that others were dropped on the way).
+func readNames(ctx context.Context, dir string, limit int, dirsOnly bool) (names []dirName, truncated bool, err error) {
+	f, err := os.Open(dir) //nolint:gosec // dir was accepted by Resolve: inside local_roots
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+	for {
+		des, rerr := f.ReadDir(listBatch)
+		for _, de := range des {
+			n := dirName{name: de.Name(), dir: de.IsDir()}
+			if de.Type()&fs.ModeSymlink != 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, false, err
+				}
+				// A dangling link, or one that cannot be followed, is not a
+				// folder.
+				if target, err := os.Stat(filepath.Join(dir, n.name)); err == nil {
+					n.dir = target.IsDir()
+				}
+			}
+			if dirsOnly && !n.dir {
+				continue
+			}
+			names = append(names, n)
+		}
+		switch {
+		case errors.Is(rerr, io.EOF):
+			slices.SortFunc(names, compareNames)
+			return names, truncated, nil
+		case rerr != nil:
+			return nil, false, rerr
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		if limit > 0 && len(names) > 2*limit {
+			// Only the first limit can be listed: keep those.
+			slices.SortFunc(names, compareNames)
+			clear(names[limit:])
+			names, truncated = names[:limit], true
+		}
+	}
+}
+
+// describe stats one entry of dir; false if it vanished meanwhile. n.dir
+// (a symbolic link's target, followed when the folder was read) is kept
+// for a link.
+func describe(dir string, n dirName) (Entry, bool) {
+	path := filepath.Join(dir, n.name)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return Entry{}, false
 	}
 	e := Entry{
-		Name:    de.Name(),
-		Path:    filepath.Join(dir, de.Name()),
+		Name:    n.name,
+		Path:    path,
 		Dir:     info.IsDir(),
 		Symlink: info.Mode()&fs.ModeSymlink != 0,
 		ModTime: info.ModTime(),
@@ -94,43 +172,45 @@ func entryOf(dir string, de fs.DirEntry) (Entry, bool) {
 		e.Size = info.Size()
 	}
 	if e.Symlink {
-		// A dangling link, or one that cannot be followed, is not a folder.
-		if target, err := os.Stat(e.Path); err == nil {
-			e.Dir = target.IsDir()
-		}
+		e.Dir = n.dir
 	}
 	return e, true
 }
 
-func (p *Policy) listRoots(limit int) Listing {
+func (p *Policy) listRoots(ctx context.Context, limit int) (Listing, error) {
 	out := Listing{Entries: make([]Entry, 0, len(p.roots))}
 	for _, r := range p.roots {
+		if err := ctx.Err(); err != nil {
+			return Listing{}, err
+		}
 		e := Entry{Name: r.clean, Path: r.clean, Dir: true}
 		if info, err := os.Stat(r.clean); err == nil {
 			e.Dir, e.ModTime, e.Mode = info.IsDir(), info.ModTime(), info.Mode()
 		}
 		out.Entries = append(out.Entries, e)
 	}
-	sortEntries(out.Entries)
+	slices.SortFunc(out.Entries, func(a, b Entry) int {
+		return compareNames(dirName{a.Name, a.Dir}, dirName{b.Name, b.Dir})
+	})
 	if limit > 0 && len(out.Entries) > limit {
 		out.Entries, out.Truncated = out.Entries[:limit], true
 	}
-	return out
+	return out, nil
 }
 
-// sortEntries orders directories first, then by name.
-func sortEntries(entries []Entry) {
-	key := func(s string) string { return s }
-	if runtime.GOOS == "windows" {
-		key = strings.ToLower
-	}
-	slices.SortFunc(entries, func(a, b Entry) int {
-		if a.Dir != b.Dir {
-			if a.Dir {
-				return -1
-			}
-			return 1
+// compareNames orders directories first, then by name (case-insensitively
+// on Windows, ties broken by the exact name).
+func compareNames(a, b dirName) int {
+	if a.dir != b.dir {
+		if a.dir {
+			return -1
 		}
-		return cmp.Or(cmp.Compare(key(a.Name), key(b.Name)), cmp.Compare(a.Name, b.Name))
-	})
+		return 1
+	}
+	if runtime.GOOS == "windows" {
+		if c := cmp.Compare(strings.ToLower(a.name), strings.ToLower(b.name)); c != 0 {
+			return c
+		}
+	}
+	return cmp.Compare(a.name, b.name)
 }

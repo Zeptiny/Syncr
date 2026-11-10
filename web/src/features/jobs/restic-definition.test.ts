@@ -217,6 +217,30 @@ describe("JobDefinitionState", () => {
     retention.retention.policy.keepWithin = "30d";
     expect(validateDefinition(retention)).toEqual({});
 
+    // The controller's rules, shown inline instead of coming back from the
+    // server: no zero or leading-zero periods, whole counts, blank tags
+    // dropped (so a blank tag alone is no rule), filter tags and host.
+    const forget = (policy: Partial<typeof retention.retention.policy>, extra = {}) => ({
+      ...retention,
+      retention: {
+        ...retention.retention,
+        ...extra,
+        policy: { ...retention.retention.policy, keepWithin: "", ...policy },
+      },
+    });
+    expect(validateDefinition(forget({ keepWithin: "0d" })).policy).toMatch(/at least 1/);
+    expect(validateDefinition(forget({ keepWithin: "01d" })).policy).toMatch(/leading zeros/);
+    expect(validateDefinition(forget({ keepTags: [" "] })).policy).toMatch(/at least one rule/);
+    expect(validateDefinition(forget({ keepDaily: "1.5" })).policy).toMatch(/whole number/);
+    expect(validateDefinition(forget({ keepWithin: "1d1y" }))).toEqual({});
+    expect(validateDefinition(forget({ keepWithin: "2y5m7d3h" }))).toEqual({});
+    expect(validateDefinition(forget({ keepLast: "3" }, { tags: ["a,b"] })).options).toMatch(
+      /comma/,
+    );
+    expect(
+      toDefinition(forget({ keepDaily: "07", keepTags: [" legal ", " "] })).operation?.value,
+    ).toMatchObject({ policy: { keepDaily: 7, keepTags: ["legal"], keepWithin: "" } });
+
     const check = emptyDefinition("restic_check", "r");
     if (check.kind !== "restic_check") throw new Error("kind");
     check.check.readData = "custom";

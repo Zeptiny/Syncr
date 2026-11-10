@@ -160,6 +160,21 @@ func probeLimit() ratelimit.Config {
 	return ratelimit.Config{Burst: 20, Every: 500 * time.Millisecond, MaxKeys: 10000}
 }
 
+// probeConfig is the probe broker's configuration: it caps a probe at the
+// longer of probe.timeout and probe.restic_timeout, so what the controller
+// enforces is what is configured (the grace is the default,
+// link.ProbeGrace).
+func probeConfig(p controllerconfig.Probe) dispatch.ProbeConfig {
+	return dispatch.ProbeConfig{MaxTimeout: p.Longest()}
+}
+
+// passiveClientConfig is the configuration of the passive workers'
+// clients: a Probe may wait for its response headers as long as the probe
+// broker waits for its answer.
+func passiveClientConfig(p controllerconfig.Probe) passive.ClientConfig {
+	return passive.ClientConfig{ProbeTimeout: probeConfig(p).Wait()}
+}
+
 // lazyRestic is the restic service as the services built before it use it:
 // the jobs service (the repository of a new job), the job describer (the
 // repositories' names) and the jobFinished notifier (Wake). The restic
@@ -304,7 +319,7 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	}
 	probeBroker, err := dispatch.NewProbeBroker(dispatch.ProbeBrokerDeps{
 		Workers: ws, Hub: hub, Clock: clk, Logger: log.With("component", "probe"),
-	}, dispatch.ProbeConfig{})
+	}, probeConfig(cfg.Probe))
 	if err != nil {
 		return nil, fmt.Errorf("probe broker: %w", err)
 	}
@@ -855,6 +870,7 @@ func serve(ctx context.Context, cfg controllerconfig.Config, info version.Info, 
 	sup, err := passive.NewSupervisor(passive.SupervisorOptions{
 		Workers: targets,
 		NewLoop: passive.DispatchLoops(svc.disp),
+		Client:  passiveClientConfig(cfg.Probe),
 		Wake:    svc.wake,
 		Logger:  log.With("component", "passive"),
 	})

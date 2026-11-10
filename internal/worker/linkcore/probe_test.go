@@ -9,6 +9,7 @@ import (
 	"time"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/link"
 	"github.com/Zeptiny/Syncr/internal/worker/agent"
 )
 
@@ -174,13 +175,85 @@ func TestActiveProbeCancel(t *testing.T) {
 		}
 		// Canceling a finished probe changes nothing.
 		poll(core, cancelProbeCmd("p1"))
-		time.Sleep(2 * time.Minute)
+		time.Sleep(ProbeResultRetention)
 		synctest.Wait()
 		if got := resultIDs(core.PendingProbeResults()); !slices.Equal(got, []string{"p2"}) {
 			// p1 expired meanwhile (see TestProbeResultsExpire); p2 finished.
 			t.Errorf("pending = %v", got)
 		}
 	})
+}
+
+// TestCancelBeforeRun: the controller cancels a probe it gave up on as soon
+// as its run_probe may have been sent, so the cancel can come first: in an
+// earlier Poll, in the same one (either order), or before a redelivery.
+// The probe never starts, and the cancelled ID is remembered for
+// ProbeDedupeRetention.
+func TestCancelBeforeRun(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		fp := &fakeProber{delay: time.Minute}
+		core, a := newProbeCore(t, fp)
+		defer shutdown(t, a)
+		defer core.Close()
+
+		// An earlier Poll.
+		if got := poll(core, cancelProbeCmd("early")); !slices.Equal(got, []string{"probe-cancel:early"}) {
+			t.Errorf("acks = %v", got)
+		}
+		if got := poll(core, runProbeCmd("early")); !slices.Equal(got, []string{"probe:early"}) {
+			t.Errorf("acks = %v", got)
+		}
+		// The same Poll, in both orders.
+		if got := poll(core, cancelProbeCmd("before"), runProbeCmd("before"), runProbeCmd("after"), cancelProbeCmd("after")); !slices.Equal(got,
+			[]string{"probe-cancel:before", "probe:before", "probe:after", "probe-cancel:after"}) {
+			t.Errorf("acks = %v", got)
+		}
+		synctest.Wait()
+		if got := fp.ran(); len(got) != 0 {
+			t.Fatalf("cancelled probes ran: %v", got)
+		}
+		if got := core.PendingProbeResults(); len(got) != 0 {
+			t.Errorf("results of probes that never ran: %v", got)
+		}
+
+		// Started, cancelled, then redelivered: stopped and not run again.
+		poll(core, runProbeCmd("started"))
+		synctest.Wait()
+		poll(core, cancelProbeCmd("started"))
+		synctest.Wait()
+		poll(core, runProbeCmd("started"))
+		synctest.Wait()
+		if got, stopped := fp.ran(), fp.wasCancelled(); !slices.Equal(got, []string{"started"}) || !slices.Equal(stopped, []string{"started"}) {
+			t.Errorf("runs = %v, cancelled = %v; want one run, stopped", got, stopped)
+		}
+
+		// Remembered for the dedupe window, then forgotten.
+		time.Sleep(ProbeDedupeRetention - time.Second)
+		poll(core, runProbeCmd("early"))
+		synctest.Wait()
+		if slices.Contains(fp.ran(), "early") {
+			t.Error("a cancelled ID was forgotten early")
+		}
+		time.Sleep(time.Second)
+		poll(core, runProbeCmd("early"))
+		synctest.Wait()
+		if !slices.Contains(fp.ran(), "early") {
+			t.Error("a cancelled ID is never forgotten")
+		}
+	})
+}
+
+// TestProbeRetentionFollowsTheCap: the retention of probe state is a
+// multiple of the longest probe, and results expire before their IDs.
+func TestProbeRetentionFollowsTheCap(t *testing.T) {
+	t.Parallel()
+	if ProbeResultRetention != 2*link.MaxProbeTimeout || ProbeDedupeRetention != 3*link.MaxProbeTimeout {
+		t.Errorf("retention = %v, %v; want 2 and 3 times %v", ProbeResultRetention, ProbeDedupeRetention, link.MaxProbeTimeout)
+	}
+	if ProbeResultRetention <= link.MaxProbeTimeout+link.ProbeGrace {
+		t.Error("a result may expire while the controller still waits for it")
+	}
 }
 
 func TestProbeResultsExpire(t *testing.T) {

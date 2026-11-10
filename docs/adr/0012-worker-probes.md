@@ -49,8 +49,8 @@ that a worker runs outside its job slots and answers with one
   canceling the HTTP request cancels the probe.
 - **Active workers** receive `Command.run_probe` through their long poll
   and answer with a new unary RPC, `ControllerLinkService.CompleteProbe`.
-  If the caller goes away after the worker accepted the probe, the worker
-  is sent `Command.cancel_probe`.
+  If the caller goes away once the `run_probe` may have reached the worker,
+  the worker is sent `Command.cancel_probe`.
 
 Restic probes read with `--no-lock` and take no concurrency keys
 (ADR 0013), so browsing never waits for, or blocks, a backup.
@@ -75,18 +75,32 @@ are derived from the job:
 |---|---|
 | the worker acks `probe:<id>` | the probe is not sent again |
 | no ack yet | `run_probe` is derived again on the next poll (workers deduplicate by probe ID) |
-| the caller gives up before the ack | the call is dropped; nothing is sent |
-| the caller gives up after the ack | `cancel_probe` is sent until it is acked |
+| the caller gives up before a `run_probe` was derived for the worker's current process | the call is dropped; nothing is sent |
+| the caller gives up after that, acked or not | `cancel_probe` is sent until it is acked |
 | the worker's epoch changes | accepted probes fail ("the worker restarted"); the others go to the new process |
+| the Hello of the worker's current process lacks `probe` or the operation | its waiting probes fail at once as outdated |
 | `CompleteProbe` | matched by probe ID **and** worker; unknown, late or another worker's results are accepted and ignored |
 
 `CompleteProbe` authenticates the worker and adopts its epoch like every
 other link call, so a result from a replaced worker process is refused.
 
+A `run_probe` counts as sent once a derivation includes it, even if the
+command budget leaves it out of that response: the worker may already
+have it (a Poll response the controller wrote but the worker had not
+acked yet), and a probe it started would otherwise run to the end, such
+as a `restic init` creating a repository nobody stores, or a slow listing
+holding one of the worker's probe slots. A worker that never saw the probe
+ignores the cancel. Workers remember a cancelled probe ID as long as a
+started one (three times the cap), and apply the cancels of a Poll response
+before its `run_probe`s, so a cancel that arrives first, in the same
+response or before a redelivery, keeps the probe from starting.
+
 For passive workers the `PassiveLoop` registers its client with the broker
 while it runs, and `Probe` calls the worker directly. The passive client
 uses a second HTTP transport for probes: the normal one gives up after
-30 s, a probe may take 90 s, and its context carries the deadline.
+30 s, a probe may take up to the longer probe setting plus the grace, and
+its context carries the deadline. A caller that gives up ends the call,
+and the worker's handler stops the probe.
 
 The broker lives in `dispatch` and not in the probe package because it
 shares the dispatcher's sessions, command derivation and `Hub`. It is
@@ -102,9 +116,10 @@ worker lacks the `probe` feature or the operation, with a message that says
 to upgrade the worker. It never sends `run_probe` to a worker without the
 feature: the dispatcher decides from the Hello of the worker's current
 process, and a new process's probes wait until its Hello is stored (the
-up-front check may still see the previous process's Hello). A passive
-worker that answers `Unimplemented` anyway (a stale Hello) gets the same
-error. An old active worker that somehow receives
+up-front check may still see the previous process's Hello). Storing that
+Hello fails the waiting probes it cannot run with the same error, at once
+rather than at their timeout. A passive worker that answers
+`Unimplemented` anyway (a stale Hello) gets the same error. An old active worker that somehow receives
 `run_probe` acks and ignores it; the probe then times out as unavailable.
 
 ### Orchestration lives in `internal/controller/probe`
@@ -139,13 +154,26 @@ either way.
 |---|---|
 | Probe timeout, listings and usage | 30 s (`probe.timeout`) |
 | Probe timeout, restic operations | 60 s (`probe.restic_timeout`) |
-| Hard cap on any probe | 90 s, on both sides |
-| Controller's own wait | the timeout plus 5 s of grace |
+| Hard cap on any probe | 90 s, on both sides (`link.MaxProbeTimeout`) |
+| Controller's own wait | the timeout plus 5 s of grace (`link.ProbeGrace`) |
 | Probes in flight per worker (controller) | 8; more fail at once as unavailable |
 | Probes running per worker (worker) | 4; more answer `BUSY` |
 | Per user | a burst of 20, then 2 per second |
 | Entries per listing | 2000 by default, 5000 at most |
 | Snapshots per listing | the newest 5000 |
+
+The cap and the grace live in `internal/link`, which both sides import;
+every other limit is derived from them: the settings' upper bound, the
+broker's cap (the longer setting), the passive client's wait for a probe's
+answer (that plus the grace), the worker's cap, its passive server's
+write timeout and how long it keeps probe results (twice the cap) and
+probe IDs (three times).
+
+A local listing stops with its probe's context between batches of
+directory entries and between stats. A filesystem call blocked in the
+kernel (a hung network mount) cannot be interrupted: the probe still
+answers at its deadline, and the listing keeps its probe slot until the
+call returns, so stuck listings never exceed the worker's slots.
 
 ### Errors
 

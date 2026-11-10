@@ -27,6 +27,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch/passive"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/link"
 )
 
 // fakeWorker is a WorkerLinkService that records the Authorization header
@@ -201,6 +202,33 @@ func TestClientTimeout(t *testing.T) {
 	start := time.Now()
 	if _, err := c.Pull(context.Background(), &syncrv1.PullRequest{}); err == nil || time.Since(start) > 5*time.Second {
 		t.Errorf("pull of a hanging worker: %v after %v", err, time.Since(start))
+	}
+}
+
+// TestClientProbeTimeout: ClientConfig.ProbeTimeout is how long a Probe
+// waits for the worker's response headers when its context has no
+// deadline; by default the longest probe plus the broker's grace.
+func TestClientProbeTimeout(t *testing.T) {
+	t.Parallel()
+	if passive.DefaultProbeTimeout != link.MaxProbeTimeout+link.ProbeGrace {
+		t.Errorf("DefaultProbeTimeout = %v", passive.DefaultProbeTimeout)
+	}
+	leaf := newCert(t, "w", nil, false)
+	block := make(chan struct{})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-block }))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{leaf.der}, PrivateKey: leaf.key}}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	defer srv.Close()
+	defer close(block)
+	c, err := passive.NewClient(target(srv.URL, leaf.fingerprint()), passive.ClientConfig{ProbeTimeout: 200 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	start := time.Now()
+	_, err = c.Probe(context.Background(), &syncrv1.ProbeRequest{Probe: &syncrv1.RunProbe{ProbeId: "p"}})
+	if took := time.Since(start); err == nil || took < 200*time.Millisecond || took > 5*time.Second {
+		t.Errorf("probe of a hanging worker: %v after %v, want an error after the probe timeout", err, took)
 	}
 }
 

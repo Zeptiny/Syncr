@@ -15,7 +15,7 @@ func TestListWindowsPaths(t *testing.T) {
 	// Roots and paths compare case-insensitively; the listing keeps the
 	// spelling that was asked for.
 	upper := strings.ToUpper(root)
-	l, err := p.List(upper, 0, true)
+	l, err := p.List(t.Context(), upper, 0, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,12 +26,12 @@ func TestListWindowsPaths(t *testing.T) {
 		t.Errorf("entry path %q has no drive letter", l.Entries[0].Path)
 	}
 	for _, bad := range []string{`C:relative`, `\rooted`, `\\.\C:\`, `\\?\C:\x`, filepath.Join(root, "NUL")} {
-		if _, err := p.List(bad, 0, false); err == nil {
+		if _, err := p.List(t.Context(), bad, 0, false); err == nil {
 			t.Errorf("List(%q) succeeded", bad)
 		}
 	}
 	// A UNC path outside the roots is refused, not listed.
-	if _, err := p.List(`\\server\share\folder`, 0, false); err == nil {
+	if _, err := p.List(t.Context(), `\\server\share\folder`, 0, false); err == nil {
 		t.Error("UNC path outside the roots was listed")
 	}
 }

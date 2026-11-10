@@ -435,6 +435,7 @@ linters:
             - $gostd
             - github.com/Zeptiny/Syncr/gen
             - google.golang.org/protobuf
+            - github.com/Zeptiny/Syncr/internal/link$
             - github.com/Zeptiny/Syncr/internal/worker/agent
             - github.com/Zeptiny/Syncr/internal/worker/outbox
 

@@ -121,7 +121,7 @@ type fakeLocal struct {
 	dirs    bool
 }
 
-func (f *fakeLocal) List(path string, limit int, dirsOnly bool) (localfs.Listing, error) {
+func (f *fakeLocal) List(_ context.Context, path string, limit int, dirsOnly bool) (localfs.Listing, error) {
 	f.limit, f.dirs = limit, dirsOnly
 	l := f.listing
 	l.Path = path
@@ -387,7 +387,7 @@ func TestTimeoutCancelAndBusy(t *testing.T) {
 			t.Errorf("timed out after %v, want %v", got, DefaultTimeout)
 		}
 		// The request's timeout, and the cap on it.
-		for _, tc := range []struct{ ask, want time.Duration }{{5 * time.Second, 5 * time.Second}, {time.Hour, DefaultMaxTimeout}} {
+		for _, tc := range []struct{ ask, want time.Duration }{{5 * time.Second, 5 * time.Second}, {time.Hour, link.MaxProbeTimeout}} {
 			start = time.Now()
 			p := probeOf("about", 0)
 			p.Timeout = durationpb.New(tc.ask)
@@ -433,7 +433,9 @@ func TestTimeoutCancelAndBusy(t *testing.T) {
 // panicLocal panics in List.
 type panicLocal struct{}
 
-func (panicLocal) List(string, int, bool) (localfs.Listing, error) { panic("boom with a secret") }
+func (panicLocal) List(context.Context, string, int, bool) (localfs.Listing, error) {
+	panic("boom with a secret")
+}
 
 func TestPanicBecomesAnInternalError(t *testing.T) {
 	t.Parallel()
@@ -493,9 +495,107 @@ func TestLocalListingConversion(t *testing.T) {
 
 func TestNewRejectsNegativeLimits(t *testing.T) {
 	t.Parallel()
-	for _, cfg := range []Config{{MaxConcurrent: -1}, {MaxEntries: -1}, {MaxSnapshots: -1}, {MaxResultBytes: -1}, {DefaultTimeout: -1}, {MaxTimeout: -1}} {
+	for _, cfg := range []Config{{MaxConcurrent: -1}, {MaxEntries: -1}, {MaxSnapshots: -1}, {MaxResultBytes: -1}, {DefaultTimeout: -1}, {MaxTimeout: -1}, {MaxTimeout: link.MaxProbeTimeout + 1}} {
 		if _, err := New(cfg); err == nil {
 			t.Errorf("New(%+v) succeeded", cfg)
 		}
 	}
+}
+
+// stuckLocal is a local listing blocked in a system call: it ignores its
+// context and returns only when release is closed.
+type stuckLocal struct {
+	release chan struct{}
+
+	mu      sync.Mutex
+	running int
+}
+
+func (l *stuckLocal) List(context.Context, string, int, bool) (localfs.Listing, error) {
+	l.mu.Lock()
+	l.running++
+	l.mu.Unlock()
+	<-l.release
+	l.mu.Lock()
+	l.running--
+	l.mu.Unlock()
+	return localfs.Listing{}, nil
+}
+
+func (l *stuckLocal) inFlight() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.running
+}
+
+// TestStuckLocalListing: a local listing that cannot be interrupted does
+// not hold its probe past the deadline or a cancel, and keeps its slot
+// until it returns, so stuck listings never exceed the slots.
+func TestStuckLocalListing(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		local := &stuckLocal{release: make(chan struct{})}
+		e := newExecutor(t, nil, local, func(c *Config) { c.MaxConcurrent = 2 })
+		start := time.Now()
+		p := probeOf("list_local", 0)
+		p.Timeout = durationpb.New(5 * time.Second)
+		mustFail(t, e.Probe(t.Context(), p), syncrv1.JobErrorCode_JOB_ERROR_CODE_TIMEOUT)
+		if got := time.Since(start); got != 5*time.Second {
+			t.Errorf("answered after %v, want the timeout", got)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		time.AfterFunc(time.Second, cancel)
+		if res := e.Probe(ctx, p); res.GetStatus() != syncrv1.ProbeStatus_PROBE_STATUS_CANCELLED {
+			t.Errorf("cancelled = %v", res)
+		}
+		// Both slots are held by the stuck listings: more are refused at
+		// once and start no listing.
+		for range 3 {
+			mustFail(t, e.Probe(t.Context(), p), syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY)
+		}
+		if n := local.inFlight(); n != 2 {
+			t.Errorf("%d listings in flight, want 2 (the slots)", n)
+		}
+		// Once the calls return, the slots are free again.
+		close(local.release)
+		synctest.Wait()
+		if n := local.inFlight(); n != 0 {
+			t.Fatalf("%d listings still in flight", n)
+		}
+		if res := e.Probe(t.Context(), p); res.GetStatus() != syncrv1.ProbeStatus_PROBE_STATUS_OK {
+			t.Errorf("after the listings returned: %v", res)
+		}
+	})
+}
+
+// TestLocalListingHonorsItsContext: the listing gets the probe's context
+// with its deadline.
+func TestLocalListingHonorsItsContext(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		deadlines := make(chan time.Duration, 2)
+		local := localFunc(func(ctx context.Context) (localfs.Listing, error) {
+			d, _ := ctx.Deadline()
+			deadlines <- time.Until(d)
+			<-ctx.Done()
+			return localfs.Listing{}, ctx.Err()
+		})
+		e := newExecutor(t, nil, local, func(c *Config) { c.MaxConcurrent = 1 })
+		p := probeOf("list_local", 0)
+		p.Timeout = durationpb.New(7 * time.Second)
+		mustFail(t, e.Probe(t.Context(), p), syncrv1.JobErrorCode_JOB_ERROR_CODE_TIMEOUT)
+		if d := <-deadlines; d != 7*time.Second {
+			t.Errorf("listing deadline = %v, want the probe's timeout", d)
+		}
+		// The listing returned with its context: the slot is free at once.
+		synctest.Wait()
+		mustFail(t, e.Probe(t.Context(), p), syncrv1.JobErrorCode_JOB_ERROR_CODE_TIMEOUT)
+	})
+}
+
+// localFunc is a Local made of a function of the listing's context.
+type localFunc func(ctx context.Context) (localfs.Listing, error)
+
+func (f localFunc) List(ctx context.Context, _ string, _ int, _ bool) (localfs.Listing, error) {
+	return f(ctx)
 }

@@ -54,10 +54,13 @@
 // # Probes
 //
 // A probe is a short request answered outside the job slots (Prober). In
-// passive mode it is one call: resp := core.HandleProbe(ctx, req). In active
-// mode a run_probe command starts it in the background (deduplicated by
-// probe ID, acked like every command) and a cancel_probe command stops it;
-// a third loop of the transport delivers the results:
+// passive mode it is one call: resp := core.HandleProbe(ctx, req), which
+// ends when the controller's call does. In active mode a run_probe command
+// starts it in the background (deduplicated by probe ID, acked like every
+// command) and a cancel_probe command stops it; a cancel_probe that comes
+// first, in an earlier Poll or the same one, keeps it from ever starting
+// (the cancelled ID is remembered like a started one). A third loop of the
+// transport delivers the results:
 //
 //  1. Wait for core.ProbeNotify().
 //  2. For each result of core.PendingProbeResults(), call CompleteProbe.
@@ -74,8 +77,9 @@
 // (and Command, whose StartJobs the agent now refuses) until
 // core.WaitDrained(ctx) returns.
 //
-// Allowed dependencies: the standard library, the generated protobuf code
-// and internal/worker/agent (for its Snapshot type).
+// Allowed dependencies: the standard library, the generated protobuf code,
+// internal/link (the probe time limits) and internal/worker/agent (for its
+// Snapshot type).
 package linkcore
 
 import (

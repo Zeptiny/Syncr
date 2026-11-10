@@ -14,10 +14,13 @@ import type {
   ResticPruneDefinitionSchema,
 } from "@/gen/syncr/v1/api_pb";
 import {
+  cleanTags,
   defaultRetention,
-  hasRetentionRule,
+  hostProblem,
+  keepCount,
   retentionCounts,
-  validRetentionDuration,
+  retentionPolicyProblem,
+  tagsProblem,
   type RetentionPolicyState,
 } from "@/lib/retention";
 
@@ -181,14 +184,18 @@ export function retentionState(d: ResticForgetDefinition): RetentionState {
   };
 }
 
-/** validateRetention checks what the browser can check before sending. */
+/**
+ * validateRetention checks what the browser can check before sending: the
+ * controller's rules for the policy (retentionPolicyProblem) and for the
+ * tag and host filters, on the values toRetention sends.
+ */
 export function validateRetention(s: RetentionState): Errors {
   const e: Errors = {};
   if (!s.repositoryId) e.repository = "Choose the repository to clean up.";
-  if (!hasRetentionRule(s.policy))
-    e.policy = "Set at least one rule. Without one, every snapshot would be removed.";
-  else if (s.policy.keepWithin.trim() && !validRetentionDuration(s.policy.keepWithin.trim()))
-    e.policy = "Write the period as years, months, days and hours, such as 1y6m, 30d or 12h.";
+  const policy = retentionPolicyProblem(s.policy);
+  if (policy) e.policy = policy;
+  const filters = tagsProblem(cleanTags(s.tags)) ?? hostProblem(s.host.trim());
+  if (filters) e.options = filters;
   return e;
 }
 
@@ -197,17 +204,22 @@ export function toRetention(
   s: RetentionState,
 ): MessageInitShape<typeof ResticForgetDefinitionSchema> {
   const counts = Object.fromEntries(
-    retentionCounts.map((c) => [c.key, Number(s.policy[c.key]) || 0]),
+    retentionCounts.map((c) => {
+      // validateRetention refuses anything but whole numbers: never send a
+      // fraction to an int32 field.
+      const n = keepCount(s.policy[c.key]);
+      return [c.key, Number.isInteger(n) ? n : 0];
+    }),
   ) as Record<(typeof retentionCounts)[number]["key"], number>;
   return {
     repositoryId: s.repositoryId,
     policy: {
       ...counts,
       keepWithin: s.policy.keepWithin.trim(),
-      keepTags: clean(s.policy.keepTags),
+      keepTags: cleanTags(s.policy.keepTags),
     },
     prune: s.prune,
-    tags: clean(s.tags),
+    tags: cleanTags(s.tags),
     host: s.host.trim(),
     dryRun: s.dryRun,
   };

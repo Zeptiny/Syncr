@@ -49,7 +49,9 @@ type ProbeConfig struct {
 	// MaxInFlightPerWorker bounds the probes waiting for one worker; more
 	// fail with domain.ErrUnavailable at once.
 	MaxInFlightPerWorker int
-	// MaxTimeout caps a probe's RunProbe.timeout (workers cap it too).
+	// MaxTimeout caps a probe's RunProbe.timeout (workers cap it too, at
+	// link.MaxProbeTimeout). The composition root sets the longest of the
+	// controller's probe settings.
 	MaxTimeout time.Duration
 	// Grace is added to a probe's timeout for the controller's own wait
 	// (delivery, the worker's answer).
@@ -57,9 +59,17 @@ type ProbeConfig struct {
 }
 
 // DefaultProbeConfig returns the default configuration: 8 in flight per
-// worker, a 90 s cap and 5 s of grace.
+// worker, the cap link.MaxProbeTimeout and the grace link.ProbeGrace.
 func DefaultProbeConfig() ProbeConfig {
-	return ProbeConfig{MaxInFlightPerWorker: 8, MaxTimeout: 90 * time.Second, Grace: 5 * time.Second}
+	return ProbeConfig{MaxInFlightPerWorker: 8, MaxTimeout: link.MaxProbeTimeout, Grace: link.ProbeGrace}
+}
+
+// Wait returns the longest the broker waits for a probe's answer: the cap
+// plus the grace (zero fields count as their defaults). A passive client's
+// wait for a Probe's response headers must not end sooner.
+func (c ProbeConfig) Wait() time.Duration {
+	c = c.withDefaults()
+	return c.MaxTimeout + c.Grace
 }
 
 func (c ProbeConfig) withDefaults() ProbeConfig {
@@ -94,10 +104,15 @@ type ProbeBrokerDeps struct {
 // Active workers: a call waits in the pending table until its caller gives
 // up or the result arrives. Until the worker acks its run_probe
 // ("probe:<id>") the command is derived again on every poll (workers
-// deduplicate by probe ID); a caller that goes away after the ack leaves a
-// cancel_probe ("probe-cancel:<id>") behind, sent until it is acked. When
-// the worker's epoch changes, the calls its dead process had accepted fail
+// deduplicate by probe ID); a caller that goes away once its run_probe was
+// derived, acked or not, leaves a cancel_probe ("probe-cancel:<id>")
+// behind, sent until it is acked (workers remember a cancelled ID, so the
+// probe never starts if the cancel overtakes its run_probe). When the
+// worker's epoch changes, the calls its dead process had accepted fail
 // ("the worker restarted") and the others are sent to the new process.
+// When the Hello of the worker's current process is stored, the calls it
+// cannot run (no link.FeatureProbe, or not the op) fail at once as
+// outdated.
 type ProbeBroker struct {
 	workers Workers
 	hub     *Hub
@@ -118,11 +133,17 @@ type ProbeBroker struct {
 }
 
 // probeCall is one waiting probe of an active worker. The broker's mutex
-// guards delivered; done receives exactly one outcome, when the call
-// leaves the table for a reason other than its caller giving up.
+// guards sent and delivered; done receives exactly one outcome, when the
+// call leaves the table for a reason other than its caller giving up.
 type probeCall struct {
-	id        string
-	run       *syncrv1.RunProbe
+	id  string
+	op  string
+	run *syncrv1.RunProbe
+	// sent is set once a derivation for the worker's current process
+	// included the run_probe: it may have reached the worker, acked or
+	// not, so giving up must tell the worker to stop it.
+	sent bool
+	// delivered is set when the worker acked the run_probe.
 	delivered bool
 	done      chan probeOutcome
 }
@@ -144,7 +165,7 @@ func NewProbeBroker(d ProbeBrokerDeps, cfg ProbeConfig) (*ProbeBroker, error) {
 		return nil, errors.New("dispatch: probe broker: missing dependency")
 	}
 	cfg = cfg.withDefaults()
-	if cfg.MaxInFlightPerWorker < 1 || cfg.MaxTimeout <= 0 || cfg.Grace < 0 {
+	if cfg.MaxInFlightPerWorker < 1 || cfg.MaxTimeout <= 0 || cfg.MaxTimeout > link.MaxProbeTimeout || cfg.Grace < 0 {
 		return nil, fmt.Errorf("dispatch: probe broker: invalid config %+v", cfg)
 	}
 	log := d.Logger
@@ -161,6 +182,10 @@ func NewProbeBroker(d ProbeBrokerDeps, cfg ProbeConfig) (*ProbeBroker, error) {
 // MaxTimeout returns the cap on a probe's timeout (ProbeConfig.MaxTimeout).
 func (b *ProbeBroker) MaxTimeout() time.Duration { return b.cfg.MaxTimeout }
 
+// Wait returns the longest the broker waits for a probe's answer
+// (ProbeConfig.Wait).
+func (b *ProbeBroker) Wait() time.Duration { return b.cfg.Wait() }
+
 // Probe runs p on the worker and returns its result: in active mode as a
 // Command.run_probe delivered by the worker's long poll and answered with
 // CompleteProbe, in passive mode by calling the worker's Probe RPC with
@@ -174,8 +199,9 @@ func (b *ProbeBroker) MaxTimeout() time.Duration { return b.cfg.MaxTimeout }
 // answer in time, the worker restarted, a transport failure, more than
 // MaxInFlightPerWorker); domain.ErrFailedPrecondition (the worker lacks
 // link.FeatureProbe or the op: "worker %q (version %s) cannot run %s;
-// upgrade it", or a passive worker answered Unimplemented); ctx's errors.
-// No error names the spec's contents.
+// upgrade it", also when the Hello of its current process says so while
+// the probe waits, or a passive worker answered Unimplemented); ctx's
+// errors. No error names the spec's contents.
 func (b *ProbeBroker) Probe(ctx context.Context, workerID domain.WorkerID, p *syncrv1.RunProbe) (*syncrv1.ProbeResult, error) {
 	op := link.ProbeOpOf(p.GetSpec())
 	if p.GetProbeId() == "" || op == "" {
@@ -195,9 +221,8 @@ func (b *ProbeBroker) Probe(ctx context.Context, workerID domain.WorkerID, p *sy
 	default:
 		return nil, fmt.Errorf("%w: worker %q is offline", domain.ErrUnavailable, w.Name)
 	}
-	if !w.Info.HasFeatures(link.FeatureProbe) || !slices.Contains(w.Info.ProbeOps, op) {
-		return nil, fmt.Errorf("%w: worker %q (version %s) cannot run %s; upgrade it",
-			domain.ErrFailedPrecondition, w.Name, cmp.Or(w.Info.Version, "unknown"), op)
+	if !canRun(w.Info, op) {
+		return nil, outdated(w.Name, w.Info, op)
 	}
 	timeout := defaultProbeTimeout
 	if p.GetTimeout() != nil && p.GetTimeout().AsDuration() > 0 {
@@ -210,15 +235,28 @@ func (b *ProbeBroker) Probe(ctx context.Context, workerID domain.WorkerID, p *sy
 	}
 	run.Timeout = durationpb.New(timeout)
 	if w.Mode == domain.WorkerPassive {
-		return b.probePassive(ctx, w, run, timeout+b.cfg.Grace)
+		return b.probePassive(ctx, w, run, op, timeout+b.cfg.Grace)
 	}
-	return b.probeActive(ctx, w, run, timeout+b.cfg.Grace)
+	return b.probeActive(ctx, w, run, op, timeout+b.cfg.Grace)
+}
+
+// canRun reports whether a worker whose process reported info runs probes
+// of op.
+func canRun(info workers.Info, op string) bool {
+	return info.HasFeatures(link.FeatureProbe) && slices.Contains(info.ProbeOps, op)
+}
+
+// outdated is the error of a probe of op on a worker that cannot run it:
+// it lacks link.FeatureProbe or the op (an older version).
+func outdated(name string, info workers.Info, op string) error {
+	return fmt.Errorf("%w: worker %q (version %s) cannot run %s; upgrade it",
+		domain.ErrFailedPrecondition, name, cmp.Or(info.Version, "unknown"), op)
 }
 
 // probeActive queues run for the worker's next poll and waits for its
 // result.
-func (b *ProbeBroker) probeActive(ctx context.Context, w workers.Worker, run *syncrv1.RunProbe, wait time.Duration) (*syncrv1.ProbeResult, error) {
-	call := &probeCall{id: run.GetProbeId(), run: run, done: make(chan probeOutcome, 1)}
+func (b *ProbeBroker) probeActive(ctx context.Context, w workers.Worker, run *syncrv1.RunProbe, op string, wait time.Duration) (*syncrv1.ProbeResult, error) {
+	call := &probeCall{id: run.GetProbeId(), op: op, run: run, done: make(chan probeOutcome, 1)}
 	b.mu.Lock()
 	switch {
 	case len(b.calls[w.ID]) >= b.cfg.MaxInFlightPerWorker:
@@ -250,16 +288,20 @@ func (b *ProbeBroker) probeActive(ctx context.Context, w workers.Worker, run *sy
 	}
 }
 
-// abandon removes a call whose caller gives up. If the worker accepted the
-// probe it is told to stop it. A call that ended meanwhile is returned
-// with ok: its outcome stands.
+// abandon removes a call whose caller gives up. If its run_probe was ever
+// derived for the worker's current process (sent, acked or not) the worker
+// is told to stop it: the command may be on its way, and a worker that
+// started the probe would otherwise run it to the end (a restic init
+// creating a repository nobody stores, a slow listing holding a probe
+// slot). A call that was never sent needs nothing. A call that ended
+// meanwhile is returned with ok: its outcome stands.
 func (b *ProbeBroker) abandon(workerID domain.WorkerID, call *probeCall) (probeOutcome, bool) {
 	b.mu.Lock()
 	if !b.removeLocked(workerID, call) {
 		b.mu.Unlock()
 		return <-call.done, true // ended concurrently; the outcome is buffered
 	}
-	wake := call.delivered
+	wake := call.sent || call.delivered
 	if wake {
 		b.cancels[workerID] = append(b.cancels[workerID], call.id)
 		if n := len(b.cancels[workerID]); n > maxProbeCancels {
@@ -289,8 +331,10 @@ func (b *ProbeBroker) removeLocked(workerID domain.WorkerID, call *probeCall) bo
 	return true
 }
 
-// probePassive calls the worker's Probe RPC through its loop's client.
-func (b *ProbeBroker) probePassive(ctx context.Context, w workers.Worker, run *syncrv1.RunProbe, wait time.Duration) (*syncrv1.ProbeResult, error) {
+// probePassive calls the worker's Probe RPC through its loop's client. A
+// caller that gives up cancels the call, and with it the probe on the
+// worker (its handler's context).
+func (b *ProbeBroker) probePassive(ctx context.Context, w workers.Worker, run *syncrv1.RunProbe, op string, wait time.Duration) (*syncrv1.ProbeResult, error) {
 	b.mu.Lock()
 	reg := b.passive[w.ID]
 	switch {
@@ -326,8 +370,7 @@ func (b *ProbeBroker) probePassive(ctx context.Context, w workers.Worker, run *s
 	case ctx.Err() != nil:
 		return nil, fmt.Errorf("probe worker %s: %w", w.ID, ctx.Err())
 	case errors.Is(err, ErrProbeUnsupported):
-		return nil, fmt.Errorf("%w: worker %q (version %s) cannot run %s; upgrade it",
-			domain.ErrFailedPrecondition, w.Name, cmp.Or(w.Info.Version, "unknown"), link.ProbeOpOf(run.GetSpec()))
+		return nil, outdated(w.Name, w.Info, op)
 	case cctx.Err() != nil:
 		return nil, fmt.Errorf("%w: worker %q did not answer in time", domain.ErrUnavailable, w.Name)
 	default:
@@ -360,6 +403,11 @@ func (b *ProbeBroker) register(workerID domain.WorkerID, client PassiveClient) (
 // commands returns at most limit probe commands of the worker: a
 // cancel_probe for every abandoned probe not acked yet, then a run_probe
 // for at most maxProbeCommands probes it has not accepted, oldest first.
+// Every call whose run_probe it returns counts as sent from then on, even
+// if the caller then leaves the command out of its response: giving up on
+// it sends a cancel_probe, which a worker that never saw the probe
+// ignores. Marking only what goes out later would let a caller give up in
+// between, unseen.
 func (b *ProbeBroker) commands(workerID domain.WorkerID, limit int) []*syncrv1.Command {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -382,9 +430,28 @@ func (b *ProbeBroker) commands(workerID domain.WorkerID, limit int) []*syncrv1.C
 			continue
 		}
 		n++
+		c.sent = true
 		cmds = append(cmds, &syncrv1.Command{Id: probePrefix + c.id, Command: &syncrv1.Command_RunProbe{RunProbe: c.run}})
 	}
 	return cmds
+}
+
+// refuse fails at once the worker's waiting calls that its current
+// process, which reported info in its Hello, cannot run (it lacks
+// link.FeatureProbe or the op), with the error Probe gives such a worker
+// up front. Without it they would wait for their timeout: no run_probe is
+// derived for a worker without the feature, and one without the op would
+// answer with a failure of its own. name is the worker's name.
+func (b *ProbeBroker) refuse(workerID domain.WorkerID, name string, info workers.Info) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, c := range slices.Clone(b.calls[workerID]) {
+		if canRun(info, c.op) {
+			continue
+		}
+		b.removeLocked(workerID, c)
+		c.done <- probeOutcome{err: outdated(name, info, c.op)}
+	}
 }
 
 // ack applies the ack of a probe command; it reports whether cmdID was
@@ -416,8 +483,8 @@ func (b *ProbeBroker) ack(workerID domain.WorkerID, cmdID string) bool {
 }
 
 // epochChanged handles a new worker process: the probes its predecessor
-// accepted died with it and fail; the others are sent to the new process.
-// Its pending cancels are moot.
+// accepted died with it and fail; the others are sent to the new process,
+// which has not seen them yet. Its pending cancels are moot.
 func (b *ProbeBroker) epochChanged(workerID domain.WorkerID, name string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -428,6 +495,7 @@ func (b *ProbeBroker) epochChanged(workerID domain.WorkerID, name string) {
 			c.done <- probeOutcome{err: fmt.Errorf("%w: worker %q restarted before it answered", domain.ErrUnavailable, name)}
 			continue
 		}
+		c.sent = false
 		kept = append(kept, c)
 	}
 	if len(kept) == 0 {
