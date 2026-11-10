@@ -238,6 +238,19 @@ func (e *env) enroll(name string) domain.WorkerID {
 	return en.Worker.ID
 }
 
+// hello stores the Hello of the worker's process in epoch, as the first
+// Report of a new process does (an rclone worker without link features):
+// the dispatcher sends a process no StartJob and no probe before its Hello.
+func (e *env) hello(id domain.WorkerID, epoch string) {
+	e.t.Helper()
+	ev := &syncrv1.Event{Seq: 1, Time: timestamppb.New(e.clock.Now()), Payload: &syncrv1.Event_Hello{Hello: &syncrv1.Hello{
+		WorkerVersion: "v2.0.0-test", Os: "linux", Arch: "amd64", JobKinds: []string{"rclone_transfer"}, MaxConcurrentJobs: 2,
+	}}}
+	if _, err := e.disp.Ingest(context.Background(), id, epoch, []*syncrv1.Event{ev}, nil); err != nil {
+		e.t.Fatalf("hello: %v", err)
+	}
+}
+
 // testSecret is the secret of the test remote: it must reach the worker's
 // spec and nothing else.
 const testSecret = "hunter2-secret-sentinel"

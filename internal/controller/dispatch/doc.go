@@ -41,7 +41,8 @@
 // # Events
 //
 //	Event        Job (this worker)                       Effect
-//	Hello        -                                       worker info replaced (if epoch still current)
+//	Hello        -                                       worker info replaced, as the info of epoch (if
+//	                                                       epoch still current); wakes a held poll
 //	JobStarted   queued                                  dispatched by this epoch, then running
 //	JobStarted   dispatched by this epoch                running (started at = event time)
 //	JobStarted   anything else                           ignored (duplicate or late)
@@ -79,17 +80,39 @@
 //
 // # Commands
 //
-// Derived on every Commands, WaitCommands and passive round: the probe
-// commands of an active worker first (see Probes), then the job commands,
-// oldest job first, at most Config.MaxCommands in all:
+// Derived on every Commands, WaitCommands and passive round:
 //
 //	Job state (this worker)                                   Command
-//	queued, not waiting on a concurrency key                  StartJob{job_id, spec}, id "start:<job>"
+//	queued, not waiting on a concurrency key, the Hello of
+//	  the current epoch stored                                StartJob{job_id, spec}, id "start:<job>"
 //	queued, an older unfinished job shares one of its keys    none (see Concurrency keys)
+//	queued, no Hello of the current epoch yet                 none (see below)
 //	dispatched/running in the current epoch, cancel requested,
 //	  CancelJob not acked in this epoch                        CancelJob, id "cancel:<job>"
 //	listed by the latest snapshot but finished, unknown or
 //	  another worker's ("orphan"), not acked in this epoch     CancelJob, id "cancel:<job>"
+//
+// At most Config.MaxCommands commands go out at once, chosen in this order:
+// the CancelJob commands (jobs oldest first, then orphans), because someone
+// asked for the work to stop and they are few; then the probe commands of
+// an active worker (see Probes), up to half of the room the cancels leave;
+// then the StartJob commands, oldest job first, in the rest. Room the
+// StartJobs leave unused goes to the probes, and the other way round, so
+// neither starves the other and probes never crowd out a CancelJob. The
+// response lists the probe commands first, then the cancels, then the
+// starts.
+//
+// The stored worker info (link features, operating system) belongs to the
+// epoch whose Hello reported it (workers.Worker.InfoCurrent). A new
+// process's first Poll can overtake the Report that carries its Hello, and
+// until that Hello is stored the info is the previous process's: another
+// version after an upgrade or a downgrade, maybe another operating system.
+// The dispatcher decides nothing from it: StartJob and probe commands wait
+// (the job stays queued, nothing fails) until the Hello of the current
+// epoch is stored, and storing it wakes the poll that was held back.
+// CancelJob commands do not wait. A process whose Hello never arrives keeps
+// its jobs queued until the dispatch timeout fails them (see Timeouts) and
+// its probes until they time out.
 //
 // A queued job never has a cancel request (canceling a queued job
 // finishes it at once, and a re-queue of a job with a cancel request
@@ -124,6 +147,8 @@
 //	a remote is deleted, missing or not the owner's        remote_unavailable
 //	the job's restic repository is deleted or not the
 //	  owner's                                              repository_unavailable
+//	the worker runs another operating system than the
+//	  definition needs (jobkind RequiredOS: Windows VSS)   invalid_spec, saying which system
 //	the worker lacks a link feature the kind requires
 //	  (an older version; jobkind RequiredFeatures)         worker_outdated
 //	the definition cannot be decoded, checked or built     invalid_spec
@@ -168,7 +193,8 @@
 // (dispatch_timeout), except jobs waiting on a concurrency key: their
 // timeout counts from when they became the oldest unfinished job of their
 // keys; the message says whether the worker never connected,
-// is offline (and since when) or is online but did not accept the job. The
+// is offline (and since when), is online but its process never reported
+// what it can run (no Hello) or is online but did not accept the job. The
 // clock starts again when a job is re-queued, and it starts no earlier than
 // the Service: after a controller outage queued jobs get the full timeout
 // for their workers to reconnect.
@@ -205,8 +231,9 @@
 //
 // WaitCommands returns as soon as commands exist, or empty after the wait
 // (capped at Config.MaxWait). The Hub wakes it when the job service queues,
-// re-queues or asks to cancel a job of the worker, and when a snapshot
-// reveals a new orphan; there is no polling. PassiveLoop documents the
+// re-queues or asks to cancel a job of the worker, when a snapshot
+// reveals a new orphan, and when the Hello that a derivation waited for is
+// stored; there is no polling. PassiveLoop documents the
 // passive cadence (about 1s while busy, 15s while idle, at once while the
 // worker has more events).
 //
@@ -219,7 +246,9 @@
 // operation (workers older than Milestone 5 would ignore the command).
 //
 // Active workers: the call waits in the broker's table and the worker's
-// long poll is woken. Its commands come first, at most 16 RunProbe at once:
+// long poll is woken. Its commands share Config.MaxCommands with the job
+// commands (see Commands; at most 16 RunProbe at once) and wait for the
+// Hello of the worker's current process:
 //
 //	Probe call                                     Command
 //	waiting, RunProbe not acked                    RunProbe, id "probe:<probe>"

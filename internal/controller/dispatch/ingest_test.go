@@ -40,6 +40,7 @@ func TestStartJobDerivationAndAcks(t *testing.T) {
 	other := e.enroll("other")
 	j := e.run(wid)
 	const ep = "epoch-a"
+	e.hello(wid, ep)
 
 	cmds, err := e.disp.Commands(ctx, wid, ep)
 	if err != nil || len(cmds) != 1 {
@@ -91,6 +92,7 @@ func TestCommandsAreCapped(t *testing.T) {
 	e.cfg.MaxCommands = 2
 	e.restart()
 	wid := e.enroll("w")
+	e.hello(wid, "ep")
 	var want []string
 	for range 5 {
 		want = append(want, "start:"+e.run(wid).ID.String())
@@ -106,6 +108,7 @@ func TestUnreadableSpecFailsTheJob(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	wid := e.enroll("w")
+	e.hello(wid, "ep")
 	for name, p := range map[string]jobs.CreateParams{
 		"not JSON":          {Kind: "rclone_transfer", Definition: []byte{0xff, 0xff, 0xff}},
 		"unknown field":     {Kind: "rclone_transfer", Definition: []byte(`{"rclone_transfer":{"spec":{}}}`)},
@@ -135,6 +138,7 @@ func TestSpecFromDefinition(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	wid := e.enroll("w")
+	e.hello(wid, "ep")
 	j := e.run(wid)
 	if !slices.Equal(j.RemoteIDs, []domain.RemoteID{testRemote()}) || !strings.Contains(j.SearchText, "archive") {
 		t.Errorf("job remotes %v, search text %q", j.RemoteIDs, j.SearchText)
@@ -194,6 +198,7 @@ func TestSpecResolveErrors(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t)
 		wid := e.enroll("w")
+		e.hello(wid, "ep")
 		j := e.run(wid)
 		e.remotes.remove(testRemote())
 		if cmds, err := e.disp.Commands(ctx, wid, "ep"); err != nil || len(cmds) != 0 {
@@ -207,6 +212,7 @@ func TestSpecResolveErrors(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t)
 		wid := e.enroll("w")
+		e.hello(wid, "ep")
 		j := e.run(wid)
 		// The remote changed hands (as far as the resolver can tell).
 		e.remotes.mu.Lock()
@@ -223,6 +229,7 @@ func TestSpecResolveErrors(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t)
 		wid := e.enroll("w")
+		e.hello(wid, "ep")
 		j := e.run(wid)
 		e.remotes.failNext(fmt.Errorf("decrypt the secrets of remote %s: %w", testRemote(), domain.ErrFailedPrecondition))
 		if _, err := e.disp.Commands(ctx, wid, "ep"); err != nil {
@@ -291,6 +298,7 @@ func TestSpecBuildErrors(t *testing.T) {
 			t.Parallel()
 			e := newEnv(t)
 			wid := e.enroll("w")
+			e.hello(wid, "ep")
 			j := e.run(wid)
 			disp, err := dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Specs: tt.specs, Clock: e.clock, Hub: e.hub}, e.cfg)
 			if err != nil {
@@ -338,14 +346,16 @@ func TestIngestIsIdempotent(t *testing.T) {
 			wid := e.enroll("w")
 			j := e.run(wid)
 			w := e.newFakeWorker(wid)
-			w.poll() // StartJob, acked with the next request
+			hello := w.outbox[0]
+			w.report() // the Hello: no StartJob before it
+			w.poll()   // StartJob, acked with the next request
 			id := j.ID.String()
 			w.start(id)
 			w.progress(id, 10)
 			w.seq++ // seq 4: a coalesced progress event that never reaches the controller
 			w.progress(id, 30)
 			w.finish(id, syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED, nil)
-			bySeq := map[int64]*syncrv1.Event{}
+			bySeq := map[int64]*syncrv1.Event{1: hello}
 			for _, ev := range w.outbox {
 				bySeq[ev.GetSeq()] = ev
 			}
@@ -436,6 +446,7 @@ func TestJobResultMapping(t *testing.T) {
 			wid := e.enroll("w")
 			j := e.run(wid)
 			w := e.newFakeWorker(wid)
+			w.report()
 			w.poll()
 			w.start(j.ID.String())
 			w.report()
@@ -479,6 +490,7 @@ func TestShutdownGivesBackUnstartedJobs(t *testing.T) {
 	running, waiting, asked := e.run(wid), e.run(wid), e.run(wid)
 	unacked := e.run(wid)
 	w := e.newFakeWorker(wid)
+	w.report()
 	w.poll()
 	w.acks = w.acks[:3] // the ack of unacked is still in flight
 	w.start(running.ID.String())
@@ -517,6 +529,7 @@ func TestShutdownGivesBackUnstartedJobs(t *testing.T) {
 
 	// The worker's next process receives the re-queued jobs and runs them.
 	w.restart()
+	w.report() // its Hello
 	cmds := w.poll()
 	var ids []string
 	for _, c := range cmds {
@@ -540,6 +553,7 @@ func TestStaleEpochIsRejected(t *testing.T) {
 	wid := e.enroll("w")
 	j := e.run(wid)
 	w := e.newFakeWorker(wid)
+	w.report()
 	w.poll()
 	w.start(j.ID.String())
 	old := w.reportRequest() // will be delivered late
@@ -577,6 +591,7 @@ func TestRemovedWorkerIsRefused(t *testing.T) {
 	wid := e.enroll("w")
 	queued, running := e.run(wid), e.run(wid)
 	w := e.newFakeWorker(wid)
+	w.report()
 	w.poll()
 	w.start(running.ID.String())
 	w.report()

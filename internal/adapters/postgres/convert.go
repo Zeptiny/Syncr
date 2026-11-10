@@ -99,6 +99,9 @@ func cleanTexts(in []string) []string {
 // change what is in the database; add fields only with omitempty so old
 // rows still decode.
 type infoDoc struct {
+	// Epoch is the epoch of the Hello (workers.Info.Epoch); migration 00008
+	// set it on the rows stored before it existed.
+	Epoch             string    `json:"epoch,omitempty"`
 	Version           string    `json:"version,omitempty"`
 	OS                string    `json:"os,omitempty"`
 	Arch              string    `json:"arch,omitempty"`
@@ -119,6 +122,7 @@ type toolDoc struct {
 
 func encodeInfo(in workers.Info) ([]byte, error) {
 	doc := infoDoc{
+		Epoch:             cleanText(in.Epoch),
 		Version:           cleanText(in.Version),
 		OS:                cleanText(in.OS),
 		Arch:              cleanText(in.Arch),
@@ -148,6 +152,7 @@ func decodeInfo(b []byte) (workers.Info, error) {
 		}
 	}
 	out := workers.Info{
+		Epoch:             doc.Epoch,
 		Version:           doc.Version,
 		OS:                doc.OS,
 		Arch:              doc.Arch,

@@ -314,9 +314,9 @@ func (h *scheduleHandler) input(ctx context.Context, procedure string, m *syncrv
 			} else if ok, why := h.kinds.Schedulable(kind); !ok {
 				v.Add("definition."+kind, why)
 			}
-			var cerr *connect.Error
-			if err := checkWorkerCanRun(ctx, h.workers, in.Target.WorkerID, def); errors.As(err, &cerr) {
-				v.Add("definition.restic_backup.use_fs_snapshot", "is only available on Windows workers")
+			// A label's workers are checked when a run picks one.
+			if req, goos, wrong := wrongWorkerOS(ctx, h.kinds, h.workers, in.Target.WorkerID, def); wrong {
+				v.Add(req.Field, req.FieldMessage()+"; this worker runs "+goos)
 			}
 		}
 	}

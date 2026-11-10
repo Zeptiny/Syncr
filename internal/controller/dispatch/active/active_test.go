@@ -327,6 +327,10 @@ func TestPollWakesAndCaps(t *testing.T) {
 	e := newEnv(t, envOptions{maxWait: 500 * time.Millisecond})
 	id, secret := e.enroll()
 	cl := e.client()
+	// The worker's Hello: no StartJob goes to a process before it.
+	if _, err := cl.Report(context.Background(), authed(&syncrv1.ReportRequest{Epoch: "e1", Events: []*syncrv1.Event{hello(1)}}, id, secret)); err != nil {
+		t.Fatal(err)
+	}
 
 	start := time.Now()
 	_, err := cl.Poll(context.Background(), authed(&syncrv1.PollRequest{Epoch: "e1", Wait: durationpb.New(time.Hour)}, id, secret))
@@ -390,6 +394,9 @@ func TestPollOutlivesServerTimeouts(t *testing.T) {
 			})
 			id, secret := e.enroll()
 			cl := e.client()
+			if _, err := cl.Report(context.Background(), authed(&syncrv1.ReportRequest{Epoch: "e1", Events: []*syncrv1.Event{hello(1)}}, id, secret)); err != nil {
+				t.Fatal(err)
+			}
 			go func() {
 				time.Sleep(500 * time.Millisecond)
 				e.queue(id)

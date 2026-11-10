@@ -191,7 +191,10 @@ func (s *Service) timeoutMessage(ctx context.Context, j jobs.Job) string {
 		return prefix + fmt.Sprintf("worker %q has never connected", w.Name)
 	case domain.WorkerOffline:
 		return prefix + fmt.Sprintf("worker %q is offline (last seen %s)", w.Name, w.Link.LastSeen.Format(time.RFC3339))
-	default:
-		return prefix + fmt.Sprintf("worker %q is online but did not accept the job", w.Name)
 	}
+	if !w.InfoCurrent() {
+		// Its jobs wait for its Hello (see commands).
+		return prefix + fmt.Sprintf("worker %q is online but its process has not reported what it can run", w.Name)
+	}
+	return prefix + fmt.Sprintf("worker %q is online but did not accept the job", w.Name)
 }

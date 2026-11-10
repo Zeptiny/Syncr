@@ -226,8 +226,8 @@ SELECT j.id AS job_id, b.id AS blocker_id
 FROM jobs j
 CROSS JOIN LATERAL (
     SELECT o.id FROM jobs o
-    WHERE o.concurrency_keys && j.concurrency_keys AND o.id <> j.id
-      AND o.status IN ('queued', 'dispatched', 'running')
+    WHERE o.status IN ('queued', 'dispatched', 'running') AND cardinality(o.concurrency_keys) > 0
+      AND o.concurrency_keys && j.concurrency_keys AND o.id <> j.id
       AND (o.created_at, o.id) < (j.created_at, j.id)
     ORDER BY o.created_at, o.id
     LIMIT 1
@@ -242,8 +242,8 @@ type ListJobBlockersRow struct {
 }
 
 // For each job of ids with concurrency keys, the oldest unfinished older
-// job sharing one of its keys (index jobs_concurrency_keys_idx). Jobs that
-// wait for nothing have no row.
+// job sharing one of its keys (index jobs_live_concurrency_keys_idx: the
+// predicate repeats the index's). Jobs that wait for nothing have no row.
 func (q *Queries) ListJobBlockers(ctx context.Context, ids []pgtype.UUID) ([]ListJobBlockersRow, error) {
 	rows, err := q.db.Query(ctx, listJobBlockers, ids)
 	if err != nil {
@@ -376,11 +376,19 @@ func (q *Queries) ListJobs(ctx context.Context, arg ListJobsParams) ([]Job, erro
 const listQueuedJobs = `-- name: ListQueuedJobs :many
 SELECT id, worker_id, kind, status, epoch, cancel_requested_at, created_at, queued_at, dispatched_at, started_at, finished_at, requeues, stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks, stat_deletes, stat_renames, stat_errors, stat_elapsed_ns, error_code, error_message, warnings, exit_code, output, version, owner_id, definition, search_text, schedule_id, notified_at, repository_id, concurrency_keys FROM jobs j
 WHERE j.status = 'queued' AND j.queued_at < $1::timestamptz
-  AND (cardinality(j.concurrency_keys) = 0 OR NOT EXISTS (
-      SELECT 1 FROM jobs o
-      WHERE o.concurrency_keys && j.concurrency_keys AND o.id <> j.id
-        AND (o.created_at, o.id) < (j.created_at, j.id)
-        AND (o.status IN ('queued', 'dispatched', 'running') OR o.finished_at >= $1::timestamptz)
+  AND (cardinality(j.concurrency_keys) = 0 OR (
+      NOT EXISTS (
+          SELECT 1 FROM jobs o
+          WHERE o.status IN ('queued', 'dispatched', 'running') AND cardinality(o.concurrency_keys) > 0
+            AND o.concurrency_keys && j.concurrency_keys AND o.id <> j.id
+            AND (o.created_at, o.id) < (j.created_at, j.id)
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM jobs o
+          WHERE o.finished_at >= $1::timestamptz
+            AND o.concurrency_keys && j.concurrency_keys AND o.id <> j.id
+            AND (o.created_at, o.id) < (j.created_at, j.id)
+      )
   ))
 ORDER BY j.queued_at, j.id
 LIMIT $2::bigint
@@ -395,7 +403,10 @@ type ListQueuedJobsParams struct {
 // is a candidate only if no older sharer (by created_at, then id) is
 // unfinished or finished at or after before, so a job waiting for its keys
 // never times out and its timeout counts from when it became their head.
-// A NULL row_limit means no limit.
+// The two kinds of sharer are separate EXISTS so neither reads the job
+// history: unfinished ones by jobs_live_concurrency_keys_idx (the
+// predicate repeats the index's), recently finished ones by
+// jobs_finished_idx. A NULL row_limit means no limit.
 func (q *Queries) ListQueuedJobs(ctx context.Context, arg ListQueuedJobsParams) ([]Job, error) {
 	rows, err := q.db.Query(ctx, listQueuedJobs, arg.Before, arg.RowLimit)
 	if err != nil {
@@ -515,12 +526,13 @@ func (q *Queries) ListUnfinishedJobs(ctx context.Context, workerID pgtype.UUID) 
 
 const listWorkersWaitingOnKeys = `-- name: ListWorkersWaitingOnKeys :many
 SELECT DISTINCT worker_id FROM jobs
-WHERE status = 'queued' AND concurrency_keys && $1::text[]
+WHERE status = 'queued' AND cardinality(concurrency_keys) > 0 AND concurrency_keys && $1::text[]
 ORDER BY worker_id
 `
 
 // The workers of the queued jobs that share one of keys (the wake-up after
-// a keyed job finished).
+// a keyed job finished; index jobs_live_concurrency_keys_idx, whose
+// predicate status = 'queued' and the cardinality condition imply).
 func (q *Queries) ListWorkersWaitingOnKeys(ctx context.Context, keys []string) ([]pgtype.UUID, error) {
 	rows, err := q.db.Query(ctx, listWorkersWaitingOnKeys, keys)
 	if err != nil {

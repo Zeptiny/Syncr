@@ -46,7 +46,9 @@ O (queued, dispatched or running) that shares a key with J and is older:
 
 There is no lock table, lease or claim. The rule is a query over the jobs
 table (`ListJobBlockers`, one call per derivation for the worker's queued
-keyed jobs, served by a GIN index on the keys), and it has these properties:
+keyed jobs, served by a GIN index on the keys of the unfinished jobs only,
+so a repository's job history does not slow it down), and it has these
+properties:
 
 - **Deterministic.** Among the unfinished jobs that share a key exactly
   one, the oldest, is the head.

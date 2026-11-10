@@ -233,20 +233,24 @@ func (h *jobHandler) scheduleRefs(ctx context.Context, js []jobs.Job) (map[domai
 	return refs, nil
 }
 
-// checkWorkerCanRun rejects a definition that the chosen worker is known
-// not to be able to run: a backup with use_fs_snapshot (Windows VSS) on a
-// worker that reported another operating system. A worker that has not
-// reported one yet, or cannot be read, passes: the worker itself fails
-// such a job.
-func checkWorkerCanRun(ctx context.Context, ws WorkerNames, id domain.WorkerID, def *syncrv1.JobDefinition) error {
-	if ws == nil || id.IsZero() || !def.GetResticBackup().GetUseFsSnapshot() {
-		return nil
+// wrongWorkerOS returns the operating system requirement of def (jobkind
+// Registry.RequiredOS, e.g. Windows VSS) that the chosen worker is known
+// not to meet, with the system it reported; ok is false when there is none.
+// A worker that has not reported a system yet, or cannot be read, passes:
+// this is an early answer from the worker's latest Hello, and the
+// dispatcher checks the worker's current process before it sends the job.
+func wrongWorkerOS(ctx context.Context, kinds *jobkind.Registry, ws WorkerNames, id domain.WorkerID, def *syncrv1.JobDefinition) (req jobkind.OSRequirement, goos string, ok bool) {
+	if ws == nil || id.IsZero() {
+		return jobkind.OSRequirement{}, "", false
+	}
+	if req = kinds.RequiredOS(def); req.OS == "" {
+		return req, "", false
 	}
 	w, err := ws.Get(ctx, id)
-	if err != nil || w.Info.OS == "" || w.Info.OS == "windows" {
-		return nil
+	if err != nil || w.Info.OS == "" || req.Allows(w.Info.OS) {
+		return req, "", false
 	}
-	return invalidField("definition.restic_backup.use_fs_snapshot", "is only available on Windows workers; this worker runs "+w.Info.OS)
+	return req, w.Info.OS, true
 }
 
 // RunJob checks the definition with its job kind and queues the job for
@@ -276,8 +280,8 @@ func (h *jobHandler) RunJob(ctx context.Context, req *connect.Request[syncrv1.Ru
 	if ok, why := h.kinds.UserStartable(kind); !ok {
 		return nil, invalidField("definition."+kind, why)
 	}
-	if err := checkWorkerCanRun(ctx, h.workers, workerID, def); err != nil {
-		return nil, err
+	if req, goos, wrong := wrongWorkerOS(ctx, h.kinds, h.workers, workerID, def); wrong {
+		return nil, invalidField(req.Field, req.FieldMessage()+"; this worker runs "+goos)
 	}
 	encoded, err := jobkind.Marshal(def)
 	if err != nil {

@@ -147,6 +147,10 @@ type session struct {
 	orphans []string
 	// saturated mirrors WorkerState.outbox_saturated, to log changes.
 	saturated bool
+	// awaitsHello is set when a derivation held back StartJob and probe
+	// commands because the Hello of epoch was not stored yet; storing it
+	// then wakes the worker's long poll.
+	awaitsHello bool
 }
 
 func (s *session) reset(epoch string) {
@@ -154,6 +158,7 @@ func (s *session) reset(epoch string) {
 	s.cancelAcked = make(map[string]bool)
 	s.orphans = nil
 	s.saturated = false
+	s.awaitsHello = false
 }
 
 func (s *Service) session(id domain.WorkerID) *session {

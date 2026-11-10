@@ -222,3 +222,80 @@ func TestRepositoryJobFailures(t *testing.T) {
 		t.Error("a secret was logged")
 	}
 }
+
+// vssJob is a built-in restic_backup job of testOwner on repo with Windows
+// VSS (use_fs_snapshot) on.
+func vssJob(t *testing.T, repo domain.ResticRepoID) jobs.Job {
+	t.Helper()
+	raw, err := jobkind.Marshal(&syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticBackup{
+		ResticBackup: &syncrv1.ResticBackupDefinition{RepositoryId: repo.String(), Paths: []string{`C:\Users`}, UseFsSnapshot: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return jobs.Job{ID: domain.NewJobID(), OwnerID: testOwner, Kind: "restic_backup", Definition: raw}
+}
+
+// TestSpecsCheckTheOS: a definition that needs another operating system
+// than the worker reported (Windows VSS) is not built: a *WrongOSError,
+// which matches domain.ErrInvalidArgument, whatever the worker's version.
+func TestSpecsCheckTheOS(t *testing.T) {
+	t.Parallel()
+	repoID := domain.NewResticRepoID()
+	repos := &fakeRepos{repo: restic.Resolved{
+		ID: repoID, OwnerID: testOwner, RemoteID: testRemote(), Password: testRepoPassword, ResticID: strings.Repeat("ab", 32),
+	}}
+	specs, err := dispatch.NewSpecs(newFakeRemotes(), repos, kinds(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := vssJob(t, repoID)
+	for _, info := range []workers.Info{
+		{OS: "linux", Features: link.Features()},
+		{OS: "", Features: link.Features()},
+		{OS: "linux"}, // outdated too: the operating system is what matters
+	} {
+		_, err := specs.Build(context.Background(), j, info)
+		var wrongOS *dispatch.WrongOSError
+		if !errors.As(err, &wrongOS) || !errors.Is(err, domain.ErrInvalidArgument) || errors.Is(err, dispatch.ErrWorkerOutdated) ||
+			wrongOS.OS != info.OS || wrongOS.Required.OS != "windows" || wrongOS.Required.Field != "definition.restic_backup.use_fs_snapshot" {
+			t.Errorf("Build on %+v: err = %v, want a WrongOSError", info, err)
+		}
+	}
+	spec, err := specs.Build(context.Background(), j, workers.Info{OS: "windows", Features: link.Features()})
+	if err != nil || !spec.GetResticBackup().GetUseFsSnapshot() {
+		t.Errorf("Build on Windows = (%v, %v)", spec.GetResticBackup(), err)
+	}
+}
+
+// TestWrongOSFailsTheJob: the dispatcher fails a job whose definition needs
+// another operating system than the worker's current process reported,
+// with invalid_spec and a message that says why, instead of sending it.
+func TestWrongOSFailsTheJob(t *testing.T) {
+	t.Parallel()
+	repoID := domain.NewResticRepoID()
+	repos := &fakeRepos{repo: restic.Resolved{ID: repoID, OwnerID: testOwner, RemoteID: testRemote(), Password: testRepoPassword}}
+	e := newEnv(t)
+	specs, err := dispatch.NewSpecs(e.remotes, repos, kinds(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.disp, err = dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Specs: specs, Clock: e.clock, Hub: e.hub}, e.cfg); err != nil {
+		t.Fatal(err)
+	}
+	w := e.newProbeWorker(e.enroll("nas")) // reports linux
+	w.report()
+	j, err := e.jobs.Create(context.Background(), testActor(), jobs.CreateParams{
+		WorkerID: w.id, Kind: "restic_backup", Definition: vssJob(t, repoID).Definition,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmds := w.poll(); len(cmds) != 0 {
+		t.Fatalf("the worker was sent %v", cmds)
+	}
+	if got := e.job(j.ID); got.Status != domain.JobFailed || got.Error.Code != jobs.CodeInvalidSpec ||
+		got.Error.Message != `Windows VSS (use_fs_snapshot) is only available on Windows workers; worker "nas" runs linux` {
+		t.Errorf("job = %s %q %q", got.Status, got.Error.Code, got.Error.Message)
+	}
+}

@@ -624,6 +624,11 @@ func checkSecretsStayHidden(t *testing.T, s *seeded, admin, alice *http.Client) 
 	link := syncrv1connect.NewControllerLinkServiceClient(&http.Client{Transport: headers{next: http.DefaultTransport, set: func(h http.Header) {
 		h.Set("Authorization", "Bearer "+workerID+"."+enrolled.Msg.GetWorkerSecret())
 	}}}, s.base)
+	// The worker's first Report carries its Hello; no StartJob comes before it.
+	hello := &syncrv1.Event{Seq: 1, Payload: &syncrv1.Event_Hello{Hello: &syncrv1.Hello{Os: "linux", Arch: "amd64", JobKinds: []string{"rclone_transfer"}}}}
+	if _, err := link.Report(ctx, connect.NewRequest(&syncrv1.ReportRequest{Epoch: "secrets-test-epoch", Events: []*syncrv1.Event{hello}})); err != nil {
+		t.Fatal(err)
+	}
 	poll, err := link.Poll(ctx, connect.NewRequest(&syncrv1.PollRequest{Epoch: "secrets-test-epoch", Wait: durationpb.New(0)}))
 	if err != nil {
 		t.Fatal(err)

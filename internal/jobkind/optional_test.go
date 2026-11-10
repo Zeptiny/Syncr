@@ -30,6 +30,14 @@ func (fullKind) SystemOnly() string                                { return "is 
 func (fullKind) RequiredFeatures() []string                        { return []string{link.FeatureResticV2} }
 func (fullKind) Label() string                                     { return "Check" }
 
+// RequiredOS asks for Linux when the check reads all data.
+func (fullKind) RequiredOS(def *syncrv1.JobDefinition) jobkind.OSRequirement {
+	if def.GetResticCheck().GetReadDataPercent() != 100 {
+		return jobkind.OSRequirement{}
+	}
+	return jobkind.OSRequirement{OS: "linux", Field: "definition.restic_check.read_data_percent", What: "Reading all data"}
+}
+
 // Summarize reports whether it got an output, and the backup's snapshot.
 func (fullKind) Summarize(_ *syncrv1.JobDefinition, out *syncrv1.JobOutput) []jobkind.Detail {
 	if out == nil {
@@ -43,6 +51,7 @@ var (
 	_ jobkind.Unschedulable = fullKind{}
 	_ jobkind.SystemOnly    = fullKind{}
 	_ jobkind.Requirer      = fullKind{}
+	_ jobkind.OSBound       = fullKind{}
 	_ jobkind.Labeled       = fullKind{}
 	_ jobkind.Summarizer    = fullKind{}
 )
@@ -102,6 +111,24 @@ func TestRegistryOptionalInterfaces(t *testing.T) {
 		}
 	}
 
+	// RequiredOS asks the definition's kind; others require nothing.
+	all := checkDef()
+	all.GetResticCheck().ReadDataPercent = 100
+	for name, tt := range map[string]struct {
+		def  *syncrv1.JobDefinition
+		want jobkind.OSRequirement
+	}{
+		"bound":        {all, jobkind.OSRequirement{OS: "linux", Field: "definition.restic_check.read_data_percent", What: "Reading all data"}},
+		"not bound":    {checkDef(), jobkind.OSRequirement{}},
+		"no OSBound":   {transfer("", "/src"), jobkind.OSRequirement{}},
+		"unknown kind": {&syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticPrune{ResticPrune: &syncrv1.ResticPruneDefinition{}}}, jobkind.OSRequirement{}},
+		"nothing":      {nil, jobkind.OSRequirement{}},
+	} {
+		if got := r.RequiredOS(tt.def); got != tt.want {
+			t.Errorf("%s: RequiredOS = %+v, want %+v", name, got, tt.want)
+		}
+	}
+
 	// Summarize decodes the stored output; nothing or garbage is nil.
 	out, err := proto.Marshal(&syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticBackup{ResticBackup: &syncrv1.ResticBackupOutput{SnapshotId: "1a2b3c4d"}}})
 	if err != nil {
@@ -126,4 +153,39 @@ func TestRegistryOptionalInterfaces(t *testing.T) {
 
 func checkDef() *syncrv1.JobDefinition {
 	return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticCheck{ResticCheck: &syncrv1.ResticCheckDefinition{}}}
+}
+
+// TestOSRequirement: what a requirement allows and how it explains itself.
+func TestOSRequirement(t *testing.T) {
+	t.Parallel()
+	vss := jobkind.OSRequirement{OS: "windows", Field: "definition.restic_backup.use_fs_snapshot", What: "Windows VSS (use_fs_snapshot)"}
+	for goos, want := range map[string]bool{"windows": true, "linux": false, "": false} {
+		if got := vss.Allows(goos); got != want {
+			t.Errorf("Allows(%q) = %v, want %v", goos, got, want)
+		}
+	}
+	if !(jobkind.OSRequirement{}).Allows("") || !(jobkind.OSRequirement{}).Allows("linux") {
+		t.Error("the zero requirement does not allow everything")
+	}
+	if got := vss.FieldMessage(); got != "is only available on Windows workers" {
+		t.Errorf("FieldMessage = %q", got)
+	}
+	if got := vss.Explain(); got != "Windows VSS (use_fs_snapshot) is only available on Windows workers" {
+		t.Errorf("Explain = %q", got)
+	}
+
+	// The built-in backup asks for Windows with VSS only.
+	r, err := jobkind.NewRegistry(jobkind.Builtin()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup := &syncrv1.ResticBackupDefinition{RepositoryId: domain.NewResticRepoID().String(), Paths: []string{`C:\Users`}}
+	def := &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticBackup{ResticBackup: backup}}
+	if got := r.RequiredOS(def); got != (jobkind.OSRequirement{}) {
+		t.Errorf("backup without VSS: RequiredOS = %+v", got)
+	}
+	backup.UseFsSnapshot = true
+	if got := r.RequiredOS(def); got != vss {
+		t.Errorf("backup with VSS: RequiredOS = %+v, want %+v", got, vss)
+	}
 }

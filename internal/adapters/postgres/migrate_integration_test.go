@@ -66,7 +66,7 @@ var milestone4Tables = []string{"contacts", "schedules", "schedule_remotes", "sc
 var milestone5Tables = []string{"restic_repositories", "restic_snapshots"}
 
 // allVersions are the versions of the embedded migrations.
-var allVersions = []int64{1, 2, 3, 4, 5, 6, 7}
+var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8}
 
 func columnExists(t *testing.T, s *Store, table, column string) bool {
 	t.Helper()
@@ -452,4 +452,61 @@ func TestMigrateResticDown(t *testing.T) {
 	if err != nil || len(js) != 1 || !js[0].RepositoryID.IsZero() || js[0].ConcurrencyKeys != nil {
 		t.Errorf("jobs after up = %+v (%v)", js, err)
 	}
+}
+
+// TestMigrateWorkerInfoEpoch checks migration 00008: the info stored before
+// it is the Hello of the worker's current epoch (a running worker does not
+// send it again), so it is tagged with that epoch; a worker that never
+// connected keeps its enrollment info untagged. Down removes the tags.
+func TestMigrateWorkerInfoEpoch(t *testing.T) {
+	s := openStore(t, createDB(t, true))
+	ctx := t.Context()
+	p, closeDB, err := s.migrationProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	if _, err := p.DownTo(ctx, 7); err != nil {
+		t.Fatalf("down to 7: %v", err)
+	}
+	const (
+		running = "00000000-0000-7000-8000-000000000201"
+		never   = "00000000-0000-7000-8000-000000000202"
+	)
+	for _, w := range []struct{ id, name, epoch, info string }{
+		{running, "nas", "e1", `{"version":"v2.0.0","os":"linux","features":["probe","restic.v2"]}`},
+		{never, "pc", "", `{"os":"windows","arch":"amd64"}`},
+	} {
+		if _, err := s.pool.Exec(ctx, `INSERT INTO workers (id, name, mode, secret_enc, info, epoch, created_at)
+			VALUES ($1, $2, 'active', '\x00', $3, $4, now())`, w.id, w.name, w.info, w.epoch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	got, err := s.GetWorker(ctx, mustWorkerID(t, running))
+	if err != nil || got.Info.Epoch != "e1" || !got.InfoCurrent() || got.Info.Version != "v2.0.0" || !got.Info.HasFeatures("restic.v2") {
+		t.Errorf("connected worker after up = %+v (%v), want its info tagged with e1", got.Info, err)
+	}
+	got, err = s.GetWorker(ctx, mustWorkerID(t, never))
+	if err != nil || got.Info.Epoch != "" || got.InfoCurrent() || got.Info.OS != "windows" {
+		t.Errorf("never connected worker after up = %+v (%v)", got.Info, err)
+	}
+	if _, err := p.DownTo(ctx, 7); err != nil {
+		t.Fatalf("down to 7 again: %v", err)
+	}
+	var tagged int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM workers WHERE info ? 'epoch'`).Scan(&tagged); err != nil || tagged != 0 {
+		t.Errorf("tagged infos after down = %d (%v), want 0", tagged, err)
+	}
+}
+
+func mustWorkerID(t *testing.T, s string) domain.WorkerID {
+	t.Helper()
+	id, err := domain.ParseWorkerID(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

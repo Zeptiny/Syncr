@@ -71,9 +71,12 @@ func (s *Service) AdvanceAckSeq(ctx context.Context, id domain.WorkerID, epoch s
 }
 
 // SetInfo stores what the worker reported in the Hello of epoch, clamped to
-// sane sizes. A Hello of an epoch that is no longer current is ignored.
+// sane sizes, with Info.Epoch = epoch (Worker.InfoCurrent). A Hello of an
+// epoch that is no longer current is ignored.
 func (s *Service) SetInfo(ctx context.Context, id domain.WorkerID, epoch string, info Info) error {
-	err := s.repo.SetWorkerInfo(ctx, id, epoch, sanitizeInfo(info))
+	in := sanitizeInfo(info)
+	in.Epoch = epoch
+	err := s.repo.SetWorkerInfo(ctx, id, epoch, in)
 	if errors.Is(err, domain.ErrConflict) {
 		s.log.DebugContext(ctx, "ignoring hello of a replaced epoch", "worker_id", id.String(), "epoch", epoch)
 		return nil

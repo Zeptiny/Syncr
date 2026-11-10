@@ -320,11 +320,13 @@ func TestProbeInFlightCap(t *testing.T) {
 	})
 }
 
-// TestProbeCommandsComeFirst: probes are not starved by a long job queue.
-func TestProbeCommandsComeFirst(t *testing.T) {
+// TestCommandBudget: probe and job commands share Config.MaxCommands.
+// Probe commands get up to half of the room and the queued jobs the rest;
+// what one side leaves unused goes to the other, so neither starves.
+func TestCommandBudget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		e := newEnv(t)
-		e.cfg.MaxCommands = 3
+		e.cfg.MaxCommands = 8
 		e.probeCfg = dispatch.ProbeConfig{MaxInFlightPerWorker: 32}
 		e.restart()
 		w := e.newProbeWorker(e.enroll("one"))
@@ -336,18 +338,90 @@ func TestProbeCommandsComeFirst(t *testing.T) {
 			goProbe(t.Context(), e, w.id, runProbe(fmt.Sprintf("p%02d", i)))
 			synctest.Wait()
 		}
+		// Each poll acks the previous round's commands.
+		for i, want := range []struct{ probes, starts int }{{4, 4}, {7, 1}, {8, 0}, {1, 0}} {
+			cmds := w.poll()
+			if got := probeCommands(cmds); len(got) != want.probes || len(started(cmds)) != want.starts || len(cmds) != want.probes+want.starts {
+				t.Fatalf("round %d: %d commands, probes %v, %d StartJob; want %d probes and %d StartJob",
+					i+1, len(cmds), got, len(started(cmds)), want.probes, want.starts)
+			}
+			if i == 0 && (cmds[0].GetId() != "probe:p00" || cmds[3].GetId() != "probe:p03" || cmds[4].GetStartJob() == nil) {
+				t.Errorf("round 1 = %v, want the oldest probes first, then the oldest jobs", cmds)
+			}
+		}
+
+		// Without jobs, at most 16 run_probe commands go out at once.
+		e2 := newEnv(t)
+		e2.probeCfg = dispatch.ProbeConfig{MaxInFlightPerWorker: 32}
+		e2.restart()
+		w2 := e2.newProbeWorker(e2.enroll("one"))
+		w2.report()
+		for i := range 20 {
+			goProbe(t.Context(), e2, w2.id, runProbe(fmt.Sprintf("q%02d", i)))
+			synctest.Wait()
+		}
+		if got := probeCommands(w2.commands()); len(got) != 16 || got[0] != "probe:q00" || got[15] != "probe:q15" {
+			t.Fatalf("commands = %v, want the 16 oldest run_probes", got)
+		}
+	})
+}
+
+// TestProbesNeverCrowdOutJobCancels: however many probe commands are
+// pending, a job's CancelJob goes out at once and the total stays within
+// Config.MaxCommands.
+func TestProbesNeverCrowdOutJobCancels(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		e := newEnv(t)
+		e.cfg.MaxCommands = 8
+		e.probeCfg = dispatch.ProbeConfig{MaxInFlightPerWorker: 32}
+		e.restart()
+		w := e.newProbeWorker(e.enroll("one"))
+		w.report()
+		running := e.run(w.id)
+		w.poll()
+		w.start(running.ID.String())
+		w.report()
+
+		// Ten probes the worker accepted and whose callers then gave up:
+		// ten cancel_probe commands.
+		ctx, cancel := context.WithCancel(t.Context())
+		var gone []<-chan probeAnswer
+		for i := range 10 {
+			gone = append(gone, goProbe(ctx, e, w.id, runProbe(fmt.Sprintf("gone%02d", i))))
+			synctest.Wait()
+		}
+		for range 3 {
+			w.poll() // delivers the run_probes, then acks them
+		}
+		if len(w.probes) != 10 {
+			t.Fatalf("the worker received %d probes, want 10", len(w.probes))
+		}
+		cancel()
+		for _, ch := range gone {
+			<-ch
+		}
+		// Six more probes waiting, three queued jobs and a cancel request.
+		for i := range 6 {
+			goProbe(t.Context(), e, w.id, runProbe(fmt.Sprintf("wait%02d", i)))
+			synctest.Wait()
+		}
+		for range 3 {
+			e.run(w.id)
+		}
+		if _, err := e.jobs.Cancel(t.Context(), testActor(), running.ID); err != nil {
+			t.Fatal(err)
+		}
+
 		cmds := w.commands()
-		// At most 16 run_probe commands at once; they alone fill the cap.
-		if got := probeCommands(cmds); len(got) != 16 || got[0] != "probe:p00" || got[15] != "probe:p15" || len(started(cmds)) != 0 {
-			t.Fatalf("commands = %v, %d StartJob", got, len(started(cmds)))
+		var cancels []string
+		for _, c := range cmds {
+			if c.GetCancelJob() != nil {
+				cancels = append(cancels, c.GetCancelJob().GetJobId())
+			}
 		}
-		w.handle(cmds)
-		cmds = w.poll()
-		if got := probeCommands(cmds); len(got) != 4 || len(started(cmds)) != 0 {
-			t.Fatalf("second round = %v, %d StartJob", got, len(started(cmds)))
-		}
-		if got := started(w.poll()); len(got) != 3 {
-			t.Fatalf("third round: %d StartJob, want 3", len(got))
+		if len(cmds) != 8 || !slices.Equal(cancels, []string{running.ID.String()}) || len(started(cmds)) != 3 || len(probeCommands(cmds)) != 4 {
+			t.Fatalf("%d commands: probes %v, cancels %v, %d StartJob; want 8 with the CancelJob, 3 StartJob and 4 probe commands",
+				len(cmds), probeCommands(cmds), cancels, len(started(cmds)))
 		}
 	})
 }

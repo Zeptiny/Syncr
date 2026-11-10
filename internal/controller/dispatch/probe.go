@@ -357,14 +357,17 @@ func (b *ProbeBroker) register(workerID domain.WorkerID, client PassiveClient) (
 	}
 }
 
-// commands returns the worker's probe commands: a cancel_probe for every
-// abandoned probe not acked yet and a run_probe for at most
-// maxProbeCommands probes it has not accepted, oldest first.
-func (b *ProbeBroker) commands(workerID domain.WorkerID) []*syncrv1.Command {
+// commands returns at most limit probe commands of the worker: a
+// cancel_probe for every abandoned probe not acked yet, then a run_probe
+// for at most maxProbeCommands probes it has not accepted, oldest first.
+func (b *ProbeBroker) commands(workerID domain.WorkerID, limit int) []*syncrv1.Command {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var cmds []*syncrv1.Command
 	for _, id := range b.cancels[workerID] {
+		if len(cmds) >= limit {
+			return cmds
+		}
 		cmds = append(cmds, &syncrv1.Command{
 			Id:      probeCancelPrefix + id,
 			Command: &syncrv1.Command_CancelProbe{CancelProbe: &syncrv1.CancelProbe{ProbeId: id}},
@@ -372,12 +375,13 @@ func (b *ProbeBroker) commands(workerID domain.WorkerID) []*syncrv1.Command {
 	}
 	n := 0
 	for _, c := range b.calls[workerID] {
+		if len(cmds) >= limit || n >= maxProbeCommands {
+			break
+		}
 		if c.delivered {
 			continue
 		}
-		if n++; n > maxProbeCommands {
-			break
-		}
+		n++
 		cmds = append(cmds, &syncrv1.Command{Id: probePrefix + c.id, Command: &syncrv1.Command_RunProbe{RunProbe: c.run}})
 	}
 	return cmds

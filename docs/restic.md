@@ -72,7 +72,9 @@ the same details.
 --use-fs-snapshot`). It needs the worker to run as a system service: a
 worker installed in user mode (a scheduled task) cannot create volume
 snapshots, and the job fails with restic's error. The option is refused for
-workers that are not on Windows.
+workers that are not on Windows: when you choose the worker, when a
+schedule on a label picks one of the label's workers (only Windows workers
+qualify), and when the job is sent to its worker.
 
 A Windows snapshot records `C:\Users\ada\Documents` as the tree path
 `/C/Users/ada/Documents`; the snapshot browser shows the tree form.

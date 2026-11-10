@@ -53,8 +53,9 @@ func TestEndToEnd(t *testing.T) {
 		watched <- seen
 	}()
 	<-subscribed
+	w.report() // Hello
 	w.poll()   // StartJob
-	w.report() // ack + Hello
+	w.report() // ack
 	if got := e.job(a.ID); got.Status != domain.JobDispatched {
 		t.Fatalf("A = %s", got.Status)
 	}

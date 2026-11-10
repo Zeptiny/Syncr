@@ -387,14 +387,25 @@ func testWorkerInfoAndTouch(t *testing.T, s Store) {
 	if _, err := s.AdvanceWorkerEpoch(ctx, w.ID, "", workers.NewEpoch{Epoch: "e"}); err != nil {
 		t.Fatal(err)
 	}
-	info := workers.Info{Version: "v2", OS: "linux", JobKinds: []string{"a", "b"}, MaxConcurrentJobs: 2, ReportedAt: t0()}
+	if got, _ := s.GetWorker(ctx, w.ID); got.InfoCurrent() {
+		t.Errorf("Info = %+v is current before the epoch's Hello", got.Info)
+	}
+	info := workers.Info{Epoch: "e", Version: "v2", OS: "linux", JobKinds: []string{"a", "b"}, MaxConcurrentJobs: 2, ReportedAt: t0()}
 	if err := s.SetWorkerInfo(ctx, w.ID, "e", info); err != nil {
 		t.Fatal(err)
 	}
-	wantErr(t, "SetWorkerInfo(other epoch)", s.SetWorkerInfo(ctx, w.ID, "old", workers.Info{Version: "old"}), domain.ErrConflict)
+	wantErr(t, "SetWorkerInfo(other epoch)", s.SetWorkerInfo(ctx, w.ID, "old", workers.Info{Epoch: "old", Version: "old"}), domain.ErrConflict)
 	got, _ := s.GetWorker(ctx, w.ID)
-	if got.Info.Version != "v2" || !slices.Equal(got.Info.JobKinds, []string{"a", "b"}) || got.Info.MaxConcurrentJobs != 2 {
+	if got.Info.Version != "v2" || !slices.Equal(got.Info.JobKinds, []string{"a", "b"}) || got.Info.MaxConcurrentJobs != 2 ||
+		got.Info.Epoch != "e" || !got.InfoCurrent() {
 		t.Errorf("Info = %+v", got.Info)
+	}
+	// A new epoch keeps the info, which is then the previous process's.
+	if _, err := s.AdvanceWorkerEpoch(ctx, w.ID, "e", workers.NewEpoch{Epoch: "e2", PastEpochs: []string{"e"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetWorker(ctx, w.ID); got.Info.Epoch != "e" || got.Info.Version != "v2" || got.InfoCurrent() {
+		t.Errorf("after a new epoch: Info = %+v, current %v", got.Info, got.InfoCurrent())
 	}
 
 	for _, at := range []time.Time{t0().Add(time.Minute), t0(), t0().Add(2 * time.Minute)} {

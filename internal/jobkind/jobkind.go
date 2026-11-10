@@ -34,12 +34,18 @@
 //   - SystemOnly: only the controller creates its jobs, never RunJob or a
 //     schedule (restic_delete_data).
 //   - Requirer: the link features a worker must report to run it.
+//   - OSBound: the operating system a worker must run for a definition
+//     (a backup with Windows VSS).
 //   - Labeled: a short label for people ("Backup").
 //   - Summarizer: display details of a finished job's output.
 //
 // The Registry answers these per kind name (Schedulable, UserStartable,
-// RequiredFeatures, Label, Summarize), with neutral answers for kinds that
-// do not implement them.
+// RequiredFeatures, Label, Summarize) or definition (RequiredOS), with
+// neutral answers for kinds that do not implement them. The worker
+// requirements (Requirer, OSBound) apply wherever a worker is chosen or
+// checked: the API and the scheduler refuse a chosen worker on another
+// operating system, the scheduler picks a label's worker by both, and the
+// dispatcher checks both, finally, when it sends the job.
 //
 // The package is pure: no I/O, no logging. Specs contain secrets and exist
 // only in memory.
@@ -200,6 +206,59 @@ type Requirer interface {
 	RequiredFeatures() []string
 }
 
+// OSBound is implemented by kinds whose definitions may need a worker that
+// runs a particular operating system.
+type OSBound interface {
+	// RequiredOS returns the requirement of a checked definition; the zero
+	// value when any operating system will do.
+	RequiredOS(def *syncrv1.JobDefinition) OSRequirement
+}
+
+// OSRequirement is a definition's requirement on the operating system of
+// the worker that runs it (OSBound). The zero value requires nothing.
+type OSRequirement struct {
+	// OS is the operating system the worker must report, as Go names it
+	// (GOOS, Hello.os), e.g. "windows"; empty when any will do.
+	OS string
+	// Field is the definition field that needs it, e.g.
+	// "definition.restic_backup.use_fs_snapshot".
+	Field string
+	// What names that option for people, e.g. "Windows VSS
+	// (use_fs_snapshot)".
+	What string
+}
+
+// Allows reports whether a worker that reported operating system goos may
+// run the definition. A worker that reported none ("") may not run one
+// that requires an operating system; callers that only have a hint (no
+// report yet) decide for themselves whether to let it pass.
+func (r OSRequirement) Allows(goos string) bool { return r.OS == "" || goos == r.OS }
+
+// FieldMessage is the field error (on Field) of a definition whose worker
+// cannot meet r, e.g. "is only available on Windows workers".
+func (r OSRequirement) FieldMessage() string {
+	return "is only available on " + osName(r.OS) + " workers"
+}
+
+// Explain says, for people, what r requires, e.g. "Windows VSS
+// (use_fs_snapshot) is only available on Windows workers".
+func (r OSRequirement) Explain() string { return r.What + " " + r.FieldMessage() }
+
+// osName returns the display name of an operating system Go names goos.
+func osName(goos string) string {
+	switch goos {
+	case "windows":
+		return "Windows"
+	case "linux":
+		return "Linux"
+	case "darwin":
+		return "macOS"
+	case "freebsd":
+		return "FreeBSD"
+	}
+	return goos
+}
+
 // Labeled is implemented by kinds with a short label for people.
 type Labeled interface {
 	// Label returns the label, e.g. "Backup".
@@ -337,6 +396,20 @@ func (r *Registry) RequiredFeatures(kind string) []string {
 		return slices.Clone(req.RequiredFeatures())
 	}
 	return nil
+}
+
+// RequiredOS returns the operating system a worker must run to run def
+// (OSBound); the zero OSRequirement for definitions of kinds without one,
+// and for definitions of no registered kind.
+func (r *Registry) RequiredOS(def *syncrv1.JobDefinition) OSRequirement {
+	k, err := r.kindOf(def)
+	if err != nil {
+		return OSRequirement{}
+	}
+	if b, ok := k.(OSBound); ok {
+		return b.RequiredOS(def)
+	}
+	return OSRequirement{}
 }
 
 // Label returns the label of kind (Labeled), else the kind name itself.

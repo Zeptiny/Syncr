@@ -26,15 +26,16 @@ func TestEpochRules(t *testing.T) {
 	}{
 		{name: "queued stays queued", setup: func(*env, *fakeWorker, jobs.Job) {},
 			status: domain.JobQueued, start: true},
-		{name: "dispatched is re-queued", setup: func(_ *env, w *fakeWorker, _ jobs.Job) { w.poll(); w.report() },
+		{name: "dispatched is re-queued", setup: func(_ *env, w *fakeWorker, _ jobs.Job) { w.report(); w.poll(); w.report() },
 			status: domain.JobQueued, requeues: 1, start: true},
-		{name: "dispatched with a cancel request is cancelled", setup: func(_ *env, w *fakeWorker, _ jobs.Job) { w.poll(); w.report() },
+		{name: "dispatched with a cancel request is cancelled", setup: func(_ *env, w *fakeWorker, _ jobs.Job) { w.report(); w.poll(); w.report() },
 			cancel: true, status: domain.JobCancelled, code: jobs.CodeCancelled},
-		{name: "running is interrupted", setup: func(_ *env, w *fakeWorker, j jobs.Job) { w.poll(); w.start(j.ID.String()); w.report() },
+		{name: "running is interrupted", setup: func(_ *env, w *fakeWorker, j jobs.Job) { w.report(); w.poll(); w.start(j.ID.String()); w.report() },
 			status: domain.JobInterrupted, code: jobs.CodeWorkerRestarted, notified: true},
-		{name: "running with a cancel request is interrupted", setup: func(_ *env, w *fakeWorker, j jobs.Job) { w.poll(); w.start(j.ID.String()); w.report() },
+		{name: "running with a cancel request is interrupted", setup: func(_ *env, w *fakeWorker, j jobs.Job) { w.report(); w.poll(); w.start(j.ID.String()); w.report() },
 			cancel: true, status: domain.JobInterrupted, code: jobs.CodeWorkerRestarted, notified: true},
 		{name: "finished stays finished", setup: func(_ *env, w *fakeWorker, j jobs.Job) {
+			w.report()
 			w.poll()
 			w.start(j.ID.String())
 			w.finish(j.ID.String(), syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED, nil)
@@ -63,9 +64,15 @@ func TestEpochRules(t *testing.T) {
 				fire(w)
 				got := e.job(j.ID)
 				if trigger == "poll" && tt.start {
-					// The poll itself delivered the re-derived StartJob.
+					// The poll ran the epoch rules, but the new process
+					// gets the re-derived StartJob only after its Hello.
+					if slices.Contains(w.held, j.ID.String()) {
+						t.Errorf("new process received StartJob before its Hello")
+					}
+					w.report()
+					w.poll()
 					if !slices.Contains(w.held, j.ID.String()) {
-						t.Errorf("new process did not receive StartJob")
+						t.Errorf("new process did not receive StartJob after its Hello")
 					}
 					w.report()
 					got = e.job(j.ID)
@@ -107,6 +114,7 @@ func TestSnapshotRules(t *testing.T) {
 		wid := e.enroll("w")
 		j := e.run(wid)
 		w := e.newFakeWorker(wid)
+		w.report()
 		w.poll()
 		w.acks = nil // the ack is lost; the snapshot still proves acceptance
 		w.report()
@@ -123,6 +131,7 @@ func TestSnapshotRules(t *testing.T) {
 		foreign := e.run(other)
 		unknown := domain.NewJobID().String()
 		w := e.newFakeWorker(wid)
+		w.report()
 		w.poll()
 		if _, err := e.jobs.Cancel(ctx, testActor(), finished.ID); err != nil { // concurrent with the delivery
 			t.Fatal(err)
@@ -184,6 +193,7 @@ func TestSnapshotRules(t *testing.T) {
 			wid := e.enroll("w")
 			j := e.run(wid)
 			w := e.newFakeWorker(wid)
+			w.report()
 			w.poll()
 			w.start(j.ID.String())
 			w.report()
@@ -206,6 +216,7 @@ func TestSnapshotRules(t *testing.T) {
 		wid := e.enroll("w")
 		j := e.run(wid)
 		w := e.newFakeWorker(wid)
+		w.report() // its Hello
 		// The snapshot was taken before the worker accepted the job; the
 		// ack overtook it.
 		early := w.reportRequest()
@@ -225,6 +236,7 @@ func TestSnapshotRules(t *testing.T) {
 		wid := e.enroll("w")
 		j := e.run(wid)
 		w := e.newFakeWorker(wid)
+		w.report()
 		w.poll()
 		w.start(j.ID.String())
 		w.report()
@@ -267,6 +279,7 @@ func TestCancelThroughTheLink(t *testing.T) {
 			wid := e.enroll("w")
 			j := e.run(wid)
 			w := e.newFakeWorker(wid)
+			w.report()
 			w.poll()
 			if running {
 				w.start(j.ID.String())
@@ -298,6 +311,7 @@ func TestCancelThroughTheLink(t *testing.T) {
 		wid := e.enroll("w")
 		j := e.run(wid)
 		w := e.newFakeWorker(wid)
+		w.report()
 		w.poll()
 		w.start(j.ID.String())
 		w.report()
@@ -321,6 +335,7 @@ func TestCancelThroughTheLink(t *testing.T) {
 		wid := e.enroll("w")
 		j := e.run(wid)
 		w := e.newFakeWorker(wid)
+		w.report()
 		w.poll()
 		w.start(j.ID.String())
 		w.finish(j.ID.String(), syncrv1.JobResultStatus_JOB_RESULT_STATUS_FAILED, &syncrv1.JobError{Code: syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED})

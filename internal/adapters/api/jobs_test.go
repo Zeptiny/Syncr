@@ -997,7 +997,7 @@ func TestRunResticJobRejections(t *testing.T) {
 	}
 	e.setWorkerOS("linux")
 	_, err = e.runAs(testUser, vss)
-	if codeOf(t, err) != connect.CodeInvalidArgument || !strings.Contains(violation(err, "definition.restic_backup.use_fs_snapshot"), "only available on Windows workers") {
+	if codeOf(t, err) != connect.CodeInvalidArgument || violation(err, "definition.restic_backup.use_fs_snapshot") != "is only available on Windows workers; this worker runs linux" {
 		t.Errorf("VSS on a Linux worker = %v", err)
 	}
 	e.setWorkerOS("windows")

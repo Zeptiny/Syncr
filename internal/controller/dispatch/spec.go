@@ -18,6 +18,24 @@ import (
 // "worker_outdated". It matches domain.ErrFailedPrecondition.
 var ErrWorkerOutdated = fmt.Errorf("the worker must be upgraded: %w", domain.ErrFailedPrecondition)
 
+// WrongOSError reports a worker that runs another operating system than
+// the job's definition needs (jobkind OSRequirement, e.g. Windows VSS): the
+// job fails with "invalid_spec", the code the worker itself would fail it
+// with. It matches domain.ErrInvalidArgument.
+type WrongOSError struct {
+	// Required is what the definition needs.
+	Required jobkind.OSRequirement
+	// OS is what the worker reported ("" if nothing).
+	OS string
+}
+
+func (e *WrongOSError) Error() string {
+	return fmt.Sprintf("%s; the worker runs %q", e.Required.Explain(), e.OS)
+}
+
+// Unwrap makes the error match domain.ErrInvalidArgument.
+func (e *WrongOSError) Unwrap() error { return domain.ErrInvalidArgument }
+
 // errRepositoryUnavailable reports a job whose restic repository was
 // deleted or is not its owner's any more: the job fails with
 // "repository_unavailable". It matches domain.ErrNotFound.
@@ -56,8 +74,10 @@ func NewSpecs(remotes Remotes, repos Repos, kinds *jobkind.Registry) (*Specs, er
 
 // Build implements SpecBuilder for job j on a worker that reported w.
 // Errors: domain.ErrInvalidArgument when the stored definition cannot be
-// decoded, checked or built (also when its kind is not the job's);
-// ErrWorkerOutdated when w lacks a link feature the kind requires;
+// decoded, checked or built (also when its kind is not the job's); a
+// *WrongOSError when w reported another operating system than the
+// definition needs (jobkind Registry.RequiredOS); ErrWorkerOutdated when w
+// lacks a link feature the kind requires;
 // errRepositoryUnavailable when its repository is gone; domain.ErrNotFound
 // (from Resolve or the kind) when a remote is missing, deleted or not the
 // owner's; whatever else the Resolves return (domain.ErrFailedPrecondition
@@ -74,6 +94,10 @@ func (s *Specs) Build(ctx context.Context, j jobs.Job, w workers.Info) (*syncrv1
 	}
 	if kind != j.Kind {
 		return nil, fmt.Errorf("job %s: %w: the definition is a %q, the job a %q", j.ID, domain.ErrInvalidArgument, kind, j.Kind)
+	}
+	// The operating system first: upgrading the worker cannot change it.
+	if req := s.kinds.RequiredOS(def); !req.Allows(w.OS) {
+		return nil, fmt.Errorf("job %s: %w", j.ID, &WrongOSError{Required: req, OS: w.OS})
 	}
 	for _, f := range s.kinds.RequiredFeatures(kind) {
 		if !w.HasFeatures(f) {

@@ -38,6 +38,11 @@ func (backupKind) Build(*syncrv1.JobDefinition, jobkind.Resolved) (*syncrv1.JobS
 func (backupKind) Describe(*syncrv1.JobDefinition, jobkind.Names) string { return "backup" }
 func (backupKind) RequiredFeatures() []string                            { return []string{link.FeatureResticV2} }
 
+// RequiredOS is the real backup's: Windows VSS needs a Windows worker.
+func (backupKind) RequiredOS(def *syncrv1.JobDefinition) jobkind.OSRequirement {
+	return jobkind.ResticBackup{}.RequiredOS(def)
+}
+
 func (k backupKind) ConcurrencyKeys(def *syncrv1.JobDefinition) []string {
 	refs, err := k.Check(def)
 	if err != nil {
@@ -175,4 +180,99 @@ func TestLabelSkipsOutdatedWorkers(t *testing.T) {
 	if js := e3.jobsOf(sc3.ID); len(js) != 1 || js[0].WorkerID != old {
 		t.Fatalf("transfer jobs = %+v", js)
 	}
+}
+
+// vssInput is backupInput with Windows VSS on.
+func (e *env) vssInput(name string, target schedules.Target, repo domain.ResticRepoID) schedules.Input {
+	in := e.backupInput(name, target, repo)
+	in.Definition = fmt.Appendf(nil, `{"restic_backup":{"repository_id":%q,"paths":["C:\\Users"],"use_fs_snapshot":true}}`, repo)
+	return in
+}
+
+// TestTargetsMeetTheOS: a definition that needs an operating system (Windows
+// VSS) only goes to workers that run it. A label's other workers are
+// skipped; a label without one fails the run (the schedule stays enabled);
+// a chosen worker on another system fails it and pauses the schedule. A
+// worker that has not reported its system yet may still take it.
+func TestTargetsMeetTheOS(t *testing.T) {
+	t.Parallel()
+	backup := func(name, os string, online bool, labels ...string) worker {
+		return worker{name: name, online: online, labels: labels, kinds: []string{"restic_backup"}, features: link.Features(), os: os}
+	}
+
+	t.Run("label: only the Windows worker", func(t *testing.T) {
+		t.Parallel()
+		e, repo := resticEnv(t)
+		e.addWorker(backup("a-linux", "linux", true, "office")) // idle and first by name
+		win := e.addWorker(backup("b-windows", "windows", true, "office"))
+		e.busyJob(win)
+		sc := e.create(e.vssInput("documents", schedules.Target{Label: "office"}, repo))
+		e.clock.Set(t0.Add(time.Hour))
+		e.tick(e.newScheduler(nil, nil))
+		if js := e.jobsOf(sc.ID); len(js) != 1 || js[0].WorkerID != win {
+			t.Fatalf("jobs = %+v, want one on the Windows worker", js)
+		}
+	})
+
+	t.Run("label: no Windows worker", func(t *testing.T) {
+		t.Parallel()
+		e, repo := resticEnv(t)
+		e.addWorker(backup("a-linux", "linux", true, "office"))
+		e.addWorker(backup("b-linux", "linux", false, "office"))
+		sc := e.create(e.vssInput("documents", schedules.Target{Label: "office"}, repo))
+		e.clock.Set(t0.Add(time.Hour))
+		e.tick(e.newScheduler(nil, nil))
+		r := e.onlyRun(sc.ID)
+		if r.Status != schedules.RunFailed || r.Reason != schedules.ReasonNoWorkerWithLabel ||
+			r.Message != `no worker with the label "office" can run this job: Windows VSS (use_fs_snapshot) is only available on Windows workers` {
+			t.Fatalf("run = %+v", r)
+		}
+		if !e.schedule(sc.ID).Enabled || len(e.jobsOf(sc.ID)) != 0 {
+			t.Errorf("schedule enabled %v, jobs %d", e.schedule(sc.ID).Enabled, len(e.jobsOf(sc.ID)))
+		}
+	})
+
+	t.Run("label: a worker that has not reported its system may", func(t *testing.T) {
+		t.Parallel()
+		e, repo := resticEnv(t)
+		e.addWorker(backup("a-linux", "linux", true, "office"))
+		e.addWorker(worker{name: "new", online: false, labels: []string{"office"}, kinds: []string{}}) // never reported
+		sc := e.create(e.vssInput("documents", schedules.Target{Label: "office"}, repo))
+		e.clock.Set(t0.Add(time.Hour))
+		e.tick(e.newScheduler(nil, nil))
+		if r := e.onlyRun(sc.ID); r.Status != schedules.RunPending {
+			t.Fatalf("run = %+v, want it waiting", r)
+		}
+	})
+
+	t.Run("worker: another system", func(t *testing.T) {
+		t.Parallel()
+		e, repo := resticEnv(t)
+		w := e.addWorker(backup("nas", "linux", true))
+		sc := e.create(e.vssInput("documents", schedules.Target{WorkerID: w}, repo))
+		e.clock.Set(t0.Add(time.Hour))
+		e.tick(e.newScheduler(nil, nil))
+		r := e.onlyRun(sc.ID)
+		if r.Status != schedules.RunFailed || r.Reason != schedules.ReasonInvalidDefinition ||
+			!strings.HasPrefix(r.Message, `Windows VSS (use_fs_snapshot) is only available on Windows workers; the schedule's worker "nas" runs linux.`) {
+			t.Fatalf("run = %+v", r)
+		}
+		if got := e.schedule(sc.ID); got.Enabled || got.PausedReason != schedules.ReasonInvalidDefinition || len(e.jobsOf(sc.ID)) != 0 {
+			t.Errorf("schedule enabled %v, paused reason %q, jobs %d", got.Enabled, got.PausedReason, len(e.jobsOf(sc.ID)))
+		}
+	})
+
+	t.Run("worker: Windows, or not reported", func(t *testing.T) {
+		t.Parallel()
+		for _, os := range []string{"windows", ""} {
+			e, repo := resticEnv(t)
+			w := e.addWorker(backup("pc", os, true))
+			sc := e.create(e.vssInput("documents", schedules.Target{WorkerID: w}, repo))
+			e.clock.Set(t0.Add(time.Hour))
+			e.tick(e.newScheduler(nil, nil))
+			if js := e.jobsOf(sc.ID); len(js) != 1 || js[0].WorkerID != w {
+				t.Errorf("os %q: jobs = %+v, want one on the worker", os, js)
+			}
+		}
+	})
 }

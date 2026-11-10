@@ -61,9 +61,13 @@ Restic probes read with `--no-lock` and take no concurrency keys
 method is what the rest of the controller calls.
 
 For active workers it keeps a table of waiting calls in memory. The
-dispatcher asks it for commands on every derivation and puts them before
-the job commands (at most 16 `run_probe` at once), so a long job queue
-cannot starve a person waiting for a folder listing. Command IDs are
+dispatcher asks it for commands on every derivation. Probe and job
+commands share the dispatcher's cap on commands per response: the
+`CancelJob`s go first, then the probe commands get up to half of the
+remaining room (at most 16 `run_probe` at once) and the `StartJob`s the
+rest, each side taking what the other leaves. So a long job queue cannot
+starve a person waiting for a folder listing, and probes never hold back a
+job's cancel. Command IDs are
 derived from the probe (`probe:<id>`, `probe-cancel:<id>`), as job commands
 are derived from the job:
 
@@ -96,8 +100,11 @@ Workers report link features (`Hello.features`: `probe`, `restic.v2`,
 (`Hello.probe_ops`). The controller refuses a probe up front when the
 worker lacks the `probe` feature or the operation, with a message that says
 to upgrade the worker. It never sends `run_probe` to a worker without the
-feature. A passive worker that answers `Unimplemented` anyway (a stale
-Hello) gets the same error. An old active worker that somehow receives
+feature: the dispatcher decides from the Hello of the worker's current
+process, and a new process's probes wait until its Hello is stored (the
+up-front check may still see the previous process's Hello). A passive
+worker that answers `Unimplemented` anyway (a stale Hello) gets the same
+error. An old active worker that somehow receives
 `run_probe` acks and ignores it; the probe then times out as unavailable.
 
 ### Orchestration lives in `internal/controller/probe`

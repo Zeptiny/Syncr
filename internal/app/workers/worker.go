@@ -33,8 +33,9 @@ type Worker struct {
 	// most domain.MaxLabels. Schedules may target any worker with a label.
 	Labels []string
 
-	// Info is what the worker reported in its latest Hello; zero before the
-	// first one.
+	// Info is what the worker reported in its latest Hello (Info.Epoch says
+	// which process sent it); before the first one, only the OS and
+	// architecture given at enrollment.
 	Info Info
 	// Link is the dispatcher's state of the worker link.
 	Link Link
@@ -43,8 +44,19 @@ type Worker struct {
 // Removed reports whether the worker has been removed.
 func (w Worker) Removed() bool { return !w.RemovedAt.IsZero() }
 
+// InfoCurrent reports whether Info comes from the Hello of the worker's
+// current process (Link.Epoch). A new process's first link calls can come
+// before its Hello is stored; until then Info describes the previous
+// process (or only what enrollment recorded), which may be another version
+// or even another operating system after a reinstall. Such Info is a hint
+// for early checks; the dispatcher decides nothing from it.
+func (w Worker) InfoCurrent() bool { return w.Link.Epoch != "" && w.Info.Epoch == w.Link.Epoch }
+
 // Info is what a worker reports about itself in its Hello event.
 type Info struct {
+	// Epoch is the worker epoch whose Hello reported this Info (set by
+	// SetInfo); empty for what enrollment recorded.
+	Epoch             string
 	Version           string
 	OS                string
 	Arch              string

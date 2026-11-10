@@ -102,7 +102,7 @@ func (s *Service) Commands(ctx context.Context, workerID domain.WorkerID, epoch 
 		return nil, err
 	}
 	defer sess.mu.Unlock()
-	return s.commands(ctx, sess, workerID, w.Info, epoch)
+	return s.commands(ctx, sess, w, epoch)
 }
 
 // WaitCommands returns the worker's pending commands as soon as there are
@@ -218,6 +218,12 @@ func (s *Service) ingest(ctx context.Context, sess *session, w workers.Worker, e
 		if applyErr = s.apply(ctx, w.ID, epoch, ev); applyErr != nil {
 			break
 		}
+		if ev.GetHello() != nil && sess.awaitsHello {
+			// A derivation held back StartJob and probe commands for this
+			// Hello (see commands): wake the worker's long poll.
+			sess.awaitsHello = false
+			s.hub.Wake(w.ID)
+		}
 		applied = ev.GetSeq()
 	}
 	if applied > cursor {
@@ -308,60 +314,103 @@ func (s *Service) ack(ctx context.Context, sess *session, workerID domain.Worker
 	return nil
 }
 
-// commands implements Commands with the session locked; info is what the
-// worker reported in its latest Hello. Probe commands come first (they are
-// few and their callers wait); the job commands follow, up to
-// Config.MaxCommands in all. A queued job that waits for an older job
-// sharing one of its concurrency keys gets no StartJob.
-func (s *Service) commands(ctx context.Context, sess *session, workerID domain.WorkerID, info workers.Info, epoch string) ([]*syncrv1.Command, error) {
-	js, err := s.jobs.Unfinished(ctx, workerID)
+// commands implements Commands with the session locked; w is the worker as
+// read for this call (in epoch). It returns at most Config.MaxCommands
+// commands, taken in this order of priority:
+//
+//  1. CancelJob: the worker's jobs with a cancel request, oldest first, then
+//     its orphans. Someone asked for the work to stop, and they are few.
+//  2. Probe commands (active workers), up to half of the room the cancels
+//     leave: their callers wait.
+//  3. StartJob, oldest job first, in the rest of the room. A queued job
+//     that waits for an older job sharing one of its concurrency keys gets
+//     none.
+//
+// Room that the starts leave unused goes to the probes and the other way
+// round. The result lists the probe commands first, then the cancels, then
+// the starts.
+//
+// StartJob and probe commands depend on what the worker's current process
+// can run (link features, operating system), so they wait until the Hello
+// of epoch is stored (Worker.InfoCurrent): until then the stored Info is
+// the previous process's, maybe another version. Storing the Hello wakes
+// the worker's long poll if a derivation was held back.
+func (s *Service) commands(ctx context.Context, sess *session, w workers.Worker, epoch string) ([]*syncrv1.Command, error) {
+	js, err := s.jobs.Unfinished(ctx, w.ID)
 	if err != nil {
 		return nil, err
 	}
-	if js, err = s.reconcileEpoch(ctx, workerID, epoch, js); err != nil {
+	if js, err = s.reconcileEpoch(ctx, w.ID, epoch, js); err != nil {
 		return nil, err
+	}
+	var cancels []*syncrv1.Command
+	for _, j := range js {
+		if j.Status.Active() && j.CancelRequested() && !sess.cancelAcked[j.ID.String()] {
+			cancels = append(cancels, cancelCommand(j.ID.String()))
+		}
+	}
+	for _, id := range sess.orphans {
+		if !sess.cancelAcked[id] {
+			cancels = append(cancels, cancelCommand(id))
+		}
+	}
+	cancels = cancels[:min(len(cancels), s.cfg.MaxCommands)]
+	if !w.InfoCurrent() {
+		sess.awaitsHello = true
+		return cancels, nil
+	}
+	room := s.cfg.MaxCommands - len(cancels)
+	if room == 0 {
+		return cancels, nil
+	}
+	var probes []*syncrv1.Command
+	if s.probes != nil && w.Info.HasFeatures(link.FeatureProbe) {
+		probes = s.probes.commands(w.ID, room)
+	}
+	starts, err := s.starts(ctx, js, w.Info, room-min(len(probes), room/2))
+	if err != nil {
+		return nil, err
+	}
+	probes = probes[:min(len(probes), room-len(starts))]
+	return slices.Concat(probes, cancels, starts), nil
+}
+
+// starts returns the StartJob commands of the queued jobs of js, oldest
+// first, at most limit, for a worker whose current process reported info.
+// A queued job that waits for an older job sharing one of its concurrency
+// keys gets none.
+func (s *Service) starts(ctx context.Context, js []jobs.Job, info workers.Info, limit int) ([]*syncrv1.Command, error) {
+	if limit <= 0 {
+		return nil, nil
 	}
 	blocked, err := s.blocked(ctx, js)
 	if err != nil {
 		return nil, err
 	}
 	var cmds []*syncrv1.Command
-	if s.probes != nil && info.HasFeatures(link.FeatureProbe) {
-		cmds = s.probes.commands(workerID)
-	}
 	for _, j := range js {
-		if len(cmds) >= s.cfg.MaxCommands {
-			return cmds, nil
-		}
-		switch {
-		case j.Status == domain.JobQueued:
-			if _, waits := blocked[j.ID]; waits {
-				continue // not the head of its concurrency keys yet
-			}
-			// Invariant (package jobs): a queued job never has a cancel
-			// request, so no StartJob follows a cancel.
-			spec, err := s.startSpec(ctx, j, info)
-			if err != nil {
-				return nil, err
-			}
-			if spec == nil {
-				continue // undeliverable; the job was failed
-			}
-			cmds = append(cmds, &syncrv1.Command{
-				Id:      startPrefix + j.ID.String(),
-				Command: &syncrv1.Command_StartJob{StartJob: &syncrv1.StartJob{JobId: j.ID.String(), Spec: spec}},
-			})
-		case j.Status.Active() && j.CancelRequested() && !sess.cancelAcked[j.ID.String()]:
-			cmds = append(cmds, cancelCommand(j.ID.String()))
-		}
-	}
-	for _, id := range sess.orphans {
-		if len(cmds) >= s.cfg.MaxCommands {
+		if len(cmds) >= limit {
 			break
 		}
-		if !sess.cancelAcked[id] {
-			cmds = append(cmds, cancelCommand(id))
+		if j.Status != domain.JobQueued {
+			continue
 		}
+		if _, waits := blocked[j.ID]; waits {
+			continue // not the head of its concurrency keys yet
+		}
+		// Invariant (package jobs): a queued job never has a cancel
+		// request, so no StartJob follows a cancel.
+		spec, err := s.startSpec(ctx, j, info)
+		if err != nil {
+			return nil, err
+		}
+		if spec == nil {
+			continue // undeliverable; the job was failed
+		}
+		cmds = append(cmds, &syncrv1.Command{
+			Id:      startPrefix + j.ID.String(),
+			Command: &syncrv1.Command_StartJob{StartJob: &syncrv1.StartJob{JobId: j.ID.String(), Spec: spec}},
+		})
 	}
 	return cmds, nil
 }
@@ -400,9 +449,12 @@ func (s *Service) startSpec(ctx context.Context, j jobs.Job, info workers.Info) 
 			errors.New("no spec builder is configured"))
 	}
 	spec, err := s.specs.Build(ctx, j, info)
+	var wrongOS *WrongOSError
 	switch {
 	case err == nil:
 		return spec, nil
+	case errors.As(err, &wrongOS):
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, s.wrongOSMessage(ctx, j, wrongOS), err)
 	case errors.Is(err, errRepositoryUnavailable):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeRepositoryUnavailable, "the repository was deleted or is not available to its owner", err)
 	case errors.Is(err, ErrWorkerOutdated):
@@ -425,6 +477,17 @@ func (s *Service) outdatedMessage(ctx context.Context, j jobs.Job) string {
 		return fmt.Sprintf("the worker must be upgraded to run %s jobs", j.Kind)
 	}
 	return fmt.Sprintf("worker %q must be upgraded to run %s jobs", w.Name, j.Kind)
+}
+
+// wrongOSMessage says why a job fails on a worker that runs another
+// operating system than its definition needs.
+func (s *Service) wrongOSMessage(ctx context.Context, j jobs.Job, e *WrongOSError) string {
+	runs := cmp.Or(e.OS, "an unknown operating system")
+	w, err := s.workers.Get(ctx, j.WorkerID)
+	if err != nil {
+		return fmt.Sprintf("%s; the worker runs %s", e.Required.Explain(), runs)
+	}
+	return fmt.Sprintf("%s; worker %q runs %s", e.Required.Explain(), w.Name, runs)
 }
 
 // failUnbuildable fails a queued job whose spec cannot be built. The error

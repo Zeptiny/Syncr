@@ -43,14 +43,17 @@ type Jobs interface {
 // "remote_unavailable" (an error wrapping errRepositoryUnavailable, a
 // repository that is gone, with "repository_unavailable"),
 // domain.ErrInvalidArgument (the definition cannot be decoded or built)
-// with "invalid_spec", ErrWorkerOutdated (the worker lacks a feature the
-// kind requires) with "worker_outdated", domain.ErrFailedPrecondition (a
+// with "invalid_spec" (a *WrongOSError, a worker on another operating system
+// than the definition needs, too, with a message saying so),
+// ErrWorkerOutdated (the worker lacks a feature the kind requires) with
+// "worker_outdated", domain.ErrFailedPrecondition (a
 // remote's stored credentials cannot be used, e.g. they no longer decrypt)
 // with "internal". Any other error is returned to the worker's call and
 // retried on its next poll.
 type SpecBuilder interface {
-	// Build builds the spec of queued job j for its worker, which reported
-	// w in its latest Hello.
+	// Build builds the spec of queued job j for its worker, whose current
+	// process reported w in its Hello (the dispatcher never calls it with
+	// the info of an earlier process).
 	Build(ctx context.Context, j jobs.Job, w workers.Info) (*syncrv1.JobSpec, error)
 }
 

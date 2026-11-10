@@ -45,6 +45,7 @@ const unknownRepository = "Unknown repository"
 // refers to one of the owner's repositories (Refs.RepositoryID), holds its
 // ResticRepoKey (Keyed) and requires the worker feature
 // link.FeatureResticV2 (restic_delete_data also link.FeatureResticDelete).
+// A backup with use_fs_snapshot needs a Windows worker (OSBound).
 // restic_restore and restic_delete_data are Unschedulable;
 // restic_delete_data is SystemOnly.
 func ResticKinds() []Kind {
@@ -238,12 +239,22 @@ var (
 	_ Kind       = ResticBackup{}
 	_ Keyed      = ResticBackup{}
 	_ Requirer   = ResticBackup{}
+	_ OSBound    = ResticBackup{}
 	_ Labeled    = ResticBackup{}
 	_ Summarizer = ResticBackup{}
 )
 
 // Name implements Kind.
 func (ResticBackup) Name() string { return "restic_backup" }
+
+// RequiredOS implements OSBound: use_fs_snapshot (VSS) needs a Windows
+// worker; a worker on another system refuses the spec (INVALID_SPEC).
+func (ResticBackup) RequiredOS(def *syncrv1.JobDefinition) OSRequirement {
+	if !def.GetResticBackup().GetUseFsSnapshot() {
+		return OSRequirement{}
+	}
+	return OSRequirement{OS: "windows", Field: backupField + ".use_fs_snapshot", What: "Windows VSS (use_fs_snapshot)"}
+}
 
 // Label implements Labeled.
 func (ResticBackup) Label() string { return "Backup" }

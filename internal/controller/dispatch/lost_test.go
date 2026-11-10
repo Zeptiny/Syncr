@@ -31,10 +31,12 @@ func newLostSetup(t *testing.T) *lostSetup {
 	s := &lostSetup{e: e, w: e.newFakeWorker(wid), o: e.newFakeWorker(oid)}
 	s.running, s.dispatched, s.cancelled = e.run(wid), e.run(wid), e.run(wid)
 	s.otherRunning = e.run(oid)
+	s.w.report()
 	s.w.poll()
 	s.w.start(s.running.ID.String())
 	s.w.start(s.cancelled.ID.String())
 	s.w.report()
+	s.o.report()
 	s.o.poll()
 	s.o.start(s.otherRunning.ID.String())
 	s.o.report()

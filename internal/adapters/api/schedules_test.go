@@ -568,13 +568,21 @@ func TestScheduleResticDefinitions(t *testing.T) {
 		t.Errorf("a schedule on another user's repository = %v", err)
 	}
 
-	// Windows VSS only on a target worker known to run Windows.
+	// Windows VSS only on a target worker known to run Windows. A label's
+	// workers are not checked here: a run picks one that can run it.
 	vss := apiBackupDef(repo.GetId())
 	vss.GetResticBackup().UseFsSnapshot = true
 	re.setWorkerOS("linux")
 	err = create(vss, testUser)
-	if codeOf(t, err) != connect.CodeInvalidArgument || violation(err, "definition.restic_backup.use_fs_snapshot") == "" {
+	if codeOf(t, err) != connect.CodeInvalidArgument ||
+		violation(err, "definition.restic_backup.use_fs_snapshot") != "is only available on Windows workers; this worker runs linux" {
 		t.Errorf("a VSS schedule on a Linux worker = %v", err)
+	}
+	onLabel := e.scheduleInput("Office documents")
+	onLabel.Definition = vss
+	onLabel.Target = &syncrv1.ScheduleTarget{Target: &syncrv1.ScheduleTarget_WorkerLabel{WorkerLabel: "office"}}
+	if _, err := e.schedulesFor(testUser).CreateSchedule(ctx, connect.NewRequest(&syncrv1.CreateScheduleRequest{Input: onLabel})); err != nil {
+		t.Errorf("a VSS schedule on a label = %v, want it accepted", err)
 	}
 
 	// While the repository's data is being deleted: its schedule is

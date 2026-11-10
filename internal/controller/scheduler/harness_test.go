@@ -136,6 +136,8 @@ type worker struct {
 	// features are the reported link features (nil: a worker older than
 	// Milestone 5).
 	features []string
+	// os is the reported operating system ("": not reported).
+	os string
 }
 
 func (e *env) addWorker(w worker) domain.WorkerID {
@@ -146,7 +148,7 @@ func (e *env) addWorker(w worker) domain.WorkerID {
 	}
 	wk := workers.Worker{
 		ID: domain.NewWorkerID(), Name: w.name, Mode: domain.WorkerActive, CreatedAt: t0, Labels: w.labels,
-		Info: workers.Info{JobKinds: kinds, Features: w.features},
+		Info: workers.Info{JobKinds: kinds, Features: w.features, OS: w.os},
 	}
 	if len(kinds) > 0 {
 		wk.Info.ReportedAt = t0

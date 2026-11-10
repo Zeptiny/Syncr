@@ -78,8 +78,13 @@ ALTER TABLE jobs
     ADD COLUMN repository_id uuid REFERENCES restic_repositories (id),
     ADD COLUMN concurrency_keys text[] NOT NULL DEFAULT '{}';
 CREATE INDEX jobs_repository_idx ON jobs (repository_id, id DESC) WHERE repository_id IS NOT NULL;
--- Key overlap (&&) for blockers, the dispatch sweep and the wake-up.
-CREATE INDEX jobs_concurrency_keys_idx ON jobs USING gin (concurrency_keys) WHERE cardinality(concurrency_keys) > 0;
+-- Key overlap (&&) among the unfinished jobs that hold keys: the blockers
+-- (each poll), the dispatch sweep and the wake-up. Finished jobs are left
+-- out, so a repository's job history never weighs on these lookups; the
+-- queries repeat the predicate so the planner can use the index. The
+-- sweep's look at recently finished sharers goes by jobs_finished_idx.
+CREATE INDEX jobs_live_concurrency_keys_idx ON jobs USING gin (concurrency_keys)
+    WHERE status IN ('queued', 'dispatched', 'running') AND cardinality(concurrency_keys) > 0;
 
 ALTER TABLE schedules ADD COLUMN repository_id uuid REFERENCES restic_repositories (id);
 CREATE INDEX schedules_repository_idx ON schedules (repository_id) WHERE repository_id IS NOT NULL;
@@ -94,7 +99,7 @@ DELETE FROM jobs WHERE repository_id IS NOT NULL;
 DELETE FROM schedules WHERE repository_id IS NOT NULL;
 DROP INDEX schedules_repository_idx;
 ALTER TABLE schedules DROP COLUMN repository_id;
-DROP INDEX jobs_concurrency_keys_idx;
+DROP INDEX jobs_live_concurrency_keys_idx;
 DROP INDEX jobs_repository_idx;
 ALTER TABLE jobs DROP COLUMN concurrency_keys, DROP COLUMN repository_id;
 DROP TABLE restic_snapshots;
