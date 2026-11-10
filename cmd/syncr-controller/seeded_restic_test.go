@@ -257,6 +257,45 @@ func TestRunSeededRestic(t *testing.T) {
 		t.Errorf("Photos vault after alice's attempts = %v (%v)", still, err)
 	}
 
+	// Deleting the data needs the repository's exact name, and the
+	// deletion kind cannot be scheduled either.
+	for _, confirm := range []string{"", "photos vault", "Photos vault "} {
+		if _, err := rc.DeleteRepository(ctx, connect.NewRequest(&syncrv1.DeleteRepositoryRequest{RepositoryId: photos.GetId(), DeleteData: true, ConfirmName: confirm})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+			t.Errorf("DeleteRepository with its data, confirmed with %q = %v, want InvalidArgument", confirm, err)
+		}
+	}
+	if _, err := syncrv1connect.NewScheduleServiceClient(admin, s.base).CreateSchedule(ctx, connect.NewRequest(&syncrv1.CreateScheduleRequest{Input: &syncrv1.ScheduleInput{
+		Name: "Delete it nightly", Cron: "0 3 * * *", Timezone: "UTC", Enabled: true,
+		Target:    &syncrv1.ScheduleTarget{Target: &syncrv1.ScheduleTarget_WorkerId{WorkerId: ids["nas-01"]}},
+		MissedRun: &syncrv1.MissedRunPolicy{Action: syncrv1.MissedRunAction_MISSED_RUN_ACTION_SKIP},
+		Overlap:   syncrv1.OverlapPolicy_OVERLAP_POLICY_SKIP,
+		Definition: &syncrv1.JobDefinition{
+			Operation: &syncrv1.JobDefinition_ResticDeleteData{ResticDeleteData: &syncrv1.ResticDeleteDataDefinition{RepositoryId: photos.GetId()}},
+		},
+	}})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("CreateSchedule(restic_delete_data) = %v, want InvalidArgument", err)
+	}
+	if still, err := rc.GetRepository(ctx, connect.NewRequest(&syncrv1.GetRepositoryRequest{RepositoryId: photos.GetId()})); err != nil || still.Msg.GetRepository().GetDeleting() {
+		t.Errorf("Photos vault after the refused deletions = %v (%v)", still, err)
+	}
+
+	// Probes are rate-limited per user: alice's flood is cut off, and the
+	// admin can still probe.
+	apc := syncrv1connect.NewProbeServiceClient(alice, s.base)
+	limited := false
+	for range 40 {
+		if _, err := apc.ListWorkerFiles(ctx, connect.NewRequest(&syncrv1.ListWorkerFilesRequest{WorkerId: ids["nas-01"]})); connect.CodeOf(err) == connect.CodeResourceExhausted {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Error("40 probes in a row were all allowed, want ResourceExhausted")
+	}
+	if _, err := pc.ListWorkerFiles(ctx, connect.NewRequest(&syncrv1.ListWorkerFilesRequest{WorkerId: ids["nas-01"]})); err != nil {
+		t.Errorf("the admin's probe after alice's flood = %v", err)
+	}
+
 	// Passwords: in no response and no log line.
 	for _, secret := range []string{"syncr-demo-restic", password} {
 		for _, text := range seen {
