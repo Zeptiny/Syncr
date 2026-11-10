@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -173,6 +174,10 @@ func TestRunActiveLink(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(hello.GetJobKinds(), ","), "rclone_transfer") {
 		t.Errorf("hello job kinds = %v", hello.GetJobKinds())
+	}
+	// An up-to-date worker reports every link feature and probe operation.
+	if !slices.Equal(hello.GetFeatures(), link.Features()) || !slices.Equal(hello.GetProbeOps(), link.ProbeOps()) {
+		t.Errorf("hello features = %v, probe ops = %v", hello.GetFeatures(), hello.GetProbeOps())
 	}
 	want := link.ActiveAuthorization(cmdWorkerID, cmdSecret)
 	for _, a := range auth {

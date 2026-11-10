@@ -13,6 +13,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
@@ -39,6 +40,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch/active"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch/passive"
+	"github.com/Zeptiny/Syncr/internal/controller/probe"
 	"github.com/Zeptiny/Syncr/internal/controller/scheduler"
 	"github.com/Zeptiny/Syncr/internal/devseed"
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -142,6 +144,63 @@ type services struct {
 	// describer describes jobs for their notifications (the outbox's and
 	// the dev seed's).
 	describer jobDescriber
+
+	// restic are the repository use cases; its Run loop completes data
+	// deletions. probes serves the API's ProbeService, and seedProbes are
+	// the canned answers a seeded controller gives instead of asking its
+	// demo workers (nil otherwise).
+	restic     *restic.Service
+	probes     *probe.Service
+	seedProbes *devseed.Probes
+}
+
+// probeLimit is the rate limit of worker probes, per user: a burst of 20,
+// then one every 500 ms.
+func probeLimit() ratelimit.Config {
+	return ratelimit.Config{Burst: 20, Every: 500 * time.Millisecond, MaxKeys: 10000}
+}
+
+// lazyRestic is the restic service as the services built before it use it:
+// the jobs service (the repository of a new job), the job describer (the
+// repositories' names) and the jobFinished notifier (Wake). The restic
+// service needs the probe runner, which needs the jobs and workers
+// services, which need these; set breaks that cycle. Nothing calls it
+// before newServices has set it.
+type lazyRestic struct {
+	svc atomic.Pointer[restic.Service]
+}
+
+var (
+	_ jobs.RepositoryChecker = (*lazyRestic)(nil)
+	_ repositoryNames        = (*lazyRestic)(nil)
+)
+
+func (l *lazyRestic) set(s *restic.Service) { l.svc.Store(s) }
+
+// UsableRepository implements jobs.RepositoryChecker. Before set it fails
+// closed, as a job service without repositories does.
+func (l *lazyRestic) UsableRepository(ctx context.Context, owner domain.UserID, id domain.ResticRepoID, jobID domain.JobID) (string, domain.RemoteID, error) {
+	s := l.svc.Load()
+	if s == nil {
+		return "", domain.RemoteID{}, fmt.Errorf("repositories are not available yet: %w", domain.ErrUnavailable)
+	}
+	return s.UsableRepository(ctx, owner, id, jobID)
+}
+
+// Names implements repositoryNames.
+func (l *lazyRestic) Names(ctx context.Context, ids []domain.ResticRepoID) (map[domain.ResticRepoID]restic.Ref, error) {
+	s := l.svc.Load()
+	if s == nil {
+		return nil, fmt.Errorf("repositories are not available yet: %w", domain.ErrUnavailable)
+	}
+	return s.Names(ctx, ids)
+}
+
+// Wake asks the restic service to complete data deletions soon.
+func (l *lazyRestic) Wake() {
+	if s := l.svc.Load(); s != nil {
+		s.Wake()
+	}
 }
 
 // loginLimits are the rate limits of credential checks: per client IP
@@ -169,6 +228,16 @@ func sendTestLimit() ratelimit.Config {
 // behind it may launch. One scheduler.Signal is shared by the schedules
 // service (a saved schedule or Run now wakes it) and the scheduler, which
 // breaks their construction cycle.
+//
+// Restic (Milestone 5), in construction order: the probe broker shares
+// the Hub and is the dispatcher's Probes; the probe runner asks workers
+// through it (on a seeded controller through devseed.Probes, whose demo
+// workers do not exist); the data deleter starts restic_delete_data jobs;
+// the restic service uses both, checks the repository of new jobs and
+// schedules, and resolves repositories with their passwords when the
+// dispatcher builds a spec. A finished restic_delete_data job wakes it
+// (jobFinished) to complete the deletion. lazyRestic breaks the cycle
+// restic -> probe runner -> jobs -> restic.
 func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring, log *slog.Logger) (*services, error) {
 	hub := dispatch.NewHub()
 	clk := clock.System{}
@@ -189,7 +258,8 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	if err != nil {
 		return nil, fmt.Errorf("job kinds: %w", err)
 	}
-	describer := jobDescriber{kinds: kinds, remotes: rs}
+	repos := &lazyRestic{}
+	describer := jobDescriber{kinds: kinds, remotes: rs, repos: repos}
 	channels, err := newChannels(cfg, log)
 	if err != nil {
 		return nil, err
@@ -218,7 +288,7 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	sig := scheduler.NewSignal()
 	js, err := jobs.New(jobs.Deps{
 		Jobs: st, Samples: st, Activity: st, Clock: clk, IDs: ids,
-		Broker: broker.New(), Notifier: jobFinished{ns, sig}, Waker: hub, Remotes: rs,
+		Broker: broker.New(), Notifier: jobFinished{ns, sig, repos}, Waker: hub, Remotes: rs, Repositories: repos,
 		Logger: log.With("component", "jobs"),
 	}, jobs.Config{})
 	if err != nil {
@@ -232,17 +302,53 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	if err != nil {
 		return nil, fmt.Errorf("workers service: %w", err)
 	}
-	// m5: the integration step passes the restic service as the
-	// repositories (dispatch.Repos); without it restic jobs fail with
-	// repository_unavailable.
-	specs, err := dispatch.NewSpecs(rs, nil, kinds)
+	probeBroker, err := dispatch.NewProbeBroker(dispatch.ProbeBrokerDeps{
+		Workers: ws, Hub: hub, Clock: clk, Logger: log.With("component", "probe"),
+	}, dispatch.ProbeConfig{})
+	if err != nil {
+		return nil, fmt.Errorf("probe broker: %w", err)
+	}
+	var (
+		transport  probe.Transport = probeBroker
+		seedProbes *devseed.Probes
+	)
+	if cfg.Dev.Seed {
+		seedProbes = devseed.NewProbes(clk)
+		transport = seedProbes
+	}
+	probeLimiter, err := ratelimit.New(probeLimit(), clk)
+	if err != nil {
+		return nil, err
+	}
+	runner, err := probe.NewRunner(probe.Deps{
+		Transport: transport, Workers: ws, Jobs: js, Remotes: rs, Limiter: probeLimiter, IDs: ids,
+		Logger: log.With("component", "probe"),
+	}, probe.Config{Timeout: cfg.Probe.Timeout, ResticTimeout: cfg.Probe.ResticTimeout})
+	if err != nil {
+		return nil, fmt.Errorf("probe runner: %w", err)
+	}
+	deleter, err := probe.NewDataDeleter(probe.DeleterDeps{
+		Jobs: js, Workers: ws, Remotes: rs, Kinds: kinds, Logger: log.With("component", "restic"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("data deleter: %w", err)
+	}
+	resticSvc, err := restic.New(restic.Deps{
+		Repo: st, Remotes: rs, Prober: runner, Deletions: deleter, Backends: backends, Cipher: cipher, Clock: clk, IDs: ids,
+		Logger: log.With("component", "restic"),
+	}, restic.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("restic service: %w", err)
+	}
+	repos.set(resticSvc)
+	specs, err := dispatch.NewSpecs(rs, resticSvc, kinds)
 	if err != nil {
 		return nil, err
 	}
 	dcfg := dispatch.DefaultConfig()
 	dcfg.LostAfter = cfg.Workers.LostAfter
 	disp, err := dispatch.New(dispatch.Deps{
-		Jobs: js, Workers: ws, Clock: clk, Hub: hub, Specs: specs,
+		Jobs: js, Workers: ws, Clock: clk, Hub: hub, Specs: specs, Probes: probeBroker,
 		Logger: log.With("component", "dispatch"),
 	}, dcfg)
 	if err != nil {
@@ -253,7 +359,7 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 		return nil, err
 	}
 	ss, err := schedules.New(schedules.Deps{
-		Repo: st, Remotes: rs, Contacts: cs, Workers: workerChecker{ws}, Waker: sig, Clock: clk, IDs: ids,
+		Repo: st, Remotes: rs, Contacts: cs, Workers: workerChecker{ws}, Repositories: resticSvc, Waker: sig, Clock: clk, IDs: ids,
 		Logger: log.With("component", "schedules"),
 	}, schedules.Config{})
 	if err != nil {
@@ -272,6 +378,7 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 		jobs: js, workers: ws, disp: disp, wake: wake,
 		adminWorkers: &wakingWorkers{Service: ws, wake: wake},
 		channels:     channels, contacts: cs, notifications: ns, schedules: ss, scheduler: sched,
+		restic: resticSvc, probes: probe.NewService(runner), seedProbes: seedProbes,
 	}, nil
 }
 
@@ -305,16 +412,22 @@ func newChannels(cfg controllerconfig.Config, log *slog.Logger) (*notify.Registr
 // jobFinished is the jobs service's Notifier: a job that reached a
 // terminal status wakes the notification outbox (to plan its
 // notifications) and the scheduler (runs queued behind the job may launch
-// now). Both are non-blocking; their periodic ticks are the backstop.
+// now); a finished restic_delete_data job also wakes the restic service,
+// which then completes the repository's deletion. All are non-blocking;
+// their periodic ticks are the backstop.
 type jobFinished struct {
 	outbox    *notifications.Service
 	scheduler *scheduler.Signal
+	restic    interface{ Wake() }
 }
 
 // JobFinished implements jobs.Notifier.
-func (f jobFinished) JobFinished(jobs.Job) {
+func (f jobFinished) JobFinished(j jobs.Job) {
 	f.outbox.Wake()
 	f.scheduler.Wake()
+	if j.Kind == (jobkind.ResticDeleteData{}).Name() {
+		f.restic.Wake()
+	}
 }
 
 // notifyingSchedules is the schedules service as the scheduler uses it: a
@@ -370,45 +483,69 @@ type remoteNames interface {
 	Names(ctx context.Context, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Ref, error)
 }
 
+// repositoryNames is the restic service as jobDescriber uses it.
+type repositoryNames interface {
+	Names(ctx context.Context, ids []domain.ResticRepoID) (map[domain.ResticRepoID]restic.Ref, error)
+}
+
 // jobDescriber is the notification outbox's notifications.JobDescriber: it
-// decodes a job's stored definition, names the remotes it refers to with
-// remotes.Names (deleted ones included, so a job whose remote was deleted
-// since still names it) and describes it with its kind
-// (jobkind.Registry.Describe), as the web UI's jobs list does. Only remotes
-// of the job's owner are named; any other (which a checked definition
-// cannot refer to) is an "Unknown remote".
+// decodes a job's stored definition, names the remotes and the restic
+// repository it refers to (remotes.Names and restic.Names: deleted ones
+// included, so a job whose remote or repository was deleted since still
+// names it) and describes it with its kind (jobkind.Registry.Describe), as
+// the web UI's jobs list does. It also gives the kind's label ("Backup")
+// and the details of the job's result (jobkind.Registry.Summarize), as the
+// job's page shows them. Only remotes and repositories of the job's owner
+// are named; any other (which a checked definition cannot refer to) is an
+// "Unknown remote" or "Unknown repository". repos may be nil: no
+// repository is named then.
 type jobDescriber struct {
 	kinds   *jobkind.Registry
 	remotes remoteNames
+	repos   repositoryNames
 }
 
 var _ notifications.JobDescriber = jobDescriber{}
 
 // DescribeJob implements notifications.JobDescriber. A definition that
 // cannot be decoded, or is not of kind, gets no description; a definition
-// the current rules reject is described without remote names.
-//
-// m5: the integration step names the owner's repositories too and fills
-// KindLabel (kinds.Label) and Details (kinds.Summarize of output).
-func (d jobDescriber) DescribeJob(ctx context.Context, owner domain.UserID, kind string, definition, _ []byte) (notifications.JobDescription, error) {
+// the current rules reject is described without names.
+func (d jobDescriber) DescribeJob(ctx context.Context, owner domain.UserID, kind string, definition, output []byte) (notifications.JobDescription, error) {
 	def, err := jobkind.Unmarshal(definition)
 	if err != nil || jobkind.KindOf(def) != kind {
 		// Not an error to retry: the definition will not decode later.
 		return notifications.JobDescription{}, nil
 	}
-	names := map[domain.RemoteID]string{}
-	if _, refs, err := d.kinds.Check(def); err == nil && len(refs.RemoteIDs) > 0 {
-		rs, err := d.remotes.Names(ctx, refs.RemoteIDs)
-		if err != nil {
-			return notifications.JobDescription{}, fmt.Errorf("describe a %s job: %w", kind, err)
+	names := jobkind.Names{Remotes: map[domain.RemoteID]string{}, Repositories: map[domain.ResticRepoID]string{}}
+	if _, refs, err := d.kinds.Check(def); err == nil {
+		if len(refs.RemoteIDs) > 0 {
+			rs, err := d.remotes.Names(ctx, refs.RemoteIDs)
+			if err != nil {
+				return notifications.JobDescription{}, fmt.Errorf("describe a %s job: %w", kind, err)
+			}
+			for id, r := range rs {
+				if r.OwnerID == owner {
+					names.Remotes[id] = r.Name
+				}
+			}
 		}
-		for id, r := range rs {
-			if r.OwnerID == owner {
-				names[id] = r.Name
+		if !refs.RepositoryID.IsZero() && d.repos != nil {
+			rs, err := d.repos.Names(ctx, []domain.ResticRepoID{refs.RepositoryID})
+			if err != nil {
+				return notifications.JobDescription{}, fmt.Errorf("describe a %s job: %w", kind, err)
+			}
+			for id, r := range rs {
+				if r.OwnerID == owner {
+					names.Repositories[id] = r.Name
+				}
 			}
 		}
 	}
-	return notifications.JobDescription{Text: d.kinds.Describe(def, jobkind.Names{Remotes: names})}, nil
+	desc := notifications.JobDescription{Text: d.kinds.Describe(def, names), KindLabel: d.kinds.Label(kind)}
+	for _, detail := range d.kinds.Summarize(kind, def, output) {
+		desc.Details = append(desc.Details, notify.Fact{Label: detail.Label, Value: detail.Value})
+	}
+	return desc, nil
 }
 
 // workerChecker adapts the workers service to schedules.WorkerChecker: its
@@ -482,11 +619,15 @@ func armSetup(ctx context.Context, cfg controllerconfig.Auth, us *users.Service,
 }
 
 // seedDemo fills the in-memory store with the demo data of dev.seed
-// (configuration validation allows it only with dev.memory_store).
-func seedDemo(ctx context.Context, st store, svc *services, log *slog.Logger) (*devseed.Seed, error) {
+// (configuration validation allows it only with dev.memory_store). The
+// demo repositories' password is encrypted with cipher, as the restic
+// service stores it, and the canned probes (svc.seedProbes) learn the demo
+// workers' folders.
+func seedDemo(ctx context.Context, st store, svc *services, cipher *secrets.Keyring, log *slog.Logger) (*devseed.Seed, error) {
 	seed, err := devseed.Run(ctx, devseed.Deps{
 		Users: svc.users, Remotes: svc.remotes, Workers: svc.workers, Jobs: svc.jobs, Kinds: svc.kinds,
 		Contacts: svc.contacts, Channels: svc.channels, Describer: svc.describer,
+		Cipher: cipher, Probes: svc.seedProbes,
 		Store: st, Clock: clock.System{}, Logger: log.With("component", "devseed"),
 	})
 	if err != nil {
@@ -496,7 +637,7 @@ func seedDemo(ctx context.Context, st store, svc *services, log *slog.Logger) (*
 }
 
 // backgroundStoppedMessage is logged in shutdown step 3 (see serve).
-const backgroundStoppedMessage = "shutdown: background loops stopped (dispatch sweeper, passive supervisor, scheduler, notifications, purges)"
+const backgroundStoppedMessage = "shutdown: background loops stopped (dispatch sweeper, passive supervisor, scheduler, notifications, repository deletions, purges)"
 
 // sessionPurgeInterval is how often expired sessions and API tokens are
 // deleted.
@@ -577,6 +718,9 @@ func newHandler(lifetime context.Context, cfg controllerconfig.Config, ac apiCon
 		Contacts:         svc.contacts,
 		Deliveries:       svc.notifications,
 		Channels:         svc.channels,
+		Restic:           svc.restic,
+		Probes:           svc.probes,
+		ProbeTimeout:     cfg.Probe.Longest(),
 		UI:               web.FS(),
 		Cookies:          ac.cookies,
 		ClientIP:         ac.clientIP.ClientIP,
@@ -643,8 +787,8 @@ func newServer(cfg controllerconfig.HTTP, h http.Handler, log *slog.Logger) *htt
 //  3. the background loops stop, all before the store closes: the
 //     dispatch-timeout sweeper, the passive supervisor, the scheduler,
 //     the notification outbox (it records the outcome of the sends in
-//     flight first), the session and token purge (and the dev seed's
-//     animation);
+//     flight first), the restic service's completion of data deletions,
+//     the session and token purge (and the dev seed's animation);
 //  4. the store is closed.
 //
 // If ready is non-nil it receives the listen address once the server
@@ -683,7 +827,7 @@ func serve(ctx context.Context, cfg controllerconfig.Config, info version.Info, 
 	}
 	var seed *devseed.Seed
 	if cfg.Dev.Seed {
-		if seed, err = seedDemo(ctx, st, svc, log); err != nil {
+		if seed, err = seedDemo(ctx, st, svc, cipher, log); err != nil {
 			return err
 		}
 	}
@@ -732,6 +876,7 @@ func serve(ctx context.Context, cfg controllerconfig.Config, info version.Info, 
 	background.Go(func() { _ = sup.Run(bgCtx) })
 	background.Go(func() { _ = svc.scheduler.Run(bgCtx) })
 	background.Go(func() { _ = svc.notifications.Run(bgCtx) })
+	background.Go(func() { _ = svc.restic.Run(bgCtx) })
 	background.Go(func() { purgeSessions(bgCtx, svc.users, sessionPurgeInterval, log.With("component", "users")) })
 	if seed != nil {
 		background.Go(func() { seed.Animate(bgCtx) })
@@ -938,3 +1083,7 @@ func latestModTime(a, b string) (time.Time, error) {
 	}
 	return latest, nil
 }
+
+// Compile-time check: the API serves the controller's probe use cases
+// (the api adapter cannot import the controller package).
+var _ api.ProbeService = (*probe.Service)(nil)

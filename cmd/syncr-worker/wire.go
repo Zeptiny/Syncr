@@ -12,6 +12,7 @@ import (
 	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
 	"github.com/Zeptiny/Syncr/internal/worker/localfs"
 	"github.com/Zeptiny/Syncr/internal/worker/paths"
+	"github.com/Zeptiny/Syncr/internal/worker/probe"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
@@ -54,13 +55,18 @@ type worker struct {
 	supervisor *proc.Supervisor
 	// policy is the local_roots policy shared by the runners.
 	policy *localfs.Policy
+	// probes runs the short operations the controller asks for over the
+	// link (folder listings, remote tests, restic's snapshot listings),
+	// with the runners' binaries, remote definitions and local_roots.
+	probes *probe.Executor
 	// dataDir, scratchDir and cacheDir are the directories in use.
 	dataDir, scratchDir, cacheDir string
 }
 
 // buildWorker wires the worker from cfg: it resolves the pinned tools,
 // builds the local_roots policy and the process supervisor, and registers
-// the rclone runner and the restic runners. It creates the data, scratch and
+// the rclone runner and the restic runners, and builds the probe executor
+// over the same tools. It creates the data, scratch and
 // cache directories. Every failure is returned with an explanation an
 // operator can act on; nothing is started.
 func buildWorker(ctx context.Context, cfg workerconfig.Config, deps workerDeps, log *slog.Logger) (*worker, error) {
@@ -207,25 +213,27 @@ func (e *toolsUnavailableError) Error() string {
 func (e *toolsUnavailableError) Unwrap() error { return e.err }
 
 // registerRunners builds the rclone runner and the restic runners and
-// registers them. The rcloneenv builder is both runners' remote definition
+// registers them, and builds the probe executor (w.probes) from the same
+// configurations. The rcloneenv builder is both engines' remote definition
 // port and the localfs policy their path port, so every remote and every
-// local path a job names is validated by the same code in both engines.
+// local path a job or a probe names is validated by the same code.
 func registerRunners(w *worker, resticCache string, log *slog.Logger) error {
 	remotes := rcloneenv.NewBuilder(w.policy)
 	rcloneBin, resticBin := w.tools[toolRclone].Path, w.tools[toolRestic].Path
 
-	rcloneRunner, err := rclone.New(rclone.Config{
+	rcloneCfg := rclone.Config{
 		Binary:     rcloneBin,
 		Supervisor: w.supervisor,
 		Env:        remotes,
 		Paths:      w.policy,
 		ScratchDir: filepath.Join(w.scratchDir, "rclone"),
 		Logger:     log,
-	})
+	}
+	rcloneRunner, err := rclone.New(rcloneCfg)
 	if err != nil {
 		return fmt.Errorf("set up the rclone runner: %w", err)
 	}
-	resticRunners, err := restic.New(restic.Config{
+	resticCfg := restic.Config{
 		ResticPath:  resticBin,
 		RclonePath:  rcloneBin,
 		Supervisor:  w.supervisor,
@@ -234,12 +242,29 @@ func registerRunners(w *worker, resticCache string, log *slog.Logger) error {
 		ScratchRoot: filepath.Join(w.scratchDir, "restic"),
 		CacheDir:    resticCache,
 		Logger:      log,
-	})
+	}
+	resticRunners, err := restic.New(resticCfg)
 	if err != nil {
 		return fmt.Errorf("set up the restic runners: %w", err)
 	}
 	if err := w.registry.Register(append([]runner.Runner{rcloneRunner}, resticRunners...)...); err != nil {
 		return fmt.Errorf("register runners: %w", err)
+	}
+
+	rcloneProber, err := rclone.NewProber(rcloneCfg)
+	if err != nil {
+		return fmt.Errorf("set up the rclone probes: %w", err)
+	}
+	resticProber, err := restic.NewProber(resticCfg)
+	if err != nil {
+		return fmt.Errorf("set up the restic probes: %w", err)
+	}
+	w.probes, err = probe.New(probe.Config{
+		Restic: resticProber, Rclone: rcloneProber, Local: w.policy,
+		Logger: log.With("component", "probe"),
+	})
+	if err != nil {
+		return fmt.Errorf("set up the probes: %w", err)
 	}
 	return nil
 }

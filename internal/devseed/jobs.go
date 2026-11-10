@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -51,6 +53,7 @@ func (s *Seed) seedJob(ctx context.Context, svc *jobs.Service, clk *stepClock, n
 	j, err := svc.Create(ctx, actor, jobs.CreateParams{
 		ID: preset.id, ScheduleID: preset.schedule,
 		WorkerID: workerID, Kind: kind, Definition: enc, RemoteIDs: refs.RemoteIDs, SearchTerms: refs.SearchTerms,
+		RepositoryID: refs.RepositoryID, ConcurrencyKeys: refs.ConcurrencyKeys,
 	})
 	if err != nil {
 		return domain.JobID{}, err
@@ -91,8 +94,9 @@ func (s *Seed) seedJob(ctx context.Context, svc *jobs.Service, clk *stepClock, n
 		return id, err
 	}
 	if dj.status == domain.JobRunning {
-		// Samples every 5 s up to now, as the worker would have sent them.
-		for at := start.Add(5 * time.Second); at.Before(now); at = at.Add(5 * time.Second) {
+		// Samples every 5 s up to now, as the worker would have sent them
+		// (a job without a known total reports none).
+		for at := start.Add(5 * time.Second); at.Before(now) && dj.stats.TotalBytes > 0; at = at.Add(5 * time.Second) {
 			if err := s.sample(ctx, svc, clk, workerID, id, epoch, at, runningStats(dj.stats, at.Sub(start))); err != nil {
 				return id, err
 			}
@@ -122,9 +126,15 @@ func (s *Seed) seedJob(ctx context.Context, svc *jobs.Service, clk *stepClock, n
 	}
 	stats := dj.stats
 	stats.Elapsed = dj.run
+	var output []byte
+	if dj.output != nil {
+		if output, err = proto.Marshal(dj.output); err != nil {
+			return id, err
+		}
+	}
 	_, _, err = svc.Finish(ctx, workerID, id, epoch, jobs.Outcome{
 		Status: dj.status, Error: dj.err, Stats: stats, Warnings: dj.warnings, ExitCode: dj.exitCode,
-		StartedAt: start, FinishedAt: end,
+		StartedAt: start, FinishedAt: end, Output: output,
 	})
 	return id, err
 }
@@ -138,8 +148,12 @@ func (s *Seed) sample(ctx context.Context, svc *jobs.Service, clk *stepClock, w 
 	return err
 }
 
-// definition is the job definition of dj, over the seeded remotes.
+// definition is the job definition of dj, over the seeded remotes and
+// repositories.
 func (s *Seed) definition(dj demoJob) (*syncrv1.JobDefinition, error) {
+	if dj.def != nil {
+		return dj.def(s)
+	}
 	location := func(l loc) (*syncrv1.JobLocation, error) {
 		if l.remote == "" {
 			return &syncrv1.JobLocation{Path: l.path}, nil
@@ -274,7 +288,7 @@ func (c *stepClock) set(t time.Time) {
 }
 
 // seedIDs mints time-ordered UUIDv7 IDs of every kind the seed's own
-// services create (jobs, schedules, runs, deliveries): the clock's time and
+// services create (jobs, schedules, runs, deliveries, repositories): the clock's time and
 // fixed "random" bits derived from a counter, so IDs order like the
 // objects' creation times and two seeds at the same time mint the same IDs.
 type seedIDs struct {
@@ -307,6 +321,10 @@ func mustID[T any](id T, err error) T {
 }
 
 func (g *seedIDs) NewJobID() domain.JobID { return mustID(domain.ParseJobID(g.next("job"))) }
+
+func (g *seedIDs) NewResticRepoID() domain.ResticRepoID {
+	return mustID(domain.ParseResticRepoID(g.next("repository")))
+}
 
 func (g *seedIDs) NewScheduleID() domain.ScheduleID {
 	return mustID(domain.ParseScheduleID(g.next("schedule")))

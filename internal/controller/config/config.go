@@ -41,6 +41,8 @@ type Config struct {
 	Schedules Schedules `yaml:"schedules"`
 	// Notify configures notifications and their network policy.
 	Notify Notify `yaml:"notify"`
+	// Probe bounds the short operations workers run for the UI.
+	Probe Probe `yaml:"probe"`
 	// Dev holds development-only switches.
 	Dev Dev `yaml:"dev"`
 }
@@ -306,13 +308,14 @@ func Default() Config {
 		},
 		Schedules: Schedules{Tick: 10 * time.Second},
 		Notify:    defaultNotify(),
+		Probe:     defaultProbe(),
 	}
 }
 
 // Validate reports every invalid setting.
 func (c *Config) Validate() error {
 	return errors.Join(c.HTTP.validate(), c.Log.Validate(), c.Secrets.validate(), c.API.validate(),
-		c.Auth.validate(), c.Workers.validate(), c.Database.validate(), c.Schedules.validate(), c.Notify.validate(),
+		c.Auth.validate(), c.Workers.validate(), c.Database.validate(), c.Schedules.validate(), c.Notify.validate(), c.Probe.validate(),
 		c.Dev.validate())
 }
 

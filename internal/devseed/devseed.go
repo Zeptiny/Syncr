@@ -1,14 +1,22 @@
 // Package devseed fills an empty controller with fixed demo data, for UI
 // development and screenshots: two users (admin and alice, with public
-// passwords), workers in every connection state with labels (and one that
-// was removed), the admin's remotes of every built-in backend type (a union
-// among them), a contact of every built-in channel, schedules of every
-// target type and policy with about a month of runs, and about 160 jobs
-// over those 30 days in every status with statistics, errors, warnings and
-// stored progress samples, and their notifications in every delivery
-// status. One job keeps running: Animate reports its progress every second
-// through the controller's job service, so live views move, and keeps the
-// online workers online.
+// passwords), workers in every connection state with labels (one that was
+// removed, and one too old for probes and restic), the admin's remotes of
+// every built-in backend type (a union among them), restic repositories
+// with their snapshots (one whose data is being deleted, one already
+// deleted), a contact of every built-in channel, schedules of every target
+// type and policy with about a month of runs, and about 270 jobs of every
+// kind over those 30 days in every status with statistics, results,
+// errors, warnings and stored progress samples, and their notifications in
+// every delivery status. One job keeps running: Animate reports its
+// progress every second through the controller's job service, so live
+// views move, and keeps the online workers online. Two more are shown
+// running without moving: a backup with another waiting behind it on the
+// same repository, and a check that a data deletion waits for.
+//
+// The demo workers, remotes and repositories do not exist. Probes answers
+// the probes a seeded controller would send them (folder listings, remote
+// tests, snapshot listings) with canned results.
 //
 // The seed runs in the controller's process when dev.seed is set, which
 // configuration validation allows only together with dev.memory_store
@@ -39,6 +47,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/notifications"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
@@ -61,13 +70,15 @@ const (
 
 // Store is what the seed writes directly, below the use cases: the
 // history (through services of its own: jobs, schedules and their runs,
-// deliveries), a worker's last contact in the past, and the deliveries it
-// leaves sending or queued again.
+// deliveries), the repositories with their snapshot caches and deletions,
+// a worker's last contact in the past, and the deliveries it leaves
+// sending or queued again.
 type Store interface {
 	jobs.Repository
 	jobs.SampleRepository
 	schedules.Repository
 	notifications.Repository
+	restic.Repository
 	// TouchWorker sets the worker's last contact to at (if later).
 	TouchWorker(ctx context.Context, id domain.WorkerID, at time.Time) error
 }
@@ -78,7 +89,7 @@ type Clock interface {
 }
 
 // Deps are the seed's collaborators: the controller's services and store.
-// All are required except Logger.
+// All are required except Describer, Probes and Logger.
 type Deps struct {
 	Users   *users.Service
 	Remotes *remotes.Service
@@ -97,8 +108,15 @@ type Deps struct {
 	// controller's notifications.JobDescriber); nil leaves them
 	// undescribed.
 	Describer notifications.JobDescriber
-	Store     Store
-	Clock     Clock
+	// Cipher encrypts the demo repositories' password (the controller's
+	// secrets keyring).
+	Cipher Cipher
+	// Probes are the canned probe answers the controller uses instead of
+	// its demo workers; Run tells them the seed's start and the workers'
+	// local roots. Optional.
+	Probes *Probes
+	Store  Store
+	Clock  Clock
 	// Logger defaults to discarding.
 	Logger *slog.Logger
 }
@@ -118,6 +136,9 @@ type Seed struct {
 	Workers map[string]domain.WorkerID
 	// Remotes are the demo remotes by name (the admin's and alice's).
 	Remotes map[string]domain.RemoteID
+	// Repositories are the demo restic repositories by name (the one
+	// whose data was deleted included).
+	Repositories map[string]domain.ResticRepoID
 	// Contacts and Schedules are the demo contacts and schedules by name.
 	Contacts  map[string]domain.ContactID
 	Schedules map[string]domain.ScheduleID
@@ -139,7 +160,7 @@ type Seed struct {
 // ErrNotEmpty if any user exists (so it never runs twice on one store).
 func Run(ctx context.Context, d Deps) (*Seed, error) {
 	if d.Users == nil || d.Remotes == nil || d.Workers == nil || d.Jobs == nil || d.Kinds == nil || d.Contacts == nil ||
-		d.Channels == nil || d.Store == nil || d.Clock == nil {
+		d.Channels == nil || d.Cipher == nil || d.Store == nil || d.Clock == nil {
 		return nil, errors.New("devseed: missing dependency")
 	}
 	log := d.Logger
@@ -155,7 +176,8 @@ func Run(ctx context.Context, d Deps) (*Seed, error) {
 	}
 	s := &Seed{
 		d: d, log: log, Workers: map[string]domain.WorkerID{}, Remotes: map[string]domain.RemoteID{},
-		Contacts: map[string]domain.ContactID{}, Schedules: map[string]domain.ScheduleID{},
+		Repositories: map[string]domain.ResticRepoID{},
+		Contacts:     map[string]domain.ContactID{}, Schedules: map[string]domain.ScheduleID{},
 	}
 	now := d.Clock.Now()
 	steps := []struct {
@@ -165,6 +187,7 @@ func Run(ctx context.Context, d Deps) (*Seed, error) {
 		{"users", s.seedUsers},
 		{"workers", s.seedWorkers},
 		{"remotes", s.seedRemotes},
+		{"repositories", s.seedRepositories},
 		{"contacts", s.seedContacts},
 		{"history", s.seedHistory},
 	}
@@ -175,7 +198,7 @@ func Run(ctx context.Context, d Deps) (*Seed, error) {
 	}
 	log.Warn("DEVELOPMENT MODE: dev.seed filled the in-memory store with demo data; log in as "+AdminUsername+" / "+AdminPassword+
 		" or "+AliceUsername+" / "+AlicePassword+" (public passwords: never expose this controller)",
-		"workers", len(s.Workers), "remotes", len(s.Remotes), "contacts", len(s.Contacts), "schedules", len(s.Schedules), "jobs", len(s.Jobs))
+		"workers", len(s.Workers), "remotes", len(s.Remotes), "repositories", len(s.Repositories), "contacts", len(s.Contacts), "schedules", len(s.Schedules), "jobs", len(s.Jobs))
 	return s, nil
 }
 
@@ -250,6 +273,7 @@ func (s *Seed) seedWorkers(ctx context.Context, now time.Time) error {
 			s.online = append(s.online, id)
 		}
 	}
+	s.bindProbes(now)
 	return nil
 }
 
