@@ -2,11 +2,16 @@ package schedules_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Zeptiny/Syncr/internal/adapters/idgen"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
@@ -801,5 +806,86 @@ func TestLaunchSteps(t *testing.T) {
 	}
 	if got := e.schedule(sc.ID); got.Enabled || got.PausedReason != schedules.ReasonWorkerRemoved || !got.NextRunAt.IsZero() {
 		t.Errorf("schedule after an auto-pause = %+v", got)
+	}
+}
+
+// fakeRepositories is a RepositoryChecker with one usable repository.
+type fakeRepositories struct {
+	id     domain.ResticRepoID
+	owner  domain.UserID
+	remote domain.RemoteID
+	err    error
+}
+
+func (f fakeRepositories) UsableRepository(_ context.Context, owner domain.UserID, id domain.ResticRepoID, _ domain.JobID) (string, domain.RemoteID, error) {
+	switch {
+	case f.err != nil:
+		return "", domain.RemoteID{}, f.err
+	case id != f.id || owner != f.owner:
+		return "", domain.RemoteID{}, domain.ErrNotFound
+	}
+	return "Photos vault", f.remote, nil
+}
+
+// TestCreateOnARepository: the repository's remote is one of the
+// schedule's remotes (next to the definition's), so the remote's "used by"
+// list and the remote filter include the schedule; an unknown or deleting
+// repository is refused.
+func TestCreateOnARepository(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	repoRemote, other := e.addRemote(e.alice, "b2"), e.addRemote(e.alice, "docs")
+	repo := restic.Repo{
+		ID: domain.NewResticRepoID(), OwnerID: e.alice.UserID, Name: "Photos vault", RemoteID: repoRemote, Path: "restic/photos",
+		PasswordEnc: []byte("x"), ResticID: strings.Repeat("ab", 32), FormatVersion: 2, CreatedAt: t0, UpdatedAt: t0, Version: 1,
+	}
+	if err := e.store.CreateRepo(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+	repos := &fakeRepositories{id: repo.ID, owner: e.alice.UserID, remote: repoRemote}
+	svc, err := schedules.New(schedules.Deps{
+		Repo: e.store, Remotes: e.remotes, Contacts: e.contacts, Workers: storeWorkers{e.store}, Repositories: repos,
+		Waker: e.waker, Clock: e.clock, IDs: &idgen.Sequential{},
+	}, schedules.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := e.input("Nightly backup")
+	in.RepositoryID = repo.ID
+	sc, err := svc.Create(ctx, e.alice, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(sc.RemoteIDs, []domain.RemoteID{repoRemote}) {
+		t.Errorf("RemoteIDs = %v, want the repository's remote %v", sc.RemoteIDs, repoRemote)
+	}
+	if got, err := svc.List(ctx, e.alice, schedules.ListFilter{RemoteID: repoRemote}); err != nil || len(got) != 1 || got[0].ID != sc.ID {
+		t.Errorf("List(by the repository's remote) = %v, %v", got, err)
+	}
+	// With the definition's own remotes, without duplicates.
+	in.Name, in.RemoteIDs = "With a remote", []domain.RemoteID{other, repoRemote}
+	both, err := svc.Create(ctx, e.alice, in)
+	if err != nil || len(both.RemoteIDs) != 2 {
+		t.Errorf("Create(with a remote) = %v, %v", both.RemoteIDs, err)
+	}
+	// An update keeps it.
+	in.Name, in.RemoteIDs = "Renamed", nil
+	upd, err := svc.Update(ctx, e.alice, sc.ID, sc.Version, in)
+	if err != nil || !slices.Equal(upd.RemoteIDs, []domain.RemoteID{repoRemote}) {
+		t.Errorf("Update = %v, %v", upd.RemoteIDs, err)
+	}
+
+	in.Name = "Refused"
+	if _, err := svc.Create(ctx, e.bob, in); !errors.Is(err, schedules.ErrUnknownRepository) {
+		t.Errorf("another user's repository: %v", err)
+	}
+	repos.err = fmt.Errorf("the repository's data is being deleted: %w", domain.ErrFailedPrecondition)
+	if _, err := svc.Create(ctx, e.alice, in); !errors.Is(err, schedules.ErrRepositoryDeleting) {
+		t.Errorf("a deleting repository: %v", err)
+	}
+	// Without a repository checker the schedule fails closed.
+	if _, err := e.svc.Create(ctx, e.alice, in); !errors.Is(err, schedules.ErrUnknownRepository) {
+		t.Errorf("without repositories: %v", err)
 	}
 }

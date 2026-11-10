@@ -382,22 +382,28 @@ func (s *Service) check(ctx context.Context, owner domain.UserID, in Input) (che
 			break
 		}
 	}
-	c.remoteIDs = sortedIDs(in.RemoteIDs)
 	c.contacts = checkContacts(&v, in.Contacts)
 	if err := v.Err(); err != nil {
 		return checked{}, err
 	}
+	// The repository's remote counts as one of the schedule's remotes, as
+	// it does for the jobs it launches: the remote's "used by" list and
+	// the remote filter then include the schedule.
+	remoteIDs := in.RemoteIDs
+	if !in.RepositoryID.IsZero() {
+		remoteID, err := s.checkRepository(ctx, owner, in.RepositoryID)
+		if err != nil {
+			return checked{}, err
+		}
+		remoteIDs = append(slices.Clone(remoteIDs), remoteID)
+	}
+	c.remoteIDs = sortedIDs(remoteIDs)
 	if len(c.remoteIDs) > 0 {
 		if _, err := s.remotes.Usable(ctx, owner, c.remoteIDs); err != nil {
 			if errors.Is(err, domain.ErrNotFound) {
 				return checked{}, fmt.Errorf("%w: %w", ErrUnknownRemote, err)
 			}
 			return checked{}, fmt.Errorf("check remotes: %w", err)
-		}
-	}
-	if !in.RepositoryID.IsZero() {
-		if err := s.checkRepository(ctx, owner, in.RepositoryID); err != nil {
-			return checked{}, err
 		}
 	}
 	if len(c.contacts) > 0 {
@@ -416,21 +422,23 @@ func (s *Service) check(ctx context.Context, owner domain.UserID, in Input) (che
 }
 
 // checkRepository checks that id is a live repository of owner whose data
-// is not being deleted.
-func (s *Service) checkRepository(ctx context.Context, owner domain.UserID, id domain.ResticRepoID) error {
+// is not being deleted, and returns its remote.
+func (s *Service) checkRepository(ctx context.Context, owner domain.UserID, id domain.ResticRepoID) (domain.RemoteID, error) {
 	if s.repos == nil {
-		return fmt.Errorf("%w: repositories are not available", ErrUnknownRepository)
+		return domain.RemoteID{}, fmt.Errorf("%w: repositories are not available", ErrUnknownRepository)
 	}
-	_, _, err := s.repos.UsableRepository(ctx, owner, id, domain.JobID{})
+	_, remoteID, err := s.repos.UsableRepository(ctx, owner, id, domain.JobID{})
 	switch {
 	case errors.Is(err, domain.ErrNotFound):
-		return fmt.Errorf("%w: %w", ErrUnknownRepository, err)
+		return domain.RemoteID{}, fmt.Errorf("%w: %w", ErrUnknownRepository, err)
 	case errors.Is(err, domain.ErrFailedPrecondition):
-		return fmt.Errorf("%w: %w", ErrRepositoryDeleting, err)
+		return domain.RemoteID{}, fmt.Errorf("%w: %w", ErrRepositoryDeleting, err)
 	case err != nil:
-		return fmt.Errorf("check the repository: %w", err)
+		return domain.RemoteID{}, fmt.Errorf("check the repository: %w", err)
+	case remoteID.IsZero():
+		return domain.RemoteID{}, fmt.Errorf("check the repository %s: %w: it has no remote", id, domain.ErrFailedPrecondition)
 	}
-	return nil
+	return remoteID, nil
 }
 
 // checkTarget validates the target: exactly one of a live worker and a
