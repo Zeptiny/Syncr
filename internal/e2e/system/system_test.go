@@ -193,9 +193,8 @@ func TestSystemWorkerStopMidJob(t *testing.T) {
 // TestSystemCopyThroughMinIO stores an S3 remote (MinIO) with its secret
 // key, copies the worker's files into a bucket and back, over the active
 // link. The secret is stored encrypted, travels only inside the spec built
-// at dispatch time, and never appears in a log or an API response. (Restic
-// jobs have no job definition before Milestone 5; the restic runner's
-// MinIO tests cover restic.)
+// at dispatch time, and never appears in a log or an API response.
+// (TestSystemResticToMinIO covers restic on the same kind of remote.)
 func TestSystemCopyThroughMinIO(t *testing.T) {
 	t.Parallel()
 	rclone, restic := requirements(t)
