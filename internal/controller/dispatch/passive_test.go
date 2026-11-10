@@ -12,6 +12,7 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
+	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
@@ -23,6 +24,8 @@ type fakePassive struct {
 	calls []string
 	at    []time.Duration
 	start time.Time
+	// probe serves Probe calls; nil answers like a worker without probes.
+	probe func(context.Context, *syncrv1.ProbeRequest) (*syncrv1.ProbeResponse, error)
 }
 
 func (c *fakePassive) record(call string) error {
@@ -105,7 +108,13 @@ func registerPassive(t *testing.T, e *env) domain.WorkerID {
 
 func startLoop(t *testing.T, e *env, wid domain.WorkerID) (*fakePassive, func()) {
 	t.Helper()
-	c := &fakePassive{w: e.newFakeWorker(wid), start: time.Now()}
+	return startLoopOf(t, e, wid, e.newFakeWorker(wid))
+}
+
+// startLoopOf runs the passive loop of wid against fake worker w.
+func startLoopOf(t *testing.T, e *env, wid domain.WorkerID, w *fakeWorker) (*fakePassive, func()) {
+	t.Helper()
+	c := &fakePassive{w: w, start: time.Now()}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- e.disp.NewPassiveLoop(wid, c).Run(ctx) }()
@@ -246,7 +255,14 @@ func TestPassiveFailuresDoNotCountAsContact(t *testing.T) {
 	})
 }
 
-// Probe implements dispatch.PassiveClient (m5: Track B tests probes).
-func (c *fakePassive) Probe(context.Context, *syncrv1.ProbeRequest) (*syncrv1.ProbeResponse, error) {
-	return nil, errors.ErrUnsupported
+// Probe answers with the probe function set by the test; without one the
+// worker has no probe support.
+func (c *fakePassive) Probe(ctx context.Context, req *syncrv1.ProbeRequest) (*syncrv1.ProbeResponse, error) {
+	c.mu.Lock()
+	fn := c.probe
+	c.mu.Unlock()
+	if fn == nil {
+		return nil, dispatch.ErrProbeUnsupported
+	}
+	return fn(ctx, req)
 }

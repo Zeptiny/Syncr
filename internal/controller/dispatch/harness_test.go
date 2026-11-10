@@ -28,6 +28,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
+	"github.com/Zeptiny/Syncr/internal/link"
 	"github.com/Zeptiny/Syncr/internal/platform/clock"
 )
 
@@ -105,6 +106,10 @@ type env struct {
 	workers *workers.Service
 	jobs    *jobs.Service
 	disp    *dispatch.Service
+	// probes is the probe broker of disp; probeCfg configures it at the
+	// next restart.
+	probes   *dispatch.ProbeBroker
+	probeCfg dispatch.ProbeConfig
 	// remotes resolves the test remote; it survives restarts.
 	remotes *fakeRemotes
 	// logs captures every service's log lines.
@@ -165,7 +170,13 @@ func (e *env) restart() {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	e.disp, err = dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Specs: e.specs(), Clock: e.clock, Hub: e.hub, Logger: log}, e.cfg)
+	e.probes, err = dispatch.NewProbeBroker(dispatch.ProbeBrokerDeps{Workers: e.workers, Hub: e.hub, Clock: e.clock, Logger: log}, e.probeCfg)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.disp, err = dispatch.New(dispatch.Deps{
+		Jobs: e.jobs, Workers: e.workers, Specs: e.specs(), Probes: e.probes, Clock: e.clock, Hub: e.hub, Logger: log,
+	}, e.cfg)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -415,6 +426,26 @@ type fakeWorker struct {
 	specs    map[string]*syncrv1.JobSpec
 	acks     []*syncrv1.CommandAck
 	restarts int
+
+	// features and probeOps are what its Hello reports (none: a worker
+	// older than Milestone 5).
+	features []string
+	probeOps []string
+	// probes are the run_probe commands it received in this epoch, by
+	// arrival; probeCancels the probe IDs it was told to stop.
+	probes       []*syncrv1.RunProbe
+	probeCancels []string
+}
+
+// newProbeWorker is newFakeWorker for a Milestone 5 worker: it reports
+// every link feature and probe operation.
+func (e *env) newProbeWorker(id domain.WorkerID) *fakeWorker {
+	w := &fakeWorker{
+		t: e.t, disp: func() *dispatch.Service { return e.disp }, clock: e.clock, id: id,
+		features: link.Features(), probeOps: link.ProbeOps(),
+	}
+	w.restart()
+	return w
 }
 
 func (e *env) newFakeWorker(id domain.WorkerID) *fakeWorker {
@@ -429,10 +460,12 @@ func (w *fakeWorker) restart() {
 	w.restarts++
 	w.epoch = fmt.Sprintf("%s-epoch-%d", w.id.String()[len(w.id.String())-4:], w.restarts)
 	w.seq, w.outbox, w.held, w.acks = 0, nil, nil, nil
+	w.probes, w.probeCancels = nil, nil
 	w.running, w.finished, w.specs = map[string]bool{}, map[string]bool{}, map[string]*syncrv1.JobSpec{}
 	w.emit(&syncrv1.Event{Payload: &syncrv1.Event_Hello{Hello: &syncrv1.Hello{
 		WorkerVersion: "v2.0.0-test", Os: "linux", Arch: "amd64", JobKinds: []string{"rclone_transfer"}, MaxConcurrentJobs: 2,
 		LocalRoots: []string{"/data"}, Tools: []*syncrv1.ToolVersion{{Name: "rclone", Version: "v1.75.2"}},
+		Features: w.features, ProbeOps: w.probeOps,
 	}}})
 }
 
@@ -453,6 +486,12 @@ func (w *fakeWorker) handle(cmds []*syncrv1.Command) {
 				w.held = append(w.held, id)
 				w.specs[id] = x.StartJob.GetSpec()
 			}
+		case *syncrv1.Command_RunProbe:
+			if !slices.ContainsFunc(w.probes, func(p *syncrv1.RunProbe) bool { return p.GetProbeId() == x.RunProbe.GetProbeId() }) {
+				w.probes = append(w.probes, x.RunProbe)
+			}
+		case *syncrv1.Command_CancelProbe:
+			w.probeCancels = append(w.probeCancels, x.CancelProbe.GetProbeId())
 		case *syncrv1.Command_CancelJob:
 			id := x.CancelJob.GetJobId()
 			if slices.Contains(w.held, id) {

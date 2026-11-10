@@ -156,7 +156,9 @@ func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, 
 			continue
 		}
 		reported := len(w.Info.JobKinds) > 0
-		runsKind := slices.Contains(w.Info.JobKinds, sc.Kind)
+		// A worker that lacks a link feature the kind requires (an older
+		// version) cannot run it, whatever kinds it lists.
+		runsKind := slices.Contains(w.Info.JobKinds, sc.Kind) && w.Info.HasFeatures(s.kinds.RequiredFeatures(sc.Kind)...)
 		if !reported || runsKind {
 			known++ // may run the kind (a worker that never reported might)
 		}
@@ -189,6 +191,7 @@ func (s *Scheduler) create(ctx context.Context, p *pass, sc schedules.Schedule, 
 	_, err = s.jobs.Create(ctx, domain.Actor{UserID: sc.OwnerID, Role: domain.RoleUser}, jobs.CreateParams{
 		ID: r.JobID, ScheduleID: sc.ID, WorkerID: r.WorkerID, Kind: kind, Definition: sc.Definition,
 		RemoteIDs: refs.RemoteIDs, SearchTerms: refs.SearchTerms,
+		RepositoryID: refs.RepositoryID, ConcurrencyKeys: refs.ConcurrencyKeys,
 	})
 	switch {
 	case err == nil:
@@ -197,6 +200,13 @@ func (s *Scheduler) create(ctx context.Context, p *pass, sc schedules.Schedule, 
 		}
 	case errors.Is(err, domain.ErrAlreadyExists):
 		// An earlier attempt created it.
+	case errors.Is(err, jobs.ErrRepositoryDeleting):
+		// The backstop of the pause that starting the deletion does.
+		return s.end(ctx, r, schedules.RunFailed, schedules.ReasonRepositoryDeleting,
+			"the repository's data is being deleted; the schedule cannot run on it", true)
+	case errors.Is(err, jobs.ErrUnknownRepository):
+		return s.end(ctx, r, schedules.RunFailed, schedules.ReasonRepositoryUnavailable,
+			"the job's repository was deleted or is not the owner's; edit the schedule and resume it", true)
 	case errors.Is(err, jobs.ErrUnknownRemote):
 		return s.end(ctx, r, schedules.RunFailed, schedules.ReasonRemoteUnavailable,
 			"a remote of the job was deleted or is not the owner's; edit the schedule and resume it", true)

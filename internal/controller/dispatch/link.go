@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/link"
 )
 
 // Command ID prefixes. A command's ID is derived from its job ("start:<job
@@ -181,6 +183,9 @@ func (s *Service) observe(ctx context.Context, sess *session, workerID domain.Wo
 			return workers.Worker{}, err
 		}
 		sess.reset(epoch)
+		if s.probes != nil {
+			s.probes.epochChanged(workerID, w.Name)
+		}
 		s.log.InfoContext(ctx, "worker process changed", "worker_id", workerID.String(), "epoch", epoch, "previous_epoch", w.Link.Epoch)
 		js, err := s.jobs.Unfinished(ctx, workerID)
 		if err != nil {
@@ -285,6 +290,7 @@ func (s *Service) ack(ctx context.Context, sess *session, workerID domain.Worker
 	for _, a := range acks {
 		cmdID := a.GetCommandId()
 		switch {
+		case s.probes != nil && s.probes.ack(workerID, cmdID):
 		case strings.HasPrefix(cmdID, startPrefix):
 			id, err := domain.ParseJobID(strings.TrimPrefix(cmdID, startPrefix))
 			if err != nil {
@@ -303,10 +309,10 @@ func (s *Service) ack(ctx context.Context, sess *session, workerID domain.Worker
 }
 
 // commands implements Commands with the session locked; info is what the
-// worker reported in its latest Hello.
-//
-// m5: Track B adds the probe commands (first) and the concurrency-key gate
-// here: a queued job with a blocker (jobs Blockers) gets no StartJob.
+// worker reported in its latest Hello. Probe commands come first (they are
+// few and their callers wait); the job commands follow, up to
+// Config.MaxCommands in all. A queued job that waits for an older job
+// sharing one of its concurrency keys gets no StartJob.
 func (s *Service) commands(ctx context.Context, sess *session, workerID domain.WorkerID, info workers.Info, epoch string) ([]*syncrv1.Command, error) {
 	js, err := s.jobs.Unfinished(ctx, workerID)
 	if err != nil {
@@ -315,13 +321,23 @@ func (s *Service) commands(ctx context.Context, sess *session, workerID domain.W
 	if js, err = s.reconcileEpoch(ctx, workerID, epoch, js); err != nil {
 		return nil, err
 	}
+	blocked, err := s.blocked(ctx, js)
+	if err != nil {
+		return nil, err
+	}
 	var cmds []*syncrv1.Command
+	if s.probes != nil && info.HasFeatures(link.FeatureProbe) {
+		cmds = s.probes.commands(workerID)
+	}
 	for _, j := range js {
 		if len(cmds) >= s.cfg.MaxCommands {
 			return cmds, nil
 		}
 		switch {
 		case j.Status == domain.JobQueued:
+			if _, waits := blocked[j.ID]; waits {
+				continue // not the head of its concurrency keys yet
+			}
 			// Invariant (package jobs): a queued job never has a cancel
 			// request, so no StartJob follows a cancel.
 			spec, err := s.startSpec(ctx, j, info)
@@ -350,6 +366,29 @@ func (s *Service) commands(ctx context.Context, sess *session, workerID domain.W
 	return cmds, nil
 }
 
+// blocked returns the queued jobs of js that wait for an older unfinished
+// job sharing one of their concurrency keys, with that job (the
+// concurrency gate: only the oldest unfinished job of a key may start).
+// It is decided from the stored jobs alone, so every controller and every
+// poll agree.
+func (s *Service) blocked(ctx context.Context, js []jobs.Job) (map[domain.JobID]domain.JobID, error) {
+	var keyed []domain.JobID
+	for _, j := range js {
+		if j.Status == domain.JobQueued && len(j.ConcurrencyKeys) > 0 {
+			keyed = append(keyed, j.ID)
+		}
+	}
+	out := make(map[domain.JobID]domain.JobID)
+	for chunk := range slices.Chunk(keyed, jobs.MaxBlockerIDs) {
+		m, err := s.jobs.Blockers(ctx, chunk)
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(out, m)
+	}
+	return out, nil
+}
+
 // startSpec builds a queued job's spec (see SpecBuilder). A job whose spec
 // can never be built (a remote is gone, an invalid definition, unusable
 // credentials) fails at once; startSpec then returns nil without an error.
@@ -367,7 +406,7 @@ func (s *Service) startSpec(ctx context.Context, j jobs.Job, info workers.Info) 
 	case errors.Is(err, errRepositoryUnavailable):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeRepositoryUnavailable, "the repository was deleted or is not available to its owner", err)
 	case errors.Is(err, ErrWorkerOutdated):
-		return nil, s.failUnbuildable(ctx, j, jobs.CodeWorkerOutdated, fmt.Sprintf("the worker must be upgraded to run %s jobs", j.Kind), err)
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeWorkerOutdated, s.outdatedMessage(ctx, j), err)
 	case errors.Is(err, domain.ErrNotFound):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeRemoteUnavailable, "a remote of the job was deleted or is not available to its owner", err)
 	case errors.Is(err, domain.ErrInvalidArgument):
@@ -377,6 +416,15 @@ func (s *Service) startSpec(ctx context.Context, j jobs.Job, info workers.Info) 
 	default:
 		return nil, fmt.Errorf("build the spec of job %s: %w", j.ID, err)
 	}
+}
+
+// outdatedMessage names the job's worker in the worker_outdated failure.
+func (s *Service) outdatedMessage(ctx context.Context, j jobs.Job) string {
+	w, err := s.workers.Get(ctx, j.WorkerID)
+	if err != nil {
+		return fmt.Sprintf("the worker must be upgraded to run %s jobs", j.Kind)
+	}
+	return fmt.Sprintf("worker %q must be upgraded to run %s jobs", w.Name, j.Kind)
 }
 
 // failUnbuildable fails a queued job whose spec cannot be built. The error

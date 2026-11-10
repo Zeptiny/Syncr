@@ -41,7 +41,9 @@
 // the job; a job runs only for a launched run.
 //
 // Launch errors: a remote that is gone fails the run (remote_unavailable)
-// and pauses the schedule; an invalid definition the same with
+// and pauses the schedule; a restic repository that is gone the same with
+// repository_unavailable, one whose data is being deleted with
+// repository_deleting; an invalid definition the same with
 // invalid_definition; a worker that disappeared puts the run back to
 // pending (the next tick decides again), or fails it (worker_removed, no
 // pause) if a later occurrence opened a pending run meanwhile; any other

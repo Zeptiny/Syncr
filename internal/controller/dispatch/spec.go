@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
@@ -23,8 +24,8 @@ var ErrWorkerOutdated = fmt.Errorf("the worker must be upgraded: %w", domain.Err
 var errRepositoryUnavailable = fmt.Errorf("repository unavailable: %w", domain.ErrNotFound)
 
 // Specs is the SpecBuilder of a controller: it builds a queued job's spec
-// from its stored definition with the job kinds and the owner's resolved
-// remotes. It holds no state and is safe for concurrent use.
+// from its stored definition with the job kinds, the owner's resolved
+// remotes and, for restic jobs, the owner's resolved repository. It holds no state and is safe for concurrent use.
 //
 // Building a spec is pure apart from Resolve: the definition is decoded
 // and checked again (jobkind.Unmarshal, Registry.Check), the remotes it
@@ -56,20 +57,13 @@ func NewSpecs(remotes Remotes, repos Repos, kinds *jobkind.Registry) (*Specs, er
 // Build implements SpecBuilder for job j on a worker that reported w.
 // Errors: domain.ErrInvalidArgument when the stored definition cannot be
 // decoded, checked or built (also when its kind is not the job's);
+// ErrWorkerOutdated when w lacks a link feature the kind requires;
 // errRepositoryUnavailable when its repository is gone; domain.ErrNotFound
 // (from Resolve or the kind) when a remote is missing, deleted or not the
-// owner's; whatever else Resolve returns (domain.ErrFailedPrecondition for
-// credentials that cannot be decrypted, store errors to retry).
-//
-// m5: Track B completes this (M5 design §2.5): the feature check
-// (ErrWorkerOutdated when w.Features lacks one of
-// kinds.RequiredFeatures(j.Kind)) and resolving the repository of
-// refs.RepositoryID with Repos.Resolve (ErrNotFound becomes
-// errRepositoryUnavailable), adding its remote to the remotes to resolve
-// and passing it in Resolved.Repositories (with its ResticID). Until then a
-// job on a repository fails with "repository_unavailable".
+// owner's; whatever else the Resolves return (domain.ErrFailedPrecondition
+// for credentials or a password that cannot be decrypted, store errors to
+// retry).
 func (s *Specs) Build(ctx context.Context, j jobs.Job, w workers.Info) (*syncrv1.JobSpec, error) {
-	_ = w // m5: Track B checks w.Features
 	def, err := jobkind.Unmarshal(j.Definition)
 	if err != nil {
 		return nil, fmt.Errorf("job %s: %w", j.ID, err)
@@ -81,15 +75,38 @@ func (s *Specs) Build(ctx context.Context, j jobs.Job, w workers.Info) (*syncrv1
 	if kind != j.Kind {
 		return nil, fmt.Errorf("job %s: %w: the definition is a %q, the job a %q", j.ID, domain.ErrInvalidArgument, kind, j.Kind)
 	}
-	if !refs.RepositoryID.IsZero() {
-		return nil, fmt.Errorf("job %s: repository %s: %w", j.ID, refs.RepositoryID, errRepositoryUnavailable)
+	for _, f := range s.kinds.RequiredFeatures(kind) {
+		if !w.HasFeatures(f) {
+			return nil, fmt.Errorf("job %s: %w: it lacks the feature %q that %s jobs need", j.ID, ErrWorkerOutdated, f, kind)
+		}
 	}
-	resolved := make(map[domain.RemoteID]jobkind.Remote)
-	if len(refs.RemoteIDs) > 0 {
+	in := jobkind.Resolved{Remotes: make(map[domain.RemoteID]jobkind.Remote)}
+	remoteIDs := refs.RemoteIDs
+	if id := refs.RepositoryID; !id.IsZero() {
+		if s.repos == nil {
+			return nil, fmt.Errorf("job %s: repository %s: %w: no repository service is configured", j.ID, id, errRepositoryUnavailable)
+		}
+		repo, err := s.repos.Resolve(ctx, j.OwnerID, id)
+		switch {
+		case errors.Is(err, domain.ErrNotFound):
+			// errRepositoryUnavailable first: it also matches ErrNotFound.
+			return nil, fmt.Errorf("job %s: repository %s: %w", j.ID, id, errRepositoryUnavailable)
+		case err != nil:
+			return nil, fmt.Errorf("job %s: resolve its repository: %w", j.ID, err)
+		}
+		// The requested ID is authoritative.
+		in.Repositories = map[domain.ResticRepoID]jobkind.Repository{id: {
+			ID: id, RemoteID: repo.RemoteID, Path: repo.Path, Password: repo.Password, ResticID: repo.ResticID,
+		}}
+		if !slices.Contains(remoteIDs, repo.RemoteID) {
+			remoteIDs = append(slices.Clone(remoteIDs), repo.RemoteID)
+		}
+	}
+	if len(remoteIDs) > 0 {
 		if s.remotes == nil {
 			return nil, fmt.Errorf("job %s: %w: no remotes service is configured", j.ID, domain.ErrNotFound)
 		}
-		rs, err := s.remotes.Resolve(ctx, j.OwnerID, refs.RemoteIDs)
+		rs, err := s.remotes.Resolve(ctx, j.OwnerID, remoteIDs)
 		if err != nil {
 			return nil, fmt.Errorf("job %s: resolve its remotes: %w", j.ID, err)
 		}
@@ -99,10 +116,10 @@ func (s *Specs) Build(ctx context.Context, j jobs.Job, w workers.Info) (*syncrv1
 				members[i] = jobkind.Member{RemoteID: m.RemoteID, Path: m.Path, Mode: m.Mode}
 			}
 			// The map key is authoritative for the ID.
-			resolved[id] = jobkind.Remote{ID: id, Rclone: r.Rclone, Members: members}
+			in.Remotes[id] = jobkind.Remote{ID: id, Rclone: r.Rclone, Members: members}
 		}
 	}
-	spec, err := s.kinds.Build(def, jobkind.Resolved{Remotes: resolved})
+	spec, err := s.kinds.Build(def, in)
 	if err != nil {
 		return nil, fmt.Errorf("job %s: %w", j.ID, err)
 	}

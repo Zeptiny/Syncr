@@ -562,13 +562,29 @@ func (s *Service) published(ctx context.Context, prev, cur Job) {
 		return
 	}
 	s.forget(cur.ID)
-	// m5: Track B adds the key wake-up here: when a job with
-	// ConcurrencyKeys becomes terminal, wake the workers of the queued jobs
-	// sharing its keys (Repository.ListWorkersWaitingOnKeys), logging
-	// errors only.
+	s.wakeWaiting(ctx, cur)
 	s.log.InfoContext(ctx, "job finished", "job_id", cur.ID.String(), "worker_id", cur.WorkerID.String(),
 		"status", string(cur.Status), "error_code", cur.Error.Code)
 	s.notifier.JobFinished(*copyOf(cur))
+}
+
+// wakeWaiting wakes the workers of the queued jobs that share a
+// concurrency key with the finished job j: one of them may be the new head
+// of its keys. A failure is only logged; workers ask for their commands
+// again within seconds anyway.
+func (s *Service) wakeWaiting(ctx context.Context, j Job) {
+	if len(j.ConcurrencyKeys) == 0 {
+		return
+	}
+	ids, err := s.repo.ListWorkersWaitingOnKeys(ctx, j.ConcurrencyKeys)
+	if err != nil {
+		s.log.WarnContext(ctx, "cannot wake the workers waiting for a finished job's concurrency keys",
+			"job_id", j.ID.String(), "error", err.Error())
+		return
+	}
+	for _, id := range ids {
+		s.waker.Wake(id)
+	}
 }
 
 // copyOf returns a copy of j for publishing. Jobs hold no secrets (the

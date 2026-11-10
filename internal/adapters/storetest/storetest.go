@@ -139,6 +139,12 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 
 		{"ActivityBuckets", testActivityBuckets},
 		{"ActivityCountUnfinished", testActivityCountUnfinished},
+
+		// Milestone 5: concurrency keys.
+		{"JobConcurrencyKeys", testJobConcurrencyKeys},
+		{"JobBlockers", testJobBlockers},
+		{"JobQueuedIsKeyAware", testJobQueuedIsKeyAware},
+		{"JobWorkersWaitingOnKeys", testJobWorkersWaitingOnKeys},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

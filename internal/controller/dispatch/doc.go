@@ -73,15 +73,19 @@
 //	Ack            Effect
 //	start:<job>    queued -> dispatched by the acking epoch; otherwise nothing
 //	cancel:<job>   that CancelJob is not sent again in this epoch
+//	probe:<probe>  that RunProbe is not sent again (see Probes)
+//	probe-cancel:<probe>  that CancelProbe is not sent again
 //	anything else  ignored
 //
 // # Commands
 //
-// Derived on every Commands, WaitCommands and passive round, oldest job
-// first, at most Config.MaxCommands:
+// Derived on every Commands, WaitCommands and passive round: the probe
+// commands of an active worker first (see Probes), then the job commands,
+// oldest job first, at most Config.MaxCommands in all:
 //
 //	Job state (this worker)                                   Command
-//	queued                                                    StartJob{job_id, spec}, id "start:<job>"
+//	queued, not waiting on a concurrency key                  StartJob{job_id, spec}, id "start:<job>"
+//	queued, an older unfinished job shares one of its keys    none (see Concurrency keys)
 //	dispatched/running in the current epoch, cancel requested,
 //	  CancelJob not acked in this epoch                        CancelJob, id "cancel:<job>"
 //	listed by the latest snapshot but finished, unknown or
@@ -93,17 +97,35 @@
 // IDs are derived from the job, so redeliveries keep their ID and workers
 // deduplicate by job ID anyway.
 //
+// # Concurrency keys
+//
+// A job may hold concurrency keys, set when it was created (restic jobs
+// hold "restic-repo:<repository id>"; docs/adr/0013-concurrency-keys.md).
+// Of the unfinished jobs (queued, dispatched, running; any worker) that
+// share a key, only the oldest by (created at, ID) may start: a queued job
+// with an older unfinished sharer gets no StartJob. The dispatcher asks
+// the job service for these blockers once per derivation (Jobs.Blockers,
+// one query) and keeps nothing: every controller and every poll derive the
+// same answer from the stored jobs. When a job holding keys finishes, the
+// job service wakes the workers of the queued jobs sharing them (Hub), so
+// the next one starts at once.
+//
 // # Specs
 //
 // Jobs store a secret-free definition. The StartJob spec is built from it
 // on every derivation (SpecBuilder, normally Specs): the definition is
 // decoded and checked, the remotes it uses are resolved for the job's owner
-// with their credentials, and the job kind builds the spec. The spec exists
+// with their credentials (for a restic job also its repository, with its
+// password, and the repository's remote), and the job kind builds the spec. The spec exists
 // only in memory and on the authenticated link; it is never stored or
 // logged. A job whose spec can never be built is failed instead of sent:
 //
 //	Cause                                                  Error code
 //	a remote is deleted, missing or not the owner's        remote_unavailable
+//	the job's restic repository is deleted or not the
+//	  owner's                                              repository_unavailable
+//	the worker lacks a link feature the kind requires
+//	  (an older version; jobkind RequiredFeatures)         worker_outdated
 //	the definition cannot be decoded, checked or built     invalid_spec
 //	a remote's credentials cannot be used (decryption)     internal
 //	anything else (e.g. the store is down)                 none: the call fails, the next poll retries
@@ -143,7 +165,9 @@
 // # Timeouts
 //
 // Run fails jobs that stay queued longer than Config.DispatchTimeout
-// (dispatch_timeout); the message says whether the worker never connected,
+// (dispatch_timeout), except jobs waiting on a concurrency key: their
+// timeout counts from when they became the oldest unfinished job of their
+// keys; the message says whether the worker never connected,
 // is offline (and since when) or is online but did not accept the job. The
 // clock starts again when a job is re-queued, and it starts no earlier than
 // the Service: after a controller outage queued jobs get the full timeout
@@ -185,6 +209,36 @@
 // reveals a new orphan; there is no polling. PassiveLoop documents the
 // passive cadence (about 1s while busy, 15s while idle, at once while the
 // worker has more events).
+//
+// # Probes
+//
+// A probe is a short request a worker answers outside its job slots
+// (docs/adr/0012-worker-probes.md). ProbeBroker.Probe runs one and waits
+// for its result; nothing about probes is stored. The broker refuses
+// workers that are missing, offline, or lack the "probe" feature or the
+// operation (workers older than Milestone 5 would ignore the command).
+//
+// Active workers: the call waits in the broker's table and the worker's
+// long poll is woken. Its commands come first, at most 16 RunProbe at once:
+//
+//	Probe call                                     Command
+//	waiting, RunProbe not acked                    RunProbe, id "probe:<probe>"
+//	given up by its caller after the ack           CancelProbe, id "probe-cancel:<probe>", until acked
+//	given up before the ack                        none
+//
+// The result arrives with CompleteProbe, which authenticates the worker
+// and adopts its epoch like Report; it is matched by probe ID and worker,
+// and an unknown, late or another worker's result is ignored. When the
+// worker's epoch changes, the probes its previous process had acked fail
+// (domain.ErrUnavailable) and the others are sent to the new process. A
+// call ends with domain.ErrUnavailable after its timeout plus
+// ProbeConfig.Grace, and at most ProbeConfig.MaxInFlightPerWorker calls
+// wait per worker.
+//
+// Passive workers: a running PassiveLoop registers its client with the
+// broker, and Probe calls the worker's Probe RPC directly with the
+// caller's context and the same deadline. A worker that answers
+// Unimplemented (ErrProbeUnsupported) is reported as outdated.
 //
 // Allowed dependencies: the standard library, protobuf, the generated link
 // code, internal/link, internal/domain, internal/jobkind and the

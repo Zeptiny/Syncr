@@ -46,6 +46,7 @@ type env struct {
 	svc     *schedules.Service
 	kinds   *jobkind.Registry
 	remotes *fakeRemotes
+	repos   *fakeRepos
 	owners  *fakeOwners
 	signal  *scheduler.Signal
 	alice   domain.Actor
@@ -58,6 +59,7 @@ func newEnv(t *testing.T) *env {
 	e := &env{
 		t: t, store: memstore.New(), clock: clock.NewFake(t0),
 		remotes: &fakeRemotes{owner: map[domain.RemoteID]domain.UserID{}},
+		repos:   &fakeRepos{state: map[domain.ResticRepoID]error{}, remote: map[domain.ResticRepoID]domain.RemoteID{}},
 		owners:  &fakeOwners{disabled: map[domain.UserID]bool{}},
 		signal:  scheduler.NewSignal(),
 		alice:   domain.Actor{UserID: domain.NewUserID(), Role: domain.RoleUser},
@@ -71,7 +73,7 @@ func newEnv(t *testing.T) *env {
 	var err error
 	e.jobs, err = jobs.New(jobs.Deps{
 		Jobs: e.store, Samples: e.store, Clock: e.clock, IDs: ids, Broker: broker.New(),
-		Notifier: jobs.NopNotifier{}, Waker: nopWorkerWaker{}, Remotes: e.remotes,
+		Notifier: jobs.NopNotifier{}, Waker: nopWorkerWaker{}, Remotes: e.remotes, Repositories: e.repos,
 	}, jobs.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +93,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	e.svc, err = schedules.New(schedules.Deps{
-		Repo: e.store, Remotes: e.remotes, Contacts: okContacts{}, Workers: workerChecker{e.workers},
+		Repo: e.store, Remotes: e.remotes, Repositories: e.repos, Contacts: okContacts{}, Workers: workerChecker{e.workers},
 		Waker: e.signal, Clock: e.clock, IDs: ids,
 	}, schedules.Config{})
 	if err != nil {
@@ -131,6 +133,9 @@ type worker struct {
 	// kinds are the reported job kinds (nil: rclone_transfer; empty
 	// non-nil: never reported).
 	kinds []string
+	// features are the reported link features (nil: a worker older than
+	// Milestone 5).
+	features []string
 }
 
 func (e *env) addWorker(w worker) domain.WorkerID {
@@ -141,7 +146,7 @@ func (e *env) addWorker(w worker) domain.WorkerID {
 	}
 	wk := workers.Worker{
 		ID: domain.NewWorkerID(), Name: w.name, Mode: domain.WorkerActive, CreatedAt: t0, Labels: w.labels,
-		Info: workers.Info{JobKinds: kinds},
+		Info: workers.Info{JobKinds: kinds, Features: w.features},
 	}
 	if len(kinds) > 0 {
 		wk.Info.ReportedAt = t0
@@ -300,6 +305,34 @@ func (f *fakeRemotes) Usable(_ context.Context, owner domain.UserID, ids []domai
 		out[id] = "remote"
 	}
 	return out, nil
+}
+
+// fakeRepos is the repository checker of both the jobs and the schedules
+// services: a repository is usable (nil), gone (an error matching
+// ErrNotFound) or deleting (one matching ErrFailedPrecondition).
+type fakeRepos struct {
+	mu     sync.Mutex
+	state  map[domain.ResticRepoID]error
+	remote map[domain.ResticRepoID]domain.RemoteID
+}
+
+func (f *fakeRepos) set(id domain.ResticRepoID, remote domain.RemoteID, state error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state[id], f.remote[id] = state, remote
+}
+
+func (f *fakeRepos) UsableRepository(_ context.Context, _ domain.UserID, id domain.ResticRepoID, _ domain.JobID) (string, domain.RemoteID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	state, ok := f.state[id]
+	switch {
+	case !ok:
+		return "", domain.RemoteID{}, fmt.Errorf("repository %s: %w", id, domain.ErrNotFound)
+	case state != nil:
+		return "", domain.RemoteID{}, state
+	}
+	return "Photos vault", f.remote[id], nil
 }
 
 // fakeOwners is the Owners port (users.Service.Active).

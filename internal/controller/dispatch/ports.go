@@ -18,6 +18,9 @@ import (
 type Jobs interface {
 	Unfinished(ctx context.Context, workerID domain.WorkerID) ([]jobs.Job, error)
 	QueuedBefore(ctx context.Context, before time.Time, limit int) ([]jobs.Job, error)
+	// Blockers returns, for each of ids (at most jobs.MaxBlockerIDs) with
+	// concurrency keys, the oldest older unfinished job sharing a key.
+	Blockers(ctx context.Context, ids []domain.JobID) (map[domain.JobID]domain.JobID, error)
 	MarkDispatched(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string) (jobs.Job, bool, error)
 	MarkRunning(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, startedAt time.Time) (jobs.Job, bool, error)
 	RecordProgress(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, smp jobs.Sample) (bool, error)
