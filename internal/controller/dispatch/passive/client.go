@@ -33,6 +33,10 @@ const (
 	// DefaultReadMaxBytes caps a worker's response: Pulls carry about 4
 	// MiB of events by default (8 MiB at most) and single events far less.
 	DefaultReadMaxBytes = 16 << 20
+	// DefaultProbeTimeout is the longest probe any setting allows plus the
+	// probe broker's grace. The composition root sets the configured
+	// longest instead (dispatch.ProbeConfig.Wait).
+	DefaultProbeTimeout = link.MaxProbeTimeout + link.ProbeGrace
 )
 
 // ErrFingerprintMismatch reports a worker certificate that does not match
@@ -55,6 +59,11 @@ type ClientConfig struct {
 	IdleConnTimeout time.Duration
 	// ReadMaxBytes caps a decoded response message.
 	ReadMaxBytes int
+	// ProbeTimeout bounds the wait for a Probe's response headers: the
+	// longest probe plus the controller's grace (the probe broker's
+	// ProbeConfig.Wait). A Probe has no other timeout of its own; its
+	// context's deadline governs.
+	ProbeTimeout time.Duration
 }
 
 func (c ClientConfig) withDefaults() ClientConfig {
@@ -63,6 +72,7 @@ func (c ClientConfig) withDefaults() ClientConfig {
 	c.TLSHandshakeTimeout = cmp.Or(c.TLSHandshakeTimeout, DefaultTLSHandshakeTimeout)
 	c.IdleConnTimeout = cmp.Or(c.IdleConnTimeout, DefaultIdleConnTimeout)
 	c.ReadMaxBytes = cmp.Or(c.ReadMaxBytes, DefaultReadMaxBytes)
+	c.ProbeTimeout = cmp.Or(c.ProbeTimeout, DefaultProbeTimeout)
 	return c
 }
 
@@ -73,6 +83,10 @@ type Client struct {
 	auth      string
 	transport *http.Transport
 	rpc       syncrv1connect.WorkerLinkServiceClient
+	// probes calls Probe over probeTransport: the same pinned connection
+	// settings, but a probe may take far longer than a Pull or Command.
+	probeTransport *http.Transport
+	probes         syncrv1connect.WorkerLinkServiceClient
 }
 
 var _ dispatch.PassiveClient = (*Client)(nil)
@@ -104,18 +118,20 @@ func NewClient(t workers.PassiveTarget, cfg ClientConfig) (*Client, error) {
 		MaxIdleConnsPerHost:   2,
 		Protocols:             protocols,
 	}
-	hc := &http.Client{
-		Transport: tr,
-		Timeout:   cfg.Timeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	hc := &http.Client{Transport: tr, Timeout: cfg.Timeout, CheckRedirect: noRedirect}
+	probeTr := tr.Clone()
+	probeTr.ResponseHeaderTimeout = cfg.ProbeTimeout
+	// No Timeout: the probe's context carries its deadline.
+	probeHC := &http.Client{Transport: probeTr, CheckRedirect: noRedirect}
+	base := strings.TrimRight(u.String(), "/")
 	return &Client{
-		target:    t.WorkerID.String(),
-		auth:      link.PassiveAuthorization(t.Secret),
-		transport: tr,
-		rpc:       syncrv1connect.NewWorkerLinkServiceClient(hc, strings.TrimRight(u.String(), "/"), connect.WithReadMaxBytes(cfg.ReadMaxBytes)),
+		target:         t.WorkerID.String(),
+		auth:           link.PassiveAuthorization(t.Secret),
+		transport:      tr,
+		rpc:            syncrv1connect.NewWorkerLinkServiceClient(hc, base, connect.WithReadMaxBytes(cfg.ReadMaxBytes)),
+		probeTransport: probeTr,
+		probes:         syncrv1connect.NewWorkerLinkServiceClient(probeHC, base, connect.WithReadMaxBytes(cfg.ReadMaxBytes)),
 	}, nil
 }
 
@@ -141,8 +157,28 @@ func (c *Client) Pull(ctx context.Context, req *syncrv1.PullRequest) (*syncrv1.P
 	return resp.Msg, nil
 }
 
+// Probe runs a probe on the worker (WorkerLinkService.Probe); ctx's
+// deadline bounds the call. It may be called concurrently with Command,
+// Pull and itself. A worker without probe support (Unimplemented) gives an
+// error wrapping dispatch.ErrProbeUnsupported.
+func (c *Client) Probe(ctx context.Context, req *syncrv1.ProbeRequest) (*syncrv1.ProbeResponse, error) {
+	r := connect.NewRequest(req)
+	r.Header().Set("Authorization", c.auth)
+	resp, err := c.probes.Probe(ctx, r)
+	if connect.CodeOf(err) == connect.CodeUnimplemented {
+		return nil, fmt.Errorf("probe worker %s: %w", c.target, dispatch.ErrProbeUnsupported)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("probe worker %s: %w", c.target, err)
+	}
+	return resp.Msg, nil
+}
+
 // Close closes the client's idle connections.
-func (c *Client) Close() { c.transport.CloseIdleConnections() }
+func (c *Client) Close() {
+	c.transport.CloseIdleConnections()
+	c.probeTransport.CloseIdleConnections()
+}
 
 // Fingerprint is a SHA-256 certificate fingerprint.
 type Fingerprint [sha256.Size]byte

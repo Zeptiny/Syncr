@@ -48,9 +48,10 @@ type Repository interface {
 	// (ErrNotFound). They are conditional updates; in SQL each is a single
 	// UPDATE ... WHERE id = $1 AND removed_at IS NULL AND <condition>.
 
-	// SetWorkerInfo replaces Info if Link.Epoch == epoch, so a delayed Hello
-	// of a replaced worker process cannot overwrite a newer one. ErrConflict
-	// if the epoch differs.
+	// SetWorkerInfo replaces Info (all of it, Info.Epoch included, as
+	// given) if Link.Epoch == epoch, so a delayed Hello of a replaced worker
+	// process cannot overwrite a newer one. ErrConflict if the epoch
+	// differs.
 	SetWorkerInfo(ctx context.Context, id domain.WorkerID, epoch string, info Info) error
 
 	// AdvanceWorkerEpoch is a compare-and-swap on the epoch: if Link.Epoch ==

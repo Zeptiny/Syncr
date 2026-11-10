@@ -168,6 +168,14 @@ seconds after its last contact; a run that comes due before that is still
 queued on it, and fails if the worker does not pick it up within 15
 minutes.
 
+## Backups, browsing and updates
+
+The folders in `local_roots` are also what the web UI can browse on this
+worker, back up with restic and restore into
+([restic backups](restic.md)). Browsing, remote tests and restic jobs need
+a current worker: one that shows as **outdated** in the web UI is updated
+by running `setup` again with the new binary.
+
 ## Uninstall
 
 ```sh

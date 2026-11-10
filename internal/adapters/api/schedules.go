@@ -31,7 +31,13 @@ type scheduleHandler struct {
 	kinds     *jobkind.Registry
 	remotes   RemoteService
 	contacts  ContactService
-	errs      errorMapper
+	// repos names the schedules' restic repositories; nil leaves the
+	// references without names.
+	repos RepositoryNames
+	// workers tells the input check a target worker's operating system
+	// (the VSS check); nil skips it.
+	workers WorkerNames
+	errs    errorMapper
 }
 
 var _ syncrv1connect.ScheduleServiceHandler = (*scheduleHandler)(nil)
@@ -42,6 +48,10 @@ func (h *scheduleHandler) fail(ctx context.Context, procedure string, err error)
 		return connect.NewError(connect.CodeNotFound, errors.New("remote not found"))
 	case errors.Is(err, schedules.ErrUnknownContact):
 		return connect.NewError(connect.CodeNotFound, errors.New("contact not found"))
+	case errors.Is(err, schedules.ErrUnknownRepository):
+		return connect.NewError(connect.CodeNotFound, errors.New("repository not found"))
+	case errors.Is(err, schedules.ErrRepositoryDeleting):
+		return connect.NewError(connect.CodeFailedPrecondition, errors.New("the repository's data is being deleted"))
 	}
 	return h.errs.toConnect(ctx, procedure, "schedule", err)
 }
@@ -63,6 +73,13 @@ func (h *scheduleHandler) ListSchedules(ctx context.Context, req *connect.Reques
 			return nil, invalidField("contact_id", "is not a valid ID")
 		}
 		f.ContactID = id
+	}
+	if s := req.Msg.GetRepositoryId(); s != "" {
+		id, err := parseRepositoryID("repository_id", s)
+		if err != nil {
+			return nil, err
+		}
+		f.RepositoryID = id
 	}
 	actor, _ := ActorFrom(ctx)
 	list, err := h.schedules.List(ctx, actor, f)
@@ -289,6 +306,18 @@ func (h *scheduleHandler) input(ctx context.Context, procedure string, m *syncrv
 				return schedules.Input{}, h.fail(ctx, procedure, err)
 			}
 			in.Kind, in.Definition, in.RemoteIDs, in.SearchTerms = kind, encoded, refs.RemoteIDs, refs.SearchTerms
+			in.RepositoryID = refs.RepositoryID
+			// Kinds only the controller starts (restic_delete_data) and
+			// kinds that cannot be scheduled (restores).
+			if ok, why := h.kinds.UserStartable(kind); !ok {
+				v.Add("definition."+kind, why)
+			} else if ok, why := h.kinds.Schedulable(kind); !ok {
+				v.Add("definition."+kind, why)
+			}
+			// A label's workers are checked when a run picks one.
+			if req, goos, wrong := wrongWorkerOS(ctx, h.kinds, h.workers, in.Target.WorkerID, def); wrong {
+				v.Add(req.Field, req.FieldMessage()+"; this worker runs "+goos)
+			}
 		}
 	}
 	for i, c := range m.GetContacts() {
@@ -323,14 +352,18 @@ func (h *scheduleHandler) protoSchedule(ctx context.Context, actor domain.Actor,
 }
 
 // protoSchedules converts ss with their references: one lookup each for
-// the remotes' and contacts' names and for the last runs.
+// the remotes', repositories' and contacts' names and for the last runs.
 func (h *scheduleHandler) protoSchedules(ctx context.Context, actor domain.Actor, ss []schedules.Schedule) ([]*syncrv1.Schedule, error) {
 	var refs scheduleRefs
 	var remoteIDs []domain.RemoteID
 	var contactIDs []domain.ContactID
+	var repoIDs []domain.ResticRepoID
 	ids := make([]domain.ScheduleID, 0, len(ss))
 	for _, sc := range ss {
 		ids = append(ids, sc.ID)
+		if !sc.RepositoryID.IsZero() && !slices.Contains(repoIDs, sc.RepositoryID) {
+			repoIDs = append(repoIDs, sc.RepositoryID)
+		}
 		for _, id := range sc.RemoteIDs {
 			if !slices.Contains(remoteIDs, id) {
 				remoteIDs = append(remoteIDs, id)
@@ -351,6 +384,11 @@ func (h *scheduleHandler) protoSchedules(ctx context.Context, actor domain.Actor
 	if h.contacts != nil && len(contactIDs) > 0 {
 		if refs.contacts, err = h.contacts.Names(ctx, contactIDs); err != nil {
 			return nil, fmt.Errorf("name the contacts of schedules: %w", err)
+		}
+	}
+	if h.repos != nil && len(repoIDs) > 0 {
+		if refs.repos, err = h.repos.Names(ctx, repoIDs); err != nil {
+			return nil, fmt.Errorf("name the repositories of schedules: %w", err)
 		}
 	}
 	if refs.last, err = h.schedules.LatestRuns(ctx, actor, ids); err != nil {

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Zeptiny/Syncr/internal/link"
 	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
 	"github.com/Zeptiny/Syncr/internal/worker/localfs"
 	"github.com/Zeptiny/Syncr/internal/worker/paths"
@@ -136,12 +137,17 @@ func TestBuildWorkerRegistersEveryRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"restic_backup", "restic_check", "restic_forget", "restic_init",
+		"restic_backup", "restic_check", "restic_delete_data", "restic_forget", "restic_init",
 		"restic_prune", "restic_restore", "restic_snapshots", "rclone_transfer",
 	}
 	slices.Sort(want)
 	if got := w.registry.Kinds(); !slices.Equal(got, want) {
 		t.Errorf("Kinds() = %v, want %v", got, want)
+	}
+
+	// The probe executor runs every probe operation with the same tools.
+	if w.probes == nil || !slices.Equal(w.probes.Ops(), link.ProbeOps()) {
+		t.Errorf("probes = %v, want every operation %v", w.probes, link.ProbeOps())
 	}
 
 	for _, tool := range []string{toolRclone, toolRestic} {
@@ -263,7 +269,7 @@ func TestBuildWorkerWithoutLocalRootsDeniesEverythingAndWarns(t *testing.T) {
 		!strings.Contains(logs, "SYNCR_LOCAL_ROOTS") {
 		t.Errorf("logs lack the local_roots warning:\n%s", logs)
 	}
-	if len(w.registry.Kinds()) != 8 {
+	if len(w.registry.Kinds()) != 9 {
 		t.Errorf("Kinds() = %v: runners must be registered even without local roots (remote-to-remote jobs)", w.registry.Kinds())
 	}
 }

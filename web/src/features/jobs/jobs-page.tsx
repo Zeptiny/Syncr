@@ -23,18 +23,18 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { JobService, JobStatus, WorkerAdminService } from "@/gen/syncr/v1/api_pb";
 import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
+import { ResticService } from "@/gen/syncr/v1/restic_pb";
 import { ScheduleService } from "@/gen/syncr/v1/schedules_pb";
 import { UserService } from "@/gen/syncr/v1/users_pb";
 import { useKeysetPager } from "@/hooks/use-keyset-pager";
 import { useNow } from "@/hooks/use-now";
 import { useSession } from "@/hooks/use-session";
-import { isTerminal, jobStatuses, jobStatusMeta, kindLabel } from "@/lib/status";
+import { isTerminal, jobKinds, jobStatuses, jobStatusMeta, kindLabel } from "@/lib/status";
 
 import { JobsTable } from "./jobs-table";
 import type { JobsSearch } from "./search";
 
 const periods = { "24h": 1, "7d": 7, "30d": 30 } as const;
-const kinds = ["rclone_transfer"];
 const ANY = "__any__";
 
 function parseStatuses(s: string | undefined): JobStatus[] {
@@ -125,6 +125,7 @@ export function JobsPage({ search }: { search: JobsSearch }) {
   const workers = useQuery(WorkerAdminService.method.listWorkers, {});
   const remotes = useQuery(RemoteService.method.listRemotes, {});
   const schedules = useQuery(ScheduleService.method.listSchedules, {});
+  const repositories = useQuery(ResticService.method.listRepositories, {});
   const users = useQuery(UserService.method.listUsers, {}, { enabled: allUsers });
   const q = useQuery(
     JobService.method.listJobs,
@@ -133,6 +134,7 @@ export function JobsPage({ search }: { search: JobsSearch }) {
       workerId: search.worker ?? "",
       remoteId: search.remote ?? "",
       scheduleId: search.schedule ?? "",
+      repositoryId: search.repository ?? "",
       kinds: search.kind ? [search.kind] : [],
       query: search.q ?? "",
       createdAfter: after ? timestampFromDate(after) : undefined,
@@ -161,6 +163,7 @@ export function JobsPage({ search }: { search: JobsSearch }) {
     !!search.worker ||
     !!search.remote ||
     !!search.schedule ||
+    !!search.repository ||
     !!search.kind ||
     !!search.q ||
     !!search.period;
@@ -169,7 +172,7 @@ export function JobsPage({ search }: { search: JobsSearch }) {
     <>
       <PageHeader
         title="Jobs"
-        description="Every transfer, newest first. Open one to follow it live."
+        description="Every transfer, backup and repository job, newest first. Open one to follow it live."
         actions={
           <Button asChild>
             <Link to="/jobs/new">
@@ -186,7 +189,7 @@ export function JobsPage({ search }: { search: JobsSearch }) {
         <SearchInput
           value={search.q ?? ""}
           onChange={(v) => setSearch({ q: v || undefined })}
-          placeholder="Search paths and remotes"
+          placeholder="Search paths, remotes and repositories"
         />
         <StatusFilter
           value={statuses}
@@ -247,6 +250,28 @@ export function JobsPage({ search }: { search: JobsSearch }) {
           </SelectContent>
         </Select>
         <Select
+          value={search.repository ?? ANY}
+          onValueChange={(v) => setSearch({ repository: v === ANY ? undefined : v })}
+        >
+          <SelectTrigger className="w-[calc(50%-0.25rem)] bg-card sm:w-44" aria-label="Repository">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ANY}>Any repository</SelectItem>
+            <SelectSeparator />
+            {(repositories.data?.repositories ?? []).map((r) => (
+              <SelectItem key={r.id} value={r.id}>
+                {r.name}
+              </SelectItem>
+            ))}
+            {repositories.data?.repositories.length === 0 && (
+              <div className="px-2 py-2 text-[13px] text-muted-foreground">
+                No repositories yet.
+              </div>
+            )}
+          </SelectContent>
+        </Select>
+        <Select
           value={search.kind ?? ANY}
           onValueChange={(v) => setSearch({ kind: v === ANY ? undefined : v })}
         >
@@ -256,7 +281,7 @@ export function JobsPage({ search }: { search: JobsSearch }) {
           <SelectContent>
             <SelectItem value={ANY}>Any kind</SelectItem>
             <SelectSeparator />
-            {kinds.map((k) => (
+            {jobKinds.map((k) => (
               <SelectItem key={k} value={k}>
                 {kindLabel(k)}
               </SelectItem>
@@ -341,7 +366,7 @@ export function JobsPage({ search }: { search: JobsSearch }) {
             <EmptyState
               icon={ArrowRightLeft}
               title="No jobs yet"
-              description="A job copies, syncs or moves files from a source to a destination on one of your workers."
+              description="A job copies, syncs or moves files, or backs folders up into a repository, on one of your workers."
               action={
                 <Button asChild>
                   <Link to="/jobs/new">Run your first job</Link>

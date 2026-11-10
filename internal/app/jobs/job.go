@@ -33,6 +33,15 @@ type Job struct {
 	// by hand. It never changes, except that deleting the schedule clears
 	// it (the job's history stays).
 	ScheduleID domain.ScheduleID
+	// RepositoryID is the restic repository the job uses (jobkind
+	// Refs.RepositoryID); zero for other kinds. It never changes; the
+	// repository may have been deleted since (soft delete).
+	RepositoryID domain.ResticRepoID
+	// ConcurrencyKeys are set at creation (jobkind Refs.ConcurrencyKeys),
+	// sorted and without duplicates, and never change. A queued job is
+	// started only when no older unfinished job (by CreatedAt, then ID)
+	// shares one of its keys (Repository.ListJobBlockers).
+	ConcurrencyKeys []string
 
 	// Epoch is the worker epoch that accepted the job; empty while queued.
 	// Dispatched and running jobs always have one.
@@ -121,6 +130,12 @@ const (
 	// CodeRemoteUnavailable: a remote of the job was deleted or is no
 	// longer usable by its owner when the job was dispatched.
 	CodeRemoteUnavailable = "remote_unavailable"
+	// CodeRepositoryUnavailable: the job's restic repository was deleted
+	// or is no longer usable by its owner when the job was dispatched.
+	CodeRepositoryUnavailable = "repository_unavailable"
+	// CodeWorkerOutdated: the job's worker lacks a link feature the kind
+	// requires (jobkind Registry.RequiredFeatures).
+	CodeWorkerOutdated = "worker_outdated"
 )
 
 // Outcome is a worker-reported terminal result (Finish).
@@ -149,11 +164,12 @@ type Update struct {
 
 // CreateParams are the inputs of Create. The owner is the actor.
 type CreateParams struct {
-	// ID is a preset job ID; zero mints a new one. Only the scheduler sets
-	// it: it reserves the ID on its run before creating the job, so a
-	// retried launch creates the job once (Create then fails with
-	// ErrAlreadyExists, which the scheduler counts as success). The API
-	// never sets it.
+	// ID is a preset job ID; zero mints a new one. The scheduler sets it
+	// (it reserves the ID on its run before creating the job) and so does
+	// a repository's data deletion (the ID is reserved on the repository),
+	// so a retried launch creates the job once (Create then fails with
+	// ErrAlreadyExists, which they count as success). The API never sets
+	// it.
 	ID domain.JobID
 	// ScheduleID is the schedule launching the job; zero for a job run by
 	// hand. It must exist (ErrNotFound otherwise).
@@ -169,8 +185,17 @@ type CreateParams struct {
 	// each must be a live remote of the actor.
 	RemoteIDs []domain.RemoteID
 	// SearchTerms are the definition's texts a search matches
-	// (jobkind.Refs); the service adds the kind and the remote names.
+	// (jobkind.Refs); the service adds the kind, the remote names and the
+	// repository's name.
 	SearchTerms []string
+	// RepositoryID is the restic repository the definition uses
+	// (jobkind.Refs); zero for none. It must be a live repository of the
+	// actor (RepositoryChecker); its remote is added to RemoteIDs.
+	RepositoryID domain.ResticRepoID
+	// ConcurrencyKeys are the definition's concurrency keys
+	// (jobkind.Refs): at most MaxConcurrencyKeys, each a
+	// ValidConcurrencyKey. The service sorts and deduplicates them.
+	ConcurrencyKeys []string
 }
 
 // ListFilter selects jobs for List. Zero fields do not filter.
@@ -190,6 +215,8 @@ type ListFilter struct {
 	RemoteID domain.RemoteID
 	// ScheduleID keeps only jobs launched by this schedule.
 	ScheduleID domain.ScheduleID
+	// RepositoryID keeps only jobs on this restic repository.
+	RepositoryID domain.ResticRepoID
 	// Kinds keeps only jobs of one of these kinds.
 	Kinds []string
 	// Query keeps only jobs whose SearchText contains it as a plain
@@ -216,6 +243,10 @@ const (
 	MaxQueryLen = 256
 	// MaxKinds bounds ListFilter.Kinds.
 	MaxKinds = 32
+	// MaxConcurrencyKeys bounds a job's concurrency keys; MaxBlockerIDs
+	// bounds one Blockers call.
+	MaxConcurrencyKeys = 8
+	MaxBlockerIDs      = 1000
 )
 
 // Page is one page of List.

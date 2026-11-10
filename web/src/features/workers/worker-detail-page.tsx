@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@connectrpc/connect-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Pencil, Trash2 } from "lucide-react";
+import { FolderSearch, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -10,8 +10,9 @@ import { ErrorState } from "@/components/app/error-state";
 import { KeyValueList } from "@/components/app/key-value-list";
 import { PageHeader } from "@/components/app/page-header";
 import { Panel } from "@/components/app/panel";
+import { PathBrowserDialog } from "@/components/app/path-browser";
 import { RelativeTime } from "@/components/app/relative-time";
-import { StatusBadge } from "@/components/app/status-badge";
+import { StatusBadge, StatusPill } from "@/components/app/status-badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,10 +28,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { JobService, WorkerAdminService, type Worker } from "@/gen/syncr/v1/api_pb";
 import { WorkerMode } from "@/gen/syncr/v1/link_pb";
 import { useSession } from "@/hooks/use-session";
+import { copyText } from "@/lib/clipboard";
 import { errorMessage } from "@/lib/errors";
 import { formatDateTime, tsDate } from "@/lib/format";
 import { invalidateService } from "@/lib/invalidate";
 import { workerModeLabel } from "@/lib/status";
+import { FEATURE_PROBE, hasFeature, isOnline, isOutdated } from "@/lib/workers";
 import { JobsTable } from "@/features/jobs/jobs-table";
 
 import { WorkerLabelsPanel } from "./worker-labels";
@@ -109,6 +112,7 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
   const remove = useMutation(WorkerAdminService.method.removeWorker);
   const [renaming, setRenaming] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
 
   if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
   const w = q.data?.worker;
@@ -129,6 +133,16 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
         meta={
           <>
             <StatusBadge worker={w.status} />
+            {isOutdated(w) ? (
+              <StatusPill
+                meta={{ label: "Outdated: upgrade to use restic", tone: "warning" }}
+                title="This worker's version cannot browse files or work with restic repositories."
+              />
+            ) : (
+              hasFeature(w, FEATURE_PROBE) && (
+                <StatusPill meta={{ label: "Probes: supported", tone: "neutral" }} />
+              )
+            )}
             <span className="text-[13px] text-muted-foreground">
               {workerModeLabel(w.mode)} link, last seen <RelativeTime date={tsDate(w.lastSeen)} />
             </span>
@@ -182,7 +196,42 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
         <Panel
           title="Allowed folders"
           description="Jobs may read and write the worker's own disks only inside these folders."
+          actions={
+            info?.localRoots.length ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!isOnline(w) || !hasFeature(w, FEATURE_PROBE)}
+                title={
+                  !isOnline(w)
+                    ? "The worker is offline."
+                    : !hasFeature(w, FEATURE_PROBE)
+                      ? "This worker's version cannot list files."
+                      : undefined
+                }
+                onClick={() => setBrowsing(true)}
+              >
+                <FolderSearch aria-hidden />
+                Browse files
+              </Button>
+            ) : undefined
+          }
         >
+          <PathBrowserDialog
+            open={browsing}
+            onOpenChange={setBrowsing}
+            source={{ kind: "worker", workerId: w.id }}
+            title={`Files on ${w.name}`}
+            description="Look around the worker's allowed folders. Selecting an entry copies its path."
+            mode="any"
+            onSelect={([path]) => {
+              if (path)
+                void copyText(path).then(
+                  () => toast.success(`Copied ${path}`),
+                  () => undefined,
+                );
+            }}
+          />
           {info?.localRoots.length ? (
             <ul className="flex flex-col gap-1.5">
               {info.localRoots.map((r) => (

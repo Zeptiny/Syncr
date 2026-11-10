@@ -201,6 +201,15 @@ func (s *Store) DeleteRemote(ctx context.Context, id domain.RemoteID, at time.Ti
 		if len(unions) > 0 {
 			return fmt.Errorf("%s: it is a member of union %q: %w", op, unions[0].Name, domain.ErrFailedPrecondition)
 		}
+		// A repository is only created while its remote is live, under a
+		// FOR SHARE lock on the remote (CreateRepository), so the lock
+		// above makes this check final.
+		switch name, err := q.RepositoryUsingRemote(ctx, pgID(id)); {
+		case err == nil:
+			return fmt.Errorf("%s: %w: the remote holds repository %q; delete the repository first", op, domain.ErrFailedPrecondition, name)
+		case !errors.Is(err, pgx.ErrNoRows):
+			return mapErr(op, err)
+		}
 		return mapErr(op, q.SoftDeleteRemote(ctx, db.SoftDeleteRemoteParams{ID: pgID(id), DeletedAt: pgTime(at)}))
 	})
 }

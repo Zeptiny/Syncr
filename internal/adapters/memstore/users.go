@@ -143,6 +143,11 @@ func (s *Store) DeleteUser(_ context.Context, id domain.UserID) error {
 			return fmt.Errorf("user %s owns schedules: %w", id, domain.ErrFailedPrecondition)
 		}
 	}
+	for _, row := range s.repos {
+		if row.repo.OwnerID == id {
+			return fmt.Errorf("user %s owns restic repositories: %w", id, domain.ErrFailedPrecondition)
+		}
+	}
 	for _, c := range s.contacts {
 		if c.OwnerID == id {
 			return fmt.Errorf("user %s owns contacts: %w", id, domain.ErrFailedPrecondition)

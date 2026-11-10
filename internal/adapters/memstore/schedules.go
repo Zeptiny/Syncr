@@ -14,7 +14,7 @@ import (
 )
 
 // This file implements schedules.Repository with the semantics of the
-// Postgres schema (migration 00003): the foreign keys of schedules,
+// Postgres schema (migrations 00003 and 00007): the foreign keys of schedules,
 // schedule_remotes and schedule_contacts, the CHECK constraints, the
 // case-insensitive name index and the one-pending-run index of
 // schedule_runs (migration 00005).
@@ -61,6 +61,11 @@ func (s *Store) checkScheduleLocked(sc *schedules.Schedule) error {
 	for _, id := range sc.RemoteIDs {
 		if _, ok := s.remotes[id]; !ok {
 			return fmt.Errorf("remote %s of schedule %s: %w", id, sc.ID, domain.ErrNotFound)
+		}
+	}
+	if !sc.RepositoryID.IsZero() {
+		if _, ok := s.repos[sc.RepositoryID]; !ok {
+			return fmt.Errorf("repository %s of schedule %s: %w", sc.RepositoryID, sc.ID, domain.ErrNotFound)
 		}
 	}
 	for _, l := range sc.Contacts {
@@ -148,7 +153,8 @@ func (s *Store) ListSchedules(_ context.Context, f schedules.ListFilter) ([]sche
 	for _, sc := range s.schedules {
 		if (f.OwnerID.IsZero() || sc.OwnerID == f.OwnerID) &&
 			(f.RemoteID.IsZero() || slices.Contains(sc.RemoteIDs, f.RemoteID)) &&
-			(f.ContactID.IsZero() || slices.ContainsFunc(sc.Contacts, func(l schedules.ContactLink) bool { return l.ContactID == f.ContactID })) {
+			(f.ContactID.IsZero() || slices.ContainsFunc(sc.Contacts, func(l schedules.ContactLink) bool { return l.ContactID == f.ContactID })) &&
+			(f.RepositoryID.IsZero() || sc.RepositoryID == f.RepositoryID) {
 			out = append(out, cloneSchedule(sc))
 		}
 	}

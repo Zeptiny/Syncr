@@ -20,11 +20,17 @@ describe("mock transport, milestone 4", () => {
 
     const { schedules } = await sched.listSchedules({});
     expect(schedules.map((s) => s.name)).toEqual([
+      "Archive 2019 yearly check",
       "Laptop projects",
+      "Monthly deep check: photos",
       "Nightly photos → B2",
+      "Nightly photos backup",
       "Office docs hourly",
+      "Office documents backup",
       "Offsite mirror",
+      "Old laptop weekly backup",
       "Weekly archive",
+      "Weekly retention: photos",
     ]);
     const office = schedules.find((s) => s.id === fx.ids.officeHourly)!;
     expect(office.lastRun).toMatchObject({ status: ScheduleRunStatus.PENDING, coalesced: 2 });

@@ -1,0 +1,15 @@
+Backup succeeded: Nightly photos backup
+
+Schedule: Nightly photos backup
+Job: Back up /srv/photos → Photos vault
+Worker: nas-01
+Type: Backup
+Status: succeeded
+Snapshot: 1a2b3c4d
+Files: 12 new, 3 changed, 1,204 unmodified
+Data added: 1.2 GiB (840.0 MiB stored)
+Processed: 48.1 GiB in 1,219 files
+Duration: 1m30s
+Finished: 2026-11-04 02:31:07 UTC
+
+Details: https://syncr.example/jobs/0195f0a4-3b7c-7d1e-9f00-000000000001

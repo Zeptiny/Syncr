@@ -16,6 +16,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/jobkind"
 )
 
 // Sizes of the dashboard's lists.
@@ -39,7 +40,11 @@ type dashboardHandler struct {
 	// remotes names the remotes of the recent failures; nil leaves them
 	// without names.
 	remotes RemoteNames
-	errs    errorMapper
+	// kinds and repos title the recent failures and name their restic
+	// repositories, as JobService does; nil leaves both out.
+	kinds *jobkind.Registry
+	repos RepositoryNames
+	errs  errorMapper
 	// now is the clock of the range; nil means time.Now.
 	now func() time.Time
 }
@@ -260,6 +265,6 @@ func (h *dashboardHandler) recentFailures(ctx context.Context, actor domain.Acto
 	if err != nil {
 		return nil, err
 	}
-	conv := &jobHandler{jobs: h.jobs, remotes: h.remotes, schedules: h.schedules, errs: h.errs, log: cmp.Or(h.errs.log, slog.New(slog.DiscardHandler))}
+	conv := &jobHandler{jobs: h.jobs, kinds: h.kinds, remotes: h.remotes, schedules: h.schedules, repos: h.repos, errs: h.errs, log: cmp.Or(h.errs.log, slog.New(slog.DiscardHandler))}
 	return conv.protoJobs(ctx, page.Jobs)
 }

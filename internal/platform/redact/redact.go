@@ -1,13 +1,15 @@
 // Package redact keeps secrets out of logs and other human-readable output.
 //
-// It offers two complementary mechanisms:
+// It offers three complementary mechanisms:
 //
 //   - Secret, a string type that renders as [redacted] wherever it is
 //     formatted, logged or encoded, so a secret stays safe even when logged
 //     under an innocent key;
 //   - ReplaceAttr, a slog.HandlerOptions.ReplaceAttr function that redacts
 //     attributes whose key (or enclosing group) looks secret, as a safety net
-//     for plain strings.
+//     for plain strings;
+//   - Scrub, which removes known secret values from free text (a tool's
+//     error message that may echo a password).
 //
 // Neither mechanism can see inside opaque values: a struct or map logged with
 // slog.Any is encoded by the handler as a whole. Never log values that carry

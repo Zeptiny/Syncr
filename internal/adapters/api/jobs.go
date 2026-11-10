@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
@@ -42,8 +44,14 @@ type jobHandler struct {
 	// schedules names the jobs' schedules (Job.schedule); nil leaves it
 	// unset (schedule_id is still set).
 	schedules ScheduleNames
-	errs      errorMapper
-	log       *slog.Logger
+	// repos names the jobs' restic repositories (Job.repository and the
+	// title); nil leaves the reference without a name.
+	repos RepositoryNames
+	// workers tells RunJob the worker's operating system (the VSS check);
+	// nil skips the check.
+	workers WorkerNames
+	errs    errorMapper
+	log     *slog.Logger
 	// base ends all watch streams when done (server shutdown).
 	base context.Context
 	// watchMax bounds a WatchJob stream; keepalive is the idle time after
@@ -67,9 +75,11 @@ func (h *jobHandler) job(ctx context.Context, j jobs.Job) (*syncrv1.Job, error) 
 	return out[0], nil
 }
 
-// protoJobs converts js with their remote and schedule references (one
-// Names lookup each for all) and, where the job's status calls for them
-// (see pickStats), the live counters (one LatestSamples lookup for all).
+// protoJobs converts js with their remote, repository and schedule
+// references (one Names lookup each for all), the jobs the queued ones wait
+// for (one Blockers lookup) and, where the job's status calls for them (see
+// pickStats), the live counters (one LatestSamples lookup for all). The
+// job kinds add the title and the display details.
 func (h *jobHandler) protoJobs(ctx context.Context, js []jobs.Job) ([]*syncrv1.Job, error) {
 	refs, err := h.remoteRefs(ctx, js)
 	if err != nil {
@@ -78,6 +88,21 @@ func (h *jobHandler) protoJobs(ctx context.Context, js []jobs.Job) ([]*syncrv1.J
 	scheds, err := h.scheduleRefs(ctx, js)
 	if err != nil {
 		return nil, err
+	}
+	repos, err := h.repositoryRefs(ctx, js)
+	if err != nil {
+		return nil, err
+	}
+	waiting, err := h.blockers(ctx, js)
+	if err != nil {
+		return nil, err
+	}
+	names := jobkind.Names{Remotes: make(map[domain.RemoteID]string, len(refs)), Repositories: make(map[domain.ResticRepoID]string, len(repos))}
+	for id, r := range refs {
+		names.Remotes[id] = r.Name
+	}
+	for id, r := range repos {
+		names.Repositories[id] = r.Name
 	}
 	var sampled []domain.JobID
 	for _, j := range js {
@@ -105,6 +130,16 @@ func (h *jobHandler) protoJobs(ctx context.Context, js []jobs.Job) ([]*syncrv1.J
 		}
 		if ref, ok := scheds[j.ScheduleID]; ok && !j.ScheduleID.IsZero() {
 			msg.Schedule = &syncrv1.JobScheduleRef{Id: ref.ID.String(), Name: ref.Name}
+		}
+		if !j.RepositoryID.IsZero() {
+			msg.Repository = repositoryRefToProto(j.RepositoryID, repos[j.RepositoryID])
+		}
+		if blocker, ok := waiting[j.ID]; ok {
+			msg.WaitingForJobId = blocker.String()
+		}
+		if h.kinds != nil && msg.GetDefinition() != nil {
+			msg.Title = h.kinds.Describe(msg.GetDefinition(), names)
+			msg.Details = jobDetailsToProto(h.kinds.Summarize(j.Kind, msg.GetDefinition(), j.Output))
 		}
 		out = append(out, msg)
 	}
@@ -134,6 +169,48 @@ func (h *jobHandler) remoteRefs(ctx context.Context, js []jobs.Job) (map[domain.
 	return refs, nil
 }
 
+// repositoryRefs looks up the restic repositories of js (deleted ones
+// included).
+func (h *jobHandler) repositoryRefs(ctx context.Context, js []jobs.Job) (map[domain.ResticRepoID]restic.Ref, error) {
+	if h.repos == nil {
+		return nil, nil
+	}
+	var ids []domain.ResticRepoID
+	for _, j := range js {
+		if !j.RepositoryID.IsZero() && !slices.Contains(ids, j.RepositoryID) {
+			ids = append(ids, j.RepositoryID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	refs, err := h.repos.Names(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("name the repositories of jobs: %w", err)
+	}
+	return refs, nil
+}
+
+// blockers returns, for the queued jobs of js that hold concurrency keys,
+// the older unfinished job each waits for (Job.waiting_for_job_id).
+func (h *jobHandler) blockers(ctx context.Context, js []jobs.Job) (map[domain.JobID]domain.JobID, error) {
+	var ids []domain.JobID
+	for _, j := range js {
+		if j.Status == domain.JobQueued && len(j.ConcurrencyKeys) > 0 {
+			ids = append(ids, j.ID)
+		}
+	}
+	out := map[domain.JobID]domain.JobID{}
+	for chunk := range slices.Chunk(ids, jobs.MaxBlockerIDs) {
+		got, err := h.jobs.Blockers(ctx, chunk)
+		if err != nil {
+			return nil, fmt.Errorf("find the jobs that queued jobs wait for: %w", err)
+		}
+		maps.Copy(out, got)
+	}
+	return out, nil
+}
+
 // scheduleRefs looks up the schedules of js; a deleted schedule has no
 // reference (its jobs' schedule_id is cleared anyway).
 func (h *jobHandler) scheduleRefs(ctx context.Context, js []jobs.Job) (map[domain.ScheduleID]schedules.Ref, error) {
@@ -154,6 +231,26 @@ func (h *jobHandler) scheduleRefs(ctx context.Context, js []jobs.Job) (map[domai
 		return nil, fmt.Errorf("name the schedules of jobs: %w", err)
 	}
 	return refs, nil
+}
+
+// wrongWorkerOS returns the operating system requirement of def (jobkind
+// Registry.RequiredOS, e.g. Windows VSS) that the chosen worker is known
+// not to meet, with the system it reported; ok is false when there is none.
+// A worker that has not reported a system yet, or cannot be read, passes:
+// this is an early answer from the worker's latest Hello, and the
+// dispatcher checks the worker's current process before it sends the job.
+func wrongWorkerOS(ctx context.Context, kinds *jobkind.Registry, ws WorkerNames, id domain.WorkerID, def *syncrv1.JobDefinition) (req jobkind.OSRequirement, goos string, ok bool) {
+	if ws == nil || id.IsZero() {
+		return jobkind.OSRequirement{}, "", false
+	}
+	if req = kinds.RequiredOS(def); req.OS == "" {
+		return req, "", false
+	}
+	w, err := ws.Get(ctx, id)
+	if err != nil || w.Info.OS == "" || req.Allows(w.Info.OS) {
+		return req, "", false
+	}
+	return req, w.Info.OS, true
 }
 
 // RunJob checks the definition with its job kind and queues the job for
@@ -178,6 +275,14 @@ func (h *jobHandler) RunJob(ctx context.Context, req *connect.Request[syncrv1.Ru
 	if err != nil {
 		return nil, h.fail(ctx, procedure, err)
 	}
+	// Kinds only the controller starts (restic_delete_data) are never
+	// accepted from a caller.
+	if ok, why := h.kinds.UserStartable(kind); !ok {
+		return nil, invalidField("definition."+kind, why)
+	}
+	if req, goos, wrong := wrongWorkerOS(ctx, h.kinds, h.workers, workerID, def); wrong {
+		return nil, invalidField(req.Field, req.FieldMessage()+"; this worker runs "+goos)
+	}
 	encoded, err := jobkind.Marshal(def)
 	if err != nil {
 		return nil, h.fail(ctx, procedure, err)
@@ -185,10 +290,15 @@ func (h *jobHandler) RunJob(ctx context.Context, req *connect.Request[syncrv1.Ru
 	actor, _ := ActorFrom(ctx)
 	j, err := h.jobs.Create(ctx, actor, jobs.CreateParams{
 		WorkerID: workerID, Kind: kind, Definition: encoded, RemoteIDs: refs.RemoteIDs, SearchTerms: refs.SearchTerms,
+		RepositoryID: refs.RepositoryID, ConcurrencyKeys: refs.ConcurrencyKeys,
 	})
 	switch {
 	case errors.Is(err, jobs.ErrUnknownRemote):
 		return nil, connect.NewError(connect.CodeNotFound, errors.New("remote not found"))
+	case errors.Is(err, jobs.ErrUnknownRepository):
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("repository not found"))
+	case errors.Is(err, jobs.ErrRepositoryDeleting):
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("the repository's data is being deleted"))
 	case errors.Is(err, jobs.ErrUnknownWorker):
 		return nil, connect.NewError(connect.CodeNotFound, errors.New("worker not found"))
 	case err != nil:
@@ -245,6 +355,13 @@ func (h *jobHandler) ListJobs(ctx context.Context, req *connect.Request[syncrv1.
 			return nil, invalidField("schedule_id", "is not a valid ID")
 		}
 		f.ScheduleID = id
+	}
+	if m.GetRepositoryId() != "" {
+		id, err := parseRepositoryID("repository_id", m.GetRepositoryId())
+		if err != nil {
+			return nil, err
+		}
+		f.RepositoryID = id
 	}
 	for _, s := range m.GetStatuses() {
 		st, err := jobStatusFromProto(s)

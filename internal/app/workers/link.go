@@ -18,6 +18,8 @@ const (
 	maxTools      = 16
 	maxJobKinds   = 64
 	maxLocalRoots = 256
+	maxFeatures   = 64
+	maxProbeOps   = 64
 )
 
 // ValidEpoch checks a worker-supplied epoch: 1 to 128 printable ASCII
@@ -69,9 +71,12 @@ func (s *Service) AdvanceAckSeq(ctx context.Context, id domain.WorkerID, epoch s
 }
 
 // SetInfo stores what the worker reported in the Hello of epoch, clamped to
-// sane sizes. A Hello of an epoch that is no longer current is ignored.
+// sane sizes, with Info.Epoch = epoch (Worker.InfoCurrent). A Hello of an
+// epoch that is no longer current is ignored.
 func (s *Service) SetInfo(ctx context.Context, id domain.WorkerID, epoch string, info Info) error {
-	err := s.repo.SetWorkerInfo(ctx, id, epoch, sanitizeInfo(info))
+	in := sanitizeInfo(info)
+	in.Epoch = epoch
+	err := s.repo.SetWorkerInfo(ctx, id, epoch, in)
 	if errors.Is(err, domain.ErrConflict) {
 		s.log.DebugContext(ctx, "ignoring hello of a replaced epoch", "worker_id", id.String(), "epoch", epoch)
 		return nil
@@ -107,6 +112,12 @@ func sanitizeInfo(in Info) Info {
 	}
 	for _, r := range in.LocalRoots[:min(len(in.LocalRoots), maxLocalRoots)] {
 		out.LocalRoots = append(out.LocalRoots, clampString(r, maxPathLen))
+	}
+	for _, f := range in.Features[:min(len(in.Features), maxFeatures)] {
+		out.Features = append(out.Features, clampString(f, maxInfoString))
+	}
+	for _, op := range in.ProbeOps[:min(len(in.ProbeOps), maxProbeOps)] {
+		out.ProbeOps = append(out.ProbeOps, clampString(op, maxInfoString))
 	}
 	return out
 }

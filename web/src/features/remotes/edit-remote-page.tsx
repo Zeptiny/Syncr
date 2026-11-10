@@ -11,9 +11,12 @@ import { ErrorState } from "@/components/app/error-state";
 import { PageHeader } from "@/components/app/page-header";
 import { Panel } from "@/components/app/panel";
 import { RelativeTime } from "@/components/app/relative-time";
+import { TestRemoteButton } from "@/components/app/test-remote-button";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { WorkerAdminService } from "@/gen/syncr/v1/api_pb";
 import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
+import { ResticService } from "@/gen/syncr/v1/restic_pb";
 import { ScheduleService } from "@/gen/syncr/v1/schedules_pb";
 import { useBackendMap } from "@/hooks/use-backends";
 import { tsDate } from "@/lib/format";
@@ -29,6 +32,8 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
   const q = useQuery(RemoteService.method.getRemote, { remoteId });
   const remotes = useQuery(RemoteService.method.listRemotes, {});
   const usedBy = useQuery(ScheduleService.method.listSchedules, { remoteId });
+  const repos = useQuery(ResticService.method.listRepositories, { remoteId });
+  const workers = useQuery(WorkerAdminService.method.listWorkers, {});
   const update = useMutation(RemoteService.method.updateRemote);
   const del = useMutation(RemoteService.method.deleteRemote);
   const [deleting, setDeleting] = useState(false);
@@ -46,6 +51,7 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
   }
   const inUse = remote.usedByUnions.length > 0;
   const schedules = usedBy.data?.schedules ?? [];
+  const repositories = repos.data?.repositories ?? [];
   // used_by_unions holds IDs; show the unions' names.
   const unionNames = remote.usedByUnions.map(
     (id) => remotes.data?.remotes.find((r) => r.id === id)?.name ?? id,
@@ -80,6 +86,14 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
             await invalidateService(queryClient, RemoteService);
             toast.success(`Saved ${input.name ?? remote.name}`);
           }}
+          extra={(input) => (
+            <TestRemoteButton
+              remoteId={remote.id}
+              input={input}
+              workers={workers.data?.workers ?? []}
+              needsWorker={!!backend.capabilities?.local}
+            />
+          )}
           footer={
             <Button
               type="button"
@@ -99,11 +113,13 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
         destructive
         title={`Delete ${remote.name}?`}
         description={
-          inUse
-            ? `It is a member of ${unionNames.join(", ")}. Remove it from ${unionNames.length === 1 ? "that union" : "those unions"} first.`
-            : schedules.length
-              ? `${schedules.map((x) => x.name).join(", ")} ${schedules.length === 1 ? "uses" : "use"} it, and will be paused at ${schedules.length === 1 ? "its" : "their"} next run. Its saved credentials are erased; past jobs keep its name.`
-              : "Its saved credentials are erased. Past jobs keep its name; queued jobs that use it will fail."
+          repositories.length
+            ? `${repositories.map((x) => x.name).join(", ")} ${repositories.length === 1 ? "is a repository" : "are repositories"} on this remote. Forget or delete ${repositories.length === 1 ? "it" : "them"} first: a remote that holds repositories cannot be deleted.`
+            : inUse
+              ? `It is a member of ${unionNames.join(", ")}. Remove it from ${unionNames.length === 1 ? "that union" : "those unions"} first.`
+              : schedules.length
+                ? `${schedules.map((x) => x.name).join(", ")} ${schedules.length === 1 ? "uses" : "use"} it, and will be paused at ${schedules.length === 1 ? "its" : "their"} next run. Its saved credentials are erased; past jobs keep its name.`
+                : "Its saved credentials are erased. Past jobs keep its name; queued jobs that use it will fail."
         }
         confirmLabel="Delete remote"
         onConfirm={async () => {

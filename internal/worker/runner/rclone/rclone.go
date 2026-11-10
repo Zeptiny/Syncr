@@ -12,6 +12,10 @@
 //   - paths follow "--", remote paths are "<alias>:<path>" with a validated
 //     alias, and local paths must pass the local path policy.
 //
+// The Prober (probe.go) answers the probe operations list_remote and about
+// with the same validation, environment and isolation: one "rclone lsjson"
+// or "rclone about" process per probe, read as it prints.
+//
 // Progress comes from rclone's JSON log (--use-json-log, stats every
 // second); unknown keys are ignored. Exit codes map to job error codes, and
 // the last error lines are added to failure messages with secret values

@@ -3,7 +3,7 @@
 // jobs.Repository, jobs.SampleRepository, jobs.ActivityRepository,
 // users.Repository, users.SessionRepository, users.APITokenRepository,
 // remotes.Repository, schedules.Repository, contacts.Repository,
-// notifications.Repository).
+// notifications.Repository, restic.Repository).
 // Every store adapter runs it from its tests:
 //
 //	func TestContract(t *testing.T) {
@@ -40,6 +40,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/notifications"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
@@ -60,6 +61,7 @@ type Store interface {
 	schedules.Repository
 	contacts.Repository
 	notifications.Repository
+	restic.Repository
 }
 
 // Run runs the suite; open returns a new, empty store for each subtest.
@@ -139,6 +141,28 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 
 		{"ActivityBuckets", testActivityBuckets},
 		{"ActivityCountUnfinished", testActivityCountUnfinished},
+
+		// Milestone 5: concurrency keys.
+		{"JobConcurrencyKeys", testJobConcurrencyKeys},
+		{"JobBlockers", testJobBlockers},
+		{"JobQueuedIsKeyAware", testJobQueuedIsKeyAware},
+		{"JobWorkersWaitingOnKeys", testJobWorkersWaitingOnKeys},
+
+		// Milestone 5: restic repositories.
+		{"RepoCreateGetList", testRepoCreateGetList},
+		{"RepoUniqueAmongLive", testRepoUniqueAmongLive},
+		{"RepoUpdateVersioned", testRepoUpdateVersioned},
+		{"RepoSoftDelete", testRepoSoftDelete},
+		{"RepoFKParity", testRepoFKParity},
+		{"RepoSnapshotsReplace", testRepoSnapshotsReplace},
+		{"RepoStatsAndChangeMark", testRepoStatsAndChangeMark},
+		{"RemoteDeleteBlockedByRepo", testRemoteDeleteBlockedByRepo},
+		{"RepoMarkDeletingCAS", testRepoMarkDeletingCAS},
+		{"RepoPendingDeletions", testRepoPendingDeletions},
+		{"RepoFinishDeletion", testRepoFinishDeletion},
+		{"RepoListShowsDeleting", testRepoListShowsDeleting},
+		{"RepoNoAliasing", testRepoNoAliasing},
+		{"JobAndScheduleRepository", testJobAndScheduleRepository},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -363,14 +387,25 @@ func testWorkerInfoAndTouch(t *testing.T, s Store) {
 	if _, err := s.AdvanceWorkerEpoch(ctx, w.ID, "", workers.NewEpoch{Epoch: "e"}); err != nil {
 		t.Fatal(err)
 	}
-	info := workers.Info{Version: "v2", OS: "linux", JobKinds: []string{"a", "b"}, MaxConcurrentJobs: 2, ReportedAt: t0()}
+	if got, _ := s.GetWorker(ctx, w.ID); got.InfoCurrent() {
+		t.Errorf("Info = %+v is current before the epoch's Hello", got.Info)
+	}
+	info := workers.Info{Epoch: "e", Version: "v2", OS: "linux", JobKinds: []string{"a", "b"}, MaxConcurrentJobs: 2, ReportedAt: t0()}
 	if err := s.SetWorkerInfo(ctx, w.ID, "e", info); err != nil {
 		t.Fatal(err)
 	}
-	wantErr(t, "SetWorkerInfo(other epoch)", s.SetWorkerInfo(ctx, w.ID, "old", workers.Info{Version: "old"}), domain.ErrConflict)
+	wantErr(t, "SetWorkerInfo(other epoch)", s.SetWorkerInfo(ctx, w.ID, "old", workers.Info{Epoch: "old", Version: "old"}), domain.ErrConflict)
 	got, _ := s.GetWorker(ctx, w.ID)
-	if got.Info.Version != "v2" || !slices.Equal(got.Info.JobKinds, []string{"a", "b"}) || got.Info.MaxConcurrentJobs != 2 {
+	if got.Info.Version != "v2" || !slices.Equal(got.Info.JobKinds, []string{"a", "b"}) || got.Info.MaxConcurrentJobs != 2 ||
+		got.Info.Epoch != "e" || !got.InfoCurrent() {
 		t.Errorf("Info = %+v", got.Info)
+	}
+	// A new epoch keeps the info, which is then the previous process's.
+	if _, err := s.AdvanceWorkerEpoch(ctx, w.ID, "e", workers.NewEpoch{Epoch: "e2", PastEpochs: []string{"e"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetWorker(ctx, w.ID); got.Info.Epoch != "e" || got.Info.Version != "v2" || got.InfoCurrent() {
+		t.Errorf("after a new epoch: Info = %+v, current %v", got.Info, got.InfoCurrent())
 	}
 
 	for _, at := range []time.Time{t0().Add(time.Minute), t0(), t0().Add(2 * time.Minute)} {

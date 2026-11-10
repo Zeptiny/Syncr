@@ -303,6 +303,22 @@ func (q *Queries) RemoteIsLive(ctx context.Context, id pgtype.UUID) (bool, error
 	return live, err
 }
 
+const repositoryUsingRemote = `-- name: RepositoryUsingRemote :one
+SELECT name FROM restic_repositories
+WHERE remote_id = $1::uuid AND deleted_at IS NULL
+ORDER BY lower(name) COLLATE "C", id
+LIMIT 1
+`
+
+// A live restic repository on the remote, which blocks its deletion
+// (DeleteRemote runs it in its transaction, after locking the remote).
+func (q *Queries) RepositoryUsingRemote(ctx context.Context, remoteID pgtype.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, repositoryUsingRemote, remoteID)
+	var name string
+	err := row.Scan(&name)
+	return name, err
+}
+
 const softDeleteRemote = `-- name: SoftDeleteRemote :exec
 UPDATE remotes SET deleted_at = $1::timestamptz, secrets_enc = NULL, version = version + 1
 WHERE id = $2::uuid AND deleted_at IS NULL

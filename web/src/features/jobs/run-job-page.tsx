@@ -17,6 +17,7 @@ import {
   type RunJobRequestSchema,
 } from "@/gen/syncr/v1/api_pb";
 import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
+import { ResticService } from "@/gen/syncr/v1/restic_pb";
 import { useBackendMap } from "@/hooks/use-backends";
 import { errorMessage, fieldViolations } from "@/lib/errors";
 import { invalidateService } from "@/lib/invalidate";
@@ -25,24 +26,27 @@ import {
   definitionError,
   definitionState,
   emptyDefinition,
+  forWorkerOS,
+  isDryRun,
   toDefinition,
   validateDefinition,
   type DefinitionErrors,
-  type DefinitionState,
+  type EditableKind,
+  type JobDefinitionState,
 } from "./definition";
 import { JobDefinitionEditor } from "./job-definition-editor";
 
 /** RunJobState is the run-job form: a worker and the job definition. */
 export interface RunJobState {
   workerId: string;
-  definition: DefinitionState;
+  definition: JobDefinitionState;
 }
 
 type Errors = DefinitionErrors & { worker?: string };
 
-/** emptyRunJob is a blank form. */
-export function emptyRunJob(): RunJobState {
-  return { workerId: "", definition: emptyDefinition() };
+/** emptyRunJob is a blank form of a kind, on a repository if given. */
+export function emptyRunJob(kind?: EditableKind, repositoryId?: string): RunJobState {
+  return { workerId: "", definition: emptyDefinition(kind, repositoryId) };
 }
 
 /** fromJob prefills the form from an earlier job ("Edit and run"). */
@@ -57,9 +61,15 @@ export function validateRunJob(s: RunJobState): Errors {
   return e;
 }
 
-/** toRunJobRequest builds the RunJob request from the form. */
-export function toRunJobRequest(s: RunJobState): MessageInitShape<typeof RunJobRequestSchema> {
-  return { workerId: s.workerId, definition: toDefinition(s.definition) };
+/**
+ * toRunJobRequest builds the RunJob request from the form. os is the
+ * chosen worker's OS: what it cannot do (VSS off Windows) is left out.
+ */
+export function toRunJobRequest(
+  s: RunJobState,
+  os?: string,
+): MessageInitShape<typeof RunJobRequestSchema> {
+  return { workerId: s.workerId, definition: toDefinition(forWorkerOS(s.definition, os)) };
 }
 
 /** serverErrors places API violations on the form's sections. */
@@ -73,15 +83,30 @@ function serverErrors(err: unknown): { errors: Errors; rest: string[] } {
   return { errors, rest };
 }
 
-/** RunJobPage queues a transfer on a worker. */
-export function RunJobPage({ from }: { from?: Job }) {
+/** RunJobPageProps configures RunJobPage. */
+export interface RunJobPageProps {
+  /** from is an earlier job to run again with changes. */
+  from?: Job;
+  /** kind and repository preselect the form (from the URL). */
+  kind?: EditableKind;
+  repository?: string;
+}
+
+/**
+ * RunJobPage queues a job on a worker: a transfer, a backup, a retention
+ * run, a check or a prune.
+ */
+export function RunJobPage({ from, kind, repository }: RunJobPageProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const backends = useBackendMap();
   const workers = useQuery(WorkerAdminService.method.listWorkers, {});
   const remotes = useQuery(RemoteService.method.listRemotes, {});
+  const repositories = useQuery(ResticService.method.listRepositories, {});
   const run = useMutation(JobService.method.runJob);
-  const [s, setS] = useState<RunJobState>(() => (from ? fromJob(from) : emptyRunJob()));
+  const [s, setS] = useState<RunJobState>(() =>
+    from ? fromJob(from) : emptyRunJob(kind, repository),
+  );
   const [errors, setErrors] = useState<Errors>({});
   const [formError, setFormError] = useState<string | undefined>();
   const worker = workers.data?.workers.find((w) => w.id === s.workerId);
@@ -93,9 +118,11 @@ export function RunJobPage({ from }: { from?: Job }) {
     setErrors(local);
     if (Object.keys(local).length) return;
     try {
-      const res = await run.mutateAsync(toRunJobRequest(s));
+      const res = await run.mutateAsync(toRunJobRequest(s, worker?.info?.os));
       await invalidateService(queryClient, JobService);
-      toast.success(s.definition.dryRun ? "Dry run queued" : "Job queued");
+      if (s.definition.kind !== "rclone_transfer")
+        await invalidateService(queryClient, ResticService);
+      toast.success(isDryRun(s.definition) ? "Dry run queued" : "Job queued");
       if (res.job) await navigate({ to: "/jobs/$jobId", params: { jobId: res.job.id } });
     } catch (err) {
       const { errors: server, rest } = serverErrors(err);
@@ -110,7 +137,7 @@ export function RunJobPage({ from }: { from?: Job }) {
       <PageHeader
         back={{ to: "/jobs", label: "Jobs" }}
         title={from ? "Run again with changes" : "Run a job"}
-        description="Choose where the files are, where they go and which worker moves them. The job starts as soon as the worker picks it up."
+        description="Choose what to do and which worker does it. The job starts as soon as the worker picks it up; jobs on the same repository wait for each other."
         actions={
           from && (
             <Button variant="outline" asChild>
@@ -129,7 +156,15 @@ export function RunJobPage({ from }: { from?: Job }) {
           errors={errors}
           remotes={remotes.data?.remotes ?? []}
           backends={backends}
+          repositories={repositories.data?.repositories ?? []}
           worker={worker}
+          onKindChange={(k) =>
+            void navigate({
+              to: "/jobs/new",
+              search: (prev) => ({ ...prev, kind: k === "rclone_transfer" ? undefined : k }),
+              replace: true,
+            })
+          }
           how={
             <FieldShell
               id="run-worker"
@@ -158,7 +193,7 @@ export function RunJobPage({ from }: { from?: Job }) {
             Cancel
           </Button>
           <Button type="submit" disabled={run.isPending}>
-            {run.isPending ? "Queuing…" : s.definition.dryRun ? "Start dry run" : "Run job"}
+            {run.isPending ? "Queuing…" : isDryRun(s.definition) ? "Start dry run" : "Run job"}
           </Button>
         </div>
       </form>

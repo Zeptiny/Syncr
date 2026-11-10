@@ -96,6 +96,8 @@ type Job struct {
 	SearchText        string
 	ScheduleID        pgtype.UUID
 	NotifiedAt        pgtype.Timestamptz
+	RepositoryID      pgtype.UUID
+	ConcurrencyKeys   []string
 }
 
 type JobRemote struct {
@@ -131,6 +133,45 @@ type Remote struct {
 	Version     int64
 }
 
+type ResticRepository struct {
+	ID                      pgtype.UUID
+	OwnerID                 pgtype.UUID
+	Name                    string
+	Description             string
+	RemoteID                pgtype.UUID
+	Path                    string
+	PasswordEnc             []byte
+	ResticID                string
+	FormatVersion           int32
+	SnapshotsRefreshedAt    pgtype.Timestamptz
+	SnapshotsTruncated      bool
+	SnapshotsMarkJobs       int64
+	SnapshotsMarkFinishedAt pgtype.Timestamptz
+	CreatedAt               pgtype.Timestamptz
+	UpdatedAt               pgtype.Timestamptz
+	DeletedAt               pgtype.Timestamptz
+	Version                 int64
+	Deleting                bool
+	DeletionJobID           pgtype.UUID
+	DeletionRequestedAt     pgtype.Timestamptz
+	DeletionError           string
+	DeletionCancelled       bool
+	DataDeletedAt           pgtype.Timestamptz
+}
+
+type ResticSnapshot struct {
+	RepositoryID   pgtype.UUID
+	SnapshotID     string
+	TakenAt        pgtype.Timestamptz
+	Hostname       string
+	Username       string
+	Paths          []string
+	Tags           []string
+	Parent         string
+	ProgramVersion string
+	Summary        []byte
+}
+
 type Schedule struct {
 	ID           pgtype.UUID
 	OwnerID      pgtype.UUID
@@ -153,6 +194,7 @@ type Schedule struct {
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
 	Version      int64
+	RepositoryID pgtype.UUID
 }
 
 type ScheduleContact struct {

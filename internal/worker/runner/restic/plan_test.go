@@ -190,7 +190,9 @@ func TestVSSOnlyOnWindows(t *testing.T) {
 func setGOOS(t *testing.T, te *testEnv, goos string) {
 	t.Helper()
 	for _, r := range te.runners {
-		r.(*kindRunner).e.goos = goos //nolint:errcheck // test-only: New returns *kindRunner
+		if kr, ok := r.(*kindRunner); ok {
+			kr.e.goos = goos // one engine is shared by every runner
+		}
 	}
 }
 

@@ -46,7 +46,9 @@ type Repository interface {
 	// clears SecretsEnc and increments Version; the remote's own members
 	// are kept. ErrNotFound if missing or already deleted;
 	// ErrFailedPrecondition (naming the union) if it is a member of a live
-	// union, checked in the same transaction.
+	// union, or (naming the repository: "the remote holds repository %q;
+	// delete the repository first") if a live restic repository is on it,
+	// both checked in the same transaction.
 	DeleteRemote(ctx context.Context, id domain.RemoteID, at time.Time) error
 
 	// ListUnionsUsing returns the live unions that have member among their

@@ -146,7 +146,7 @@ func (c *controller) start() {
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	specs, err := dispatch.NewSpecs(c.remotes, kinds(c.t))
+	specs, err := dispatch.NewSpecs(c.remotes, nil, kinds(c.t))
 	if err != nil {
 		c.t.Fatal(err)
 	}

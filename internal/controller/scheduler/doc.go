@@ -15,10 +15,15 @@
 //     (overlap skip or queue) it waits; a disabled owner fails it and pauses
 //     the schedule; a definition the job kinds reject fails it and pauses
 //     the schedule; then the target: a removed worker fails it and pauses
-//     the schedule, an offline or never connected one keeps it waiting; a
-//     label without workers fails it (no pause), and otherwise the least
-//     busy online worker with the label that runs the kind is chosen (fewest
-//     unfinished jobs, then name), or the run waits.
+//     the schedule, so does one that reported another operating system
+//     than the definition needs (invalid_definition: Windows VSS on a Linux
+//     worker), an offline or never connected one keeps it waiting; a label
+//     without a worker that may run it fails it (no_worker_with_label, no
+//     pause), and otherwise the least busy online worker with the label
+//     that runs the kind, with its link features and operating system, is
+//     chosen (fewest unfinished jobs, then name), or the run waits. What
+//     the workers reported is their latest Hello, a hint: the dispatcher
+//     checks the chosen worker's current process again.
 //  3. launches in two idempotent phases: MarkLaunching reserves a job ID on
 //     the run (pending -> launching, a compare-and-swap), jobs.Create
 //     creates the job with that ID (ErrAlreadyExists counts as success),
@@ -41,7 +46,9 @@
 // the job; a job runs only for a launched run.
 //
 // Launch errors: a remote that is gone fails the run (remote_unavailable)
-// and pauses the schedule; an invalid definition the same with
+// and pauses the schedule; a restic repository that is gone the same with
+// repository_unavailable, one whose data is being deleted with
+// repository_deleting; an invalid definition the same with
 // invalid_definition; a worker that disappeared puts the run back to
 // pending (the next tick decides again), or fails it (worker_removed, no
 // pause) if a later occurrence opened a pending run meanwhile; any other

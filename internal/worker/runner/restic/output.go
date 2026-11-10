@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	pathpkg "path"
+	"slices"
 	"strings"
 	"time"
 
@@ -35,19 +38,35 @@ type message struct {
 	BytesRestored int64 `json:"bytes_restored"`
 	FilesSkipped  int64 `json:"files_skipped"`
 	BytesSkipped  int64 `json:"bytes_skipped"`
+	FilesDeleted  int64 `json:"files_deleted"`
 
 	// backup summary
 	FilesNew            int64  `json:"files_new"`
 	FilesChanged        int64  `json:"files_changed"`
 	FilesUnmodified     int64  `json:"files_unmodified"`
+	DirsNew             int64  `json:"dirs_new"`
+	DirsChanged         int64  `json:"dirs_changed"`
+	DirsUnmodified      int64  `json:"dirs_unmodified"`
 	DataAdded           int64  `json:"data_added"`
+	DataAddedPacked     int64  `json:"data_added_packed"`
 	TotalFilesProcessed int64  `json:"total_files_processed"`
 	TotalBytesProcessed int64  `json:"total_bytes_processed"`
 	SnapshotID          string `json:"snapshot_id"`
 	DryRun              bool   `json:"dry_run"`
 
 	// check summary
-	NumErrors *int64 `json:"num_errors"`
+	NumErrors          *int64   `json:"num_errors"`
+	SuggestRepairIndex bool     `json:"suggest_repair_index"`
+	SuggestPrune       bool     `json:"suggest_prune"`
+	BrokenPacks        []string `json:"broken_packs"`
+
+	// ls node: {"message_type":"node","name":...,"type":"dir","path":...}
+	Name        string    `json:"name"`
+	Type        string    `json:"type"`
+	Path        string    `json:"path"`
+	Size        int64     `json:"size"`
+	Mtime       time.Time `json:"mtime"`
+	Permissions string    `json:"permissions"`
 
 	// init
 	ID string `json:"id"`
@@ -81,8 +100,16 @@ type session struct {
 	// summaries seen
 	backup      *message
 	restore     *message
+	check       *message
 	checkErrors *int64
 	initialized *message
+
+	// collect keeps standard output as text in raw, up to maxRawBytes.
+	collect      bool
+	raw          []byte
+	rawTruncated bool
+	// ls collects the nodes of a listing.
+	ls *lsFilter
 
 	// error accounting: distinct failing items (restic reports a file once
 	// per phase, e.g. "scan" and "archival").
@@ -103,6 +130,18 @@ type session struct {
 
 func newSession(kind string, emit runner.EmitFunc, sc *scrub.Scrubber) *session {
 	return &session{kind: kind, start: time.Now(), emit: emit, sc: sc, errItems: make(map[string]struct{})}
+}
+
+// stdout handles one line of restic's standard output.
+func (s *session) stdout(l proc.Line) {
+	if s.collect {
+		if len(s.raw)+len(l.Data)+1 > maxRawBytes {
+			s.rawTruncated = true
+		} else {
+			s.raw = append(append(s.raw, l.Data...), '\n')
+		}
+	}
+	s.line(l)
 }
 
 // line handles one line of restic output from either stream.
@@ -147,6 +186,10 @@ func (s *session) message(m *message) {
 		s.exit = m
 	case "initialized":
 		s.initialized = m
+	case "node":
+		if s.ls != nil {
+			s.ls.node(m)
+		}
 	}
 }
 
@@ -169,6 +212,7 @@ func (s *session) summary(m *message) {
 		s.restore = m
 		s.setProgress(m.BytesRestored+m.BytesSkipped, m.TotalBytes, m.FilesRestored+m.FilesSkipped, m.TotalFiles)
 	case kindCheck:
+		s.check = m
 		if m.NumErrors != nil {
 			s.checkErrors = m.NumErrors
 			s.prog.Errors = max(s.prog.Errors, *m.NumErrors)
@@ -281,7 +325,15 @@ func (s *session) output(spec *syncrv1.JobSpec) (*syncrv1.JobOutput, error) {
 	case kindForget:
 		return s.forgetOutput()
 	case kindSnapshots:
-		return s.snapshotsOutput()
+		out, err := s.snapshotsOutput(0)
+		if err != nil {
+			return nil, err
+		}
+		return &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticSnapshots{ResticSnapshots: out}}, nil
+	case kindCheck:
+		return s.checkOutput(spec.GetResticCheck()), nil
+	case kindRestore:
+		return s.restoreOutput(), nil
 	}
 	return nil, nil
 }
@@ -296,12 +348,54 @@ func (s *session) backupOutput(op *syncrv1.ResticBackup) (*syncrv1.JobOutput, er
 		id = "" // a dry run creates no snapshot
 	}
 	return &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticBackup{ResticBackup: &syncrv1.ResticBackupOutput{
-		SnapshotId:      id,
-		DataAddedBytes:  m.DataAdded,
-		FilesNew:        m.FilesNew,
-		FilesChanged:    m.FilesChanged,
-		FilesUnmodified: m.FilesUnmodified,
+		SnapshotId:           id,
+		DataAddedBytes:       m.DataAdded,
+		FilesNew:             m.FilesNew,
+		FilesChanged:         m.FilesChanged,
+		FilesUnmodified:      m.FilesUnmodified,
+		DirsNew:              m.DirsNew,
+		DirsChanged:          m.DirsChanged,
+		DirsUnmodified:       m.DirsUnmodified,
+		DataAddedPackedBytes: m.DataAddedPacked,
+		TotalFilesProcessed:  m.TotalFilesProcessed,
+		TotalBytesProcessed:  m.TotalBytesProcessed,
 	}}}, nil
+}
+
+// checkOutput is the output of a check that ran to completion; nil if
+// restic printed no summary.
+func (s *session) checkOutput(op *syncrv1.ResticCheck) *syncrv1.JobOutput {
+	m := s.check
+	if m == nil {
+		return nil
+	}
+	out := &syncrv1.ResticCheckOutput{
+		SuggestRepairIndex: m.SuggestRepairIndex,
+		SuggestPrune:       m.SuggestPrune,
+		BrokenPacks:        m.BrokenPacks,
+		ReadDataPercent:    op.GetReadDataPercent(),
+	}
+	if m.NumErrors != nil {
+		out.NumErrors = *m.NumErrors
+	}
+	return &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticCheck{ResticCheck: out}}
+}
+
+// restoreOutput is restic's restore summary; nil if it printed none.
+func (s *session) restoreOutput() *syncrv1.JobOutput {
+	m := s.restore
+	if m == nil {
+		return nil
+	}
+	return &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticRestore{ResticRestore: &syncrv1.ResticRestoreOutput{
+		TotalFiles:    m.TotalFiles,
+		FilesRestored: m.FilesRestored,
+		FilesSkipped:  m.FilesSkipped,
+		FilesDeleted:  m.FilesDeleted,
+		TotalBytes:    m.TotalBytes,
+		BytesRestored: m.BytesRestored,
+		BytesSkipped:  m.BytesSkipped,
+	}}}
 }
 
 // forgetGroup is the part of a "restic forget --json" group that is read.
@@ -309,6 +403,8 @@ type forgetGroup struct {
 	Remove []struct {
 		ID string `json:"id"`
 	} `json:"remove"`
+	// Keep is counted only; its elements are whole snapshots.
+	Keep []json.RawMessage `json:"keep"`
 }
 
 func (s *session) forgetOutput() (*syncrv1.JobOutput, error) {
@@ -319,6 +415,7 @@ func (s *session) forgetOutput() (*syncrv1.JobOutput, error) {
 	// A listing cut at the supervisor's line limit still yields the groups
 	// that fit; the snapshots were removed either way.
 	_, err := decodeArray(s.array, func(g forgetGroup) {
+		out.KeptCount += int32(min(len(g.Keep), math.MaxInt32-int(out.KeptCount))) //nolint:gosec // bounded by min
 		for _, r := range g.Remove {
 			if r.ID != "" {
 				out.RemovedSnapshotIds = append(out.RemovedSnapshotIds, r.ID)
@@ -333,14 +430,69 @@ func (s *session) forgetOutput() (*syncrv1.JobOutput, error) {
 
 // snapshotJSON is the part of a "restic snapshots --json" entry that is read.
 type snapshotJSON struct {
-	ID       string    `json:"id"`
-	Time     time.Time `json:"time"`
-	Hostname string    `json:"hostname"`
-	Paths    []string  `json:"paths"`
-	Tags     []string  `json:"tags"`
+	ID             string       `json:"id"`
+	Time           time.Time    `json:"time"`
+	Hostname       string       `json:"hostname"`
+	Username       string       `json:"username"`
+	Parent         string       `json:"parent"`
+	ProgramVersion string       `json:"program_version"`
+	Paths          []string     `json:"paths"`
+	Tags           []string     `json:"tags"`
+	Summary        *summaryJSON `json:"summary"`
 }
 
-func (s *session) snapshotsOutput() (*syncrv1.JobOutput, error) {
+// summaryJSON is the backup summary restic 0.17 and later store in a
+// snapshot.
+type summaryJSON struct {
+	BackupStart         time.Time `json:"backup_start"`
+	BackupEnd           time.Time `json:"backup_end"`
+	FilesNew            int64     `json:"files_new"`
+	FilesChanged        int64     `json:"files_changed"`
+	FilesUnmodified     int64     `json:"files_unmodified"`
+	DirsNew             int64     `json:"dirs_new"`
+	DirsChanged         int64     `json:"dirs_changed"`
+	DirsUnmodified      int64     `json:"dirs_unmodified"`
+	DataBlobs           int64     `json:"data_blobs"`
+	TreeBlobs           int64     `json:"tree_blobs"`
+	DataAdded           int64     `json:"data_added"`
+	DataAddedPacked     int64     `json:"data_added_packed"`
+	TotalFilesProcessed int64     `json:"total_files_processed"`
+	TotalBytesProcessed int64     `json:"total_bytes_processed"`
+}
+
+func (sn snapshotJSON) proto() *syncrv1.ResticSnapshot {
+	out := &syncrv1.ResticSnapshot{
+		Id:             sn.ID,
+		Time:           timestamppb.New(sn.Time),
+		Host:           sn.Hostname,
+		Paths:          sn.Paths,
+		Tags:           sn.Tags,
+		Parent:         sn.Parent,
+		Username:       sn.Username,
+		ProgramVersion: strings.TrimPrefix(sn.ProgramVersion, "restic "),
+	}
+	if m := sn.Summary; m != nil {
+		out.Summary = &syncrv1.ResticSnapshotSummary{
+			FilesNew: m.FilesNew, FilesChanged: m.FilesChanged, FilesUnmodified: m.FilesUnmodified,
+			DirsNew: m.DirsNew, DirsChanged: m.DirsChanged, DirsUnmodified: m.DirsUnmodified,
+			DataBlobs: m.DataBlobs, TreeBlobs: m.TreeBlobs,
+			DataAddedBytes: m.DataAdded, DataAddedPackedBytes: m.DataAddedPacked,
+			TotalFilesProcessed: m.TotalFilesProcessed, TotalBytesProcessed: m.TotalBytesProcessed,
+		}
+		if !m.BackupStart.IsZero() {
+			out.Summary.BackupStart = timestamppb.New(m.BackupStart)
+		}
+		if !m.BackupEnd.IsZero() {
+			out.Summary.BackupEnd = timestamppb.New(m.BackupEnd)
+		}
+	}
+	return out
+}
+
+// snapshotsOutput parses the listing, in restic's order (oldest first). A
+// positive limit keeps only the newest limit snapshots and reports whether
+// older ones were dropped.
+func (s *session) snapshotsOutput(limit int) (*syncrv1.ResticSnapshotsOutput, error) {
 	if s.array == nil {
 		return nil, errors.New("restic snapshots produced no result")
 	}
@@ -349,18 +501,101 @@ func (s *session) snapshotsOutput() (*syncrv1.JobOutput, error) {
 	}
 	out := &syncrv1.ResticSnapshotsOutput{}
 	_, err := decodeArray(s.array, func(sn snapshotJSON) {
-		out.Snapshots = append(out.Snapshots, &syncrv1.ResticSnapshot{
-			Id:    sn.ID,
-			Time:  timestamppb.New(sn.Time),
-			Host:  sn.Hostname,
-			Paths: sn.Paths,
-			Tags:  sn.Tags,
-		})
+		out.Snapshots = append(out.Snapshots, sn.proto())
 	})
 	if err != nil {
 		return nil, fmt.Errorf("parse restic snapshots result: %w", err)
 	}
-	return &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticSnapshots{ResticSnapshots: out}}, nil
+	if limit > 0 && len(out.Snapshots) > limit {
+		slices.SortStableFunc(out.Snapshots, func(a, b *syncrv1.ResticSnapshot) int {
+			return a.GetTime().AsTime().Compare(b.GetTime().AsTime())
+		})
+		out.Snapshots = slices.Clone(out.Snapshots[len(out.Snapshots)-limit:])
+		out.Truncated = true
+	}
+	return out, nil
+}
+
+// maxRawBytes bounds the standard output kept by a collecting command.
+const maxRawBytes = 64 << 10
+
+// lsFilter collects the direct children of dir from a "restic ls" listing,
+// which also lists dir itself.
+type lsFilter struct {
+	dir string // cleaned tree path
+	max int
+	// found reports that dir itself was listed (the root never is).
+	found     bool
+	entries   []*syncrv1.ProbeEntry
+	truncated bool
+}
+
+func (f *lsFilter) node(m *message) {
+	p := pathpkg.Clean(m.Path)
+	if p == f.dir {
+		f.found = true
+		return
+	}
+	if pathpkg.Dir(p) != f.dir {
+		return
+	}
+	if len(f.entries) >= f.max {
+		f.truncated = true
+		return
+	}
+	e := &syncrv1.ProbeEntry{
+		Name: runner.ValidText(m.Name),
+		Path: runner.ValidText(p),
+		Mode: m.Permissions,
+	}
+	switch m.Type {
+	case "file":
+		e.Type = syncrv1.ProbeEntryType_PROBE_ENTRY_TYPE_FILE
+		e.Size = m.Size
+	case "dir":
+		e.Type = syncrv1.ProbeEntryType_PROBE_ENTRY_TYPE_DIR
+	case "symlink":
+		e.Type = syncrv1.ProbeEntryType_PROBE_ENTRY_TYPE_SYMLINK
+	default:
+		e.Type = syncrv1.ProbeEntryType_PROBE_ENTRY_TYPE_OTHER
+	}
+	if !m.Mtime.IsZero() {
+		e.ModTime = timestamppb.New(m.Mtime)
+	}
+	f.entries = append(f.entries, e)
+}
+
+// sorted returns the entries, directories first, then by name.
+func (f *lsFilter) sorted() []*syncrv1.ProbeEntry {
+	slices.SortStableFunc(f.entries, func(a, b *syncrv1.ProbeEntry) int {
+		ad, bd := a.GetType() == syncrv1.ProbeEntryType_PROBE_ENTRY_TYPE_DIR, b.GetType() == syncrv1.ProbeEntryType_PROBE_ENTRY_TYPE_DIR
+		if ad != bd {
+			if ad {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.GetName(), b.GetName())
+	})
+	return f.entries
+}
+
+// repositoryConfig parses the collected output of "restic cat config".
+func (s *session) repositoryConfig() (*syncrv1.ResticRepositoryConfig, error) {
+	var cfg struct {
+		Version int32  `json:"version"`
+		ID      string `json:"id"`
+	}
+	if s.rawTruncated {
+		return nil, errors.New("the repository config is too large")
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(s.raw), &cfg); err != nil {
+		return nil, fmt.Errorf("parse the repository config: %w", err)
+	}
+	if !resticIDPattern.MatchString(cfg.ID) {
+		return nil, errors.New("the repository config has no valid ID")
+	}
+	return &syncrv1.ResticRepositoryConfig{Id: cfg.ID, Version: cfg.Version}, nil
 }
 
 // decodeArray streams the elements of a JSON array into fn, one at a time, so

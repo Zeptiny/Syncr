@@ -3,6 +3,7 @@ package devseed
 import (
 	"time"
 
+	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -114,6 +115,8 @@ type runOutcome struct {
 	err          jobs.JobError
 	exitCode     int
 	warnings     []string
+	// output is the job's result (the restic kinds).
+	output *syncrv1.JobOutput
 }
 
 // succeeded is the outcome of a successful transfer.

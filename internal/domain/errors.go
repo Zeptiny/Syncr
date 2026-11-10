@@ -17,6 +17,7 @@ import "errors"
 //	ErrUnauthenticated                                 Unauthenticated
 //	ErrPermissionDenied                                PermissionDenied
 //	ErrRateLimited                                     ResourceExhausted
+//	ErrUnavailable                                     Unavailable
 //
 // Anything else is an internal error.
 var (
@@ -53,6 +54,12 @@ var (
 	// does not leak.
 	ErrPermissionDenied = errors.New("permission denied")
 	// ErrRateLimited reports a caller that made too many attempts (logins,
-	// setup codes) and must wait.
+	// setup codes, probes) and must wait.
 	ErrRateLimited = errors.New("too many attempts")
+	// ErrUnavailable reports that something the operation needs is
+	// temporarily out of reach: a worker that is offline, busy, restarted
+	// or did not answer in time (probes). Retrying later may succeed. Its
+	// wrapping message is written for people (like ErrFailedPrecondition's)
+	// and reaches the caller.
+	ErrUnavailable = errors.New("unavailable")
 )

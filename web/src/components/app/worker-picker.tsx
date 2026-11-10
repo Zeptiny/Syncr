@@ -11,7 +11,12 @@ import { toneDot } from "@/lib/tones";
 import { sortWorkers } from "@/lib/workers";
 import { cn } from "@/lib/utils";
 
-/** WorkerPicker selects a worker, online ones first. */
+const AUTO = "__auto__";
+
+/**
+ * WorkerPicker selects a worker, online ones first. With autoLabel it also
+ * offers "let Syncr choose", which is the empty value.
+ */
 export function WorkerPicker({
   id,
   workers,
@@ -19,6 +24,9 @@ export function WorkerPicker({
   onChange,
   invalid,
   className,
+  autoLabel,
+  disabled,
+  "aria-label": ariaLabel,
 }: {
   id?: string;
   workers: Worker[];
@@ -26,17 +34,27 @@ export function WorkerPicker({
   onChange: (id: string) => void;
   invalid?: boolean;
   className?: string;
+  /** autoLabel adds a first choice with the empty value, e.g. "Automatic". */
+  autoLabel?: string;
+  disabled?: boolean;
+  "aria-label"?: string;
 }) {
   return (
-    <Select value={value || undefined} onValueChange={onChange}>
+    <Select
+      value={value || (autoLabel ? AUTO : undefined)}
+      onValueChange={(v) => onChange(v === AUTO ? "" : v)}
+      disabled={disabled}
+    >
       <SelectTrigger
         id={id}
+        aria-label={ariaLabel}
         aria-invalid={invalid || undefined}
         className={cn("w-full", className)}
       >
         <SelectValue placeholder="Choose a worker" />
       </SelectTrigger>
       <SelectContent>
+        {autoLabel && <SelectItem value={AUTO}>{autoLabel}</SelectItem>}
         {sortWorkers(workers).map((w) => {
           const meta = workerStatusMeta(w.status);
           return (

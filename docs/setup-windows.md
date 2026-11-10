@@ -57,6 +57,10 @@ window is closed at start (`run --hide-console`), so the log goes to a file.
 Config and data live under `%LocalAppData%\Syncr`. To manage it, open Task
 Scheduler or use `syncr-worker service status --user` and friends.
 
+A worker in user mode cannot create volume snapshots (VSS): restic backups
+with **Use a volume snapshot** need the worker installed as a service. See
+[restic backups](restic.md#windows-volume-snapshots-vss).
+
 ## Passive worker
 
 ```powershell
@@ -98,6 +102,15 @@ limit has passed it is recorded as missed). A worker shows as offline about 45
 seconds after its last contact; a run that comes due before that is still
 queued on it, and fails if the worker does not pick it up within 15
 minutes.
+
+## Backups, browsing and updates
+
+The folders in `local_roots` are also what the web UI can browse on this
+worker, back up with restic and restore into
+([restic backups](restic.md)). A drive is written `C:\`; a snapshot shows
+`C:\Users\ada\Documents` as `/C/Users/ada/Documents`. Browsing, remote
+tests and restic jobs need a current worker: one that shows as **outdated**
+in the web UI is updated by running `setup` again with the new binary.
 
 ## Uninstall
 

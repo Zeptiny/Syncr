@@ -35,7 +35,7 @@ func infoFromHello(h *syncrv1.Hello, at time.Time) workers.Info {
 	info := workers.Info{
 		Version: h.GetWorkerVersion(), OS: h.GetOs(), Arch: h.GetArch(), Hostname: h.GetHostname(),
 		JobKinds: h.GetJobKinds(), MaxConcurrentJobs: int(h.GetMaxConcurrentJobs()),
-		LocalRoots: h.GetLocalRoots(), ReportedAt: at,
+		LocalRoots: h.GetLocalRoots(), Features: h.GetFeatures(), ProbeOps: h.GetProbeOps(), ReportedAt: at,
 	}
 	for _, t := range h.GetTools() {
 		info.Tools = append(info.Tools, workers.Tool{Name: t.GetName(), Version: t.GetVersion()})

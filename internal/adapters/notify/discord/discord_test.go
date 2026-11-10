@@ -117,7 +117,7 @@ func TestRequestShape(t *testing.T) {
 		t.Fatalf("payload = %+v", p)
 	}
 	e := p.Embeds[0]
-	if want := `Job failed: \@everyone \*\*pwn\*\* \<\@&1\> \` + "`x\\`"; e.Title != want {
+	if want := `Transfer failed: \@everyone \*\*pwn\*\* \<\@&1\> \` + "`x\\`"; e.Title != want {
 		t.Errorf("title = %q, want %q", e.Title, want)
 	}
 	if e.URL != msg.URL || e.Color != 0xCF222E || e.Timestamp != "2026-11-04T02:31:07Z" || e.Footer == nil {

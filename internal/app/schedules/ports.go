@@ -165,6 +165,17 @@ type RemoteChecker interface {
 	Usable(ctx context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]string, error)
 }
 
+// RepositoryChecker checks the restic repository of a schedule's
+// definition (*restic.Service; the same port as the jobs service's).
+type RepositoryChecker interface {
+	// UsableRepository returns the name and remote of a live repository of
+	// owner: ErrNotFound if it is missing, deleted or another user's; an
+	// error matching ErrFailedPrecondition while its data is being deleted
+	// (schedules pass a zero jobID, so a deleting repository is never
+	// usable).
+	UsableRepository(ctx context.Context, owner domain.UserID, id domain.ResticRepoID, jobID domain.JobID) (name string, remoteID domain.RemoteID, err error)
+}
+
 // ContactChecker checks the contacts linked to a schedule
 // (*contacts.Service).
 type ContactChecker interface {

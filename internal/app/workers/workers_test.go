@@ -495,7 +495,10 @@ func TestSetInfoClampsAndIgnoresReplacedEpochs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	huge := workers.Info{Version: strings.Repeat("v", 1000), MaxConcurrentJobs: -3}
+	if w.InfoCurrent() {
+		t.Error("the enrollment info is current after the first epoch started")
+	}
+	huge := workers.Info{Epoch: "spoofed", Version: strings.Repeat("v", 1000), MaxConcurrentJobs: -3}
 	for i := range 500 {
 		huge.LocalRoots = append(huge.LocalRoots, fmt.Sprintf("/r%d", i))
 		huge.JobKinds = append(huge.JobKinds, "k")
@@ -507,6 +510,9 @@ func TestSetInfoClampsAndIgnoresReplacedEpochs(t *testing.T) {
 	if len(got.Info.Version) != 256 || len(got.Info.LocalRoots) != 256 || len(got.Info.JobKinds) != 64 || got.Info.MaxConcurrentJobs != 0 {
 		t.Errorf("info not clamped: version %d, roots %d, kinds %d, max %d",
 			len(got.Info.Version), len(got.Info.LocalRoots), len(got.Info.JobKinds), got.Info.MaxConcurrentJobs)
+	}
+	if got.Info.Epoch != "e1" || !got.InfoCurrent() {
+		t.Errorf("info epoch = %q, want the Hello's epoch e1", got.Info.Epoch)
 	}
 	if err := e.svc.SetInfo(ctx, w.ID, "old", workers.Info{Version: "old"}); err != nil {
 		t.Errorf("SetInfo(replaced epoch) = %v, want nil (ignored)", err)

@@ -60,6 +60,9 @@ func (c PassiveConfig) withDefaults() PassiveConfig {
 // round is retried with exponential backoff; it does not count as contact,
 // so the worker turns offline after the workers' OfflineAfter.
 //
+// While it runs, the loop's client also serves the worker's probes (the
+// probe broker calls its Probe directly).
+//
 // Run one loop per passive worker (the transport's supervisor starts and
 // stops them as workers are registered and removed).
 type PassiveLoop struct {
@@ -76,6 +79,9 @@ func (s *Service) NewPassiveLoop(workerID domain.WorkerID, client PassiveClient)
 
 // Run runs rounds until ctx ends, then returns nil.
 func (l *PassiveLoop) Run(ctx context.Context) error {
+	if l.svc.probes != nil {
+		defer l.svc.probes.register(l.workerID, l.client)()
+	}
 	var backoff time.Duration
 	for {
 		woken := l.svc.hub.wait(l.workerID)

@@ -42,6 +42,7 @@ func TestWaitCommands(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			e := newEnv(t)
 			wid := e.enroll("w")
+			e.hello(wid, ep)
 			e.run(wid)
 			r := <-waitAsync(t.Context(), e, wid, ep, 20*time.Second)
 			if r.err != nil || len(r.cmds) != 1 || r.elapsed != 0 {
@@ -54,6 +55,7 @@ func TestWaitCommands(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			e := newEnv(t)
 			wid := e.enroll("w")
+			e.hello(wid, ep)
 			ch := waitAsync(t.Context(), e, wid, ep, 20*time.Second)
 			time.Sleep(5 * time.Second)
 			synctest.Wait()
@@ -71,6 +73,7 @@ func TestWaitCommands(t *testing.T) {
 			wid := e.enroll("w")
 			j := e.run(wid)
 			w := e.newFakeWorker(wid)
+			w.report()
 			w.poll()
 			w.report() // dispatched; no commands left
 			ch := waitAsync(t.Context(), e, wid, w.epoch, 20*time.Second)
@@ -163,6 +166,7 @@ func TestDispatchTimeout(t *testing.T) {
 	e.clock.Advance(10 * time.Minute)
 	jLater := e.run(offline) // queued 10 minutes after the others
 	jDispatched := e.run(online)
+	wOn.report() // its Hello
 	wOn.poll()
 	wOn.acks = wOn.acks[len(wOn.acks)-1:] // only jDispatched is accepted
 	wOn.held = []string{jDispatched.ID.String()}
@@ -252,6 +256,7 @@ func TestRequeueRestartsTheDispatchClock(t *testing.T) {
 	wid := e.enroll("w")
 	j := e.run(wid)
 	w := e.newFakeWorker(wid)
+	w.report() // its Hello
 	w.poll()
 	w.report()
 	e.clock.Advance(20 * time.Minute)

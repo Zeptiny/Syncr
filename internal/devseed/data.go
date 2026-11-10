@@ -51,13 +51,18 @@ func tools() []workers.Tool {
 	return []workers.Tool{{Name: "rclone", Version: "v1.75.2"}, {Name: "restic", Version: "0.19.1"}}
 }
 
+// demoWorkers are the workers. All but old-nas run the current build: they
+// report every link feature and probe operation. old-nas reported none
+// before it was removed.
 func demoWorkers() []demoWorker {
+	features, ops := link.Features(), link.ProbeOps()
 	return []demoWorker{
 		{
 			name: "nas-01", mode: domain.WorkerActive, status: domain.WorkerOnline,
 			info: workers.Info{
 				Version: "2.0.0-dev", OS: "linux", Arch: "amd64", Hostname: "nas-01", Tools: tools(), JobKinds: link.Kinds(),
 				MaxConcurrentJobs: 2, LocalRoots: []string{"/srv", "/mnt"},
+				Features: features, ProbeOps: ops,
 			},
 			labels: []string{"nas", "linux"},
 		},
@@ -66,6 +71,7 @@ func demoWorkers() []demoWorker {
 			info: workers.Info{
 				Version: "2.0.0-dev", OS: "windows", Arch: "amd64", Hostname: "OFFICE-PC", Tools: tools(), JobKinds: link.Kinds(),
 				MaxConcurrentJobs: 1, LocalRoots: []string{`C:\Users\ada\Documents`, `D:\Backups`},
+				Features: features, ProbeOps: ops,
 			},
 			labels: []string{"desktop", "windows"},
 		},
@@ -75,6 +81,7 @@ func demoWorkers() []demoWorker {
 			info: workers.Info{
 				Version: "2.0.0-dev", OS: "linux", Arch: "arm64", Hostname: "backup-host", Tools: tools(), JobKinds: link.Kinds(),
 				MaxConcurrentJobs: 4, LocalRoots: []string{"/backup"},
+				Features: features, ProbeOps: ops,
 			},
 			labels: []string{"offsite"},
 		},
@@ -167,6 +174,13 @@ type demoJob struct {
 	src     loc
 	dst     loc
 	options *syncrv1.RcloneTransferOptions
+	// def, when set, builds the definition instead of the transfer above
+	// (the restic kinds); output is the finished job's result.
+	def    defFunc
+	output *syncrv1.JobOutput
+	// static: a running job that is shown running but is not the one job
+	// Animate moves.
+	static bool
 
 	status  domain.JobStatus
 	created time.Duration

@@ -12,6 +12,8 @@
 //   - The Poll loop long-polls with core.BuildPoll(Options.PollWait), hands
 //     the commands to core.ApplyPollResponse and polls again at once, which
 //     delivers the new command acks.
+//   - The probe loop waits for core.ProbeNotify() and delivers each result
+//     of core.PendingProbeResults() with CompleteProbe.
 //   - The loops never run two Reports or two Polls at once; a Report and a
 //     Poll may overlap.
 //   - On a transport error a loop backs off exponentially (with jitter,
@@ -87,6 +89,16 @@ type Core interface {
 	ApplyPollResponse(ctx context.Context, req *syncrv1.PollRequest, resp *syncrv1.PollResponse) []*syncrv1.CommandAck
 	Notify() <-chan struct{}
 	Drained() bool
+}
+
+// ProbeCore is the part of the link core that runs probes. When the Core
+// also implements it (*linkcore.Core does), the transport delivers the
+// probes' results.
+type ProbeCore interface {
+	Epoch() string
+	ProbeNotify() <-chan struct{}
+	PendingProbeResults() []*syncrv1.ProbeResult
+	ProbeDelivered(probeID string)
 }
 
 // Options configure a Transport. ControllerURL, WorkerID and Secret are
@@ -220,7 +232,76 @@ func (t *Transport) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	wg.Go(func() { t.reportLoop(ctx) })
 	wg.Go(func() { t.pollLoop(ctx) })
+	if pc, ok := t.core.(ProbeCore); ok {
+		wg.Go(func() { t.probeLoop(ctx, pc) })
+	}
 	wg.Wait()
+	return nil
+}
+
+// probeLoop delivers the results of finished probes with CompleteProbe. A
+// result the controller accepted, or refuses for good (it no longer knows
+// the probe, the epoch is stale, the controller has no probes), is dropped;
+// after a transport error the loop backs off and tries again, for as long
+// as the core keeps the result.
+func (t *Transport) probeLoop(ctx context.Context, pc ProbeCore) {
+	var backoff time.Duration
+	for {
+		results := pc.PendingProbeResults()
+		if len(results) == 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-pc.ProbeNotify():
+			}
+			continue
+		}
+		failed := false
+		for _, res := range results {
+			err := t.completeProbe(ctx, &syncrv1.CompleteProbeRequest{Epoch: pc.Epoch(), Result: res})
+			if ctx.Err() != nil {
+				return
+			}
+			if err == nil || probeRefused(err) {
+				if err != nil {
+					t.log.InfoContext(ctx, "the controller did not take a probe result", "probe_id", res.GetProbeId(), "error", err.Error())
+				}
+				pc.ProbeDelivered(res.GetProbeId())
+				continue
+			}
+			failed = true
+			backoff = t.nextBackoff(backoff, err)
+			t.logFailure(ctx, "complete probe", err, backoff)
+			break
+		}
+		if !failed {
+			backoff = 0
+			continue
+		}
+		if !sleep(ctx, jitter(backoff)) {
+			return
+		}
+	}
+}
+
+// probeRefused reports whether the controller answered that it will never
+// take the result, so sending it again is pointless.
+func probeRefused(err error) bool {
+	switch connect.CodeOf(err) {
+	case connect.CodeNotFound, connect.CodeFailedPrecondition, connect.CodeInvalidArgument, connect.CodeUnimplemented:
+		return true
+	}
+	return false
+}
+
+func (t *Transport) completeProbe(ctx context.Context, req *syncrv1.CompleteProbeRequest) error {
+	ctx, cancel := context.WithTimeout(ctx, t.requestTimeout)
+	defer cancel()
+	r := connect.NewRequest(req)
+	r.Header().Set("Authorization", t.auth)
+	if _, err := t.rpc.CompleteProbe(ctx, r); err != nil {
+		return fmt.Errorf("complete probe: %w", err)
+	}
 	return nil
 }
 

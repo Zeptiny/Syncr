@@ -45,6 +45,8 @@ func TestHelloIsFirstEvent(t *testing.T) {
 			WorkerVersion: "v2.0.0-test", OS: "linux", Arch: "arm64", Hostname: "nas",
 			Tools:      []Tool{{Name: "rclone", Version: "v1.75.2"}, {Name: "restic", Version: "0.19.1"}},
 			LocalRoots: []string{"/srv"},
+			Features:   []string{"probe", "restic.v2"},
+			ProbeOps:   []string{"list_local", "restic_ls"},
 		},
 		MaxConcurrentJobs: 3,
 		Outbox:            outbox.Options{Epoch: "epoch-1"},
@@ -61,7 +63,8 @@ func TestHelloIsFirstEvent(t *testing.T) {
 	if h.GetWorkerVersion() != "v2.0.0-test" || h.GetOs() != "linux" || h.GetArch() != "arm64" || h.GetHostname() != "nas" ||
 		h.GetMaxConcurrentJobs() != 3 || !slices.Equal(h.GetJobKinds(), []string{"rclone_transfer"}) ||
 		!slices.Equal(h.GetLocalRoots(), []string{"/srv"}) || len(h.GetTools()) != 2 ||
-		h.GetTools()[1].GetName() != "restic" || h.GetTools()[1].GetVersion() != "0.19.1" {
+		h.GetTools()[1].GetName() != "restic" || h.GetTools()[1].GetVersion() != "0.19.1" ||
+		!slices.Equal(h.GetFeatures(), []string{"probe", "restic.v2"}) || !slices.Equal(h.GetProbeOps(), []string{"list_local", "restic_ls"}) {
 		t.Errorf("hello = %v", h)
 	}
 	if a.Epoch() != "epoch-1" {

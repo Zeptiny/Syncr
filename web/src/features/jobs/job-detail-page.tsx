@@ -48,7 +48,9 @@ import { invalidateService } from "@/lib/invalidate";
 import { errorCodeLabel, isTerminal, kindLabel, transferModeLabel } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
-import { ScheduleChip } from "./jobs-table";
+import { isEditableKind } from "./definition";
+import { JobOutputCards, ResticBand } from "./job-output";
+import { ScheduleChip, WaitingChip } from "./jobs-table";
 import {
   endpoint,
   jobElapsed,
@@ -261,6 +263,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
   }
 
   const terminal = isTerminal(job.status);
+  const transfer = transferOf(job);
   const worker = workers.data?.workers.find((w) => w.id === job.workerId);
   // Progress messages carry fresher counters than the last job message.
   const latest = terminal ? undefined : watch.samples.at(-1);
@@ -297,6 +300,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
               <RelativeTime date={tsDate(job.createdAt)} />
               {foreign && owner && <> by {owner.displayName || owner.username}</>}
             </span>
+            <WaitingChip job={job} />
             {job.scheduleId && <ScheduleChip job={job} />}
             <span
               className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground"
@@ -325,7 +329,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
                 {job.cancelRequested ? "Cancelling…" : "Cancel job"}
               </Button>
             )}
-            {!foreign && !job.scheduleId && (
+            {!foreign && !job.scheduleId && isEditableKind(job.kind) && (
               <Button variant="outline" asChild>
                 <Link to="/schedules/new" search={{ job: job.id }}>
                   <CalendarClock aria-hidden />
@@ -333,7 +337,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
                 </Link>
               </Button>
             )}
-            {!foreign && (
+            {!foreign && isEditableKind(job.kind) && (
               <Button variant="outline" asChild>
                 <Link to="/jobs/new" search={{ from: job.id }}>
                   <Pencil aria-hidden />
@@ -341,7 +345,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
                 </Link>
               </Button>
             )}
-            {terminal && !foreign && (
+            {terminal && !foreign && isEditableKind(job.kind) && (
               <Button
                 onClick={() => void runAgain().catch((e: unknown) => toast.error(String(e)))}
                 disabled={rerun.isPending}
@@ -356,10 +360,11 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
 
       <div className="flex flex-col gap-6">
         <RouteBand job={job} worker={worker?.name} p={p} />
+        <ResticBand job={job} worker={worker?.name} />
 
         <StatGrid>
           <StatCard
-            label="Transferred"
+            label={transfer ? "Transferred" : "Processed"}
             value={formatBytes(p.bytes)}
             sub={p.total > 0 ? `of ${formatBytes(p.total)}` : "Total not known yet"}
           />
@@ -434,6 +439,8 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
           </div>
         )}
 
+        <JobOutputCards job={job} />
+
         <Panel title="Throughput" actions={<Connection watch={watch} terminal={terminal} />}>
           <ProgressChart samples={watch.samples} live={!terminal} />
         </Panel>
@@ -474,8 +481,24 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
                     "Run by hand"
                   ),
                 },
-                { label: "Mode", value: transferModeLabel(transferOf(job)?.mode ?? 0) },
-                { label: "Options", value: optionSummary(job) },
+                ...(transfer
+                  ? [
+                      { label: "Mode", value: transferModeLabel(transfer.mode) },
+                      { label: "Options", value: optionSummary(job) },
+                    ]
+                  : [
+                      { label: "Kind", value: kindLabel(job.kind) },
+                      ...(job.repository
+                        ? [
+                            {
+                              label: "Repository",
+                              value: job.repository.deleted
+                                ? `${job.repository.name} (removed)`
+                                : job.repository.name,
+                            },
+                          ]
+                        : []),
+                    ]),
                 ...(job.stats
                   ? [
                       {

@@ -52,8 +52,10 @@ import (
 const (
 	DefaultReadHeaderTimeout = 10 * time.Second
 	DefaultReadTimeout       = 2 * time.Minute
-	DefaultWriteTimeout      = 2 * time.Minute
-	DefaultIdleTimeout       = 2 * time.Minute
+	// DefaultWriteTimeout covers a Probe answered at the longest probe
+	// timeout, with room to write the response.
+	DefaultWriteTimeout = link.MaxProbeTimeout + 30*time.Second
+	DefaultIdleTimeout  = 2 * time.Minute
 	// DefaultReadMaxBytes caps a request: a CommandRequest carries up to 64
 	// commands with job specs of up to 1 MiB each.
 	DefaultReadMaxBytes = 64 << 20
@@ -263,4 +265,23 @@ func (h *service) Command(ctx context.Context, req *connect.Request[syncrv1.Comm
 
 func (h *service) Pull(_ context.Context, req *connect.Request[syncrv1.PullRequest]) (*connect.Response[syncrv1.PullResponse], error) {
 	return connect.NewResponse(h.core.HandlePull(req.Msg)), nil
+}
+
+// ProbeCore is the part of the link core that runs probes;
+// *linkcore.Core implements it. A Core without it answers Unimplemented.
+type ProbeCore interface {
+	HandleProbe(ctx context.Context, req *syncrv1.ProbeRequest) *syncrv1.ProbeResponse
+}
+
+// Probe runs a probe for as long as the controller's call lasts: ending the
+// call cancels the probe. The probe's own failures are in the response.
+func (h *service) Probe(ctx context.Context, req *connect.Request[syncrv1.ProbeRequest]) (*connect.Response[syncrv1.ProbeResponse], error) {
+	pc, ok := h.core.(ProbeCore)
+	if !ok {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("this worker does not run probes"))
+	}
+	if req.Msg.GetProbe().GetProbeId() == "" || req.Msg.GetProbe().GetSpec() == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("the probe needs an ID and a spec"))
+	}
+	return connect.NewResponse(pc.HandleProbe(ctx, req.Msg)), nil
 }

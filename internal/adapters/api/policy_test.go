@@ -30,6 +30,8 @@ type (
 	stubUsers      struct{ UserAdminService }
 	stubRemotes    struct{ RemoteService }
 	stubSchedules  struct{ ScheduleService }
+	stubRestic     struct{ ResticService }
+	stubProbes     struct{ ProbeService }
 	stubContacts   struct{ ContactService }
 	stubDeliveries struct{ DeliveryService }
 	// stubDashboardJobs adds the dashboard's job use cases to the real
@@ -55,6 +57,7 @@ func withEveryService(t *testing.T) func(*Deps) {
 	return func(d *Deps) {
 		d.Identity, d.Users, d.Remotes, d.Backends = stubIdentity{}, stubUsers{}, stubRemotes{}, reg
 		d.Schedules, d.Contacts, d.Deliveries, d.Channels = stubSchedules{}, stubContacts{}, stubDeliveries{}, channels
+		d.Restic, d.Probes = stubRestic{}, stubProbes{}
 		if _, ok := d.Jobs.(DashboardJobs); !ok {
 			d.Jobs = stubDashboardJobs{JobService: d.Jobs}
 		}
@@ -157,7 +160,7 @@ func TestPolicyLevels(t *testing.T) {
 		case slices.Contains([]string{
 			syncrv1connect.JobServiceName, syncrv1connect.RemoteServiceName, syncrv1connect.BackendServiceName,
 			syncrv1connect.ScheduleServiceName, syncrv1connect.ChannelServiceName, syncrv1connect.ContactServiceName,
-			syncrv1connect.DashboardServiceName,
+			syncrv1connect.DashboardServiceName, syncrv1connect.ResticServiceName, syncrv1connect.ProbeServiceName,
 		}, svc) && level != user:
 			t.Errorf("%s is %v, want user", p, level)
 		}

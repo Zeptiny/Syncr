@@ -1,8 +1,8 @@
 -- name: PendingJobOutcomes :many
--- Terminal jobs that were not notified yet, with their definition and
--- their worker's and schedule's names (the predicate matches the partial
--- index jobs_notify_idx). A NULL row_limit means no limit.
-SELECT j.id, j.owner_id, j.kind, j.definition, j.status, j.worker_id, w.name AS worker_name,
+-- Terminal jobs that were not notified yet, with their definition, output
+-- and their worker's and schedule's names (the predicate matches the
+-- partial index jobs_notify_idx). A NULL row_limit means no limit.
+SELECT j.id, j.owner_id, j.kind, j.definition, j.output, j.status, j.worker_id, w.name AS worker_name,
        j.schedule_id, s.name AS schedule_name, j.error_code, j.error_message,
        j.stat_bytes, j.stat_files, j.stat_errors, j.started_at, j.finished_at
 FROM jobs j

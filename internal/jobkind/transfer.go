@@ -36,10 +36,16 @@ const transferField = "definition.rclone_transfer"
 // worker's filesystem.
 type Transfer struct{}
 
-var _ Kind = Transfer{}
+var (
+	_ Kind    = Transfer{}
+	_ Labeled = Transfer{}
+)
 
 // Name implements Kind.
 func (Transfer) Name() string { return "rclone_transfer" }
+
+// Label implements Labeled.
+func (Transfer) Label() string { return "Transfer" }
 
 // Check implements Kind. It checks the mode, both locations (a valid remote
 // ID and a relative path without ".." segments, or an absolute local path),
@@ -84,8 +90,9 @@ func (Transfer) Check(def *syncrv1.JobDefinition) (Refs, error) {
 }
 
 // Build implements Kind: the transfer with its two locations on the
-// aliased remotes (see the package documentation).
-func (k Transfer) Build(def *syncrv1.JobDefinition, remotes map[domain.RemoteID]Remote) (*syncrv1.JobSpec, error) {
+// aliased remotes (see the package documentation). It uses in.Remotes
+// only.
+func (k Transfer) Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.JobSpec, error) {
 	// Stored definitions are checked again: a spec is never built from a
 	// definition the current rules reject.
 	refs, err := k.Check(def)
@@ -93,7 +100,7 @@ func (k Transfer) Build(def *syncrv1.JobDefinition, remotes map[domain.RemoteID]
 		return nil, err
 	}
 	tr := def.GetRcloneTransfer()
-	rs, err := newSpecRemotes(refs.RemoteIDs, remotes)
+	rs, err := newSpecRemotes(refs.RemoteIDs, in.Remotes)
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", k.Name(), err)
 	}
@@ -119,14 +126,14 @@ func (k Transfer) Build(def *syncrv1.JobDefinition, remotes map[domain.RemoteID]
 // Describe implements Kind: the mode, then the source and destination, e.g.
 // "Copy Photos → B2 offsite" or "Sync /srv/data → B2 offsite". A location
 // on a remote is the remote's name, one on the worker's filesystem its
-// path ("Worker filesystem" without one).
-func (Transfer) Describe(def *syncrv1.JobDefinition, names map[domain.RemoteID]string) string {
+// path ("Worker filesystem" without one). It uses names.Remotes only.
+func (Transfer) Describe(def *syncrv1.JobDefinition, names Names) string {
 	tr := def.GetRcloneTransfer()
 	mode := "Transfer"
 	if m, ok := modeName(tr.GetMode()); ok {
 		mode = strings.ToUpper(m[:1]) + m[1:]
 	}
-	return mode + " " + describeLocation(tr.GetSource(), names) + " → " + describeLocation(tr.GetDestination(), names)
+	return mode + " " + describeLocation(tr.GetSource(), names.Remotes) + " → " + describeLocation(tr.GetDestination(), names.Remotes)
 }
 
 // describeLocation names a definition location for people (see

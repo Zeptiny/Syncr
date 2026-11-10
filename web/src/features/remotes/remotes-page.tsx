@@ -1,16 +1,25 @@
 import { useQuery } from "@connectrpc/connect-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { createColumnHelper } from "@tanstack/react-table";
-import { Cloud, KeyRound, Plus } from "lucide-react";
-import { useMemo } from "react";
+import { Archive, Cloud, FolderSearch, KeyRound, MoreHorizontal, Pencil, Plus } from "lucide-react";
+import { useMemo, useState } from "react";
+import { toast } from "sonner";
 
 import { DataTable } from "@/components/app/data-table";
 import { EmptyState } from "@/components/app/empty-state";
 import { PageHeader } from "@/components/app/page-header";
+import { PathBrowserDialog } from "@/components/app/path-browser";
 import { RelativeTime } from "@/components/app/relative-time";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { RemoteService, type Remote } from "@/gen/syncr/v1/remotes_pb";
 import { useBackendMap } from "@/hooks/use-backends";
+import { copyText } from "@/lib/clipboard";
 import { tsDate } from "@/lib/format";
 
 import { BackendIcon } from "./backend-icon";
@@ -32,6 +41,7 @@ export function RemotesPage() {
   const navigate = useNavigate();
   const backends = useBackendMap();
   const q = useQuery(RemoteService.method.listRemotes, {});
+  const [browsing, setBrowsing] = useState<Remote | undefined>();
   const names = useMemo(
     () => new Map((q.data?.remotes ?? []).map((r) => [r.id, r.name])),
     [q.data],
@@ -93,6 +103,42 @@ export function RemotesPage() {
         cell: (c) => <RelativeTime date={c.getValue()} className="text-[13px]" />,
         meta: { className: "text-right" },
       }),
+      col.display({
+        id: "actions",
+        header: () => <span className="sr-only">Actions</span>,
+        cell: ({ row: { original: r } }) => (
+          <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${r.name}`}>
+                  <MoreHorizontal aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setBrowsing(r)}>
+                  <FolderSearch aria-hidden />
+                  Browse
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link to="/remotes/$remoteId" params={{ remoteId: r.id }}>
+                    <Pencil aria-hidden />
+                    Edit
+                  </Link>
+                </DropdownMenuItem>
+                {backends.get(r.backendType)?.capabilities?.resticRepository && (
+                  <DropdownMenuItem asChild>
+                    <Link to="/repositories/new" search={{ remote: r.id }}>
+                      <Archive aria-hidden />
+                      Add a repository here
+                    </Link>
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
+        ),
+        meta: { className: "w-12 text-right" },
+      }),
     ],
     [backends, names],
   );
@@ -133,6 +179,24 @@ export function RemotesPage() {
           />
         }
       />
+      {browsing && (
+        <PathBrowserDialog
+          open
+          onOpenChange={(o) => !o && setBrowsing(undefined)}
+          source={{ kind: "remote", remoteId: browsing.id }}
+          title={`Browse ${browsing.name}`}
+          rootLabel={browsing.name}
+          description="Look around the remote. Selecting a folder copies its path."
+          mode="dir"
+          onSelect={([path]) => {
+            if (path === undefined) return;
+            void copyText(path).then(
+              () => toast.success(`Copied ${path || "the root path"}`),
+              () => undefined,
+            );
+          }}
+        />
+      )}
     </>
   );
 }

@@ -1,0 +1,11 @@
+Check failed: Check Photos vault (read 10% of the data)
+
+Job: Check Photos vault (read 10% of the data)
+Worker: nas-01
+Type: Check
+Status: failed
+Error: execution_failed: the check found 2 error(s)
+Duration: 1m30s
+Finished: 2026-11-04 02:31:07 UTC
+
+Details: https://syncr.example/jobs/0195f0a4-3b7c-7d1e-9f00-000000000001

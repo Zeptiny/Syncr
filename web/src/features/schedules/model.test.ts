@@ -102,8 +102,9 @@ describe("schedule form model", () => {
     s.missed = { action: "run_late", within: 0 };
     s.overlap = OverlapPolicy.QUEUE;
     s.contacts = [{ contactId: fx.ids.opsDiscord, events: [NotificationEvent.FAILED] }];
-    s.definition.source = { remoteId: fx.ids.photos, path: "2026" };
-    s.definition.destination = { remoteId: fx.ids.b2, path: "photos" };
+    if (s.definition.kind !== "rclone_transfer") throw new Error("not a transfer");
+    s.definition.transfer.source = { remoteId: fx.ids.photos, path: "2026" };
+    s.definition.transfer.destination = { remoteId: fx.ids.b2, path: "photos" };
     expect(validateSchedule(s)).toEqual({});
     const input = toScheduleInput(s);
     expect(input).toMatchObject({
@@ -149,7 +150,10 @@ describe("schedule form model", () => {
     const job = fx.jobs(now)[3];
     const s = scheduleFromJob(job, "UTC");
     expect(s.target).toEqual({ kind: "worker", workerId: job.workerId, label: "" });
-    expect(s.definition.source.path).toBe("archive/2025");
+    expect(s.definition).toMatchObject({
+      kind: "rclone_transfer",
+      transfer: { source: { path: "archive/2025" } },
+    });
   });
 
   it("places server violations on their sections", () => {

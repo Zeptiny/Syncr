@@ -1,7 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
+
+// Whole pages load their route chunks lazily, which can take more than the
+// default second when the test files run in parallel.
+configure({ asyncUtilTimeout: 4000 });
 
 afterEach(() => {
   cleanup();

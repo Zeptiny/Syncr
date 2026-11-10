@@ -1,0 +1,175 @@
+syntax = "proto3";
+
+package syncr.v1;
+
+import "google/protobuf/duration.proto";
+import "syncr/v1/link.proto";
+import "syncr/v1/remotes.proto";
+
+// Browsing worker folders and remotes, and testing remotes, through a worker
+// (Milestone 5). Each call runs a probe on a worker (see link.proto) and
+// waits for its result, up to the controller's probe timeout.
+
+// ProbeService browses workers and remotes and tests remotes, through a
+// worker.
+//
+// Remotes are the caller's (NOT_FOUND otherwise, admins included); any user
+// may browse any worker's local roots (workers are shared). Worker-side
+// failures map to: UNAVAILABLE (the worker is offline, busy or did not
+// answer in time), FAILED_PRECONDITION (an outdated worker, no usable
+// worker, a tool failure), INVALID_ARGUMENT with a "path" field (outside
+// the worker's local_roots, or missing). RESOURCE_EXHAUSTED when the caller
+// is rate limited.
+service ProbeService {
+  // ListWorkerFiles lists a folder on a worker's filesystem; an empty path
+  // lists its local roots.
+  rpc ListWorkerFiles(ListWorkerFilesRequest) returns (ListWorkerFilesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // ListRemoteFiles lists a folder of one of the caller's remotes. A remote
+  // on a worker's local filesystem needs worker_id ("worker_id": "choose
+  // the worker whose disk holds this remote").
+  rpc ListRemoteFiles(ListRemoteFilesRequest) returns (ListRemoteFilesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // TestRemote lists a remote's root (or path) and asks for its usage.
+  // Worker-side failures are reported in the response (ok=false), not as
+  // errors.
+  rpc TestRemote(TestRemoteRequest) returns (TestRemoteResponse) {}
+}
+
+// ProbeWorkerRef names the worker that ran a probe.
+message ProbeWorkerRef {
+  // Worker ID (UUID).
+  string id = 1;
+
+  // The worker's name.
+  string name = 2;
+
+  reserved 3 to 5;
+}
+
+// ListWorkerFilesRequest names the folder to list.
+message ListWorkerFilesRequest {
+  // The worker (required).
+  string worker_id = 1;
+
+  // Absolute local path inside the worker's local_roots; empty lists the
+  // local roots.
+  string path = 2;
+
+  // List directories only.
+  bool dirs_only = 3;
+
+  reserved 4 to 9;
+}
+
+// ListWorkerFilesResponse is the listed folder.
+message ListWorkerFilesResponse {
+  // The listed path (normalized by the worker).
+  string path = 1;
+
+  // Its direct children, directories first, then by name.
+  repeated ProbeEntry entries = 2;
+
+  // Only the first entries are listed.
+  bool truncated = 3;
+
+  // The worker that listed it.
+  ProbeWorkerRef worker = 4;
+
+  reserved 5 to 9;
+}
+
+// ListRemoteFilesRequest names the folder to list.
+message ListRemoteFilesRequest {
+  // One of the caller's remotes (required).
+  string remote_id = 1;
+
+  // Path on the remote, relative to its root; empty is the root.
+  string path = 2;
+
+  // The worker to list through; empty lets the controller choose (required
+  // for a remote on a worker's local filesystem).
+  string worker_id = 3;
+
+  // List directories only.
+  bool dirs_only = 4;
+
+  reserved 5 to 9;
+}
+
+// ListRemoteFilesResponse is the listed folder.
+message ListRemoteFilesResponse {
+  // The listed path, relative to the remote's root.
+  string path = 1;
+
+  // Its direct children, directories first, then by name.
+  repeated ProbeEntry entries = 2;
+
+  // Only the first entries are listed.
+  bool truncated = 3;
+
+  // The worker that listed it.
+  ProbeWorkerRef worker = 4;
+
+  reserved 5 to 9;
+}
+
+// TestRemoteRequest names the remote to test: a stored one, a stored one
+// with unsaved changes, or an unsaved new one.
+message TestRemoteRequest {
+  // One of the caller's remotes; empty with input tests an unsaved new
+  // remote.
+  string remote_id = 1;
+
+  // Unsaved values to test instead of the stored ones. For a stored remote
+  // they are merged as UpdateRemote merges them (empty secrets keep the
+  // stored ones). Validation failures are INVALID_ARGUMENT, as for
+  // CreateRemote and UpdateRemote.
+  RemoteInput input = 2;
+
+  // The worker to test through; empty lets the controller choose (required
+  // for a remote on a worker's local filesystem).
+  string worker_id = 3;
+
+  // Path on the remote to list; empty is the root.
+  string path = 4;
+
+  reserved 5 to 9;
+}
+
+// TestRemoteResponse is the outcome of a remote test.
+message TestRemoteResponse {
+  // The worker could list the remote.
+  bool ok = 1;
+
+  // Why the test failed (ok=false), for display; scrubbed of secrets.
+  string error = 2;
+
+  // The failure's code, a JobErrorCode name in lower case (e.g.
+  // "execution_failed", "timeout"); empty when ok.
+  string error_code = 3;
+
+  // The worker that ran the test; unset if none could.
+  ProbeWorkerRef worker = 4;
+
+  // How long the listing took on the worker.
+  google.protobuf.Duration latency = 5;
+
+  // Entries listed (at most 50).
+  int32 entries = 6;
+
+  // The first entries' names (at most 10).
+  repeated string sample = 7;
+
+  // More entries exist than were listed.
+  bool truncated = 8;
+
+  // The remote's usage, when the worker could ask for it (best effort).
+  ProbeUsage usage = 9;
+
+  reserved 10 to 19;
+}

@@ -639,7 +639,10 @@ type Schedule struct {
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,18,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	// Optimistic concurrency token for UpdateSchedule.
-	Version       int64 `protobuf:"varint,20,opt,name=version,proto3" json:"version,omitempty"`
+	Version int64 `protobuf:"varint,20,opt,name=version,proto3" json:"version,omitempty"`
+	// The restic repository the definition uses, for display; unset for other
+	// kinds.
+	Repository    *JobRepositoryRef `protobuf:"bytes,21,opt,name=repository,proto3" json:"repository,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -814,6 +817,13 @@ func (x *Schedule) GetVersion() int64 {
 	return 0
 }
 
+func (x *Schedule) GetRepository() *JobRepositoryRef {
+	if x != nil {
+		return x.Repository
+	}
+	return nil
+}
+
 // ScheduleRun is one run of a schedule.
 type ScheduleRun struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -835,8 +845,10 @@ type ScheduleRun struct {
 	Status ScheduleRunStatus `protobuf:"varint,7,opt,name=status,proto3,enum=syncr.v1.ScheduleRunStatus" json:"status,omitempty"`
 	// Why it is MISSED, FAILED or CANCELLED, as a code: worker_offline,
 	// overlap, controller_unavailable, remote_unavailable,
-	// invalid_definition, worker_removed, no_worker_with_label,
-	// owner_disabled, disabled.
+	// repository_unavailable (the restic repository was deleted),
+	// repository_deleting (its data is being deleted), invalid_definition,
+	// worker_removed, no_worker_with_label, owner_disabled, disabled.
+	// Schedule.paused_reason uses the same codes.
 	Reason string `protobuf:"bytes,8,opt,name=reason,proto3" json:"reason,omitempty"`
 	// Details of the reason, for display; may be empty.
 	Message string `protobuf:"bytes,9,opt,name=message,proto3" json:"message,omitempty"`
@@ -987,7 +999,10 @@ type ListSchedulesRequest struct {
 	// Only schedules whose definition uses this remote; empty means any.
 	RemoteId string `protobuf:"bytes,1,opt,name=remote_id,json=remoteId,proto3" json:"remote_id,omitempty"`
 	// Only schedules that notify this contact; empty means any.
-	ContactId     string `protobuf:"bytes,2,opt,name=contact_id,json=contactId,proto3" json:"contact_id,omitempty"`
+	ContactId string `protobuf:"bytes,2,opt,name=contact_id,json=contactId,proto3" json:"contact_id,omitempty"`
+	// Only schedules whose definition uses this restic repository; empty
+	// means any.
+	RepositoryId  string `protobuf:"bytes,3,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1032,6 +1047,13 @@ func (x *ListSchedulesRequest) GetRemoteId() string {
 func (x *ListSchedulesRequest) GetContactId() string {
 	if x != nil {
 		return x.ContactId
+	}
+	return ""
+}
+
+func (x *ListSchedulesRequest) GetRepositoryId() string {
+	if x != nil {
+		return x.RepositoryId
 	}
 	return ""
 }
@@ -1917,7 +1939,7 @@ const file_syncr_v1_schedules_proto_rawDesc = "" +
 	"definition\x18\t \x01(\v2\x17.syncr.v1.JobDefinitionR\n" +
 	"definition\x125\n" +
 	"\bcontacts\x18\n" +
-	" \x03(\v2\x19.syncr.v1.ScheduleContactR\bcontacts\"\xdf\x06\n" +
+	" \x03(\v2\x19.syncr.v1.ScheduleContactR\bcontacts\"\x9b\a\n" +
 	"\bSchedule\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bowner_id\x18\x02 \x01(\tR\aownerId\x12\x12\n" +
@@ -1944,7 +1966,10 @@ const file_syncr_v1_schedules_proto_rawDesc = "" +
 	"created_at\x18\x12 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
 	"updated_at\x18\x13 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x18\n" +
-	"\aversion\x18\x14 \x01(\x03R\aversionJ\x04\b\x15\x10(\"\xd8\x04\n" +
+	"\aversion\x18\x14 \x01(\x03R\aversion\x12:\n" +
+	"\n" +
+	"repository\x18\x15 \x01(\v2\x1a.syncr.v1.JobRepositoryRefR\n" +
+	"repositoryJ\x04\b\x16\x10(\"\xd8\x04\n" +
 	"\vScheduleRun\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vschedule_id\x18\x02 \x01(\tR\n" +
@@ -1964,11 +1989,12 @@ const file_syncr_v1_schedules_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAtJ\x04\b\x0f\x10\x1e\"R\n" +
+	"updated_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAtJ\x04\b\x0f\x10\x1e\"w\n" +
 	"\x14ListSchedulesRequest\x12\x1b\n" +
 	"\tremote_id\x18\x01 \x01(\tR\bremoteId\x12\x1d\n" +
 	"\n" +
-	"contact_id\x18\x02 \x01(\tR\tcontactId\"I\n" +
+	"contact_id\x18\x02 \x01(\tR\tcontactId\x12#\n" +
+	"\rrepository_id\x18\x03 \x01(\tR\frepositoryId\"I\n" +
 	"\x15ListSchedulesResponse\x120\n" +
 	"\tschedules\x18\x01 \x03(\v2\x12.syncr.v1.ScheduleR\tschedules\"5\n" +
 	"\x12GetScheduleRequest\x12\x1f\n" +
@@ -2102,7 +2128,8 @@ var file_syncr_v1_schedules_proto_goTypes = []any{
 	(*JobDefinition)(nil),              // 30: syncr.v1.JobDefinition
 	(*JobRemoteRef)(nil),               // 31: syncr.v1.JobRemoteRef
 	(*timestamppb.Timestamp)(nil),      // 32: google.protobuf.Timestamp
-	(JobStatus)(0),                     // 33: syncr.v1.JobStatus
+	(*JobRepositoryRef)(nil),           // 33: syncr.v1.JobRepositoryRef
+	(JobStatus)(0),                     // 34: syncr.v1.JobStatus
 }
 var file_syncr_v1_schedules_proto_depIdxs = []int32{
 	0,  // 0: syncr.v1.MissedRunPolicy.action:type_name -> syncr.v1.MissedRunAction
@@ -2124,47 +2151,48 @@ var file_syncr_v1_schedules_proto_depIdxs = []int32{
 	9,  // 16: syncr.v1.Schedule.last_run:type_name -> syncr.v1.ScheduleRun
 	32, // 17: syncr.v1.Schedule.created_at:type_name -> google.protobuf.Timestamp
 	32, // 18: syncr.v1.Schedule.updated_at:type_name -> google.protobuf.Timestamp
-	3,  // 19: syncr.v1.ScheduleRun.trigger:type_name -> syncr.v1.ScheduleRunTrigger
-	32, // 20: syncr.v1.ScheduleRun.scheduled_for:type_name -> google.protobuf.Timestamp
-	32, // 21: syncr.v1.ScheduleRun.deadline:type_name -> google.protobuf.Timestamp
-	2,  // 22: syncr.v1.ScheduleRun.status:type_name -> syncr.v1.ScheduleRunStatus
-	33, // 23: syncr.v1.ScheduleRun.job_status:type_name -> syncr.v1.JobStatus
-	32, // 24: syncr.v1.ScheduleRun.created_at:type_name -> google.protobuf.Timestamp
-	32, // 25: syncr.v1.ScheduleRun.updated_at:type_name -> google.protobuf.Timestamp
-	8,  // 26: syncr.v1.ListSchedulesResponse.schedules:type_name -> syncr.v1.Schedule
-	8,  // 27: syncr.v1.GetScheduleResponse.schedule:type_name -> syncr.v1.Schedule
-	7,  // 28: syncr.v1.CreateScheduleRequest.input:type_name -> syncr.v1.ScheduleInput
-	8,  // 29: syncr.v1.CreateScheduleResponse.schedule:type_name -> syncr.v1.Schedule
-	7,  // 30: syncr.v1.UpdateScheduleRequest.input:type_name -> syncr.v1.ScheduleInput
-	8,  // 31: syncr.v1.UpdateScheduleResponse.schedule:type_name -> syncr.v1.Schedule
-	8,  // 32: syncr.v1.SetScheduleEnabledResponse.schedule:type_name -> syncr.v1.Schedule
-	9,  // 33: syncr.v1.RunScheduleNowResponse.run:type_name -> syncr.v1.ScheduleRun
-	9,  // 34: syncr.v1.ListScheduleRunsResponse.runs:type_name -> syncr.v1.ScheduleRun
-	32, // 35: syncr.v1.PreviewScheduleRequest.after:type_name -> google.protobuf.Timestamp
-	32, // 36: syncr.v1.PreviewScheduleResponse.next_runs:type_name -> google.protobuf.Timestamp
-	10, // 37: syncr.v1.ScheduleService.ListSchedules:input_type -> syncr.v1.ListSchedulesRequest
-	12, // 38: syncr.v1.ScheduleService.GetSchedule:input_type -> syncr.v1.GetScheduleRequest
-	14, // 39: syncr.v1.ScheduleService.CreateSchedule:input_type -> syncr.v1.CreateScheduleRequest
-	16, // 40: syncr.v1.ScheduleService.UpdateSchedule:input_type -> syncr.v1.UpdateScheduleRequest
-	18, // 41: syncr.v1.ScheduleService.SetScheduleEnabled:input_type -> syncr.v1.SetScheduleEnabledRequest
-	20, // 42: syncr.v1.ScheduleService.DeleteSchedule:input_type -> syncr.v1.DeleteScheduleRequest
-	22, // 43: syncr.v1.ScheduleService.RunScheduleNow:input_type -> syncr.v1.RunScheduleNowRequest
-	24, // 44: syncr.v1.ScheduleService.ListScheduleRuns:input_type -> syncr.v1.ListScheduleRunsRequest
-	26, // 45: syncr.v1.ScheduleService.PreviewSchedule:input_type -> syncr.v1.PreviewScheduleRequest
-	11, // 46: syncr.v1.ScheduleService.ListSchedules:output_type -> syncr.v1.ListSchedulesResponse
-	13, // 47: syncr.v1.ScheduleService.GetSchedule:output_type -> syncr.v1.GetScheduleResponse
-	15, // 48: syncr.v1.ScheduleService.CreateSchedule:output_type -> syncr.v1.CreateScheduleResponse
-	17, // 49: syncr.v1.ScheduleService.UpdateSchedule:output_type -> syncr.v1.UpdateScheduleResponse
-	19, // 50: syncr.v1.ScheduleService.SetScheduleEnabled:output_type -> syncr.v1.SetScheduleEnabledResponse
-	21, // 51: syncr.v1.ScheduleService.DeleteSchedule:output_type -> syncr.v1.DeleteScheduleResponse
-	23, // 52: syncr.v1.ScheduleService.RunScheduleNow:output_type -> syncr.v1.RunScheduleNowResponse
-	25, // 53: syncr.v1.ScheduleService.ListScheduleRuns:output_type -> syncr.v1.ListScheduleRunsResponse
-	27, // 54: syncr.v1.ScheduleService.PreviewSchedule:output_type -> syncr.v1.PreviewScheduleResponse
-	46, // [46:55] is the sub-list for method output_type
-	37, // [37:46] is the sub-list for method input_type
-	37, // [37:37] is the sub-list for extension type_name
-	37, // [37:37] is the sub-list for extension extendee
-	0,  // [0:37] is the sub-list for field type_name
+	33, // 19: syncr.v1.Schedule.repository:type_name -> syncr.v1.JobRepositoryRef
+	3,  // 20: syncr.v1.ScheduleRun.trigger:type_name -> syncr.v1.ScheduleRunTrigger
+	32, // 21: syncr.v1.ScheduleRun.scheduled_for:type_name -> google.protobuf.Timestamp
+	32, // 22: syncr.v1.ScheduleRun.deadline:type_name -> google.protobuf.Timestamp
+	2,  // 23: syncr.v1.ScheduleRun.status:type_name -> syncr.v1.ScheduleRunStatus
+	34, // 24: syncr.v1.ScheduleRun.job_status:type_name -> syncr.v1.JobStatus
+	32, // 25: syncr.v1.ScheduleRun.created_at:type_name -> google.protobuf.Timestamp
+	32, // 26: syncr.v1.ScheduleRun.updated_at:type_name -> google.protobuf.Timestamp
+	8,  // 27: syncr.v1.ListSchedulesResponse.schedules:type_name -> syncr.v1.Schedule
+	8,  // 28: syncr.v1.GetScheduleResponse.schedule:type_name -> syncr.v1.Schedule
+	7,  // 29: syncr.v1.CreateScheduleRequest.input:type_name -> syncr.v1.ScheduleInput
+	8,  // 30: syncr.v1.CreateScheduleResponse.schedule:type_name -> syncr.v1.Schedule
+	7,  // 31: syncr.v1.UpdateScheduleRequest.input:type_name -> syncr.v1.ScheduleInput
+	8,  // 32: syncr.v1.UpdateScheduleResponse.schedule:type_name -> syncr.v1.Schedule
+	8,  // 33: syncr.v1.SetScheduleEnabledResponse.schedule:type_name -> syncr.v1.Schedule
+	9,  // 34: syncr.v1.RunScheduleNowResponse.run:type_name -> syncr.v1.ScheduleRun
+	9,  // 35: syncr.v1.ListScheduleRunsResponse.runs:type_name -> syncr.v1.ScheduleRun
+	32, // 36: syncr.v1.PreviewScheduleRequest.after:type_name -> google.protobuf.Timestamp
+	32, // 37: syncr.v1.PreviewScheduleResponse.next_runs:type_name -> google.protobuf.Timestamp
+	10, // 38: syncr.v1.ScheduleService.ListSchedules:input_type -> syncr.v1.ListSchedulesRequest
+	12, // 39: syncr.v1.ScheduleService.GetSchedule:input_type -> syncr.v1.GetScheduleRequest
+	14, // 40: syncr.v1.ScheduleService.CreateSchedule:input_type -> syncr.v1.CreateScheduleRequest
+	16, // 41: syncr.v1.ScheduleService.UpdateSchedule:input_type -> syncr.v1.UpdateScheduleRequest
+	18, // 42: syncr.v1.ScheduleService.SetScheduleEnabled:input_type -> syncr.v1.SetScheduleEnabledRequest
+	20, // 43: syncr.v1.ScheduleService.DeleteSchedule:input_type -> syncr.v1.DeleteScheduleRequest
+	22, // 44: syncr.v1.ScheduleService.RunScheduleNow:input_type -> syncr.v1.RunScheduleNowRequest
+	24, // 45: syncr.v1.ScheduleService.ListScheduleRuns:input_type -> syncr.v1.ListScheduleRunsRequest
+	26, // 46: syncr.v1.ScheduleService.PreviewSchedule:input_type -> syncr.v1.PreviewScheduleRequest
+	11, // 47: syncr.v1.ScheduleService.ListSchedules:output_type -> syncr.v1.ListSchedulesResponse
+	13, // 48: syncr.v1.ScheduleService.GetSchedule:output_type -> syncr.v1.GetScheduleResponse
+	15, // 49: syncr.v1.ScheduleService.CreateSchedule:output_type -> syncr.v1.CreateScheduleResponse
+	17, // 50: syncr.v1.ScheduleService.UpdateSchedule:output_type -> syncr.v1.UpdateScheduleResponse
+	19, // 51: syncr.v1.ScheduleService.SetScheduleEnabled:output_type -> syncr.v1.SetScheduleEnabledResponse
+	21, // 52: syncr.v1.ScheduleService.DeleteSchedule:output_type -> syncr.v1.DeleteScheduleResponse
+	23, // 53: syncr.v1.ScheduleService.RunScheduleNow:output_type -> syncr.v1.RunScheduleNowResponse
+	25, // 54: syncr.v1.ScheduleService.ListScheduleRuns:output_type -> syncr.v1.ListScheduleRunsResponse
+	27, // 55: syncr.v1.ScheduleService.PreviewSchedule:output_type -> syncr.v1.PreviewScheduleResponse
+	47, // [47:56] is the sub-list for method output_type
+	38, // [38:47] is the sub-list for method input_type
+	38, // [38:38] is the sub-list for extension type_name
+	38, // [38:38] is the sub-list for extension extendee
+	0,  // [0:38] is the sub-list for field type_name
 }
 
 func init() { file_syncr_v1_schedules_proto_init() }

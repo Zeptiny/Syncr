@@ -100,11 +100,42 @@ export function transferModeLabel(mode: RcloneTransferMode): string {
   return transferModes.find((m) => m.mode === mode)?.label ?? "Transfer";
 }
 
+/**
+ * jobKinds are the kinds the jobs list can filter by. Restores and data
+ * deletions are listed here, though no form can start them.
+ */
+export const jobKinds: string[] = [
+  "rclone_transfer",
+  "restic_backup",
+  "restic_forget",
+  "restic_check",
+  "restic_prune",
+  "restic_restore",
+  "restic_delete_data",
+];
+
+/** isResticKind reports whether a job kind works on a restic repository. */
+export function isResticKind(kind: string): boolean {
+  return kind.startsWith("restic_");
+}
+
 /** kindLabel names a job kind. */
 export function kindLabel(kind: string): string {
   switch (kind) {
     case "rclone_transfer":
       return "Transfer";
+    case "restic_backup":
+      return "Backup";
+    case "restic_forget":
+      return "Retention";
+    case "restic_prune":
+      return "Prune";
+    case "restic_check":
+      return "Check";
+    case "restic_restore":
+      return "Restore";
+    case "restic_delete_data":
+      return "Delete data";
     default:
       return kind.replaceAll("_", " ");
   }
@@ -130,6 +161,12 @@ const errorCodes: Partial<Record<JobErrorCode, string>> = {
   [JobErrorCode.WORKER_LOST]: "Worker lost the job",
   [JobErrorCode.WORKER_REMOVED]: "Worker removed",
   [JobErrorCode.REMOTE_UNAVAILABLE]: "Remote unavailable",
+  [JobErrorCode.ALREADY_EXISTS]: "Already exists",
+  [JobErrorCode.BUSY]: "Worker busy",
+  [JobErrorCode.TIMEOUT]: "Timed out",
+  [JobErrorCode.REPOSITORY_MISMATCH]: "Another repository is there",
+  [JobErrorCode.REPOSITORY_UNAVAILABLE]: "Repository unavailable",
+  [JobErrorCode.WORKER_OUTDATED]: "Worker outdated",
 };
 
 /** errorCodeLabel names a job error code. */
@@ -232,6 +269,8 @@ const runReasons: Record<string, string> = {
   no_worker_with_label: "No worker has the label",
   owner_disabled: "The owner's account is disabled",
   disabled: "The schedule was paused",
+  repository_unavailable: "Its repository is gone",
+  repository_deleting: "Its repository's data is being deleted",
 };
 
 /** runReasonLabel explains a schedule run's reason code. */
@@ -251,6 +290,10 @@ export function pausedReasonLabel(reason: string): string {
       return "Its job is no longer valid. Edit it, then resume it.";
     case "owner_disabled":
       return "Its owner's account was disabled.";
+    case "repository_deleting":
+      return "The data of its repository is being deleted, or a deletion was started. Resume it only if the repository is kept.";
+    case "repository_unavailable":
+      return "Its repository was removed. Choose another repository, then resume it.";
     default:
       return reason ? runReasonLabel(reason) + "." : "";
   }

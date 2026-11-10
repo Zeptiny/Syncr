@@ -349,6 +349,8 @@ linters:
             - google.golang.org/protobuf
             - github.com/Zeptiny/Syncr/internal/domain
             - github.com/Zeptiny/Syncr/internal/backend$
+            # Link feature names the kinds require of a worker.
+            - github.com/Zeptiny/Syncr/internal/link$
             - github.com/Zeptiny/Syncr/internal/jobkind
 
         # The web UI's Go package only embeds the built SPA.
@@ -433,8 +435,23 @@ linters:
             - $gostd
             - github.com/Zeptiny/Syncr/gen
             - google.golang.org/protobuf
+            - github.com/Zeptiny/Syncr/internal/link$
             - github.com/Zeptiny/Syncr/internal/worker/agent
             - github.com/Zeptiny/Syncr/internal/worker/outbox
+
+        # The probe executor dispatches to the probers behind interfaces: it
+        # knows the wire types, the local path policy and the runner
+        # contract's error codes, never a concrete runner or a process.
+        worker-probe:
+          list-mode: strict
+          files: ["**/internal/worker/probe/**", "!$test"]
+          allow:
+            - $gostd
+            - github.com/Zeptiny/Syncr/gen
+            - google.golang.org/protobuf
+            - github.com/Zeptiny/Syncr/internal/link$
+            - github.com/Zeptiny/Syncr/internal/worker/localfs
+            - github.com/Zeptiny/Syncr/internal/worker/runner$
 
         # The worker transports move linkcore envelopes over HTTP; they know
         # nothing of runners, the agent's internals or the controller.

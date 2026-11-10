@@ -86,7 +86,7 @@ func TestTransferDescribe(t *testing.T) {
 			"Transfer Photos → B2 offsite"},
 	}
 	for _, tt := range tests {
-		if got := (jobkind.Transfer{}).Describe(tt.def, names); got != tt.want {
+		if got := (jobkind.Transfer{}).Describe(tt.def, jobkind.Names{Remotes: names}); got != tt.want {
 			t.Errorf("%s: Describe = %q, want %q", tt.name, got, tt.want)
 		}
 	}
@@ -196,7 +196,7 @@ func TestTransferCheckRejects(t *testing.T) {
 			if !errors.Is(err, domain.ErrInvalidArgument) || !slices.Equal(fields(err), tt.want) {
 				t.Errorf("Check = %v, want fields %q", err, tt.want)
 			}
-			if _, err := (jobkind.Transfer{}).Build(tt.def, nil); !errors.Is(err, domain.ErrInvalidArgument) {
+			if _, err := (jobkind.Transfer{}).Build(tt.def, jobkind.Resolved{}); !errors.Is(err, domain.ErrInvalidArgument) {
 				t.Errorf("Build = %v, want the Check error", err)
 			}
 		})
@@ -294,14 +294,14 @@ func TestTransferBuild(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := jobkind.Transfer{}.Build(tt.def, all)
+			got, err := jobkind.Transfer{}.Build(tt.def, jobkind.Resolved{Remotes: all})
 			if err != nil {
 				t.Fatalf("Build = %v", err)
 			}
 			if !proto.Equal(got, tt.want) {
 				t.Errorf("Build =\n%v\nwant\n%v", got, tt.want)
 			}
-			again, err := jobkind.Transfer{}.Build(tt.def, all)
+			again, err := jobkind.Transfer{}.Build(tt.def, jobkind.Resolved{Remotes: all})
 			if err != nil || !proto.Equal(again, got) {
 				t.Errorf("Build is not deterministic: %v", err)
 			}
@@ -315,7 +315,7 @@ func TestTransferBuildDoesNotAlias(t *testing.T) {
 	r := sftpRemote(s3, "")
 	opts := &syncrv1.RcloneTransferOptions{Filters: []*syncrv1.FilterRule{{Action: syncrv1.FilterAction_FILTER_ACTION_EXCLUDE, Pattern: "x"}}}
 	d := def(loc(s3, "a"), loc(domain.RemoteID{}, "/b"), withOptions(opts))
-	got, err := jobkind.Transfer{}.Build(d, remoteMap(r))
+	got, err := jobkind.Transfer{}.Build(d, jobkind.Resolved{Remotes: remoteMap(r)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestTransferBuildRejects(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := jobkind.Transfer{}.Build(tt.def, tt.remotes)
+			_, err := jobkind.Transfer{}.Build(tt.def, jobkind.Resolved{Remotes: tt.remotes})
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("Build = %v, want %v", err, tt.want)
 			}

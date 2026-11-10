@@ -16,8 +16,8 @@ import (
 // logged and reported as a bare Internal error so that internals (SQL
 // errors, file paths, decrypted values) never reach clients.
 //
-// The messages of InvalidArgument and FailedPrecondition errors reach the
-// caller: the use cases write them for people ("name is required", "the
+// The messages of InvalidArgument, FailedPrecondition and Unavailable
+// errors reach the caller: the use cases write them for people ("name is required", "the
 // remote is a member of union \"Pool\"") and never put secrets or internals
 // in them. A *domain.ValidationError also travels as a ValidationError
 // detail, so forms can show each message next to its field. Other codes
@@ -54,6 +54,8 @@ func (m errorMapper) toConnect(ctx context.Context, procedure, what string, err 
 		return connect.NewError(connect.CodeAlreadyExists, errors.New(what+" already exists"))
 	case errors.Is(err, domain.ErrFailedPrecondition), errors.Is(err, domain.ErrInvalidTransition):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
+	case errors.Is(err, domain.ErrUnavailable):
+		return connect.NewError(connect.CodeUnavailable, err)
 	case errors.Is(err, domain.ErrConflict):
 		return connect.NewError(connect.CodeAborted, errors.New(what+" was modified concurrently; retry"))
 	case errors.Is(err, domain.ErrUnauthenticated):

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,84 @@ type itest struct {
 	root    string // the local root; test data lives below it
 	scratch string
 	runner  *Runner
+	// cfg is the runner's Config, for a Prober on the same tools.
+	cfg Config
+}
+
+// prober returns a Prober with the test's configuration.
+func (it *itest) prober(t *testing.T) *Prober {
+	t.Helper()
+	p, err := NewProber(it.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// probeRemote checks the probe operations on a remote that holds the tree
+// of roundTrip at path: a listing of path (directories first), a bounded
+// listing, a missing folder, and the usage.
+func probeRemote(t *testing.T, it *itest, def *syncrv1.RemoteDefinition, path, missing string, wantUsage bool) {
+	t.Helper()
+	const id = "0195f0a4-3b7c-7d1e-9f00-0000000000dd"
+	p := it.prober(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	remotes := []*syncrv1.RemoteDefinition{def}
+	loc := &syncrv1.Location{Remote: def.GetAlias(), Path: path}
+
+	l, err := p.List(ctx, id, remotes, &syncrv1.ProbeListRemote{Location: loc})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var got []string
+	for _, e := range l.GetEntries() {
+		got = append(got, e.GetType().String()[len("PROBE_ENTRY_TYPE_"):]+" "+e.GetPath())
+	}
+	if want := []string{"DIR " + path + "/dir", "FILE " + path + "/a.txt"}; !slices.Equal(got, want) || l.GetTruncated() {
+		t.Errorf("listing = %v, want %v", got, want)
+	}
+	if f := l.GetEntries()[1]; f.GetSize() != 100 || f.GetModTime() == nil {
+		t.Errorf("file entry = %v", f)
+	}
+	sub, err := p.List(ctx, id, remotes, &syncrv1.ProbeListRemote{Location: &syncrv1.Location{Remote: def.GetAlias(), Path: path + "/dir"}, MaxEntries: 1})
+	if err != nil || len(sub.GetEntries()) != 1 || !sub.GetTruncated() {
+		t.Errorf("bounded listing = %v, %v; want 1 of 2 entries, truncated", sub, err)
+	}
+	dirs, err := p.List(ctx, id, remotes, &syncrv1.ProbeListRemote{Location: loc, DirsOnly: true})
+	if err != nil || len(dirs.GetEntries()) != 1 || dirs.GetEntries()[0].GetName() != "dir" {
+		t.Errorf("dirs only = %v, %v", dirs, err)
+	}
+	_, err = p.List(ctx, id, remotes, &syncrv1.ProbeListRemote{Location: &syncrv1.Location{Remote: def.GetAlias(), Path: missing}})
+	if err == nil || runner.CodeOf(err) != syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND {
+		t.Errorf("missing folder %s: %v (code %v), want NOT_FOUND", missing, err, runner.CodeOf(err))
+	}
+
+	u, err := p.About(ctx, id, remotes, &syncrv1.ProbeAbout{Location: loc})
+	if err != nil {
+		t.Fatalf("about: %v", err)
+	}
+	if wantUsage == u.GetUnsupported() || (wantUsage && u.Total == nil && u.Used == nil && u.Free == nil) {
+		t.Errorf("usage = %v, want usage reported: %v", u, wantUsage)
+	}
+
+	// A wrong secret fails without leaking it.
+	bad := cloneDef(def)
+	for k := range bad.Secrets {
+		bad.Secrets[k] = "wrong-" + k + "-Secret-Value"
+	}
+	_, err = p.List(ctx, id, []*syncrv1.RemoteDefinition{bad}, &syncrv1.ProbeListRemote{Location: loc})
+	if err == nil {
+		t.Fatal("listing with wrong credentials succeeded")
+	}
+	for _, v := range bad.Secrets {
+		if strings.Contains(err.Error(), v) {
+			t.Errorf("error leaks a secret: %v", err)
+		}
+	}
+	if left, _ := os.ReadDir(it.scratch); len(left) != 0 {
+		t.Errorf("scratch entries left by the probes: %v", left)
+	}
 }
 
 func newITest(t *testing.T) *itest {
@@ -61,13 +140,14 @@ func newITest(t *testing.T) *itest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	it.runner, err = New(Config{
+	it.cfg = Config{
 		Binary:     bin,
 		Supervisor: proc.New(proc.Options{GracePeriod: 10 * time.Second}),
 		Env:        rcloneenv.NewBuilder(policy),
 		Paths:      policy,
 		ScratchDir: it.scratch,
-	})
+	}
+	it.runner, err = New(it.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,12 +579,21 @@ func TestIntegrationMinIO(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	roundTrip(t, it, &syncrv1.RemoteDefinition{
+	def := &syncrv1.RemoteDefinition{
 		Alias:       "minio",
 		BackendType: "s3",
 		Options:     map[string]string{"provider": "Minio", "endpoint": endpoint, "region": "us-east-1", "force_path_style": "true"},
 		Secrets:     map[string]string{"access_key_id": user, "secret_access_key": secret},
-	}, "syncr-it/prefix")
+	}
+	roundTrip(t, it, def, "syncr-it/prefix")
+	// S3 cannot report usage, and only a bucket can be missing: a prefix
+	// without objects is an empty folder.
+	probeRemote(t, it, def, "syncr-it/prefix", "syncr-it-no-such-bucket/x", false)
+	empty, err := it.prober(t).List(t.Context(), "0195f0a4-3b7c-7d1e-9f00-0000000000de", []*syncrv1.RemoteDefinition{def},
+		&syncrv1.ProbeListRemote{Location: &syncrv1.Location{Remote: "minio", Path: "syncr-it/no-such-prefix"}})
+	if err != nil || len(empty.GetEntries()) != 0 {
+		t.Errorf("a prefix without objects = %v, %v; want an empty listing", empty, err)
+	}
 }
 
 func TestIntegrationSFTP(t *testing.T) {
@@ -529,7 +618,7 @@ func TestIntegrationSFTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	roundTrip(t, it, &syncrv1.RemoteDefinition{
+	def := &syncrv1.RemoteDefinition{
 		Alias:       "box",
 		BackendType: "sftp",
 		// shell_type none: the chrooted server has no shell for hash
@@ -537,5 +626,7 @@ func TestIntegrationSFTP(t *testing.T) {
 		Options:     map[string]string{"host": host, "port": port.Port(), "user": user, "shell_type": "none"},
 		Secrets:     map[string]string{"pass": pass},
 		ObscureKeys: []string{"pass"},
-	}, "upload/syncr-it")
+	}
+	roundTrip(t, it, def, "upload/syncr-it")
+	probeRemote(t, it, def, "upload/syncr-it", "upload/syncr-it/nope", true)
 }

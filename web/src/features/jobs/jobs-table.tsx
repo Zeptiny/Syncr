@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { createColumnHelper } from "@tanstack/react-table";
-import { ArrowRight, CalendarClock } from "lucide-react";
+import { ArrowRight, CalendarClock, Hourglass } from "lucide-react";
 import { useMemo } from "react";
 
 import { DataTable, type Pager } from "@/components/app/data-table";
@@ -10,7 +10,7 @@ import { JobStatus, type Job, type Worker } from "@/gen/syncr/v1/api_pb";
 import type { User } from "@/gen/syncr/v1/users_pb";
 import { useNow } from "@/hooks/use-now";
 import { formatBytes, formatDuration, percent, tsDate } from "@/lib/format";
-import { isTerminal, transferModeLabel } from "@/lib/status";
+import { isTerminal, kindLabel, transferModeLabel } from "@/lib/status";
 
 import { Endpoint } from "./endpoint";
 import { endpoint, jobElapsed, jobProgress, jobTitle, transferOf } from "./model";
@@ -42,11 +42,31 @@ export function ScheduleChip({ job }: { job: Job }) {
       to="/schedules/$scheduleId"
       params={{ scheduleId: job.scheduleId }}
       onClick={(e) => e.stopPropagation()}
-      className="inline-flex max-w-44 items-center gap-1.5 rounded-md bg-secondary px-1.5 py-0.5 text-[12.5px] text-secondary-foreground hover:bg-accent"
+      className="inline-flex max-w-36 items-center gap-1.5 rounded-md bg-secondary px-1.5 py-0.5 text-[12.5px] text-secondary-foreground hover:bg-accent"
       title={name}
     >
       <CalendarClock className="size-3.5 shrink-0 text-primary" aria-hidden />
       <span className="truncate">{name}</span>
+    </Link>
+  );
+}
+
+/**
+ * WaitingChip marks a queued job that waits for an older job on the same
+ * repository, and links to that job.
+ */
+export function WaitingChip({ job }: { job: Job }) {
+  if (job.status !== JobStatus.QUEUED || !job.waitingForJobId) return null;
+  return (
+    <Link
+      to="/jobs/$jobId"
+      params={{ jobId: job.waitingForJobId }}
+      onClick={(e) => e.stopPropagation()}
+      className="inline-flex w-fit items-center gap-1 rounded-md bg-warning-soft px-1.5 py-0.5 text-[12px] font-medium whitespace-nowrap text-warning hover:underline"
+      title="An older job on the same repository runs first. Open it."
+    >
+      <Hourglass className="size-3 shrink-0" aria-hidden />
+      Waiting for repository
     </Link>
   );
 }
@@ -94,7 +114,7 @@ function RunningDuration({ job }: { job: Job }) {
 
 function DurationText({ seconds }: { seconds: number | undefined }) {
   return (
-    <span className="tabular text-[13px] text-muted-foreground">
+    <span className="tabular text-[13px] whitespace-nowrap text-muted-foreground">
       {seconds === undefined ? "–" : formatDuration(seconds)}
     </span>
   );
@@ -119,18 +139,32 @@ export function JobsTable({
       col.accessor("status", {
         header: "Status",
         cell: (c) => (
-          <StatusBadge job={c.getValue()} cancelRequested={c.row.original.cancelRequested} />
+          <div className="flex flex-col items-start gap-1">
+            <StatusBadge job={c.getValue()} cancelRequested={c.row.original.cancelRequested} />
+            <WaitingChip job={c.row.original} />
+          </div>
         ),
         meta: { className: "w-32" },
       }),
       col.display({
         id: "transfer",
-        header: "Transfer",
+        header: "Job",
         cell: ({ row: { original: job } }) => {
           const t = transferOf(job);
-          if (!t) return <span>{job.kind}</span>;
+          if (!t)
+            return (
+              <div className="flex w-0 min-w-full flex-col gap-0.5">
+                <span className="truncate font-medium" title={jobTitle(job)}>
+                  {jobTitle(job)}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {kindLabel(job.kind)}
+                  {job.repository?.deleted ? ", repository removed" : ""}
+                </span>
+              </div>
+            );
           return (
-            <div className="flex min-w-0 flex-col gap-0.5">
+            <div className="flex w-0 min-w-full flex-col gap-0.5">
               <div className="flex min-w-0 items-center gap-2">
                 <Endpoint e={endpoint(job, t.source)} className="max-w-[45%]" />
                 <ArrowRight className="size-3.5 shrink-0 text-muted-foreground" aria-label="to" />
@@ -140,7 +174,10 @@ export function JobsTable({
             </div>
           );
         },
-        meta: { className: "min-w-[18rem] max-w-[30rem]" },
+        // The column takes the width the others leave. Its content never
+        // widens it (w-0 min-w-full above): long names are cut instead of
+        // pushing the table past its container.
+        meta: { className: "w-full min-w-[18rem]" },
       }),
       ...(owners
         ? [

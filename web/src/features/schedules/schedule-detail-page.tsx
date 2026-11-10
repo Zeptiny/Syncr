@@ -37,7 +37,7 @@ import { eventMeta, pausedReasonLabel, transferModeLabel } from "@/lib/status";
 import { hasOffsetChange, zoneLabel } from "@/lib/timezones";
 
 import { Endpoint } from "../jobs/endpoint";
-import { endpoint, transferOf } from "../jobs/model";
+import { endpoint, resticSummary, transferOf } from "../jobs/model";
 import { useScheduleActions } from "./actions";
 import { missedSummary, overlapLabel } from "./model";
 import { ScheduleRunsTable } from "./runs-table";
@@ -51,6 +51,23 @@ function asJob(s: Schedule): Job {
 function JobSummary({ schedule }: { schedule: Schedule }) {
   const job = asJob(schedule);
   const t = transferOf(job);
+  const restic = resticSummary(schedule.definition, schedule.repository);
+  if (restic)
+    return (
+      <div className="flex min-w-0 flex-col gap-1">
+        <span className="font-medium">{restic.title}</span>
+        {restic.detail && <span className="text-xs text-muted-foreground">{restic.detail}</span>}
+        {schedule.repository && !schedule.repository.deleted && (
+          <Link
+            to="/repositories/$repositoryId"
+            params={{ repositoryId: schedule.repository.id }}
+            className="w-fit text-xs text-primary hover:underline"
+          >
+            Open {schedule.repository.name}
+          </Link>
+        )}
+      </div>
+    );
   if (!t) return <span className="text-muted-foreground">No transfer</span>;
   return (
     <div className="flex min-w-0 flex-col gap-1">

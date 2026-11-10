@@ -67,6 +67,12 @@ type fixture struct {
 
 func newFixture(t *testing.T, readMax int) *fixture {
 	t.Helper()
+	return newFixtureWith(t, readMax)
+}
+
+// newFixtureWith is newFixture with options for the link core (a Prober).
+func newFixtureWith(t *testing.T, readMax int, coreOpts ...linkcore.Option) *fixture {
+	t.Helper()
 	reg := runner.NewRegistry()
 	if err := reg.Register(gateRunner{}); err != nil {
 		t.Fatal(err)
@@ -77,7 +83,7 @@ func newFixture(t *testing.T, readMax int) *fixture {
 	}
 	t.Cleanup(func() { _ = a.Shutdown(context.Background()) })
 	certFile, keyFile, cert := writeCert(t)
-	srv, err := New(linkcore.New(a, a.Outbox(), nil), Options{Addr: "127.0.0.1:0", CertFile: certFile, KeyFile: keyFile, Secret: secret, ReadMaxBytes: readMax})
+	srv, err := New(linkcore.New(a, a.Outbox(), nil, coreOpts...), Options{Addr: "127.0.0.1:0", CertFile: certFile, KeyFile: keyFile, Secret: secret, ReadMaxBytes: readMax})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -201,8 +201,10 @@ func TestRunSeeded(t *testing.T) {
 		t.Fatal(err)
 	}
 	var running *syncrv1.Job
+	// The transfer is the job the seed keeps moving (a backup and a check
+	// are shown running too, without progress).
 	for _, j := range list.Msg.GetJobs() {
-		if j.GetStatus() == syncrv1.JobStatus_JOB_STATUS_RUNNING {
+		if j.GetStatus() == syncrv1.JobStatus_JOB_STATUS_RUNNING && j.GetKind() == "rclone_transfer" {
 			running = j
 		}
 	}
@@ -622,6 +624,11 @@ func checkSecretsStayHidden(t *testing.T, s *seeded, admin, alice *http.Client) 
 	link := syncrv1connect.NewControllerLinkServiceClient(&http.Client{Transport: headers{next: http.DefaultTransport, set: func(h http.Header) {
 		h.Set("Authorization", "Bearer "+workerID+"."+enrolled.Msg.GetWorkerSecret())
 	}}}, s.base)
+	// The worker's first Report carries its Hello; no StartJob comes before it.
+	hello := &syncrv1.Event{Seq: 1, Payload: &syncrv1.Event_Hello{Hello: &syncrv1.Hello{Os: "linux", Arch: "amd64", JobKinds: []string{"rclone_transfer"}}}}
+	if _, err := link.Report(ctx, connect.NewRequest(&syncrv1.ReportRequest{Epoch: "secrets-test-epoch", Events: []*syncrv1.Event{hello}})); err != nil {
+		t.Fatal(err)
+	}
 	poll, err := link.Poll(ctx, connect.NewRequest(&syncrv1.PollRequest{Epoch: "secrets-test-epoch", Wait: durationpb.New(0)}))
 	if err != nil {
 		t.Fatal(err)
@@ -742,13 +749,18 @@ func checkSeededMilestone4(t *testing.T, s *seeded, admin *http.Client) {
 		statuses[d.GetStatus()]++
 		// Jobs without a schedule are titled by their description, never
 		// by their kind.
-		if strings.Contains(d.GetTitle(), "rclone_transfer") {
+		if strings.Contains(d.GetTitle(), "rclone_") || strings.Contains(d.GetTitle(), "restic_") {
 			t.Errorf("delivery title %q names the job kind", d.GetTitle())
 		}
 		if d.GetJobId() != "" && d.GetScheduleId() == "" {
 			manual++
-			if !strings.Contains(d.GetTitle(), " → ") {
+			// A transfer names both ends; a restic job its repository.
+			if !strings.Contains(d.GetTitle(), " → ") && !strings.Contains(d.GetTitle(), "Photos vault") {
 				t.Errorf("manual job delivery title %q has no description", d.GetTitle())
+			}
+			// The title starts with the kind's label, as people read it.
+			if strings.HasPrefix(d.GetTitle(), "Job ") {
+				t.Errorf("manual job delivery title %q lacks the kind's label", d.GetTitle())
 			}
 		}
 		if d.GetStatus() == syncrv1.DeliveryStatus_DELIVERY_STATUS_PENDING && d.GetAttempts() > 0 && d.GetLastError() != "" {

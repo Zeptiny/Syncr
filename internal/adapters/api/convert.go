@@ -13,6 +13,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/contacts"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -91,6 +92,8 @@ func workerInfoToProto(in workers.Info) *syncrv1.WorkerInfo {
 		JobKinds:          in.JobKinds,
 		MaxConcurrentJobs: int32(min(max(in.MaxConcurrentJobs, 0), 1<<31-1)),
 		LocalRoots:        in.LocalRoots,
+		Features:          in.Features,
+		ProbeOps:          in.ProbeOps,
 		ReportedAt:        ts(in.ReportedAt),
 	}
 	for _, t := range in.Tools {
@@ -406,13 +409,14 @@ func scheduleRunToProto(r schedules.Run) *syncrv1.ScheduleRun {
 type scheduleRefs struct {
 	remotes  map[domain.RemoteID]remotes.Ref
 	contacts map[domain.ContactID]contacts.Ref
+	repos    map[domain.ResticRepoID]restic.Ref
 	// last is each schedule's newest run.
 	last map[domain.ScheduleID]schedules.Run
 }
 
 // scheduleToProto converts sc (it holds no secrets: the definition refers
-// to remotes by ID). refs names its remotes and contacts and holds its
-// last run. The returned error reports a stored definition that cannot be
+// to remotes and repositories by ID). refs names its remotes, repository
+// and contacts and holds its last run. The returned error reports a stored definition that cannot be
 // decoded; the schedule is still returned, without it (as jobToProto).
 func scheduleToProto(sc schedules.Schedule, refs scheduleRefs) (*syncrv1.Schedule, error) {
 	out := &syncrv1.Schedule{
@@ -451,10 +455,152 @@ func scheduleToProto(sc schedules.Schedule, refs scheduleRefs) (*syncrv1.Schedul
 	if r, ok := refs.last[sc.ID]; ok {
 		out.LastRun = scheduleRunToProto(r)
 	}
+	if !sc.RepositoryID.IsZero() {
+		out.Repository = repositoryRefToProto(sc.RepositoryID, refs.repos[sc.RepositoryID])
+	}
 	def, err := jobkind.Unmarshal(sc.Definition)
 	if err != nil {
 		return out, fmt.Errorf("decode definition of schedule %s: %w", sc.ID, err)
 	}
 	out.Definition = def
 	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Restic repositories
+// ---------------------------------------------------------------------------
+
+// repositoryRefToProto names a job's or a schedule's repository: its ID
+// and, when ref is its reference, its name and whether it was deleted.
+func repositoryRefToProto(id domain.ResticRepoID, ref restic.Ref) *syncrv1.JobRepositoryRef {
+	return &syncrv1.JobRepositoryRef{Id: id.String(), Name: ref.Name, Deleted: ref.Deleted}
+}
+
+// repositoryToProto converts r with its statistics; remote names its
+// remote. The encrypted password is never part of the message.
+func repositoryToProto(r restic.Repo, remote remotes.Ref) *syncrv1.Repository {
+	out := &syncrv1.Repository{
+		Id:            r.ID.String(),
+		Name:          r.Name,
+		Description:   r.Description,
+		RemoteId:      r.RemoteID.String(),
+		Path:          r.Path,
+		Remote:        &syncrv1.JobRemoteRef{Id: r.RemoteID.String(), Name: remote.Name, BackendType: remote.Type, Deleted: remote.Deleted},
+		ResticId:      r.ResticID,
+		FormatVersion: int32(min(max(r.FormatVersion, 0), 1<<31-1)),
+		Stats:         repositoryStatsToProto(r.Stats),
+		CreatedAt:     ts(r.CreatedAt),
+		UpdatedAt:     ts(r.UpdatedAt),
+		Version:       r.Version,
+		Deleting:      r.Deleting,
+		DeletionError: r.DeletionError,
+	}
+	if !r.DeletionJobID.IsZero() {
+		out.DeletionJobId = r.DeletionJobID.String()
+		out.DeletionRequestedAt = ts(r.DeletionRequestedAt)
+	}
+	switch {
+	case r.Deleting || r.DeletionError == "":
+	case r.DeletionCancelled:
+		out.DeletionOutcome = syncrv1.RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_CANCELLED
+	default:
+		out.DeletionOutcome = syncrv1.RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_FAILED
+	}
+	return out
+}
+
+func repositoryStatsToProto(s restic.RepoStats) *syncrv1.RepositoryStats {
+	clamp := func(n int) int32 { return int32(min(max(n, 0), 1<<31-1)) }
+	return &syncrv1.RepositoryStats{
+		SnapshotCount:        clamp(s.SnapshotCount),
+		LatestSnapshotAt:     ts(s.LatestSnapshotAt),
+		LatestSnapshotBytes:  s.LatestSnapshotBytes,
+		SnapshotsRefreshedAt: ts(s.SnapshotsRefreshedAt),
+		SnapshotsStale:       s.SnapshotsStale(),
+		SnapshotsTruncated:   s.SnapshotsTruncated,
+		LastBackup:           repositoryJobRefToProto(s.LastBackup),
+		LastCheck:            repositoryJobRefToProto(s.LastCheck),
+		ScheduleCount:        clamp(s.ScheduleCount),
+	}
+}
+
+// repositoryJobRefToProto converts a job reference; nil if there is none.
+func repositoryJobRefToProto(r restic.JobRef) *syncrv1.RepositoryJobRef {
+	if r.ID.IsZero() {
+		return nil
+	}
+	return &syncrv1.RepositoryJobRef{JobId: r.ID.String(), Status: jobStatusToProto(r.Status), CreatedAt: ts(r.CreatedAt), FinishedAt: ts(r.FinishedAt)}
+}
+
+// repositoryModeFromProto maps a create mode; UNSPECIFIED and unknown
+// values are "" (the service reports the "mode" field).
+func repositoryModeFromProto(m syncrv1.RepositoryCreateMode) restic.Mode {
+	switch m {
+	case syncrv1.RepositoryCreateMode_REPOSITORY_CREATE_MODE_INIT:
+		return restic.ModeInit
+	case syncrv1.RepositoryCreateMode_REPOSITORY_CREATE_MODE_CONNECT:
+		return restic.ModeConnect
+	default:
+		return ""
+	}
+}
+
+// snapshotToProto converts a cached snapshot.
+func snapshotToProto(s restic.Snapshot) *syncrv1.ResticSnapshot {
+	out := &syncrv1.ResticSnapshot{
+		Id: s.ID, Time: ts(s.Time), Host: s.Hostname, Paths: s.Paths, Tags: s.Tags,
+		Parent: s.Parent, Username: s.Username, ProgramVersion: s.ProgramVersion,
+	}
+	if sum := s.Summary; sum != nil {
+		out.Summary = &syncrv1.ResticSnapshotSummary{
+			BackupStart: ts(sum.BackupStart), BackupEnd: ts(sum.BackupEnd),
+			FilesNew: sum.FilesNew, FilesChanged: sum.FilesChanged, FilesUnmodified: sum.FilesUnmodified,
+			DirsNew: sum.DirsNew, DirsChanged: sum.DirsChanged, DirsUnmodified: sum.DirsUnmodified,
+			DataBlobs: sum.DataBlobs, TreeBlobs: sum.TreeBlobs,
+			DataAddedBytes: sum.DataAdded, DataAddedPackedBytes: sum.DataAddedPacked,
+			TotalFilesProcessed: sum.TotalFilesProcessed, TotalBytesProcessed: sum.TotalBytesProcessed,
+		}
+	}
+	return out
+}
+
+func entryTypeToProto(t restic.EntryType) syncrv1.ProbeEntryType {
+	switch t {
+	case restic.EntryFile:
+		return syncrv1.ProbeEntryType_PROBE_ENTRY_TYPE_FILE
+	case restic.EntryDir:
+		return syncrv1.ProbeEntryType_PROBE_ENTRY_TYPE_DIR
+	case restic.EntrySymlink:
+		return syncrv1.ProbeEntryType_PROBE_ENTRY_TYPE_SYMLINK
+	case restic.EntryOther:
+		return syncrv1.ProbeEntryType_PROBE_ENTRY_TYPE_OTHER
+	default:
+		return syncrv1.ProbeEntryType_PROBE_ENTRY_TYPE_UNSPECIFIED
+	}
+}
+
+// entryToProto converts an entry of a listed snapshot directory.
+func entryToProto(e restic.Entry) *syncrv1.ProbeEntry {
+	return &syncrv1.ProbeEntry{Name: e.Name, Path: e.Path, Type: entryTypeToProto(e.Type), Size: e.Size, ModTime: ts(e.ModTime), Mode: e.Mode}
+}
+
+// probeWorkerRef names the worker that ran a probe or runs a job; nil for
+// the zero ID.
+func probeWorkerRef(id domain.WorkerID, name string) *syncrv1.ProbeWorkerRef {
+	if id.IsZero() {
+		return nil
+	}
+	return &syncrv1.ProbeWorkerRef{Id: id.String(), Name: name}
+}
+
+// jobDetailsToProto converts a kind's display details.
+func jobDetailsToProto(ds []jobkind.Detail) []*syncrv1.JobDetail {
+	if len(ds) == 0 {
+		return nil
+	}
+	out := make([]*syncrv1.JobDetail, len(ds))
+	for i, d := range ds {
+		out[i] = &syncrv1.JobDetail{Label: d.Label, Value: d.Value}
+	}
+	return out
 }

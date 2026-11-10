@@ -35,6 +35,7 @@ import { UserRole, UserSchema, UserService } from "@/gen/syncr/v1/users_pb";
 import * as fx from "@/test/fixtures";
 
 import { registerM4 } from "./m4";
+import * as m5mock from "./m5";
 
 const passwords: Record<string, string> = { admin: "syncr-demo-admin", alice: "syncr-demo-alice" };
 const SESSION_KEY = "syncr.mock.session";
@@ -72,10 +73,12 @@ function uuid(): string {
 export function createMockTransport(): Transport {
   const now = Date.now();
   const users = fx.users(now);
-  const workers = fx.workers(now);
+  const workers = m5mock.workers(now);
   let remotes = fx.remotes(now);
   const hist = fx.history(now);
-  const jobs = [...fx.jobs(now), ...hist.jobs].sort(
+  const m5data = m5mock.data(now);
+  hist.schedules.push(...m5data.schedules);
+  const jobs = [...fx.jobs(now), ...hist.jobs, ...m5data.jobs].sort(
     (a, b) =>
       timestampMs(b.createdAt ?? timestampFromMs(0)) -
       timestampMs(a.createdAt ?? timestampFromMs(0)),
@@ -125,6 +128,18 @@ export function createMockTransport(): Transport {
     return r;
   };
 
+  const m5 = m5mock.createM5({
+    now,
+    data: m5data,
+    me,
+    jobs,
+    workers,
+    schedules: hist.schedules,
+    remotes: () => remotes,
+    invalid,
+    sleep: (ms) => sleep(ms),
+  });
+
   // Advance a running job by about one second of transfer.
   const tick = (j: Job) => {
     if (j.status !== JobStatus.RUNNING || !j.stats) return;
@@ -143,6 +158,7 @@ export function createMockTransport(): Transport {
     if (bytes >= total) {
       j.status = JobStatus.SUCCEEDED;
       j.finishedAt = timestampFromMs(Date.now());
+      m5.settle();
     }
   };
 
@@ -155,8 +171,10 @@ export function createMockTransport(): Transport {
     scheduleName?: string;
   }): Job => {
     const op = p.definition?.operation;
-    const refs =
-      op?.case === "rcloneTransfer"
+    const restic = m5.describe(p.definition);
+    const refs = restic
+      ? restic.remotes
+      : op?.case === "rcloneTransfer"
         ? [op.value.source?.remoteId, op.value.destination?.remoteId]
             .filter((id): id is string => !!id)
             .map((id) => {
@@ -167,7 +185,9 @@ export function createMockTransport(): Transport {
     const j = create(JobSchema, {
       id: uuid(),
       workerId: p.workerId,
-      kind: "rclone_transfer",
+      kind: restic?.kind ?? "rclone_transfer",
+      title: restic?.title ?? "",
+      repository: restic?.repository,
       status: JobStatus.QUEUED,
       ownerId: p.ownerId,
       createdAt: timestampFromMs(Date.now()),
@@ -177,6 +197,11 @@ export function createMockTransport(): Transport {
       schedule: p.scheduleId ? { id: p.scheduleId, name: p.scheduleName ?? "" } : undefined,
     });
     jobs.unshift(j);
+    if (restic) {
+      // Restic jobs wait for older jobs on their repository, then finish.
+      m5.start(j);
+      return j;
+    }
     setTimeout(() => {
       if (j.status !== JobStatus.QUEUED) return;
       j.status = JobStatus.RUNNING;
@@ -199,7 +224,9 @@ export function createMockTransport(): Transport {
 
   return createRouterTransport((router) => {
     const { service } = router;
+    m5.register(router);
     registerM4(router, {
+      m5,
       now,
       history: hist,
       me,
@@ -413,6 +440,13 @@ export function createMockTransport(): Transport {
             Code.FailedPrecondition,
           );
         }
+        const held = m5data.repositories.filter((x) => !x.deleted && x.repo.remoteId === r.id);
+        if (held.length) {
+          throw new ConnectError(
+            `the remote holds ${held.length === 1 ? "the repository" : "the repositories"} ${held.map((x) => x.repo.name).join(", ")}`,
+            Code.FailedPrecondition,
+          );
+        }
         remotes = remotes.filter((x) => x.id !== r.id);
         return {};
       },
@@ -505,6 +539,7 @@ export function createMockTransport(): Transport {
           if (req.workerId && j.workerId !== req.workerId) return false;
           if (req.scheduleId && j.scheduleId !== req.scheduleId) return false;
           if (req.remoteId && !j.remotes.some((r) => r.id === req.remoteId)) return false;
+          if (req.repositoryId && j.repository?.id !== req.repositoryId) return false;
           if (req.kinds.length && !req.kinds.includes(j.kind)) return false;
           const at = timestampMs(j.createdAt ?? timestampFromMs(0));
           if (at < after || at > before) return false;
@@ -512,6 +547,8 @@ export function createMockTransport(): Transport {
             const op = j.definition?.operation;
             const text = [
               ...j.remotes.map((r) => r.name),
+              j.title,
+              j.repository?.name ?? "",
               op?.case === "rcloneTransfer"
                 ? `${op.value.source?.path} ${op.value.destination?.path}`
                 : "",
@@ -539,14 +576,24 @@ export function createMockTransport(): Transport {
           j.finishedAt = timestampFromMs(Date.now());
         } else if (j.status === JobStatus.RUNNING || j.status === JobStatus.DISPATCHED) {
           j.cancelRequested = true;
+          // Nothing streams a restic job in the mock, so stop it here.
+          if (j.kind !== "rclone_transfer") {
+            j.status = JobStatus.CANCELLED;
+            j.finishedAt = timestampFromMs(Date.now());
+          }
         }
+        m5.settle();
         return { job: j };
       },
       runJob: (req) => {
         const u = me();
         const op = req.definition?.operation;
-        if (op?.case !== "rcloneTransfer")
-          throw invalid([{ field: "definition", message: "Choose what to transfer." }]);
+        const problems = m5.check(req.definition, false, req.workerId);
+        if (problems.length) throw invalid(problems);
+        if (op?.case === undefined)
+          throw invalid([{ field: "definition", message: "Choose what to do." }]);
+        if (!workers.some((w) => w.id === req.workerId))
+          throw invalid([{ field: "worker_id", message: "Choose the worker that runs the job." }]);
         return {
           job: queueJob({ workerId: req.workerId, definition: req.definition, ownerId: u.id }),
         };

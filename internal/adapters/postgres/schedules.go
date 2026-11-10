@@ -107,6 +107,7 @@ func (s *Store) ListSchedules(ctx context.Context, f schedules.ListFilter) ([]sc
 	const op = "list schedules"
 	rows, err := s.q.ListSchedules(ctx, db.ListSchedulesParams{
 		OwnerID: pgOptID(f.OwnerID), RemoteID: pgOptID(f.RemoteID), ContactID: pgOptID(f.ContactID),
+		RepositoryID: pgOptID(f.RepositoryID),
 	})
 	if err != nil {
 		return nil, mapErr(op, err)
@@ -135,7 +136,7 @@ func (s *Store) UpdateSchedule(ctx context.Context, sc schedules.Schedule, resch
 			Kind: sc.Kind, Definition: sc.Definition, SearchText: cleanText(sc.SearchText),
 			WorkerID: pgOptID(sc.Target.WorkerID), WorkerLabel: optText(sc.Target.Label),
 			MissedAction: string(sc.Missed.Action), MaxDelayNs: int64(sc.Missed.MaxDelay), Overlap: string(sc.Overlap),
-			Enabled: sc.Enabled, PausedReason: sc.PausedReason,
+			Enabled: sc.Enabled, PausedReason: sc.PausedReason, RepositoryID: pgOptID(sc.RepositoryID),
 			Reschedule: reschedule, NextRunAt: pgOptTime(sc.NextRunAt), UpdatedAt: pgTime(sc.UpdatedAt),
 			ID: pgID(sc.ID), ExpectedVersion: sc.Version,
 		})
@@ -524,6 +525,7 @@ func createScheduleParams(sc schedules.Schedule) db.CreateScheduleParams {
 		Enabled: sc.Enabled, PausedReason: sc.PausedReason,
 		NextRunAt: pgOptTime(sc.NextRunAt), LastFiredAt: pgOptTime(sc.LastFiredAt),
 		CreatedAt: pgTime(sc.CreatedAt), UpdatedAt: pgTime(sc.UpdatedAt), Version: sc.Version,
+		RepositoryID: pgOptID(sc.RepositoryID),
 	}
 }
 
@@ -592,7 +594,7 @@ func scheduleFrom(row db.Schedule, remoteIDs []domain.RemoteID, contacts []sched
 	for _, d := range []struct {
 		dst interface{ UnmarshalText([]byte) error }
 		src pgtype.UUID
-	}{{&sc.ID, row.ID}, {&sc.OwnerID, row.OwnerID}, {&sc.Target.WorkerID, row.WorkerID}} {
+	}{{&sc.ID, row.ID}, {&sc.OwnerID, row.OwnerID}, {&sc.Target.WorkerID, row.WorkerID}, {&sc.RepositoryID, row.RepositoryID}} {
 		if err := decodeID(d.dst, d.src); err != nil {
 			return schedules.Schedule{}, err
 		}

@@ -28,6 +28,7 @@ type (
 	contactKind    struct{}
 	runKind        struct{}
 	deliveryKind   struct{}
+	probeKind      struct{}
 )
 
 // Entity IDs.
@@ -52,6 +53,10 @@ type (
 	ScheduleRunID = ID[runKind]
 	// DeliveryID identifies one notification to one contact.
 	DeliveryID = ID[deliveryKind]
+	// ProbeID identifies one probe: a short request a worker answers
+	// outside its job slots (Milestone 5). Probes are never stored; the ID
+	// matches a worker's result to its caller.
+	ProbeID = ID[probeKind]
 )
 
 // NewUserID returns a new random UserID.
@@ -84,6 +89,9 @@ func NewScheduleRunID() ScheduleRunID { return newID[runKind]() }
 // NewDeliveryID returns a new random DeliveryID.
 func NewDeliveryID() DeliveryID { return newID[deliveryKind]() }
 
+// NewProbeID returns a new random ProbeID.
+func NewProbeID() ProbeID { return newID[probeKind]() }
+
 // ParseUserID parses a UserID from its canonical string form.
 func ParseUserID(s string) (UserID, error) { return parseID[userKind](s) }
 
@@ -113,6 +121,9 @@ func ParseScheduleRunID(s string) (ScheduleRunID, error) { return parseID[runKin
 
 // ParseDeliveryID parses a DeliveryID from its canonical string form.
 func ParseDeliveryID(s string) (DeliveryID, error) { return parseID[deliveryKind](s) }
+
+// ParseProbeID parses a ProbeID from its canonical string form.
+func ParseProbeID(s string) (ProbeID, error) { return parseID[probeKind](s) }
 
 func newID[K any]() ID[K] { return ID[K]{uuid: uuid.NewV7()} }
 

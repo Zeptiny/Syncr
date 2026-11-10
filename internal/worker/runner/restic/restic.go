@@ -68,16 +68,9 @@ type Config struct {
 
 // New returns one runner per restic job kind, ready for runner.Registry.Register.
 func New(cfg Config) ([]runner.Runner, error) {
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
-	rcloneOpts, err := rcloneOptions(cfg.RclonePath, rcloneArgs())
+	e, err := newEngine(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("restic: Config.RclonePath: %w", err)
-	}
-	e := &engine{cfg: cfg, goos: runtime.GOOS, log: cfg.Logger, rcloneOpts: rcloneOpts}
-	if e.log == nil {
-		e.log = slog.New(slog.DiscardHandler)
+		return nil, err
 	}
 	kinds := []struct {
 		kind string
@@ -91,15 +84,31 @@ func New(cfg Config) ([]runner.Runner, error) {
 		{kindRestore, planRestore},
 		{kindSnapshots, planSnapshots},
 	}
-	runners := make([]runner.Runner, 0, len(kinds))
+	runners := make([]runner.Runner, 0, len(kinds)+1)
 	for _, k := range kinds {
 		runners = append(runners, &kindRunner{e: e, kind: k.kind, plan: k.plan})
 	}
+	runners = append(runners, &deleteRunner{e: e})
 	return runners, nil
 }
 
-// engine is the state shared by the per-kind runners: configuration only, so
-// it is safe for concurrent jobs.
+func newEngine(cfg Config) (*engine, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	rcloneOpts, err := rcloneOptions(cfg.RclonePath, rcloneArgs())
+	if err != nil {
+		return nil, fmt.Errorf("restic: Config.RclonePath: %w", err)
+	}
+	e := &engine{cfg: cfg, goos: runtime.GOOS, log: cfg.Logger, rcloneOpts: rcloneOpts}
+	if e.log == nil {
+		e.log = slog.New(slog.DiscardHandler)
+	}
+	return e, nil
+}
+
+// engine is the state shared by the per-kind runners and the Prober:
+// configuration only, so it is safe for concurrent jobs.
 type engine struct {
 	cfg  Config
 	goos string
@@ -133,7 +142,17 @@ func (r *kindRunner) Run(ctx context.Context, job runner.Job, emit runner.EmitFu
 	if err != nil {
 		return res, scrub.New(secrets).Error(err)
 	}
-	res, sc, err := r.e.run(ctx, r.kind, job, cmd, emit, secrets)
+	res, s, sc, err := r.e.exec(ctx, execution{
+		kind: r.kind, scratch: "restic-" + job.ID, logID: job.ID,
+		remotes: job.Spec.GetRemotes(), cmd: cmd, emit: emit, secrets: secrets,
+	})
+	if err == nil && res.Output == nil {
+		var out *syncrv1.JobOutput
+		if out, err = s.output(job.Spec); err != nil {
+			err = runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "restic %s: %w", cmd.verb, err)
+		}
+		res.Output = out
+	}
 	if err != nil && !runner.Canceled(err) {
 		err = sc.Error(err)
 	}
@@ -144,31 +163,61 @@ func (r *kindRunner) Run(ctx context.Context, job runner.Job, emit runner.EmitFu
 	return res, err
 }
 
-// run executes a planned command. It returns the scrubber for every secret
-// of the run, with which restic's output was scrubbed and with which the
-// caller must scrub the result.
-func (e *engine) run(ctx context.Context, kind string, job runner.Job, cmd command, emit runner.EmitFunc, secrets []string) (runner.Result, *scrub.Scrubber, error) {
+// execution is one restic invocation: a planned command with what it needs
+// from its job or probe.
+type execution struct {
+	// kind selects how the session reads restic's output.
+	kind string
+	// scratch names the private directory created under ScratchRoot for the
+	// invocation and removed after it. dir, if set, is used instead and is
+	// left in place (the caller owns it).
+	scratch string
+	dir     string
+	// logID identifies the job or probe in diagnostics.
+	logID   string
+	remotes []*syncrv1.RemoteDefinition
+	cmd     command
+	emit    runner.EmitFunc
+	secrets []string
+}
+
+// exec runs a planned command. It returns the session that read restic's
+// output and the scrubber for every secret of the run, with which that
+// output was scrubbed and with which the caller must scrub what it returns.
+// The session is never nil.
+func (e *engine) exec(ctx context.Context, x execution) (runner.Result, *session, *scrub.Scrubber, error) {
 	res := runner.Result{ExitCode: -1}
-	spec := job.Spec
-	sc := scrub.New(secrets)
+	sc := scrub.New(x.secrets)
+	emit := x.emit
+	if emit == nil {
+		emit = func(runner.Progress) {}
+	}
+	s := newSession(x.kind, emit, sc)
+	s.collect = x.cmd.collect
+	s.ls = x.cmd.ls
+	cmd := x.cmd
 
-	repo, viaRclone, err := e.repository(spec, cmd.repo)
+	repo, viaRclone, err := e.repository(x.remotes, cmd.repo)
 	if err != nil {
-		return res, sc, err
+		return res, s, sc, err
 	}
-	env, err := e.baseEnv(spec, cmd.repo.GetPassword(), viaRclone)
+	env, err := e.baseEnv(x.remotes, cmd.repo.GetPassword(), viaRclone)
 	if err != nil {
-		return res, sc, err
+		return res, s, sc, err
 	}
-	if obscured := obscuredSecrets(spec, env); len(obscured) > 0 {
-		sc = scrub.New(append(slices.Clip(secrets), obscured...))
+	if obscured := obscuredSecrets(x.remotes, env); len(obscured) > 0 {
+		sc = scrub.New(append(slices.Clip(x.secrets), obscured...))
+		s.sc = sc
 	}
 
-	scratch, cleanup, err := e.scratchDir(job.ID)
-	if err != nil {
-		return res, sc, err
+	scratch := x.dir
+	if scratch == "" {
+		var cleanup func()
+		if scratch, cleanup, err = e.scratchDir(x.scratch, x.logID); err != nil {
+			return res, s, sc, err
+		}
+		defer cleanup()
 	}
-	defer cleanup()
 	for _, name := range []string{"TMPDIR", "TEMP", "TMP"} {
 		env[name] = scratch
 	}
@@ -181,16 +230,16 @@ func (e *engine) run(ctx context.Context, kind string, job runner.Job, cmd comma
 	if e.cfg.CacheDir == "" || cmd.noCache {
 		argv = append(argv, "--no-cache")
 	}
+	argv = append(argv, cmd.global...)
 	argv = append(argv, cmd.verb)
 	argv = append(argv, cmd.args...)
 
-	s := newSession(kind, emit, sc)
 	pres, err := e.cfg.Supervisor.Run(ctx, proc.Spec{
 		Path:   e.cfg.ResticPath,
 		Args:   argv,
 		Dir:    scratch,
 		Env:    env,
-		Stdout: s.line,
+		Stdout: s.stdout,
 		Stderr: s.line,
 	})
 	res.ExitCode = pres.ExitCode
@@ -199,27 +248,21 @@ func (e *engine) run(ctx context.Context, kind string, job runner.Job, cmd comma
 	switch {
 	case err == nil:
 	case runner.Canceled(err):
-		return res, sc, err
+		return res, s, sc, err
 	default:
 		if exitErr, ok := errors.AsType[*proc.ExitError](err); ok {
-			res, err := e.exitFailure(res, kind, cmd.verb, exitErr.ExitCode, s)
-			return res, sc, err
+			res, err := e.exitFailure(res, x.kind, cmd.verb, exitErr.ExitCode, s)
+			return res, s, sc, err
 		}
 		if pres.ExitCode != exitOK || !errors.Is(err, exec.ErrWaitDelay) {
-			return res, sc, err // *proc.StartError and other collection errors
+			return res, s, sc, err // *proc.StartError and other collection errors
 		}
 		// restic succeeded, but a process it started (rclone) kept the
 		// output pipes open past the grace period. restic's own output is
 		// complete, so the run is judged by it like any other.
-		e.log.Warn("restic output not fully collected", "job_id", job.ID, "error", err.Error())
+		e.log.Warn("restic output not fully collected", "job_id", x.logID, "error", err.Error())
 	}
-
-	out, err := s.output(job.Spec)
-	if err != nil {
-		return res, sc, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "restic %s: %w", cmd.verb, err)
-	}
-	res.Output = out
-	return res, sc, nil
+	return res, s, sc, nil
 }
 
 // exitFailure maps a non-zero restic exit to the job outcome. A backup that
@@ -254,7 +297,7 @@ func incompleteWarnings(s *session) []string {
 
 // baseEnv builds the child's variables: the job's remotes (RCLONE_CONFIG_*
 // only), the repository password and the restic tuning variables.
-func (e *engine) baseEnv(spec *syncrv1.JobSpec, password string, viaRclone bool) (map[string]string, error) {
+func (e *engine) baseEnv(remotes []*syncrv1.RemoteDefinition, password string, viaRclone bool) (map[string]string, error) {
 	env := map[string]string{
 		"RESTIC_PASSWORD": password,
 		// One status line per second, matching the controller's sampling.
@@ -266,7 +309,7 @@ func (e *engine) baseEnv(spec *syncrv1.JobSpec, password string, viaRclone bool)
 	if !viaRclone {
 		return env, nil
 	}
-	remote, err := e.cfg.Remotes.Env(spec.GetRemotes())
+	remote, err := e.cfg.Remotes.Env(remotes)
 	if err != nil {
 		return nil, invalid("define remotes: %w", err)
 	}
@@ -280,7 +323,7 @@ func (e *engine) baseEnv(spec *syncrv1.JobSpec, password string, viaRclone bool)
 	return env, nil
 }
 
-// scratchDir creates the job's private directory under ScratchRoot and
+// scratchDir creates the private directory name under ScratchRoot and
 // returns it with a function that removes it.
 //
 // The directory is restic's working and temporary directory, and so also
@@ -288,12 +331,12 @@ func (e *engine) baseEnv(spec *syncrv1.JobSpec, password string, viaRclone bool)
 // does not wait for that process to exit, so on Windows it can still hold the
 // directory open when the job ends (or when a job with the same ID starts):
 // proc.RemoveAll retries until it lets go.
-func (e *engine) scratchDir(jobID string) (string, func(), error) {
+func (e *engine) scratchDir(name, logID string) (string, func(), error) {
 	root := e.cfg.ScratchRoot
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "create scratch root: %w", err)
 	}
-	dir := filepath.Join(root, "restic-"+jobID)
+	dir := filepath.Join(root, name)
 	if err := proc.RemoveAll(dir); err != nil { // left over from a crashed worker or a lingering rclone
 		return "", nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "clear scratch directory: %w", err)
 	}
@@ -302,7 +345,7 @@ func (e *engine) scratchDir(jobID string) (string, func(), error) {
 	}
 	cleanup := func() {
 		if err := proc.RemoveAll(dir); err != nil {
-			e.log.Warn("cannot remove job scratch directory", "job_id", jobID, "dir", dir, "error", err.Error())
+			e.log.Warn("cannot remove scratch directory", "job_id", logID, "dir", dir, "error", err.Error())
 		}
 	}
 	return dir, cleanup, nil

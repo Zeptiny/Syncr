@@ -41,9 +41,11 @@ adapter imports only the domain, the app ports it implements and
 - `workers.info` is one `jsonb` document, not columns: it is what the
   worker reported in its latest Hello, replaced as a whole, never filtered or
   joined in SQL, and it grows with the protocol (new fields need no
-  migration). The adapter owns the document shape (`infoDoc`), decoupled
-  from the Go struct. Everything the controller acts on (epoch, ack cursor,
-  last seen, mode, removal) is a typed column. `past_epochs` is `text[]`
+  migration; its `epoch` names the process that sent the Hello, and
+  migration 00008 filled it in for the rows stored before). The adapter
+  owns the document shape (`infoDoc`), decoupled from the Go struct.
+  Everything the controller acts on (epoch, ack cursor, last seen, mode,
+  removal) is a typed column. `past_epochs` is `text[]`
   because order matters and it is small and bounded.
 - Secrets (`secret_enc`, `spec_enc`) are opaque `bytea` ciphertexts; the
   database never sees plaintext.

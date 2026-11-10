@@ -88,12 +88,14 @@ func (s *Seed) seedHistory(ctx context.Context, now time.Time) error {
 	if h.jobs, err = jobs.New(jobs.Deps{
 		Jobs: s.d.Store, Samples: s.d.Store, Clock: clk, IDs: ids,
 		Broker: nopBroker{}, Notifier: jobs.NopNotifier{}, Waker: nopWaker{}, Remotes: s.d.Remotes,
+		Repositories: storeRepos{s.d.Store},
 	}, jobs.Config{}); err != nil {
 		return err
 	}
 	if h.sched, err = schedules.New(schedules.Deps{
 		Repo: s.d.Store, Remotes: s.d.Remotes, Contacts: s.d.Contacts, Workers: workerCheck{s.d.Workers},
-		Waker: nopScheduleWaker{}, Clock: clk, IDs: ids,
+		Repositories: storeRepos{s.d.Store},
+		Waker:        nopScheduleWaker{}, Clock: clk, IDs: ids,
 	}, schedules.Config{}); err != nil {
 		return err
 	}
@@ -141,7 +143,7 @@ func (h *history) events() ([]event, error) {
 	var out []event
 	ticks := map[time.Time]bool{}
 	downFrom, downUntil := controllerDown(h.now)
-	for _, d := range demoSchedules(h.now) {
+	for _, d := range slices.Concat(demoSchedules(h.now), demoResticSchedules(h.now)) {
 		e, err := cronexpr.Parse(d.cron, d.timezone)
 		if err != nil {
 			return nil, fmt.Errorf("schedule %q: %w", d.name, err)
@@ -187,7 +189,7 @@ func (h *history) events() ([]event, error) {
 			return h.s.d.Workers.Remove(ctx, id)
 		}})
 	}
-	for i, dj := range demoJobs() {
+	for i, dj := range slices.Concat(demoJobs(), demoResticJobs()) {
 		at := h.now.Add(-dj.created)
 		out = append(out, event{at: at, order: orderJob, do: func(ctx context.Context) error {
 			if err := h.manualJob(ctx, dj, at); err != nil {
@@ -196,6 +198,16 @@ func (h *history) events() ([]event, error) {
 			return nil
 		}})
 	}
+	// Data deletions: one finished days ago; one requested just now, which
+	// waits for the check running on its repository.
+	out = append(out,
+		event{at: h.now.Add(-retiredDeletedAgo), order: orderJob, do: func(ctx context.Context) error {
+			return h.deleteData(ctx, repoRetired, "nas-01", h.now.Add(-retiredDeletedAgo), true, 4*time.Minute+10*time.Second)
+		}},
+		event{at: h.now.Add(-oldLaptopDeleteAgo), order: orderJob, do: func(ctx context.Context) error {
+			return h.deleteData(ctx, repoOldLaptop, "nas-01", h.now.Add(-oldLaptopDeleteAgo), false, 0)
+		}},
+	)
 	return out, nil
 }
 
@@ -218,7 +230,8 @@ func (h *history) create(ctx context.Context, ss *seededSchedule) error {
 	in := schedules.Input{
 		Name: d.name, Description: d.description, Cron: d.cron, Timezone: d.timezone, Missed: d.missed, Overlap: d.overlap,
 		Enabled: true, Kind: kind, Definition: enc, RemoteIDs: refs.RemoteIDs, SearchTerms: refs.SearchTerms,
-		Target: schedules.Target{Label: d.label},
+		RepositoryID: refs.RepositoryID,
+		Target:       schedules.Target{Label: d.label},
 	}
 	if d.worker != "" {
 		in.Target = schedules.Target{WorkerID: h.s.Workers[d.worker]}
@@ -339,7 +352,7 @@ func (h *history) decide(ctx context.Context, ss *seededSchedule, r schedules.Ru
 	}
 	dj := d.job
 	dj.worker, dj.status, dj.queue, dj.run = workerName, o.status, 2*time.Second, o.run
-	dj.stats, dj.err, dj.exitCode, dj.warnings, dj.samples = o.stats, o.err, o.exitCode, o.warnings, 6
+	dj.stats, dj.err, dj.exitCode, dj.warnings, dj.samples, dj.output = o.stats, o.err, o.exitCode, o.warnings, 6, o.output
 	h.script.onScheduledJob(ss.demo.name, at, o.status, jobID)
 	id, err := h.s.seedJob(ctx, h.jobs, h.clk, h.now, at, dj, jobPreset{id: jobID, schedule: ss.id})
 	if err != nil {
@@ -380,7 +393,7 @@ func (h *history) manualJob(ctx context.Context, dj demoJob, at time.Time) error
 	}
 	h.s.Jobs = append(h.s.Jobs, id)
 	h.script.onManualJob(dj, id)
-	if dj.status == domain.JobRunning {
+	if dj.status == domain.JobRunning && !dj.static {
 		h.running++
 		h.s.Running = id
 		h.s.runningWorker = h.s.Workers[dj.worker]

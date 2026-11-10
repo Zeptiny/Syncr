@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/Zeptiny/Syncr/internal/link"
 	"github.com/Zeptiny/Syncr/internal/platform/version"
 	"github.com/Zeptiny/Syncr/internal/worker/agent"
 	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
@@ -49,9 +50,14 @@ type linkInfo struct {
 //   - passive: the TLS server the controller calls;
 //   - unset: nothing (the worker is not enrolled); it idles with a hint.
 //
+// The link also carries the controller's probes to w.probes (linkcore
+// WithProber), and the Hello event names the link features and probe
+// operations of this build (identity).
+//
 // The returned stop function shuts down in order: (1) the transport's run
-// context ends (active loops stop; passive keeps serving), (2) the agent
-// cancels its jobs and waits for their CANCELLED results, (3) those results
+// context ends (active loops stop; passive keeps serving), (2) the probes
+// in flight are cancelled (Core.Close) and the agent cancels its jobs and
+// waits for their CANCELLED results, (3) those results
 // are flushed: the active transport reports until acknowledged
 // (Transport.Drain), the passive server answers Pulls until acknowledged
 // (Server.Shutdown). Each step is bounded, see the timeouts above.
@@ -71,11 +77,17 @@ func startLink(ctx context.Context, cfg workerconfig.Config, w *worker, log *slo
 	if err != nil {
 		return nil, fmt.Errorf("start the job agent: %w", err)
 	}
-	core := linkcore.New(a, a.Outbox(), log.With("component", "link"))
+	var opts []linkcore.Option
+	if w.probes != nil {
+		opts = append(opts, linkcore.WithProber(w.probes))
+	}
+	core := linkcore.New(a, a.Outbox(), log.With("component", "link"), opts...)
 	log.Info("worker link starting", "link_mode", string(cfg.Link.Mode), "epoch", a.Epoch(),
 		"max_concurrent_jobs", cfg.MaxConcurrentJobs)
 
 	shutdownAgent := func() {
+		// Probes first: they are short and their callers have gone.
+		core.Close()
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentShutdownTimeout)
 		defer cancel()
 		if err := a.Shutdown(sctx); err != nil {
@@ -188,6 +200,9 @@ func identity(w *worker, info linkInfo) agent.Identity {
 		Arch:          runtime.GOARCH,
 		Hostname:      host,
 		LocalRoots:    w.policy.Roots(),
+	}
+	if w.probes != nil {
+		id.Features, id.ProbeOps = link.Features(), w.probes.Ops()
 	}
 	for _, tool := range []string{toolRclone, toolRestic} {
 		if r, ok := w.tools[tool]; ok {

@@ -36,6 +36,7 @@ type env struct {
 	jobs    *jobs.Service
 	workers *workers.Service
 	disp    *dispatch.Service
+	probes  *dispatch.ProbeBroker
 	srv     *httptest.Server
 	stop    context.CancelFunc
 	// owner owns the queued jobs (it exists in the store).
@@ -76,7 +77,13 @@ func newEnv(t *testing.T, o envOptions) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.disp, err = dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Specs: specBuilder{}, Clock: e.clock, Hub: hub}, dispatch.Config{MaxWait: o.maxWait})
+	e.probes, err = dispatch.NewProbeBroker(dispatch.ProbeBrokerDeps{Workers: e.workers, Hub: hub, Clock: e.clock}, dispatch.ProbeConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.disp, err = dispatch.New(dispatch.Deps{
+		Jobs: e.jobs, Workers: e.workers, Specs: specBuilder{}, Probes: e.probes, Clock: e.clock, Hub: hub,
+	}, dispatch.Config{MaxWait: o.maxWait})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,12 +112,18 @@ func newEnv(t *testing.T, o envOptions) *env {
 // enroll returns an active worker's credentials.
 func (e *env) enroll() (domain.WorkerID, string) {
 	e.t.Helper()
+	return e.enroll2("w")
+}
+
+// enroll2 enrolls an active worker called name.
+func (e *env) enroll2(name string) (domain.WorkerID, string) {
+	e.t.Helper()
 	g, err := e.workers.CreateEnrollmentToken(context.Background(), 0)
 	if err != nil {
 		e.t.Fatal(err)
 	}
 	cl := syncrv1connect.NewEnrollmentServiceClient(e.srv.Client(), e.srv.URL)
-	resp, err := cl.Enroll(context.Background(), connect.NewRequest(&syncrv1.EnrollRequest{EnrollmentToken: g.Token, Name: "w"}))
+	resp, err := cl.Enroll(context.Background(), connect.NewRequest(&syncrv1.EnrollRequest{EnrollmentToken: g.Token, Name: name}))
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -140,7 +153,7 @@ func hello(seq int64) *syncrv1.Event {
 // specs from definitions, is tested in package dispatch).
 type specBuilder struct{}
 
-func (specBuilder) Build(context.Context, jobs.Job) (*syncrv1.JobSpec, error) {
+func (specBuilder) Build(context.Context, jobs.Job, workers.Info) (*syncrv1.JobSpec, error) {
 	return &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransfer{}}}, nil
 }
 
@@ -195,6 +208,84 @@ func TestReportPollAndStaleEpoch(t *testing.T) {
 	}
 }
 
+// TestCompleteProbe: a probe reaches an active worker through its long
+// poll and its result comes back through CompleteProbe.
+func TestCompleteProbe(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, envOptions{maxWait: 5 * time.Second})
+	id, secret := e.enroll()
+	cl := e.client()
+	ctx := context.Background()
+
+	current := &syncrv1.Event{Seq: 1, Payload: &syncrv1.Event_Hello{Hello: &syncrv1.Hello{
+		Hostname: "h", Features: link.Features(), ProbeOps: link.ProbeOps(),
+	}}}
+	if _, err := cl.Report(ctx, authed(&syncrv1.ReportRequest{Epoch: "e1", Events: []*syncrv1.Event{current}}, id, secret)); err != nil {
+		t.Fatal(err)
+	}
+
+	type answer struct {
+		res *syncrv1.ProbeResult
+		err error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		res, err := e.probes.Probe(ctx, id, &syncrv1.RunProbe{
+			ProbeId: "p1", Spec: &syncrv1.ProbeSpec{Op: &syncrv1.ProbeSpec_ListLocal{ListLocal: &syncrv1.ProbeListLocal{Path: "/data"}}},
+		})
+		done <- answer{res, err}
+	}()
+	// The long poll returns as soon as the probe is queued.
+	poll, err := cl.Poll(ctx, authed(&syncrv1.PollRequest{Epoch: "e1", Wait: durationpb.New(5 * time.Second)}, id, secret))
+	if err != nil || len(poll.Msg.GetCommands()) != 1 || poll.Msg.GetCommands()[0].GetRunProbe().GetSpec().GetListLocal().GetPath() != "/data" {
+		t.Fatalf("poll = %v, %v", poll, err)
+	}
+	cmdID := poll.Msg.GetCommands()[0].GetId()
+
+	result := &syncrv1.ProbeResult{
+		ProbeId: "p1", Status: syncrv1.ProbeStatus_PROBE_STATUS_OK,
+		Output: &syncrv1.ProbeResult_Listing{Listing: &syncrv1.ProbeListing{Path: "/data"}},
+	}
+	// Without credentials, and from a replaced process, nothing is taken.
+	if _, err := cl.CompleteProbe(ctx, connect.NewRequest(&syncrv1.CompleteProbeRequest{Epoch: "e1", Result: result})); connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Fatalf("unauthenticated: %v", err)
+	}
+	if _, err := cl.CompleteProbe(ctx, authed(&syncrv1.CompleteProbeRequest{Epoch: "e1"}, id, secret)); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("no result: %v", err)
+	}
+	other, otherSecret := e.enroll2("other")
+	if _, err := cl.Report(ctx, authed(&syncrv1.ReportRequest{Epoch: "o1", Events: []*syncrv1.Event{hello(1)}}, other, otherSecret)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cl.CompleteProbe(ctx, authed(&syncrv1.CompleteProbeRequest{Epoch: "o1", Result: result}, other, otherSecret)); err != nil {
+		t.Fatalf("another worker's result must be accepted and ignored: %v", err)
+	}
+	select {
+	case a := <-done:
+		t.Fatalf("another worker completed the probe: %v, %v", a.res, a.err)
+	default:
+	}
+
+	if _, err := cl.Poll(ctx, authed(&syncrv1.PollRequest{Epoch: "e1", Wait: durationpb.New(0), Acks: []*syncrv1.CommandAck{{CommandId: cmdID}}}, id, secret)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cl.CompleteProbe(ctx, authed(&syncrv1.CompleteProbeRequest{Epoch: "e1", Result: result}, id, secret)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case a := <-done:
+		if a.err != nil || a.res.GetListing().GetPath() != "/data" {
+			t.Fatalf("probe = %v, %v", a.res, a.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the probe did not return")
+	}
+	// Idempotent.
+	if _, err := cl.CompleteProbe(ctx, authed(&syncrv1.CompleteProbeRequest{Epoch: "e1", Result: result}, id, secret)); err != nil {
+		t.Fatalf("repeated result: %v", err)
+	}
+}
+
 func TestUnauthenticated(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, envOptions{})
@@ -236,6 +327,10 @@ func TestPollWakesAndCaps(t *testing.T) {
 	e := newEnv(t, envOptions{maxWait: 500 * time.Millisecond})
 	id, secret := e.enroll()
 	cl := e.client()
+	// The worker's Hello: no StartJob goes to a process before it.
+	if _, err := cl.Report(context.Background(), authed(&syncrv1.ReportRequest{Epoch: "e1", Events: []*syncrv1.Event{hello(1)}}, id, secret)); err != nil {
+		t.Fatal(err)
+	}
 
 	start := time.Now()
 	_, err := cl.Poll(context.Background(), authed(&syncrv1.PollRequest{Epoch: "e1", Wait: durationpb.New(time.Hour)}, id, secret))
@@ -299,6 +394,9 @@ func TestPollOutlivesServerTimeouts(t *testing.T) {
 			})
 			id, secret := e.enroll()
 			cl := e.client()
+			if _, err := cl.Report(context.Background(), authed(&syncrv1.ReportRequest{Epoch: "e1", Events: []*syncrv1.Event{hello(1)}}, id, secret)); err != nil {
+				t.Fatal(err)
+			}
 			go func() {
 				time.Sleep(500 * time.Millisecond)
 				e.queue(id)
@@ -352,6 +450,10 @@ func (s stubDispatcher) Report(context.Context, domain.WorkerID, *syncrv1.Report
 
 func (s stubDispatcher) Poll(context.Context, domain.WorkerID, *syncrv1.PollRequest) (*syncrv1.PollResponse, error) {
 	return nil, s.err
+}
+
+func (s stubDispatcher) CompleteProbe(context.Context, domain.WorkerID, string, *syncrv1.ProbeResult) error {
+	return s.err
 }
 
 func (stubDispatcher) MaxWait() time.Duration { return time.Second }

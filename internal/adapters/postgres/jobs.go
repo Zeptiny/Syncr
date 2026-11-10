@@ -75,6 +75,8 @@ func createJobParams(j jobs.Job) db.CreateJobParams {
 		Output:            j.Output,
 		Version:           j.Version,
 		ScheduleID:        pgOptID(j.ScheduleID),
+		RepositoryID:      pgOptID(j.RepositoryID),
+		ConcurrencyKeys:   textArray(j.ConcurrencyKeys),
 	}
 }
 
@@ -191,6 +193,7 @@ func (s *Store) ListJobs(ctx context.Context, f jobs.ListFilter) ([]jobs.Job, er
 		Kinds:         textArray(f.Kinds),
 		RemoteID:      pgOptID(f.RemoteID),
 		ScheduleID:    pgOptID(f.ScheduleID),
+		RepositoryID:  pgOptID(f.RepositoryID),
 		Query:         query,
 		CreatedAfter:  pgOptTime(f.CreatedAfter),
 		CreatedBefore: pgOptTime(f.CreatedBefore),
@@ -213,11 +216,54 @@ func (s *Store) ListUnfinishedJobs(ctx context.Context, workerID domain.WorkerID
 	return s.jobsWithRemotes(ctx, op, rows)
 }
 
-// ListQueuedJobs implements jobs.Repository.
+// ListQueuedJobs implements jobs.Repository. The query is key-aware (see
+// jobs.Repository): a keyed job waiting for an older sharer is no
+// candidate.
 func (s *Store) ListQueuedJobs(ctx context.Context, before time.Time, limit int) ([]jobs.Job, error) {
 	rows, err := s.q.ListQueuedJobs(ctx, db.ListQueuedJobsParams{Before: pgTime(before), RowLimit: limitArg(limit)})
 	if err != nil {
 		return nil, mapErr("list queued jobs", err)
 	}
 	return s.jobsWithRemotes(ctx, "list queued jobs", rows)
+}
+
+// ListJobBlockers implements jobs.Repository (query ListJobBlockers).
+func (s *Store) ListJobBlockers(ctx context.Context, ids []domain.JobID) (map[domain.JobID]domain.JobID, error) {
+	out := make(map[domain.JobID]domain.JobID)
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.q.ListJobBlockers(ctx, pgIDs(ids))
+	if err != nil {
+		return nil, mapErr("list job blockers", err)
+	}
+	for _, r := range rows {
+		var job, blocker domain.JobID
+		if err := errors.Join(decodeID(&job, r.JobID), decodeID(&blocker, r.BlockerID)); err != nil {
+			return nil, fmt.Errorf("list job blockers: %w", err)
+		}
+		out[job] = blocker
+	}
+	return out, nil
+}
+
+// ListWorkersWaitingOnKeys implements jobs.Repository (query
+// ListWorkersWaitingOnKeys).
+func (s *Store) ListWorkersWaitingOnKeys(ctx context.Context, keys []string) ([]domain.WorkerID, error) {
+	out := []domain.WorkerID{}
+	if len(keys) == 0 {
+		return out, nil
+	}
+	rows, err := s.q.ListWorkersWaitingOnKeys(ctx, keys)
+	if err != nil {
+		return nil, mapErr("list workers waiting on keys", err)
+	}
+	for _, r := range rows {
+		var id domain.WorkerID
+		if err := decodeID(&id, r); err != nil {
+			return nil, fmt.Errorf("list workers waiting on keys: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, nil
 }

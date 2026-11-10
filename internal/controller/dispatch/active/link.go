@@ -60,3 +60,16 @@ func (l *linkService) Poll(ctx context.Context, req *connect.Request[syncrv1.Pol
 
 // errShuttingDown ends long polls when the server's lifetime ends.
 var errShuttingDown = errors.New("controller shutting down")
+
+// CompleteProbe hands the result of an active-mode probe to the
+// dispatcher. Unknown and late results are accepted and ignored there.
+func (l *linkService) CompleteProbe(ctx context.Context, req *connect.Request[syncrv1.CompleteProbeRequest]) (*connect.Response[syncrv1.CompleteProbeResponse], error) {
+	id, err := workerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := l.s.disp.CompleteProbe(ctx, id, req.Msg.GetEpoch(), req.Msg.GetResult()); err != nil {
+		return nil, l.s.toConnect(ctx, syncrv1connect.ControllerLinkServiceCompleteProbeProcedure, err)
+	}
+	return connect.NewResponse(&syncrv1.CompleteProbeResponse{}), nil
+}

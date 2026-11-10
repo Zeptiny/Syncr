@@ -34,7 +34,7 @@ func TestNewRegistersEveryResticKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"restic_backup", "restic_check", "restic_forget", "restic_init",
+		"restic_backup", "restic_check", "restic_delete_data", "restic_forget", "restic_init",
 		"restic_prune", "restic_restore", "restic_snapshots",
 	}
 	if got := reg.Kinds(); !slices.Equal(got, want) {

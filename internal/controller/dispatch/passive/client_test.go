@@ -24,8 +24,10 @@ import (
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
+	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch/passive"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/link"
 )
 
 // fakeWorker is a WorkerLinkService that records the Authorization header
@@ -34,6 +36,8 @@ type fakeWorker struct {
 	mu      sync.Mutex
 	auth    []string
 	padding int
+	// probe serves Probe; nil answers Unimplemented.
+	probe func(context.Context, *syncrv1.RunProbe) (*syncrv1.ProbeResult, error)
 }
 
 func (f *fakeWorker) Command(_ context.Context, req *connect.Request[syncrv1.CommandRequest]) (*connect.Response[syncrv1.CommandResponse], error) {
@@ -201,6 +205,33 @@ func TestClientTimeout(t *testing.T) {
 	}
 }
 
+// TestClientProbeTimeout: ClientConfig.ProbeTimeout is how long a Probe
+// waits for the worker's response headers when its context has no
+// deadline; by default the longest probe plus the broker's grace.
+func TestClientProbeTimeout(t *testing.T) {
+	t.Parallel()
+	if passive.DefaultProbeTimeout != link.MaxProbeTimeout+link.ProbeGrace {
+		t.Errorf("DefaultProbeTimeout = %v", passive.DefaultProbeTimeout)
+	}
+	leaf := newCert(t, "w", nil, false)
+	block := make(chan struct{})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-block }))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{leaf.der}, PrivateKey: leaf.key}}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	defer srv.Close()
+	defer close(block)
+	c, err := passive.NewClient(target(srv.URL, leaf.fingerprint()), passive.ClientConfig{ProbeTimeout: 200 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	start := time.Now()
+	_, err = c.Probe(context.Background(), &syncrv1.ProbeRequest{Probe: &syncrv1.RunProbe{ProbeId: "p"}})
+	if took := time.Since(start); err == nil || took < 200*time.Millisecond || took > 5*time.Second {
+		t.Errorf("probe of a hanging worker: %v after %v, want an error after the probe timeout", err, took)
+	}
+}
+
 func TestNewClientValidates(t *testing.T) {
 	t.Parallel()
 	fp := strings.Repeat("ab", 32)
@@ -213,6 +244,92 @@ func TestNewClientValidates(t *testing.T) {
 	} {
 		if _, err := passive.NewClient(tg, passive.ClientConfig{}); !errors.Is(err, passive.ErrInvalidTarget) {
 			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// Probe implements WorkerLinkService: it answers with the fake's probe
+// function, or Unimplemented (a worker without probe support).
+func (f *fakeWorker) Probe(ctx context.Context, req *connect.Request[syncrv1.ProbeRequest]) (*connect.Response[syncrv1.ProbeResponse], error) {
+	f.mu.Lock()
+	f.auth = append(f.auth, req.Header().Get("Authorization"))
+	fn := f.probe
+	f.mu.Unlock()
+	if fn == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, nil)
+	}
+	res, err := fn(ctx, req.Msg.GetProbe())
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&syncrv1.ProbeResponse{Result: res}), nil
+}
+
+func TestClientProbe(t *testing.T) {
+	t.Parallel()
+	w := &fakeWorker{}
+	leaf := newCert(t, "syncr-worker", nil, false)
+	srv := serve(t, w, leaf)
+	// Pull and Command give up after 50 ms; a probe does not.
+	c, err := passive.NewClient(target(srv.URL, leaf.fingerprint()), passive.ClientConfig{Timeout: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	ctx := context.Background()
+	req := &syncrv1.ProbeRequest{Probe: &syncrv1.RunProbe{ProbeId: "p1"}}
+
+	// A worker without probes.
+	if _, err := c.Probe(ctx, req); !errors.Is(err, dispatch.ErrProbeUnsupported) || !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("unimplemented: %v", err)
+	}
+
+	// A probe that takes longer than the client's call timeout.
+	release := make(chan struct{})
+	w.mu.Lock()
+	w.probe = func(ctx context.Context, p *syncrv1.RunProbe) (*syncrv1.ProbeResult, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return &syncrv1.ProbeResult{ProbeId: p.GetProbeId(), Status: syncrv1.ProbeStatus_PROBE_STATUS_OK}, nil
+	}
+	w.mu.Unlock()
+	time.AfterFunc(200*time.Millisecond, func() { close(release) })
+	resp, err := c.Probe(ctx, req)
+	if err != nil || resp.GetResult().GetProbeId() != "p1" {
+		t.Fatalf("slow probe = %v, %v", resp, err)
+	}
+
+	// The context's deadline governs.
+	w.mu.Lock()
+	w.probe = func(ctx context.Context, _ *syncrv1.RunProbe) (*syncrv1.ProbeResult, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	w.mu.Unlock()
+	short, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	if _, err := c.Probe(short, req); connect.CodeOf(err) != connect.CodeDeadlineExceeded {
+		t.Fatalf("deadline: %v", err)
+	}
+
+	// Other failures stay transport errors.
+	w.mu.Lock()
+	w.probe = func(context.Context, *syncrv1.RunProbe) (*syncrv1.ProbeResult, error) {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("bad secret"))
+	}
+	w.mu.Unlock()
+	if _, err := c.Probe(ctx, req); err == nil || errors.Is(err, dispatch.ErrProbeUnsupported) || connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Fatalf("unauthenticated: %v", err)
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, a := range w.auth {
+		if a != "Bearer s3cret-s3cret-s3cret" {
+			t.Errorf("authorization %q", a)
 		}
 	}
 }

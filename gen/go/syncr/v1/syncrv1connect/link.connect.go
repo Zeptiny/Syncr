@@ -43,11 +43,16 @@ const (
 	// ControllerLinkServicePollProcedure is the fully-qualified name of the ControllerLinkService's
 	// Poll RPC.
 	ControllerLinkServicePollProcedure = "/syncr.v1.ControllerLinkService/Poll"
+	// ControllerLinkServiceCompleteProbeProcedure is the fully-qualified name of the
+	// ControllerLinkService's CompleteProbe RPC.
+	ControllerLinkServiceCompleteProbeProcedure = "/syncr.v1.ControllerLinkService/CompleteProbe"
 	// WorkerLinkServiceCommandProcedure is the fully-qualified name of the WorkerLinkService's Command
 	// RPC.
 	WorkerLinkServiceCommandProcedure = "/syncr.v1.WorkerLinkService/Command"
 	// WorkerLinkServicePullProcedure is the fully-qualified name of the WorkerLinkService's Pull RPC.
 	WorkerLinkServicePullProcedure = "/syncr.v1.WorkerLinkService/Pull"
+	// WorkerLinkServiceProbeProcedure is the fully-qualified name of the WorkerLinkService's Probe RPC.
+	WorkerLinkServiceProbeProcedure = "/syncr.v1.WorkerLinkService/Probe"
 	// EnrollmentServiceEnrollProcedure is the fully-qualified name of the EnrollmentService's Enroll
 	// RPC.
 	EnrollmentServiceEnrollProcedure = "/syncr.v1.EnrollmentService/Enroll"
@@ -72,6 +77,11 @@ type ControllerLinkServiceClient interface {
 	// holds the call open for up to PollRequest.wait and returns as soon as
 	// commands are available. Commands are redelivered until acknowledged.
 	Poll(context.Context, *connect.Request[v1.PollRequest]) (*connect.Response[v1.PollResponse], error)
+	// CompleteProbe delivers the result of a probe the worker received as
+	// Command.run_probe (Milestone 5). Idempotent: an unknown, late or another
+	// worker's probe ID is accepted and ignored. FAILED_PRECONDITION for a
+	// stale epoch, as for Report.
+	CompleteProbe(context.Context, *connect.Request[v1.CompleteProbeRequest]) (*connect.Response[v1.CompleteProbeResponse], error)
 }
 
 // NewControllerLinkServiceClient constructs a client for the syncr.v1.ControllerLinkService
@@ -97,13 +107,20 @@ func NewControllerLinkServiceClient(httpClient connect.HTTPClient, baseURL strin
 			connect.WithSchema(controllerLinkServiceMethods.ByName("Poll")),
 			connect.WithClientOptions(opts...),
 		),
+		completeProbe: connect.NewClient[v1.CompleteProbeRequest, v1.CompleteProbeResponse](
+			httpClient,
+			baseURL+ControllerLinkServiceCompleteProbeProcedure,
+			connect.WithSchema(controllerLinkServiceMethods.ByName("CompleteProbe")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // controllerLinkServiceClient implements ControllerLinkServiceClient.
 type controllerLinkServiceClient struct {
-	report *connect.Client[v1.ReportRequest, v1.ReportResponse]
-	poll   *connect.Client[v1.PollRequest, v1.PollResponse]
+	report        *connect.Client[v1.ReportRequest, v1.ReportResponse]
+	poll          *connect.Client[v1.PollRequest, v1.PollResponse]
+	completeProbe *connect.Client[v1.CompleteProbeRequest, v1.CompleteProbeResponse]
 }
 
 // Report calls syncr.v1.ControllerLinkService.Report.
@@ -114,6 +131,11 @@ func (c *controllerLinkServiceClient) Report(ctx context.Context, req *connect.R
 // Poll calls syncr.v1.ControllerLinkService.Poll.
 func (c *controllerLinkServiceClient) Poll(ctx context.Context, req *connect.Request[v1.PollRequest]) (*connect.Response[v1.PollResponse], error) {
 	return c.poll.CallUnary(ctx, req)
+}
+
+// CompleteProbe calls syncr.v1.ControllerLinkService.CompleteProbe.
+func (c *controllerLinkServiceClient) CompleteProbe(ctx context.Context, req *connect.Request[v1.CompleteProbeRequest]) (*connect.Response[v1.CompleteProbeResponse], error) {
+	return c.completeProbe.CallUnary(ctx, req)
 }
 
 // ControllerLinkServiceHandler is an implementation of the syncr.v1.ControllerLinkService service.
@@ -135,6 +157,11 @@ type ControllerLinkServiceHandler interface {
 	// holds the call open for up to PollRequest.wait and returns as soon as
 	// commands are available. Commands are redelivered until acknowledged.
 	Poll(context.Context, *connect.Request[v1.PollRequest]) (*connect.Response[v1.PollResponse], error)
+	// CompleteProbe delivers the result of a probe the worker received as
+	// Command.run_probe (Milestone 5). Idempotent: an unknown, late or another
+	// worker's probe ID is accepted and ignored. FAILED_PRECONDITION for a
+	// stale epoch, as for Report.
+	CompleteProbe(context.Context, *connect.Request[v1.CompleteProbeRequest]) (*connect.Response[v1.CompleteProbeResponse], error)
 }
 
 // NewControllerLinkServiceHandler builds an HTTP handler from the service implementation. It
@@ -156,12 +183,20 @@ func NewControllerLinkServiceHandler(svc ControllerLinkServiceHandler, opts ...c
 		connect.WithSchema(controllerLinkServiceMethods.ByName("Poll")),
 		connect.WithHandlerOptions(opts...),
 	)
+	controllerLinkServiceCompleteProbeHandler := connect.NewUnaryHandler(
+		ControllerLinkServiceCompleteProbeProcedure,
+		svc.CompleteProbe,
+		connect.WithSchema(controllerLinkServiceMethods.ByName("CompleteProbe")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/syncr.v1.ControllerLinkService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ControllerLinkServiceReportProcedure:
 			controllerLinkServiceReportHandler.ServeHTTP(w, r)
 		case ControllerLinkServicePollProcedure:
 			controllerLinkServicePollHandler.ServeHTTP(w, r)
+		case ControllerLinkServiceCompleteProbeProcedure:
+			controllerLinkServiceCompleteProbeHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -179,6 +214,10 @@ func (UnimplementedControllerLinkServiceHandler) Poll(context.Context, *connect.
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ControllerLinkService.Poll is not implemented"))
 }
 
+func (UnimplementedControllerLinkServiceHandler) CompleteProbe(context.Context, *connect.Request[v1.CompleteProbeRequest]) (*connect.Response[v1.CompleteProbeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ControllerLinkService.CompleteProbe is not implemented"))
+}
+
 // WorkerLinkServiceClient is a client for the syncr.v1.WorkerLinkService service.
 type WorkerLinkServiceClient interface {
 	// Command delivers commands to the worker. The worker acknowledges every
@@ -191,6 +230,11 @@ type WorkerLinkServiceClient interface {
 	// the worker is busy and every ~15s when idle, and again at once while
 	// has_more is set.
 	Pull(context.Context, *connect.Request[v1.PullRequest]) (*connect.Response[v1.PullResponse], error)
+	// Probe runs a probe synchronously (Milestone 5). The call's deadline and
+	// cancellation apply to the probe; workers cap its timeout (90s). Failures
+	// of the probe itself are reported in the response (ProbeResult.status),
+	// not as RPC errors. Workers without probe support answer UNIMPLEMENTED.
+	Probe(context.Context, *connect.Request[v1.ProbeRequest]) (*connect.Response[v1.ProbeResponse], error)
 }
 
 // NewWorkerLinkServiceClient constructs a client for the syncr.v1.WorkerLinkService service. By
@@ -216,6 +260,12 @@ func NewWorkerLinkServiceClient(httpClient connect.HTTPClient, baseURL string, o
 			connect.WithSchema(workerLinkServiceMethods.ByName("Pull")),
 			connect.WithClientOptions(opts...),
 		),
+		probe: connect.NewClient[v1.ProbeRequest, v1.ProbeResponse](
+			httpClient,
+			baseURL+WorkerLinkServiceProbeProcedure,
+			connect.WithSchema(workerLinkServiceMethods.ByName("Probe")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -223,6 +273,7 @@ func NewWorkerLinkServiceClient(httpClient connect.HTTPClient, baseURL string, o
 type workerLinkServiceClient struct {
 	command *connect.Client[v1.CommandRequest, v1.CommandResponse]
 	pull    *connect.Client[v1.PullRequest, v1.PullResponse]
+	probe   *connect.Client[v1.ProbeRequest, v1.ProbeResponse]
 }
 
 // Command calls syncr.v1.WorkerLinkService.Command.
@@ -233,6 +284,11 @@ func (c *workerLinkServiceClient) Command(ctx context.Context, req *connect.Requ
 // Pull calls syncr.v1.WorkerLinkService.Pull.
 func (c *workerLinkServiceClient) Pull(ctx context.Context, req *connect.Request[v1.PullRequest]) (*connect.Response[v1.PullResponse], error) {
 	return c.pull.CallUnary(ctx, req)
+}
+
+// Probe calls syncr.v1.WorkerLinkService.Probe.
+func (c *workerLinkServiceClient) Probe(ctx context.Context, req *connect.Request[v1.ProbeRequest]) (*connect.Response[v1.ProbeResponse], error) {
+	return c.probe.CallUnary(ctx, req)
 }
 
 // WorkerLinkServiceHandler is an implementation of the syncr.v1.WorkerLinkService service.
@@ -247,6 +303,11 @@ type WorkerLinkServiceHandler interface {
 	// the worker is busy and every ~15s when idle, and again at once while
 	// has_more is set.
 	Pull(context.Context, *connect.Request[v1.PullRequest]) (*connect.Response[v1.PullResponse], error)
+	// Probe runs a probe synchronously (Milestone 5). The call's deadline and
+	// cancellation apply to the probe; workers cap its timeout (90s). Failures
+	// of the probe itself are reported in the response (ProbeResult.status),
+	// not as RPC errors. Workers without probe support answer UNIMPLEMENTED.
+	Probe(context.Context, *connect.Request[v1.ProbeRequest]) (*connect.Response[v1.ProbeResponse], error)
 }
 
 // NewWorkerLinkServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -268,12 +329,20 @@ func NewWorkerLinkServiceHandler(svc WorkerLinkServiceHandler, opts ...connect.H
 		connect.WithSchema(workerLinkServiceMethods.ByName("Pull")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workerLinkServiceProbeHandler := connect.NewUnaryHandler(
+		WorkerLinkServiceProbeProcedure,
+		svc.Probe,
+		connect.WithSchema(workerLinkServiceMethods.ByName("Probe")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/syncr.v1.WorkerLinkService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkerLinkServiceCommandProcedure:
 			workerLinkServiceCommandHandler.ServeHTTP(w, r)
 		case WorkerLinkServicePullProcedure:
 			workerLinkServicePullHandler.ServeHTTP(w, r)
+		case WorkerLinkServiceProbeProcedure:
+			workerLinkServiceProbeHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -289,6 +358,10 @@ func (UnimplementedWorkerLinkServiceHandler) Command(context.Context, *connect.R
 
 func (UnimplementedWorkerLinkServiceHandler) Pull(context.Context, *connect.Request[v1.PullRequest]) (*connect.Response[v1.PullResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerLinkService.Pull is not implemented"))
+}
+
+func (UnimplementedWorkerLinkServiceHandler) Probe(context.Context, *connect.Request[v1.ProbeRequest]) (*connect.Response[v1.ProbeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerLinkService.Probe is not implemented"))
 }
 
 // EnrollmentServiceClient is a client for the syncr.v1.EnrollmentService service.

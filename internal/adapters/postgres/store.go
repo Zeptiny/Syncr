@@ -3,8 +3,8 @@
 // jobs.Repository, jobs.SampleRepository, jobs.ActivityRepository,
 // users.Repository, users.SessionRepository, users.APITokenRepository,
 // remotes.Repository, schedules.Repository, contacts.Repository,
-// notifications.Repository), built on pgx/v5, sqlc-generated queries
-// (package db) and goose migrations.
+// notifications.Repository, restic.Repository), built on pgx/v5,
+// sqlc-generated queries (package db) and goose migrations.
 //
 // Concurrency safety lives in the statements, not in application locks: every
 // conditional update is a single UPDATE ... WHERE <condition> RETURNING ...
@@ -29,6 +29,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/notifications"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/users"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
@@ -48,6 +49,7 @@ var (
 	_ schedules.Repository     = (*Store)(nil)
 	_ contacts.Repository      = (*Store)(nil)
 	_ notifications.Repository = (*Store)(nil)
+	_ restic.Repository        = (*Store)(nil)
 )
 
 // applicationName identifies the controller in pg_stat_activity.

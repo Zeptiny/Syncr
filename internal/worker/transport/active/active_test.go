@@ -47,9 +47,16 @@ type fakeController struct {
 	acked    []string
 	commands []*syncrv1.Command
 	wake     chan struct{}
-	failWith error         // returned by every call while set
-	ackLess  bool          // ack nothing (for the drain deadline test)
-	hold     chan struct{} // Reports wait until it is closed (holdReports)
+	failWith error // returned by every call while set
+	// probes are the results delivered with CompleteProbe, probeEpochs
+	// their epochs; probeErrs are returned by the next CompleteProbe calls,
+	// one each, before results are accepted.
+	probes      []*syncrv1.ProbeResult
+	probeEpochs []string
+	probeCalls  int
+	probeErrs   []error
+	ackLess     bool          // ack nothing (for the drain deadline test)
+	hold        chan struct{} // Reports wait until it is closed (holdReports)
 }
 
 func newFakeController() *fakeController {
@@ -181,6 +188,12 @@ func (r stepRunner) Run(ctx context.Context, _ runner.Job, emit runner.EmitFunc)
 // setup builds an agent, core and transport against ctrl.
 func setup(t *testing.T, ctrl *fakeController, rn runner.Runner, mod func(*Options)) (*agent.Agent, *linkcore.Core, *Transport) {
 	t.Helper()
+	return setupWith(t, ctrl, rn, mod)
+}
+
+// setupWith is setup with options for the link core (a Prober).
+func setupWith(t *testing.T, ctrl *fakeController, rn runner.Runner, mod func(*Options), coreOpts ...linkcore.Option) (*agent.Agent, *linkcore.Core, *Transport) {
+	t.Helper()
 	reg := runner.NewRegistry()
 	if err := reg.Register(rn); err != nil {
 		t.Fatal(err)
@@ -189,7 +202,7 @@ func setup(t *testing.T, ctrl *fakeController, rn runner.Runner, mod func(*Optio
 	if err != nil {
 		t.Fatal(err)
 	}
-	core := linkcore.New(a, a.Outbox(), nil)
+	core := linkcore.New(a, a.Outbox(), nil, coreOpts...)
 	opts := Options{
 		ControllerURL: "https://controller.test/prefix/", WorkerID: "w1", Secret: "s3cret",
 		HTTPClient: &http.Client{Transport: inMemory{h: http.StripPrefix("/prefix", ctrl.handler())}},

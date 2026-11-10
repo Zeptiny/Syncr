@@ -12,8 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
+
+// jobsFilterAll lists every job.
+func jobsFilterAll() jobs.ListFilter { return jobs.ListFilter{Limit: -1} }
 
 // appliedVersions returns the goose bookkeeping rows of the store's database.
 func appliedVersions(t *testing.T, s *Store) []int64 {
@@ -52,13 +56,17 @@ var schemaTables = []string{
 	"workers", "enrollment_tokens", "jobs", "job_samples",
 	"users", "sessions", "api_tokens", "remotes", "union_members", "job_remotes",
 	"contacts", "schedules", "schedule_remotes", "schedule_contacts", "schedule_runs", "deliveries",
+	"restic_repositories", "restic_snapshots",
 }
 
 // milestone4Tables are the tables of migration 00003.
 var milestone4Tables = []string{"contacts", "schedules", "schedule_remotes", "schedule_contacts", "schedule_runs", "deliveries"}
 
+// milestone5Tables are the tables of migration 00007.
+var milestone5Tables = []string{"restic_repositories", "restic_snapshots"}
+
 // allVersions are the versions of the embedded migrations.
-var allVersions = []int64{1, 2, 3, 4, 5, 6}
+var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8}
 
 func columnExists(t *testing.T, s *Store, table, column string) bool {
 	t.Helper()
@@ -345,4 +353,160 @@ func TestMigrateSchedulesNotificationsDown(t *testing.T) {
 	if !errors.Is(wantErr, domain.ErrAlreadyExists) {
 		t.Errorf("CreateWorker(taken name) = %v, want ErrAlreadyExists", wantErr)
 	}
+}
+
+// TestMigrateResticDown checks migration 00007: going down to version 6
+// removes the restic tables and columns, together with the restic jobs and
+// schedules (and their deliveries), which cannot exist without them; other
+// jobs survive. Migrating up again restores version 7.
+func TestMigrateResticDown(t *testing.T) {
+	s := openStore(t, createDB(t, true))
+	ctx := t.Context()
+	owner := seedUser(t, s)
+	w := newTestWorker()
+	if err := s.CreateWorker(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateJob(ctx, newTestJob(w.ID, owner)); err != nil {
+		t.Fatal(err)
+	}
+	// Version 7 data the down migration drops: a repository with a cached
+	// snapshot, a restic job with a delivery and a restic schedule.
+	const (
+		remote = "00000000-0000-7000-8000-000000000101"
+		repo   = "00000000-0000-7000-8000-000000000102"
+		job    = "00000000-0000-7000-8000-000000000103"
+		sched  = "00000000-0000-7000-8000-000000000104"
+		cont   = "00000000-0000-7000-8000-000000000105"
+		deliv  = "00000000-0000-7000-8000-000000000106"
+	)
+	hex64 := strings.Repeat("ab", 32)
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO remotes (id, owner_id, name, backend_type, options, created_at, updated_at, version)
+			VALUES ($1, $2, 'B2', 'b2', '{}', now(), now(), 1)`, []any{remote, owner.String()}},
+		{`INSERT INTO restic_repositories (id, owner_id, name, remote_id, path, password_enc, restic_id, created_at, updated_at)
+			VALUES ($1, $2, 'Photos', $3, 'restic', '\x00', $4, now(), now())`, []any{repo, owner.String(), remote, hex64}},
+		{`INSERT INTO restic_snapshots (repository_id, snapshot_id, taken_at) VALUES ($1, $2, now())`, []any{repo, hex64}},
+		{`INSERT INTO jobs (id, worker_id, owner_id, kind, status, definition, created_at, queued_at, exit_code, version, repository_id, concurrency_keys)
+			VALUES ($1, $2, $3, 'restic_backup', 'queued', '{}', now(), now(), -1, 1, $4, $5)`,
+			[]any{job, w.ID.String(), owner.String(), repo, []string{"restic-repo:" + repo}}},
+		{`INSERT INTO schedules (id, owner_id, name, cron, timezone, kind, definition, worker_id, missed_action, overlap,
+			enabled, created_at, updated_at, version, repository_id)
+			VALUES ($1, $2, 'Nightly', '0 2 * * *', 'UTC', 'restic_backup', '{}', $3, 'run_late', 'skip', false, now(), now(), 1, $4)`,
+			[]any{sched, owner.String(), w.ID.String(), repo}},
+		{`INSERT INTO contacts (id, owner_id, name, channel_type, created_at, updated_at) VALUES ($1, $2, 'Me', 'webhook', now(), now())`,
+			[]any{cont, owner.String()}},
+		{`INSERT INTO deliveries (id, contact_id, owner_id, event, dedupe_key, job_id, payload, status, max_attempts, next_attempt_at, created_at)
+			VALUES ($1, $2, $3, 'succeeded', $4, $5, '{}', 'pending', 5, now(), now())`,
+			[]any{deliv, cont, owner.String(), "job:" + job + ":succeeded", job}},
+	} {
+		if _, err := s.pool.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("%s: %v", stmt.sql, err)
+		}
+	}
+	p, closeDB, err := s.migrationProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+
+	if _, err := p.DownTo(ctx, 6); err != nil {
+		t.Fatalf("down to 6: %v", err)
+	}
+	for _, table := range milestone5Tables {
+		if tableExists(t, s, table) {
+			t.Errorf("table %s survived the down migration", table)
+		}
+	}
+	if columnExists(t, s, "jobs", "repository_id") || columnExists(t, s, "jobs", "concurrency_keys") || columnExists(t, s, "schedules", "repository_id") {
+		t.Error("the 00007 columns survived the down migration")
+	}
+	var jobCount, scheduleCount, deliveryCount int
+	if err := s.pool.QueryRow(ctx, "SELECT (SELECT count(*) FROM jobs), (SELECT count(*) FROM schedules), (SELECT count(*) FROM deliveries)").
+		Scan(&jobCount, &scheduleCount, &deliveryCount); err != nil || jobCount != 1 || scheduleCount != 0 || deliveryCount != 0 {
+		t.Errorf("after down: %d jobs, %d schedules, %d deliveries (%v); want the transfer job only", jobCount, scheduleCount, deliveryCount, err)
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, []int64{1, 2, 3, 4, 5, 6}) {
+		t.Errorf("applied versions = %v, want [1 2 3 4 5 6]", got)
+	}
+
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) {
+		t.Errorf("applied versions = %v, want %v", got, allVersions)
+	}
+	for _, table := range milestone5Tables {
+		if !tableExists(t, s, table) {
+			t.Errorf("table %s missing after up", table)
+		}
+	}
+	if !columnExists(t, s, "jobs", "concurrency_keys") || !columnExists(t, s, "schedules", "repository_id") {
+		t.Error("the 00007 columns are missing after up")
+	}
+	// The surviving job reads back without a repository or keys.
+	js, err := s.ListJobs(ctx, jobsFilterAll())
+	if err != nil || len(js) != 1 || !js[0].RepositoryID.IsZero() || js[0].ConcurrencyKeys != nil {
+		t.Errorf("jobs after up = %+v (%v)", js, err)
+	}
+}
+
+// TestMigrateWorkerInfoEpoch checks migration 00008: the info stored before
+// it is the Hello of the worker's current epoch (a running worker does not
+// send it again), so it is tagged with that epoch; a worker that never
+// connected keeps its enrollment info untagged. Down removes the tags.
+func TestMigrateWorkerInfoEpoch(t *testing.T) {
+	s := openStore(t, createDB(t, true))
+	ctx := t.Context()
+	p, closeDB, err := s.migrationProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	if _, err := p.DownTo(ctx, 7); err != nil {
+		t.Fatalf("down to 7: %v", err)
+	}
+	const (
+		running = "00000000-0000-7000-8000-000000000201"
+		never   = "00000000-0000-7000-8000-000000000202"
+	)
+	for _, w := range []struct{ id, name, epoch, info string }{
+		{running, "nas", "e1", `{"version":"v2.0.0","os":"linux","features":["probe","restic.v2"]}`},
+		{never, "pc", "", `{"os":"windows","arch":"amd64"}`},
+	} {
+		if _, err := s.pool.Exec(ctx, `INSERT INTO workers (id, name, mode, secret_enc, info, epoch, created_at)
+			VALUES ($1, $2, 'active', '\x00', $3, $4, now())`, w.id, w.name, w.info, w.epoch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	got, err := s.GetWorker(ctx, mustWorkerID(t, running))
+	if err != nil || got.Info.Epoch != "e1" || !got.InfoCurrent() || got.Info.Version != "v2.0.0" || !got.Info.HasFeatures("restic.v2") {
+		t.Errorf("connected worker after up = %+v (%v), want its info tagged with e1", got.Info, err)
+	}
+	got, err = s.GetWorker(ctx, mustWorkerID(t, never))
+	if err != nil || got.Info.Epoch != "" || got.InfoCurrent() || got.Info.OS != "windows" {
+		t.Errorf("never connected worker after up = %+v (%v)", got.Info, err)
+	}
+	if _, err := p.DownTo(ctx, 7); err != nil {
+		t.Fatalf("down to 7 again: %v", err)
+	}
+	var tagged int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM workers WHERE info ? 'epoch'`).Scan(&tagged); err != nil || tagged != 0 {
+		t.Errorf("tagged infos after down = %d (%v), want 0", tagged, err)
+	}
+}
+
+func mustWorkerID(t *testing.T, s string) domain.WorkerID {
+	t.Helper()
+	id, err := domain.ParseWorkerID(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

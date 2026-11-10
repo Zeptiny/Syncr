@@ -13,3 +13,28 @@ export function sortWorkers(workers: Worker[]): Worker[] {
     (a, b) => order[a.status] - order[b.status] || a.name.localeCompare(b.name),
   );
 }
+
+/** The link features a worker reports (internal/link/features.go). */
+export const FEATURE_PROBE = "probe";
+export const FEATURE_RESTIC = "restic.v2";
+export const FEATURE_RESTIC_DELETE = "restic.delete";
+
+/** hasFeature reports whether a worker reported a link feature. */
+export function hasFeature(w: Worker | undefined, feature: string): boolean {
+  return !!w?.info?.features.includes(feature);
+}
+
+/** isOnline reports whether a worker is connected. */
+export function isOnline(w: Worker | undefined): boolean {
+  return w?.status === WorkerStatus.ONLINE;
+}
+
+/**
+ * isOutdated reports whether a worker that has connected is too old for
+ * restic repositories and file browsing. A worker that never connected
+ * (pending) has reported nothing yet and is not called outdated.
+ */
+export function isOutdated(w: Worker): boolean {
+  if (!w.info || w.status === WorkerStatus.PENDING) return false;
+  return !hasFeature(w, FEATURE_PROBE) || !hasFeature(w, FEATURE_RESTIC);
+}

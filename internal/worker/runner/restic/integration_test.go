@@ -73,6 +73,18 @@ type harness struct {
 	repoDir string // directory behind the "repo" remote
 	defs    []*syncrv1.RemoteDefinition
 	loc     *syncrv1.Location
+	// cfg is the runners' Config, for a Prober on the same tools.
+	cfg Config
+}
+
+// prober returns a Prober with the harness's configuration.
+func (h *harness) prober() *Prober {
+	h.t.Helper()
+	p, err := NewProber(h.cfg)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return p
 }
 
 func newHarness(t *testing.T, flags ...string) *harness {
@@ -114,6 +126,7 @@ func newHarnessWith(t *testing.T, mutate func(h *harness, cfg *Config), flags ..
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.cfg = cfg
 	h.runners = map[string]runner.Runner{}
 	for _, r := range rs {
 		h.runners[r.Kind()] = r
@@ -260,11 +273,11 @@ func runLifecycle(t *testing.T, h *harness) {
 
 	h.init(itPassword)
 
-	// Re-initializing an existing repository fails.
+	// Re-initializing an existing repository fails, with its own code.
 	_, _, err := h.run(t.Context(), func(s *syncrv1.JobSpec) {
 		s.Operation = &syncrv1.JobSpec_ResticInit{ResticInit: &syncrv1.ResticInit{Repository: h.repo(itPassword)}}
 	})
-	mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED)
+	mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_ALREADY_EXISTS)
 
 	// A dry run creates nothing.
 	dry, _ := h.backup(&syncrv1.ResticBackup{Paths: []string{src}, DryRun: true})

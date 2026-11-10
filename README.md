@@ -4,11 +4,12 @@ Self-hosted manager for [rclone](https://rclone.org/) sync jobs and
 [restic](https://restic.net/) backups: one controller with a web UI, any
 number of workers on servers and desktops (Linux first, Windows second).
 
-> **Status: v2 rewrite in progress. Milestone 4 complete: schedules,
-> notifications and the dashboard.** Workers enroll and run rclone jobs over
-> the link (active or passive), by hand or on cron schedules, and contacts on
-> Discord, email or webhooks hear how they went; restic repositories come
-> next. The previous Django version lives on `main` (tag `django-final`).
+> **Status: v2 rewrite in progress. Milestone 5 complete: restic
+> repositories.** Workers enroll and run rclone transfers and restic backups
+> over the link (active or passive), by hand or on cron schedules; snapshots
+> can be browsed and restored, and contacts on Discord, email or webhooks
+> hear how jobs went. Hardening and the first release come next. The
+> previous Django version lives on `main` (tag `django-final`).
 
 ## Architecture
 
@@ -50,7 +51,10 @@ Design records: [architecture](docs/adr/0001-architecture.md),
 [backend registry and remotes](docs/adr/0007-backend-registry-remotes.md),
 [web UI](docs/adr/0008-web-ui.md),
 [schedules](docs/adr/0009-schedules.md),
-[notifications](docs/adr/0010-notifications.md).
+[notifications](docs/adr/0010-notifications.md),
+[restic repositories](docs/adr/0011-restic-repositories.md),
+[worker probes](docs/adr/0012-worker-probes.md),
+[concurrency keys](docs/adr/0013-concurrency-keys.md).
 
 ## Quick start
 
@@ -109,9 +113,26 @@ worker, and unions of them). Credentials are encrypted at rest, never shown
 again and only sent to the worker that runs a job. **Jobs, Run job** copies,
 syncs or moves between a remote or a worker folder (inside its
 `local_roots`) and another, on a worker you pick; the job page follows its
-progress live.
+progress live. **Test remote** on a remote's form lists it through a worker
+and says what it found, also for values you have not saved yet, and the
+**Browse** buttons pick paths on a worker or a remote instead of typing
+them.
 
-**5. Schedule jobs.** Under **Schedules, New schedule** pick a cron expression
+**5. Back up with restic.** Under **Repositories, Add repository** create a
+restic repository at a path on one of your remotes, or connect to one that
+is already there, with its password (encrypted at rest and never shown
+again: keep your own copy, the backups cannot be read without it). Then run
+or schedule **Backup** jobs of a worker's folders, **Retention** (which
+snapshots to keep, with prune) and **Check** jobs. A repository's page
+lists its snapshots; open one to browse its folders and **restore** all of
+it, one folder or selected items into a folder of a worker. A restore keeps
+existing files unless you choose otherwise. Jobs on one repository run one
+at a time. Deleting a repository forgets it and leaves the backups in
+place; deleting the backup data too is a separate, confirmed choice.
+Details, Windows volume snapshots and what a deletion removes:
+[restic backups](docs/restic.md).
+
+**6. Schedule jobs.** Under **Schedules, New schedule** pick a cron expression
 (five fields, e.g. `30 2 * * *`, or `@daily`; the form previews the next
 runs) and its time zone, where the jobs run (one worker, or any worker with
 a label, e.g. `nas`: the least busy online one that can run the job), the
@@ -127,14 +148,14 @@ Occurrences that pass while the controller is down are not replayed one by
 one: those that may still start merge into one run (shown as coalesced),
 and those whose missed-run limit has passed are recorded as missed because
 the controller was down. A schedule whose worker
-was removed, whose remote was deleted or whose owner was disabled pauses
+was removed, whose remote or repository was deleted or whose owner was disabled pauses
 itself and says why; **Run now** works on paused schedules too. Schedule
 times follow the time zone's daylight saving rules: a time that does not
 exist that day runs at the first moment after the gap, and a time that
 happens twice runs once. Admins label workers on the worker page. Schedules
 belong to their owner, like remotes ([ADR 0009](docs/adr/0009-schedules.md)).
 
-**6. Get notified.** Under **Notifications** add contacts: a Discord webhook,
+**7. Get notified.** Under **Notifications** add contacts: a Discord webhook,
 an email address (your SMTP server, STARTTLS or TLS) or a webhook (JSON,
 signed per [Standard Webhooks](https://www.standardwebhooks.com/), or in
 Slack's format); **Send test** checks one. Link contacts to schedules with
@@ -196,6 +217,7 @@ internal/app/jobs/        job lifecycle: create, cancel, watch, every status cha
 internal/backend/         backend type registry (fields, validation, rclone mapping); builtin/ has the types
 internal/jobkind/         job kinds: check stored definitions, build worker specs from resolved remotes
 internal/app/schedules/   schedules and their runs: validation, fire and missed-run/overlap policies
+internal/app/restic/      restic repositories: create or connect, encrypted password, snapshot cache, deletion
 internal/app/contacts/    notification contacts: validation, encrypted secrets, test sends
 internal/app/notifications/ durable notification outbox: planning, delivery with retries, delivery log
 internal/cronexpr/        cron expressions with time-zone and daylight-saving rules
@@ -205,6 +227,7 @@ internal/controller/scheduler/ fires due schedules and launches their runs on wo
 internal/controller/dispatch/ controller side of the worker link: ingest, commands, reconcile, long polls, passive loop
 internal/controller/dispatch/active/  Connect handlers for active workers (Report, Poll) and enrollment
 internal/controller/dispatch/passive/ pinned HTTPS client and supervisor for passive workers
+internal/controller/probe/    probes: folder listings, remote tests and restic listings through a worker; the data deleter
 internal/controller/config/   controller configuration
 internal/adapters/api/    Connect handlers, access policy, sessions, the web UI handler and health endpoint
 internal/adapters/password/   argon2id password hashing
@@ -216,6 +239,7 @@ internal/adapters/secrets/    AES-256-GCM encryption of secrets at rest, with ke
 internal/adapters/idgen/      entity ID generators
 internal/adapters/notify/     built-in notification channels: discord, email, webhook
 internal/worker/agent/    runs the controller's commands through the runners; outbox events
+internal/worker/probe/    runs the controller's probes with the runners' tools and local_roots
 internal/worker/outbox/   event buffer with (epoch, seq), acks and coalescing
 internal/worker/linkcore/ link envelopes for both transports, no networking
 internal/worker/transport/ active (Report/Poll loops) and passive (TLS server) transports
@@ -403,6 +427,9 @@ notify:
   concurrency: 4             # SYNCR_NOTIFY_CONCURRENCY: notifications sent at once
   send_timeout: 15s          # SYNCR_NOTIFY_SEND_TIMEOUT: one send or test send (1s to 1m)
   retention: 720h            # SYNCR_NOTIFY_RETENTION: how long the delivery log keeps sent and dead notifications
+probe:
+  timeout: 30s               # SYNCR_PROBE_TIMEOUT: a folder listing or a remote test through a worker (1s to 90s)
+  restic_timeout: 60s        # SYNCR_PROBE_RESTIC_TIMEOUT: creating or opening a repository, listing and browsing snapshots (1s to 90s)
 dev:
   memory_store: false        # SYNCR_DEV_MEMORY_STORE: demos/tests only, instead of database.url; data is lost on exit
   seed: false                # SYNCR_DEV_SEED: demo data with public passwords (needs memory_store); never expose it

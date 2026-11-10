@@ -1,7 +1,8 @@
 // Package linkcore turns worker-link envelopes into agent calls and back, so
 // the active and passive transports (internal/worker/transport/...) only
-// move bytes. It does no networking and holds only one piece of state: the
-// command acks an active worker still has to deliver.
+// move bytes. It does no networking and holds little state: the command acks
+// an active worker still has to deliver, and the probes in flight with
+// their undelivered results (probe.go).
 //
 // # Active mode (the worker calls the controller)
 //
@@ -50,6 +51,23 @@
 //     WorkerState consistent with the events.
 //     When has_more is set the controller should Pull again at once.
 //
+// # Probes
+//
+// A probe is a short request answered outside the job slots (Prober). In
+// passive mode it is one call: resp := core.HandleProbe(ctx, req), which
+// ends when the controller's call does. In active mode a run_probe command
+// starts it in the background (deduplicated by probe ID, acked like every
+// command) and a cancel_probe command stops it; a cancel_probe that comes
+// first, in an earlier Poll or the same one, keeps it from ever starting
+// (the cancelled ID is remembered like a started one). A third loop of the
+// transport delivers the results:
+//
+//  1. Wait for core.ProbeNotify().
+//  2. For each result of core.PendingProbeResults(), call CompleteProbe.
+//     On success, or when the controller refuses the result for good, call
+//     core.ProbeDelivered(id). On a transport error, back off and go to 2:
+//     an undelivered result stays pending until it expires.
+//
 // # Shutdown
 //
 // The composition root calls agent.Shutdown, which leaves every job's
@@ -59,8 +77,9 @@
 // (and Command, whose StartJobs the agent now refuses) until
 // core.WaitDrained(ctx) returns.
 //
-// Allowed dependencies: the standard library, the generated protobuf code
-// and internal/worker/agent (for its Snapshot type).
+// Allowed dependencies: the standard library, the generated protobuf code,
+// internal/link (the probe time limits) and internal/worker/agent (for its
+// Snapshot type).
 package linkcore
 
 import (
@@ -128,14 +147,22 @@ type Core struct {
 	// duplicates.
 	acks     []*syncrv1.CommandAck
 	ackIndex map[string]struct{}
+
+	// probes are the probes in flight and their undelivered results.
+	probes probes
 }
 
 // New returns a Core for a and its outbox. A nil logger discards logs.
-func New(a Agent, out Outbox, log *slog.Logger) *Core {
+func New(a Agent, out Outbox, log *slog.Logger, opts ...Option) *Core {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Core{agent: a, out: out, log: log, ackIndex: make(map[string]struct{})}
+	c := &Core{agent: a, out: out, log: log, ackIndex: make(map[string]struct{})}
+	c.probes.init()
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
 
 // Notify signals that events were appended (see outbox.Outbox.Notify).
@@ -209,7 +236,12 @@ func (c *Core) ApplyPollResponse(ctx context.Context, req *syncrv1.PollRequest, 
 	if len(resp.GetCommands()) == 0 {
 		return nil
 	}
-	acks := c.agent.HandleCommands(ctx, resp.GetCommands())
+	// Probe commands are the core's own: probes run outside the agent's
+	// job slots and their results travel on their own RPC.
+	acks, rest := c.takeProbeCommands(resp.GetCommands())
+	if len(rest) > 0 {
+		acks = append(acks, c.agent.HandleCommands(ctx, rest)...)
+	}
 	c.queueAcks(acks)
 	return acks
 }

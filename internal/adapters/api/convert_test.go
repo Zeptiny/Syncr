@@ -2,6 +2,7 @@ package api
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,10 +13,12 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/contacts"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
+	"github.com/Zeptiny/Syncr/internal/notify"
 )
 
 var convT0 = time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
@@ -356,5 +359,97 @@ func TestScheduleConversions(t *testing.T) {
 	sc.Definition = []byte("not json")
 	if ps, err := scheduleToProto(sc, scheduleRefs{}); err == nil || ps.GetDefinition() != nil || ps.GetName() != "n" || ps.GetLastRun() != nil {
 		t.Errorf("scheduleToProto(corrupt definition) = (%v, %v)", ps, err)
+	}
+}
+
+// The job kinds format sizes exactly as notifications do: the same job
+// reads the same in the UI and in a notification.
+func TestFormatBytesAgree(t *testing.T) {
+	t.Parallel()
+	for _, n := range []int64{0, 1, 2, 1023, 1024, 1025, 1536, 1 << 20, 1<<20 + 1<<19, 880803840, 5 << 30, 51646976819, 1 << 40, 1 << 50, 1 << 60, 1 << 62, 1<<63 - 1} {
+		if a, b := jobkind.FormatBytes(n), notify.FormatBytes(n); a != b {
+			t.Errorf("FormatBytes(%d): jobkind %q, notify %q", n, a, b)
+		}
+	}
+}
+
+func TestRepositoryToProto(t *testing.T) {
+	t.Parallel()
+	id, remote, job := domain.NewResticRepoID(), domain.NewRemoteID(), domain.NewJobID()
+	backup, check := domain.NewJobID(), domain.NewJobID()
+	r := restic.Repo{
+		ID: id, OwnerID: domain.NewUserID(), Name: "Photos vault", Description: "family", RemoteID: remote, Path: "restic/photos",
+		PasswordEnc: []byte("never shown"), ResticID: "abc", FormatVersion: 2,
+		Deleting: true, DeletionJobID: job, DeletionRequestedAt: convT0.Add(time.Hour), DeletionError: "",
+		CreatedAt: convT0, UpdatedAt: convT0.Add(time.Minute), Version: 4,
+		Stats: restic.RepoStats{
+			SnapshotCount: 3, LatestSnapshotAt: convT0, LatestSnapshotBytes: 12345, SnapshotsRefreshedAt: convT0.Add(time.Minute),
+			SnapshotsTruncated: true, SnapshotsMark: restic.ChangeMark{Jobs: 1, LastFinishedAt: convT0}, ChangeMark: restic.ChangeMark{Jobs: 2, LastFinishedAt: convT0},
+			LastBackup:    restic.JobRef{ID: backup, Status: domain.JobSucceeded, CreatedAt: convT0, FinishedAt: convT0.Add(2 * time.Minute)},
+			LastCheck:     restic.JobRef{ID: check, Status: domain.JobRunning, CreatedAt: convT0},
+			ScheduleCount: 2,
+		},
+	}
+	got := repositoryToProto(r, remotes.Ref{ID: remote, Name: "B2 offsite", Type: "b2", Deleted: true})
+	want := &syncrv1.Repository{
+		Id: id.String(), Name: "Photos vault", Description: "family", RemoteId: remote.String(), Path: "restic/photos",
+		Remote:   &syncrv1.JobRemoteRef{Id: remote.String(), Name: "B2 offsite", BackendType: "b2", Deleted: true},
+		ResticId: "abc", FormatVersion: 2, CreatedAt: ts(convT0), UpdatedAt: ts(convT0.Add(time.Minute)), Version: 4,
+		Deleting: true, DeletionJobId: job.String(), DeletionRequestedAt: ts(convT0.Add(time.Hour)),
+		Stats: &syncrv1.RepositoryStats{
+			SnapshotCount: 3, LatestSnapshotAt: ts(convT0), LatestSnapshotBytes: 12345, SnapshotsRefreshedAt: ts(convT0.Add(time.Minute)),
+			SnapshotsStale: true, SnapshotsTruncated: true,
+			LastBackup:    &syncrv1.RepositoryJobRef{JobId: backup.String(), Status: syncrv1.JobStatus_JOB_STATUS_SUCCEEDED, CreatedAt: ts(convT0), FinishedAt: ts(convT0.Add(2 * time.Minute))},
+			LastCheck:     &syncrv1.RepositoryJobRef{JobId: check.String(), Status: syncrv1.JobStatus_JOB_STATUS_RUNNING, CreatedAt: ts(convT0)},
+			ScheduleCount: 2,
+		},
+	}
+	if !proto.Equal(got, want) {
+		t.Errorf("repositoryToProto =\n%v\nwant\n%v", got, want)
+	}
+	// The message has no field that could carry the password.
+	fields := got.ProtoReflect().Descriptor().Fields()
+	for i := range fields.Len() {
+		if name := string(fields.Get(i).Name()); strings.Contains(name, "password") || strings.Contains(name, "secret") {
+			t.Errorf("Repository has the field %q", name)
+		}
+	}
+
+	// After an attempt that did not delete the data, the outcome says how
+	// it ended; while deleting, and without an error, there is none.
+	for _, tt := range []struct {
+		deleting, cancelled bool
+		msg                 string
+		want                syncrv1.RepositoryDeletionOutcome
+	}{
+		{false, false, "boom", syncrv1.RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_FAILED},
+		{false, true, "stopped", syncrv1.RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_CANCELLED},
+		{true, true, "stale", syncrv1.RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_UNSPECIFIED},
+		{false, true, "", syncrv1.RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_UNSPECIFIED},
+	} {
+		ended := repositoryToProto(restic.Repo{ID: id, RemoteID: remote, Version: 1, Deleting: tt.deleting, DeletionJobID: job,
+			DeletionError: tt.msg, DeletionCancelled: tt.cancelled}, remotes.Ref{})
+		if ended.GetDeletionOutcome() != tt.want || ended.GetDeletionError() != tt.msg {
+			t.Errorf("deleting=%v cancelled=%v error=%q: outcome %v, want %v", tt.deleting, tt.cancelled, tt.msg, ended.GetDeletionOutcome(), tt.want)
+		}
+	}
+
+	// A repository that was never deleting or listed.
+	plain := repositoryToProto(restic.Repo{ID: id, RemoteID: remote, Version: 1}, remotes.Ref{})
+	if plain.GetDeletionJobId() != "" || plain.GetDeletionRequestedAt() != nil || plain.GetStats().GetLastBackup() != nil ||
+		plain.GetStats().GetLastCheck() != nil || !plain.GetStats().GetSnapshotsStale() || plain.GetRemote().GetId() != remote.String() {
+		t.Errorf("a plain repository = %v", plain)
+	}
+	if got := repositoryModeFromProto(syncrv1.RepositoryCreateMode_REPOSITORY_CREATE_MODE_INIT); got != restic.ModeInit {
+		t.Errorf("mode INIT = %q", got)
+	}
+	if got := repositoryModeFromProto(syncrv1.RepositoryCreateMode_REPOSITORY_CREATE_MODE_CONNECT); got != restic.ModeConnect {
+		t.Errorf("mode CONNECT = %q", got)
+	}
+	if got := repositoryModeFromProto(42); got != "" {
+		t.Errorf("an unknown mode = %q", got)
+	}
+	if probeWorkerRef(domain.WorkerID{}, "x") != nil {
+		t.Error("the zero worker has a reference")
 	}
 }

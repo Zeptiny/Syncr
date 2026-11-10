@@ -127,8 +127,14 @@ func (s *Scheduler) decide(ctx context.Context, p *pass, sc schedules.Schedule, 
 }
 
 // target picks the run's worker: launch is false while the run waits, or
-// when it was ended here (no such worker).
+// when it was ended here (no such worker, or none that can run it).
+//
+// What the workers reported (job kinds, features, operating system) is
+// their latest Hello, maybe of a previous process: a hint good enough to
+// choose among them. The dispatcher checks the chosen worker's current
+// process again before it sends the job.
 func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, r schedules.Run) (domain.WorkerID, bool, error) {
+	req := s.requiredOS(sc)
 	if id := sc.Target.WorkerID; !id.IsZero() {
 		w, err := s.workers.Get(ctx, id)
 		switch {
@@ -137,6 +143,11 @@ func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, 
 				"the schedule's worker was removed; choose another worker and resume the schedule", true)
 		case err != nil:
 			return domain.WorkerID{}, false, err
+		case !osMayRun(req, w):
+			// Every run would fail on it: the job must change.
+			return domain.WorkerID{}, false, s.end(ctx, r, schedules.RunFailed, schedules.ReasonInvalidDefinition,
+				clip(fmt.Sprintf("%s; the schedule's worker %q runs %s. Choose another worker or change the job, then resume the schedule",
+					req.Explain(), w.Name, w.Info.OS)), true)
 		}
 		return w.ID, s.workers.Status(w) == domain.WorkerOnline, nil
 	}
@@ -150,13 +161,19 @@ func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, 
 		p.labels[label] = ws
 	}
 	var cands []candidate
-	known := 0
+	known, wrongOS := 0, 0
 	for _, w := range ws {
 		if w.Removed() {
 			continue
 		}
+		if !osMayRun(req, w) {
+			wrongOS++ // another operating system than the definition needs
+			continue
+		}
 		reported := len(w.Info.JobKinds) > 0
-		runsKind := slices.Contains(w.Info.JobKinds, sc.Kind)
+		// A worker that lacks a link feature the kind requires (an older
+		// version) cannot run it, whatever kinds it lists.
+		runsKind := slices.Contains(w.Info.JobKinds, sc.Kind) && w.Info.HasFeatures(s.kinds.RequiredFeatures(sc.Kind)...)
 		if !reported || runsKind {
 			known++ // may run the kind (a worker that never reported might)
 		}
@@ -170,13 +187,32 @@ func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, 
 	}
 	if known == 0 {
 		msg := fmt.Sprintf("no worker has the label %q", label)
-		if len(ws) > 0 {
+		switch {
+		case wrongOS > 0:
+			msg = fmt.Sprintf("no worker with the label %q can run this job: %s", label, req.Explain())
+		case len(ws) > 0:
 			msg = fmt.Sprintf("no worker with the label %q runs %s jobs", label, sc.Kind)
 		}
-		return domain.WorkerID{}, false, s.end(ctx, r, schedules.RunFailed, schedules.ReasonNoWorkerWithLabel, msg, false)
+		return domain.WorkerID{}, false, s.end(ctx, r, schedules.RunFailed, schedules.ReasonNoWorkerWithLabel, clip(msg), false)
 	}
 	c, ok := pick(cands)
 	return c.ID, ok, nil
+}
+
+// requiredOS returns the operating system the schedule's definition needs
+// (jobkind OSRequirement); decide has checked the definition.
+func (s *Scheduler) requiredOS(sc schedules.Schedule) jobkind.OSRequirement {
+	def, err := jobkind.Unmarshal(sc.Definition)
+	if err != nil {
+		return jobkind.OSRequirement{}
+	}
+	return s.kinds.RequiredOS(def)
+}
+
+// osMayRun reports whether w may meet req as far as the scheduler can tell:
+// a worker that has not reported an operating system yet may.
+func osMayRun(req jobkind.OSRequirement, w workers.Worker) bool {
+	return w.Info.OS == "" || req.Allows(w.Info.OS)
 }
 
 // create creates a launching run's job with the reserved ID and closes the
@@ -189,6 +225,7 @@ func (s *Scheduler) create(ctx context.Context, p *pass, sc schedules.Schedule, 
 	_, err = s.jobs.Create(ctx, domain.Actor{UserID: sc.OwnerID, Role: domain.RoleUser}, jobs.CreateParams{
 		ID: r.JobID, ScheduleID: sc.ID, WorkerID: r.WorkerID, Kind: kind, Definition: sc.Definition,
 		RemoteIDs: refs.RemoteIDs, SearchTerms: refs.SearchTerms,
+		RepositoryID: refs.RepositoryID, ConcurrencyKeys: refs.ConcurrencyKeys,
 	})
 	switch {
 	case err == nil:
@@ -197,6 +234,13 @@ func (s *Scheduler) create(ctx context.Context, p *pass, sc schedules.Schedule, 
 		}
 	case errors.Is(err, domain.ErrAlreadyExists):
 		// An earlier attempt created it.
+	case errors.Is(err, jobs.ErrRepositoryDeleting):
+		// The backstop of the pause that starting the deletion does.
+		return s.end(ctx, r, schedules.RunFailed, schedules.ReasonRepositoryDeleting,
+			"the repository's data is being deleted; the schedule cannot run on it", true)
+	case errors.Is(err, jobs.ErrUnknownRepository):
+		return s.end(ctx, r, schedules.RunFailed, schedules.ReasonRepositoryUnavailable,
+			"the job's repository was deleted or is not the owner's; edit the schedule and resume it", true)
 	case errors.Is(err, jobs.ErrUnknownRemote):
 		return s.end(ctx, r, schedules.RunFailed, schedules.ReasonRemoteUnavailable,
 			"a remote of the job was deleted or is not the owner's; edit the schedule and resume it", true)

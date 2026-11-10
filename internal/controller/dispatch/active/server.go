@@ -34,6 +34,9 @@ const (
 type Dispatcher interface {
 	Report(ctx context.Context, workerID domain.WorkerID, req *syncrv1.ReportRequest) (*syncrv1.ReportResponse, error)
 	Poll(ctx context.Context, workerID domain.WorkerID, req *syncrv1.PollRequest) (*syncrv1.PollResponse, error)
+	// CompleteProbe delivers the result of a probe the worker received as
+	// Command.run_probe.
+	CompleteProbe(ctx context.Context, workerID domain.WorkerID, epoch string, r *syncrv1.ProbeResult) error
 	// MaxWait is the longest a Poll may wait for commands.
 	MaxWait() time.Duration
 }

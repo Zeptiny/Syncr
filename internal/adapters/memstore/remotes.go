@@ -147,6 +147,9 @@ func (s *Store) DeleteRemote(_ context.Context, id domain.RemoteID, at time.Time
 	if unions := s.unionsUsingLocked(id); len(unions) > 0 {
 		return fmt.Errorf("remote %s is a member of union %q: %w", id, unions[0].Name, domain.ErrFailedPrecondition)
 	}
+	if name, ok := s.repositoryOnRemoteLocked(id); ok {
+		return fmt.Errorf("%w: the remote holds repository %q; delete the repository first", domain.ErrFailedPrecondition, name)
+	}
 	r.DeletedAt, r.SecretsEnc = at, nil
 	r.Version++
 	s.remotes[id] = r

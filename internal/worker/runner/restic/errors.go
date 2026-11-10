@@ -3,6 +3,7 @@ package restic
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
@@ -139,10 +140,17 @@ func secretsOf(spec *syncrv1.JobSpec) []string {
 		spec.GetResticCheck().GetRepository(),
 		spec.GetResticRestore().GetRepository(),
 		spec.GetResticSnapshots().GetRepository(),
+		spec.GetResticDeleteData().GetRepository(),
 	} {
 		out = append(out, repo.GetPassword())
 	}
-	for _, r := range spec.GetRemotes() {
+	return append(out, remoteSecrets(spec.GetRemotes())...)
+}
+
+// remoteSecrets lists the secret options of remotes.
+func remoteSecrets(remotes []*syncrv1.RemoteDefinition) []string {
+	var out []string
+	for _, r := range remotes {
 		for _, v := range r.GetSecrets() {
 			out = append(out, v)
 		}
@@ -154,9 +162,9 @@ func secretsOf(spec *syncrv1.JobSpec) []string {
 // secrets listed in obscure_keys: rclone's obscured form of a secret is
 // randomized, so it cannot be derived from the spec, and rclone may print
 // it. The variable names follow rcloneenv.EnvName.
-func obscuredSecrets(spec *syncrv1.JobSpec, env map[string]string) []string {
+func obscuredSecrets(remotes []*syncrv1.RemoteDefinition, env map[string]string) []string {
 	var out []string
-	for _, r := range spec.GetRemotes() {
+	for _, r := range remotes {
 		for _, key := range r.GetObscureKeys() {
 			name := "RCLONE_CONFIG_" + strings.ToUpper(r.GetAlias()+"_"+strings.ReplaceAll(key, "-", "_"))
 			if v := env[name]; v != "" {
@@ -167,8 +175,25 @@ func obscuredSecrets(spec *syncrv1.JobSpec, env map[string]string) []string {
 	return out
 }
 
-// failure builds the runner error for a restic exit.
+// failure builds the runner error for a restic exit. A plain failure (exit
+// code 1) whose message names a known condition gets that condition's code:
+// ALREADY_EXISTS for an init over an existing repository, NOT_FOUND for a
+// snapshot or snapshot path that does not exist.
 func failure(verb string, code int, message string) error {
 	e := &ExitError{Verb: verb, ExitCode: code, Message: message}
-	return runner.Fail(jobErrorCode(e), e)
+	wire := jobErrorCode(e)
+	if code == exitFatal {
+		switch {
+		case verb == "init" && strings.Contains(message, "config file already exists"):
+			wire = syncrv1.JobErrorCode_JOB_ERROR_CODE_ALREADY_EXISTS
+		case (verb == "ls" || verb == "restore") &&
+			(strings.Contains(message, "no matching ID found") || notFoundPath.MatchString(message)):
+			wire = syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND
+		}
+	}
+	return runner.Fail(wire, e)
 }
+
+// notFoundPath matches restic's message for a missing snapshot subfolder
+// ("path nope: not found").
+var notFoundPath = regexp.MustCompile(`^(Fatal: )?path .*: not found$`)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/link"
 )
 
 // Command ID prefixes. A command's ID is derived from its job ("start:<job
@@ -95,12 +97,12 @@ func (s *Service) Ack(ctx context.Context, workerID domain.WorkerID, epoch strin
 // first (see the package documentation for how they are derived). It never
 // blocks.
 func (s *Service) Commands(ctx context.Context, workerID domain.WorkerID, epoch string) ([]*syncrv1.Command, error) {
-	sess, _, err := s.begin(ctx, workerID, epoch)
+	sess, w, err := s.begin(ctx, workerID, epoch)
 	if err != nil {
 		return nil, err
 	}
 	defer sess.mu.Unlock()
-	return s.commands(ctx, sess, workerID, epoch)
+	return s.commands(ctx, sess, w, epoch)
 }
 
 // WaitCommands returns the worker's pending commands as soon as there are
@@ -181,6 +183,9 @@ func (s *Service) observe(ctx context.Context, sess *session, workerID domain.Wo
 			return workers.Worker{}, err
 		}
 		sess.reset(epoch)
+		if s.probes != nil {
+			s.probes.epochChanged(workerID, w.Name)
+		}
 		s.log.InfoContext(ctx, "worker process changed", "worker_id", workerID.String(), "epoch", epoch, "previous_epoch", w.Link.Epoch)
 		js, err := s.jobs.Unfinished(ctx, workerID)
 		if err != nil {
@@ -212,6 +217,19 @@ func (s *Service) ingest(ctx context.Context, sess *session, w workers.Worker, e
 		}
 		if applyErr = s.apply(ctx, w.ID, epoch, ev); applyErr != nil {
 			break
+		}
+		if h := ev.GetHello(); h != nil {
+			if s.probes != nil {
+				// The probes this process cannot run fail now instead of
+				// waiting for their timeout.
+				s.probes.refuse(w.ID, w.Name, infoFromHello(h, timeOf(ev.GetTime())))
+			}
+			if sess.awaitsHello {
+				// A derivation held back StartJob and probe commands for
+				// this Hello (see commands): wake the worker's long poll.
+				sess.awaitsHello = false
+				s.hub.Wake(w.ID)
+			}
 		}
 		applied = ev.GetSeq()
 	}
@@ -285,6 +303,7 @@ func (s *Service) ack(ctx context.Context, sess *session, workerID domain.Worker
 	for _, a := range acks {
 		cmdID := a.GetCommandId()
 		switch {
+		case s.probes != nil && s.probes.ack(workerID, cmdID):
 		case strings.HasPrefix(cmdID, startPrefix):
 			id, err := domain.ParseJobID(strings.TrimPrefix(cmdID, startPrefix))
 			if err != nil {
@@ -302,48 +321,137 @@ func (s *Service) ack(ctx context.Context, sess *session, workerID domain.Worker
 	return nil
 }
 
-// commands implements Commands with the session locked.
-func (s *Service) commands(ctx context.Context, sess *session, workerID domain.WorkerID, epoch string) ([]*syncrv1.Command, error) {
-	js, err := s.jobs.Unfinished(ctx, workerID)
+// commands implements Commands with the session locked; w is the worker as
+// read for this call (in epoch). It returns at most Config.MaxCommands
+// commands, taken in this order of priority:
+//
+//  1. CancelJob: the worker's jobs with a cancel request, oldest first, then
+//     its orphans. Someone asked for the work to stop, and they are few.
+//  2. Probe commands (active workers), up to half of the room the cancels
+//     leave: their callers wait.
+//  3. StartJob, oldest job first, in the rest of the room. A queued job
+//     that waits for an older job sharing one of its concurrency keys gets
+//     none.
+//
+// Room that the starts leave unused goes to the probes and the other way
+// round. The result lists the probe commands first, then the cancels, then
+// the starts.
+//
+// StartJob and probe commands depend on what the worker's current process
+// can run (link features, operating system), so they wait until the Hello
+// of epoch is stored (Worker.InfoCurrent): until then the stored Info is
+// the previous process's, maybe another version. Storing the Hello wakes
+// the worker's long poll if a derivation was held back, and fails the
+// probes the process cannot run (ProbeBroker.refuse; derivations repeat
+// that for probes queued on the previous process's Info meanwhile).
+func (s *Service) commands(ctx context.Context, sess *session, w workers.Worker, epoch string) ([]*syncrv1.Command, error) {
+	js, err := s.jobs.Unfinished(ctx, w.ID)
 	if err != nil {
 		return nil, err
 	}
-	if js, err = s.reconcileEpoch(ctx, workerID, epoch, js); err != nil {
+	if js, err = s.reconcileEpoch(ctx, w.ID, epoch, js); err != nil {
+		return nil, err
+	}
+	var cancels []*syncrv1.Command
+	for _, j := range js {
+		if j.Status.Active() && j.CancelRequested() && !sess.cancelAcked[j.ID.String()] {
+			cancels = append(cancels, cancelCommand(j.ID.String()))
+		}
+	}
+	for _, id := range sess.orphans {
+		if !sess.cancelAcked[id] {
+			cancels = append(cancels, cancelCommand(id))
+		}
+	}
+	cancels = cancels[:min(len(cancels), s.cfg.MaxCommands)]
+	if !w.InfoCurrent() {
+		sess.awaitsHello = true
+		return cancels, nil
+	}
+	if s.probes != nil {
+		// Storing the Hello failed the probes this process cannot run; this
+		// also catches one queued meanwhile on the previous process's Info.
+		s.probes.refuse(w.ID, w.Name, w.Info)
+	}
+	room := s.cfg.MaxCommands - len(cancels)
+	if room == 0 {
+		return cancels, nil
+	}
+	var probes []*syncrv1.Command
+	if s.probes != nil && w.Info.HasFeatures(link.FeatureProbe) {
+		// Every run_probe derived here counts as sent, also one the
+		// budget below leaves out (see ProbeBroker.commands).
+		probes = s.probes.commands(w.ID, room)
+	}
+	starts, err := s.starts(ctx, js, w.Info, room-min(len(probes), room/2))
+	if err != nil {
+		return nil, err
+	}
+	probes = probes[:min(len(probes), room-len(starts))]
+	return slices.Concat(probes, cancels, starts), nil
+}
+
+// starts returns the StartJob commands of the queued jobs of js, oldest
+// first, at most limit, for a worker whose current process reported info.
+// A queued job that waits for an older job sharing one of its concurrency
+// keys gets none.
+func (s *Service) starts(ctx context.Context, js []jobs.Job, info workers.Info, limit int) ([]*syncrv1.Command, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	blocked, err := s.blocked(ctx, js)
+	if err != nil {
 		return nil, err
 	}
 	var cmds []*syncrv1.Command
 	for _, j := range js {
-		if len(cmds) >= s.cfg.MaxCommands {
-			return cmds, nil
-		}
-		switch {
-		case j.Status == domain.JobQueued:
-			// Invariant (package jobs): a queued job never has a cancel
-			// request, so no StartJob follows a cancel.
-			spec, err := s.startSpec(ctx, j)
-			if err != nil {
-				return nil, err
-			}
-			if spec == nil {
-				continue // undeliverable; the job was failed
-			}
-			cmds = append(cmds, &syncrv1.Command{
-				Id:      startPrefix + j.ID.String(),
-				Command: &syncrv1.Command_StartJob{StartJob: &syncrv1.StartJob{JobId: j.ID.String(), Spec: spec}},
-			})
-		case j.Status.Active() && j.CancelRequested() && !sess.cancelAcked[j.ID.String()]:
-			cmds = append(cmds, cancelCommand(j.ID.String()))
-		}
-	}
-	for _, id := range sess.orphans {
-		if len(cmds) >= s.cfg.MaxCommands {
+		if len(cmds) >= limit {
 			break
 		}
-		if !sess.cancelAcked[id] {
-			cmds = append(cmds, cancelCommand(id))
+		if j.Status != domain.JobQueued {
+			continue
 		}
+		if _, waits := blocked[j.ID]; waits {
+			continue // not the head of its concurrency keys yet
+		}
+		// Invariant (package jobs): a queued job never has a cancel
+		// request, so no StartJob follows a cancel.
+		spec, err := s.startSpec(ctx, j, info)
+		if err != nil {
+			return nil, err
+		}
+		if spec == nil {
+			continue // undeliverable; the job was failed
+		}
+		cmds = append(cmds, &syncrv1.Command{
+			Id:      startPrefix + j.ID.String(),
+			Command: &syncrv1.Command_StartJob{StartJob: &syncrv1.StartJob{JobId: j.ID.String(), Spec: spec}},
+		})
 	}
 	return cmds, nil
+}
+
+// blocked returns the queued jobs of js that wait for an older unfinished
+// job sharing one of their concurrency keys, with that job (the
+// concurrency gate: only the oldest unfinished job of a key may start).
+// It is decided from the stored jobs alone, so every controller and every
+// poll agree.
+func (s *Service) blocked(ctx context.Context, js []jobs.Job) (map[domain.JobID]domain.JobID, error) {
+	var keyed []domain.JobID
+	for _, j := range js {
+		if j.Status == domain.JobQueued && len(j.ConcurrencyKeys) > 0 {
+			keyed = append(keyed, j.ID)
+		}
+	}
+	out := make(map[domain.JobID]domain.JobID)
+	for chunk := range slices.Chunk(keyed, jobs.MaxBlockerIDs) {
+		m, err := s.jobs.Blockers(ctx, chunk)
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(out, m)
+	}
+	return out, nil
 }
 
 // startSpec builds a queued job's spec (see SpecBuilder). A job whose spec
@@ -351,15 +459,22 @@ func (s *Service) commands(ctx context.Context, sess *session, workerID domain.W
 // credentials) fails at once; startSpec then returns nil without an error.
 // Other errors are returned, so the poll fails and the next one retries.
 // The spec is only ever sent, never logged.
-func (s *Service) startSpec(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, error) {
+func (s *Service) startSpec(ctx context.Context, j jobs.Job, info workers.Info) (*syncrv1.JobSpec, error) {
 	if s.specs == nil {
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, "the controller cannot build job specs yet",
 			errors.New("no spec builder is configured"))
 	}
-	spec, err := s.specs.Build(ctx, j)
+	spec, err := s.specs.Build(ctx, j, info)
+	var wrongOS *WrongOSError
 	switch {
 	case err == nil:
 		return spec, nil
+	case errors.As(err, &wrongOS):
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, s.wrongOSMessage(ctx, j, wrongOS), err)
+	case errors.Is(err, errRepositoryUnavailable):
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeRepositoryUnavailable, "the repository was deleted or is not available to its owner", err)
+	case errors.Is(err, ErrWorkerOutdated):
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeWorkerOutdated, s.outdatedMessage(ctx, j), err)
 	case errors.Is(err, domain.ErrNotFound):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeRemoteUnavailable, "a remote of the job was deleted or is not available to its owner", err)
 	case errors.Is(err, domain.ErrInvalidArgument):
@@ -369,6 +484,26 @@ func (s *Service) startSpec(ctx context.Context, j jobs.Job) (*syncrv1.JobSpec, 
 	default:
 		return nil, fmt.Errorf("build the spec of job %s: %w", j.ID, err)
 	}
+}
+
+// outdatedMessage names the job's worker in the worker_outdated failure.
+func (s *Service) outdatedMessage(ctx context.Context, j jobs.Job) string {
+	w, err := s.workers.Get(ctx, j.WorkerID)
+	if err != nil {
+		return fmt.Sprintf("the worker must be upgraded to run %s jobs", j.Kind)
+	}
+	return fmt.Sprintf("worker %q must be upgraded to run %s jobs", w.Name, j.Kind)
+}
+
+// wrongOSMessage says why a job fails on a worker that runs another
+// operating system than its definition needs.
+func (s *Service) wrongOSMessage(ctx context.Context, j jobs.Job, e *WrongOSError) string {
+	runs := cmp.Or(e.OS, "an unknown operating system")
+	w, err := s.workers.Get(ctx, j.WorkerID)
+	if err != nil {
+		return fmt.Sprintf("%s; the worker runs %s", e.Required.Explain(), runs)
+	}
+	return fmt.Sprintf("%s; worker %q runs %s", e.Required.Explain(), w.Name, runs)
 }
 
 // failUnbuildable fails a queued job whose spec cannot be built. The error

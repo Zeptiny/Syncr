@@ -99,3 +99,18 @@ func TestM4IDs(t *testing.T) {
 		t.Errorf("ParseDeliveryID(x) = %v", err)
 	}
 }
+
+func TestProbeID(t *testing.T) {
+	t.Parallel()
+	a := NewProbeID()
+	if a.IsZero() || a == NewProbeID() {
+		t.Fatal("new probe IDs must be non-zero and distinct")
+	}
+	got, err := ParseProbeID(a.String())
+	if err != nil || got != a {
+		t.Errorf("ParseProbeID(%s) = (%v, %v)", a, got, err)
+	}
+	if _, err := ParseProbeID("00000000-0000-0000-0000-000000000000"); !errors.Is(err, ErrInvalidID) {
+		t.Errorf("ParseProbeID(nil UUID) = %v, want ErrInvalidID", err)
+	}
+}

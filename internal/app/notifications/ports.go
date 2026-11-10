@@ -6,6 +6,7 @@ import (
 
 	"github.com/Zeptiny/Syncr/internal/descriptor"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/notify"
 )
 
 // Repository is the notification outbox. Implementations must be safe for
@@ -94,15 +95,29 @@ type AdminChecker interface {
 }
 
 // JobDescriber describes jobs for their notifications (wired with the job
-// kinds and the remotes service; app packages cannot use them directly).
+// kinds and the remotes and restic services; app packages cannot use them
+// directly).
 type JobDescriber interface {
-	// DescribeJob returns a one-line description of a job of owner from
-	// its kind and stored definition, as the web UI's jobs list shows it,
-	// e.g. "Copy Photos → B2 offsite". Remotes are named as the owner named
-	// them, deleted ones included; only the owner's remotes are named. It
-	// returns "" for a definition it cannot describe, and an error only
-	// when the names cannot be read now (the outcome is planned again).
-	DescribeJob(ctx context.Context, owner domain.UserID, kind string, definition []byte) (string, error)
+	// DescribeJob describes a job of owner from its kind, stored
+	// definition and stored output (nil if none): Text is a one-line
+	// description as the web UI's jobs list shows it, e.g. "Copy Photos →
+	// B2 offsite"; KindLabel the kind's label ("Backup"); Details the
+	// kind-specific results. Remotes and repositories are named as the
+	// owner named them, deleted ones included; only the owner's are named.
+	// A definition it cannot describe gets an empty Text; it returns an
+	// error only when the names cannot be read now (the outcome is planned
+	// again).
+	DescribeJob(ctx context.Context, owner domain.UserID, kind string, definition, output []byte) (JobDescription, error)
+}
+
+// JobDescription is what a JobDescriber says about a job.
+type JobDescription struct {
+	// Text is the one-line description; "" if it could not be described.
+	Text string
+	// KindLabel is the kind's label for people; "" if unknown.
+	KindLabel string
+	// Details are the kind-specific results, in display order.
+	Details []notify.Fact
 }
 
 // Clock tells the time.
