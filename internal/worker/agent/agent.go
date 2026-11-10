@@ -137,6 +137,12 @@ type Identity struct {
 	Tools []Tool
 	// LocalRoots are the configured local roots.
 	LocalRoots []string
+	// Features are the link features this worker implements
+	// (link.Features of an up-to-date worker).
+	Features []string
+	// ProbeOps are the probe operations this worker can run
+	// (probe.Executor.Ops).
+	ProbeOps []string
 }
 
 // Config configures an Agent.
@@ -305,6 +311,8 @@ func (a *Agent) hello(id Identity) *syncrv1.Hello {
 		JobKinds:          a.runners.Kinds(),
 		MaxConcurrentJobs: int32(min(a.maxConcurrent, 1<<31-1)), //nolint:gosec // clamped to the int32 range
 		LocalRoots:        slices.Clone(id.LocalRoots),
+		Features:          slices.Clone(id.Features),
+		ProbeOps:          slices.Clone(id.ProbeOps),
 	}
 	for _, t := range id.Tools {
 		h.Tools = append(h.Tools, &syncrv1.ToolVersion{Name: t.Name, Version: t.Version})

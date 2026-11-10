@@ -1,6 +1,9 @@
 // Package restic implements the worker runners for the restic job kinds:
 // restic_init, restic_backup, restic_forget, restic_prune, restic_check,
-// restic_restore and restic_snapshots.
+// restic_restore, restic_snapshots and restic_delete_data, and the Prober
+// that answers the restic probe operations (snapshot listings, browsing a
+// snapshot, creating a repository and reading its config) with the same
+// engine.
 //
 // Every job runs one child process of the pinned restic binary through the
 // supervisor in internal/worker/proc (see docs/adr/0003). The runners map the
@@ -18,6 +21,28 @@
 // rclone.conf of the worker's user is ever read. An empty remote is a local
 // repository whose path must pass PathPolicy, like backup sources and restore
 // targets.
+//
+// # Restores
+//
+// A restore names what to restore as literal snapshot tree paths ("/srv/x",
+// or "/C/Users/x" for a snapshot made on Windows), never as patterns: the
+// runner escapes them into --include patterns (includePattern), or passes a
+// single folder as "<snapshot>:<folder>" so its contents land directly in
+// the target. Existing files are handled as the spec's overwrite behavior
+// says; the controller always sets it.
+//
+// # Deleting a repository's data
+//
+// restic_delete_data (delete.go) removes restic's own files at a
+// repository's location and nothing else there. It first verifies that the
+// location still holds the expected repository ("cat config" with the
+// stored password, compared with the expected ID) and that no other client
+// holds a lock; then it deletes locks/, snapshots/, index/, data/ and keys/
+// with the pinned rclone, the config last. A run that stopped part-way can
+// be repeated: with the keys gone only the config is left to delete, and
+// with everything gone it succeeds at once. The folder itself is removed
+// only when asked to, when it is empty and when it is not the remote's
+// root.
 //
 // # Secrets
 //

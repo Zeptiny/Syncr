@@ -265,10 +265,21 @@ func (h *service) Pull(_ context.Context, req *connect.Request[syncrv1.PullReque
 	return connect.NewResponse(h.core.HandlePull(req.Msg)), nil
 }
 
-// Probe answers Unimplemented: this worker reports no "probe" feature yet,
-// so the controller does not call it.
-//
-// m5: Track A implements this: core.HandleProbe(ctx, req.Msg).
-func (h *service) Probe(context.Context, *connect.Request[syncrv1.ProbeRequest]) (*connect.Response[syncrv1.ProbeResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("this worker does not run probes yet"))
+// ProbeCore is the part of the link core that runs probes;
+// *linkcore.Core implements it. A Core without it answers Unimplemented.
+type ProbeCore interface {
+	HandleProbe(ctx context.Context, req *syncrv1.ProbeRequest) *syncrv1.ProbeResponse
+}
+
+// Probe runs a probe for as long as the controller's call lasts: ending the
+// call cancels the probe. The probe's own failures are in the response.
+func (h *service) Probe(ctx context.Context, req *connect.Request[syncrv1.ProbeRequest]) (*connect.Response[syncrv1.ProbeResponse], error) {
+	pc, ok := h.core.(ProbeCore)
+	if !ok {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("this worker does not run probes"))
+	}
+	if req.Msg.GetProbe().GetProbeId() == "" || req.Msg.GetProbe().GetSpec() == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("the probe needs an ID and a spec"))
+	}
+	return connect.NewResponse(pc.HandleProbe(ctx, req.Msg)), nil
 }
