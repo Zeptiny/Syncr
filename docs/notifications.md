@@ -150,24 +150,30 @@ unknown fields should be ignored.
 | `id` | string | The delivery ID (equals `webhook-id`). |
 | `event` | string | `succeeded`, `failed`, `interrupted`, `missed` or `test`. |
 | `occurred_at` | RFC 3339 time | When it happened (the job finished, the run was missed). |
-| `title` | string | One-line summary, at most 200 characters: the event and the schedule's name, or for a job without a schedule its description (e.g. `Job failed: Copy Photos → B2 offsite`). |
+| `title` | string | One-line summary, at most 200 characters: the event and the schedule's name, or for a job without a schedule its description, after the kind of job (e.g. `Transfer failed: Copy Photos → B2 offsite`, `Backup succeeded: Nightly photos backup`). |
 | `url` | string | Link to the job or schedule in the web UI; absent without `http.public_url`. |
 | `schedule` | object | For scheduled jobs and runs: `id`, `name`. |
 | `job` | object | For job outcomes (below). |
 | `run` | object | For missed or failed runs (below). |
 | `test` | boolean | `true` on test notifications; absent otherwise. |
 
-`job`: `id`, `kind` (e.g. `rclone_transfer`), `description` (what the job
+`job`: `id`, `kind` (e.g. `rclone_transfer`, `restic_backup`), `kind_label`
+(the kind for people: `Transfer`, `Backup`, `Retention`, `Prune`, `Check`,
+`Restore`, `Delete data`), `description` (what the job
 does, as the jobs list shows it, e.g. `Copy Photos → B2 offsite`: the mode,
 then the source and destination by remote name or path on the worker;
 absent if the job could not be described), `status`, `worker_id`,
 `worker_name`, `error_code` and `error_message` (absent on success), `bytes`,
 `files`, `errors`, `started_at` and `finished_at` (absent if the job never
-started or finished), `duration_seconds`.
+started or finished), `duration_seconds`, `details` (the kind's results as a
+list of `label` and `value` pairs in display order, e.g. a backup's snapshot
+and file counts; absent if the kind has none or the job produced no
+result).
 
 `run`: `id`, `scheduled_for` (the occurrence), `reason` (a code:
 `worker_offline`, `overlap`, `controller_unavailable`, `remote_unavailable`,
-`invalid_definition`, `worker_removed`, `no_worker_with_label`,
+`repository_unavailable`, `repository_deleting`, `invalid_definition`,
+`worker_removed`, `no_worker_with_label`,
 `owner_disabled`), `message` (details, may be absent), `coalesced` (earlier
 occurrences merged into this run).
 
@@ -179,7 +185,7 @@ A failed scheduled job:
   "id": "0195f0a4-3b7c-7d1e-9f00-123456789abc",
   "event": "failed",
   "occurred_at": "2026-11-04T02:31:07Z",
-  "title": "Job failed: Nightly photos → B2",
+  "title": "Transfer failed: Nightly photos → B2",
   "url": "https://syncr.example/jobs/0195f0a4-3b7c-7d1e-9f00-000000000001",
   "schedule": {
     "id": "0195f0a4-3b7c-7d1e-9f00-000000000002",
@@ -188,6 +194,7 @@ A failed scheduled job:
   "job": {
     "id": "0195f0a4-3b7c-7d1e-9f00-000000000001",
     "kind": "rclone_transfer",
+    "kind_label": "Transfer",
     "description": "Copy Photos → B2 offsite",
     "status": "failed",
     "worker_id": "0195f0a4-3b7c-7d1e-9f00-000000000003",

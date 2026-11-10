@@ -111,7 +111,7 @@ func SampleMessage() notify.Message {
 		URL:        "https://syncr.example/jobs/0195f0a4-3b7c-7d1e-9f00-000000000001",
 		Schedule:   &notify.ScheduleInfo{ID: "0195f0a4-3b7c-7d1e-9f00-000000000002", Name: "Nightly photos → B2"},
 		Job: &notify.JobInfo{
-			ID: "0195f0a4-3b7c-7d1e-9f00-000000000001", Kind: "rclone_transfer", Description: "Copy Photos → B2 offsite",
+			ID: "0195f0a4-3b7c-7d1e-9f00-000000000001", Kind: "rclone_transfer", KindLabel: "Transfer", Description: "Copy Photos → B2 offsite",
 			Status:   domain.JobFailed,
 			WorkerID: "0195f0a4-3b7c-7d1e-9f00-000000000003", WorkerName: "nas-01",
 			ErrorCode: "path_not_allowed", ErrorMessage: "the source is outside the worker's local_roots",

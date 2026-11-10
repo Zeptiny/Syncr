@@ -1,8 +1,8 @@
-Job succeeded: Copy Photos → B2 offsite
+Transfer succeeded: Copy Photos → B2 offsite
 
 Job: Copy Photos → B2 offsite
 Worker: nas-01
-Kind: rclone_transfer
+Type: Transfer
 Status: succeeded
 Transferred: 5.5 GiB in 1 file
 Duration: 1h2m5s
