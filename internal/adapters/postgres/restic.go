@@ -257,7 +257,7 @@ func (s *Store) FinishDeletion(ctx context.Context, id domain.ResticRepoID, jobI
 	lost := fmt.Errorf("%s: not deleting with that job: %w", op, domain.ErrConflict)
 	if !o.Succeeded {
 		n, err := s.q.FinishRepositoryDeletionFailed(ctx, db.FinishRepositoryDeletionFailedParams{
-			ID: pgID(id), JobID: pgID(jobID), At: pgTime(at), Message: clipRunes(cleanText(o.Error), restic.MaxDeletionErrorLen),
+			ID: pgID(id), JobID: pgID(jobID), At: pgTime(at), Message: clipRunes(cleanText(o.Error), restic.MaxDeletionErrorLen), Cancelled: o.Cancelled,
 		})
 		if err != nil {
 			return mapErr(op, err)
@@ -467,6 +467,7 @@ func repoFrom(row db.ResticRepository) (restic.Repo, error) {
 		Deleting:            row.Deleting,
 		DeletionRequestedAt: timeFrom(row.DeletionRequestedAt),
 		DeletionError:       row.DeletionError,
+		DeletionCancelled:   row.DeletionCancelled,
 		DataDeletedAt:       timeFrom(row.DataDeletedAt),
 		CreatedAt:           timeFrom(row.CreatedAt),
 		UpdatedAt:           timeFrom(row.UpdatedAt),

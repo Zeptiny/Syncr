@@ -34,6 +34,8 @@ CREATE TABLE restic_repositories (
     deletion_job_id         uuid,
     deletion_requested_at   timestamptz,
     deletion_error          text        NOT NULL DEFAULT '' CHECK (char_length(deletion_error) <= 1000),
+    -- The last attempt was cancelled rather than failed (with deletion_error).
+    deletion_cancelled      boolean     NOT NULL DEFAULT false,
     data_deleted_at         timestamptz,
     CHECK ((deleted_at IS NULL) = (password_enc IS NOT NULL)),
     CHECK (NOT deleting OR (deletion_job_id IS NOT NULL AND deletion_requested_at IS NOT NULL AND deleted_at IS NULL)),

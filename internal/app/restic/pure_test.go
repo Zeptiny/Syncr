@@ -159,7 +159,7 @@ func TestDeletionOutcome(t *testing.T) {
 		{PendingDeletion{}, false, "the deletion job was never created; try again"},
 	}
 	for _, tt := range tests {
-		if got := deletionOutcome(tt.p); got.Succeeded != tt.ok || got.Error != tt.want {
+		if got := deletionOutcome(tt.p); got.Succeeded != tt.ok || got.Error != tt.want || got.Cancelled != (tt.p.JobStatus == domain.JobCancelled) {
 			t.Errorf("deletionOutcome(%+v) = %+v", tt.p, got)
 		}
 	}

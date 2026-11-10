@@ -855,7 +855,7 @@ func testRepoFinishDeletion(t *testing.T, s Store) {
 	}
 	got = mustGetRepo(t, s, bad.ID)
 	if got.Deleting || got.Deleted() || !got.DataDeletedAt.IsZero() || string(got.PasswordEnc) != "encrypted password" || got.Version != 3 ||
-		got.DeletionJobID != job || !got.DeletionRequestedAt.Equal(t0()) || got.DeletionError != long[:2*restic.MaxDeletionErrorLen] ||
+		got.DeletionJobID != job || !got.DeletionRequestedAt.Equal(t0()) || got.DeletionError != long[:2*restic.MaxDeletionErrorLen] || got.DeletionCancelled ||
 		!got.UpdatedAt.Equal(at) || got.Stats.SnapshotCount != 1 {
 		t.Errorf("after a failed deletion = %+v", got)
 	}
@@ -864,7 +864,7 @@ func testRepoFinishDeletion(t *testing.T, s Store) {
 	}
 	// A new attempt clears the error and takes a new job.
 	again, err := s.MarkDeleting(ctx, bad.ID, stale, at.Add(time.Hour))
-	if err != nil || !again.Deleting || again.DeletionJobID != stale || again.DeletionError != "" || again.Version != 4 {
+	if err != nil || !again.Deleting || again.DeletionJobID != stale || again.DeletionError != "" || again.DeletionCancelled || again.Version != 4 {
 		t.Errorf("MarkDeleting after a failure = %+v, %v", again, err)
 	}
 	wantErr(t, "FinishDeletion(the earlier attempt's job)", s.FinishDeletion(ctx, bad.ID, job, restic.DeletionOutcome{Succeeded: true}, at), domain.ErrConflict)
@@ -886,7 +886,7 @@ func testRepoListShowsDeleting(t *testing.T, s Store) {
 	if _, err := s.MarkDeleting(ctx, failed.ID, jobID(t, 2), at); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.FinishDeletion(ctx, failed.ID, jobID(t, 2), restic.DeletionOutcome{Error: "the deletion was cancelled"}, at.Add(time.Minute)); err != nil {
+	if err := s.FinishDeletion(ctx, failed.ID, jobID(t, 2), restic.DeletionOutcome{Error: "the deletion was cancelled", Cancelled: true}, at.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if !marked.Deleting || marked.DeletionJobID != jobID(t, 1) || !marked.DeletionRequestedAt.Equal(at) || marked.Version != 2 {
@@ -906,7 +906,7 @@ func testRepoListShowsDeleting(t *testing.T, s Store) {
 				t.Errorf("the deleting repository = %+v, want %+v", r, marked)
 			}
 		case 1:
-			if r.Deleting || r.DeletionJobID != jobID(t, 2) || !r.DeletionRequestedAt.Equal(at) || r.DeletionError != "the deletion was cancelled" || r.Version != 3 {
+			if r.Deleting || r.DeletionJobID != jobID(t, 2) || !r.DeletionRequestedAt.Equal(at) || r.DeletionError != "the deletion was cancelled" || !r.DeletionCancelled || r.Version != 3 {
 				t.Errorf("the repository after a failed attempt = %+v", r)
 			}
 		}

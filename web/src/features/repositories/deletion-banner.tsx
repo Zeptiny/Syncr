@@ -9,7 +9,11 @@ import { StatusBadge } from "@/components/app/status-badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { JobService, JobStatus, type Worker } from "@/gen/syncr/v1/api_pb";
-import { ResticService, type Repository } from "@/gen/syncr/v1/restic_pb";
+import {
+  RepositoryDeletionOutcome,
+  ResticService,
+  type Repository,
+} from "@/gen/syncr/v1/restic_pb";
 import type { Schedule } from "@/gen/syncr/v1/schedules_pb";
 import { useWatchJob } from "@/hooks/use-watch-job";
 import { invalidateService } from "@/lib/invalidate";
@@ -119,7 +123,7 @@ function Failed({
   onTryAgain,
   onForget,
 }: DeletionBannerProps) {
-  const cancelled = /cancelled/i.test(repo.deletionError);
+  const cancelled = repo.deletionOutcome === RepositoryDeletionOutcome.CANCELLED;
   return (
     <Alert variant="destructive" data-testid="deletion-failed">
       <TriangleAlert aria-hidden />

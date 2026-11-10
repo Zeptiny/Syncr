@@ -925,7 +925,8 @@ func TestFinishDeletions(t *testing.T) {
 		&interrupted: "deleting the data failed: worker_lost: the worker did not come back",
 	} {
 		got := e.get(r.ID)
-		if got.Deleting || got.Deleted() || got.PasswordEnc == nil || got.DeletionError != want || got.DeletionJobID != r.DeletionJobID {
+		if got.Deleting || got.Deleted() || got.PasswordEnc == nil || got.DeletionError != want || got.DeletionJobID != r.DeletionJobID ||
+			got.DeletionCancelled != (r == &cancelled) {
 			t.Errorf("%s: after the job ended: deleting=%v deleted=%v error=%q", r.Name, got.Deleting, got.Deleted(), got.DeletionError)
 		}
 	}

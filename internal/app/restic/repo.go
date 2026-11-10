@@ -65,7 +65,8 @@ type Repo struct {
 	// Data deletion (see the package documentation). Deleting is true
 	// while the restic_delete_data job DeletionJobID is pending. After a
 	// failed attempt Deleting is false, and DeletionJobID,
-	// DeletionRequestedAt and DeletionError describe that attempt.
+	// DeletionRequestedAt, DeletionError and DeletionCancelled describe
+	// that attempt.
 	// DataDeletedAt is set when the data was deleted (the row is then
 	// soft-deleted as well).
 	Deleting            bool
@@ -73,7 +74,10 @@ type Repo struct {
 	DeletionRequestedAt time.Time
 	// DeletionError is scrubbed, at most MaxDeletionErrorLen runes.
 	DeletionError string
-	DataDeletedAt time.Time
+	// DeletionCancelled says the last attempt was cancelled, not failed;
+	// it is only set together with DeletionError.
+	DeletionCancelled bool
+	DataDeletedAt     time.Time
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -330,9 +334,11 @@ type PendingDeletion struct {
 // DeletionOutcome ends a deletion (Repository.FinishDeletion).
 type DeletionOutcome struct {
 	// Succeeded deletes the row; otherwise the repository becomes active
-	// again with Error as its DeletionError.
+	// again with Error as its DeletionError, and Cancelled as its
+	// DeletionCancelled (the job was cancelled, not failed).
 	Succeeded bool
 	Error     string
+	Cancelled bool
 }
 
 // Limits and policy constants.

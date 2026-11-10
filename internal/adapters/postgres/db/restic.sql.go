@@ -126,23 +126,26 @@ func (q *Queries) DeleteRepositorySnapshots(ctx context.Context, repositoryID pg
 
 const finishRepositoryDeletionFailed = `-- name: FinishRepositoryDeletionFailed :execrows
 UPDATE restic_repositories SET
-    deleting = false, deletion_error = $1::text, updated_at = $2::timestamptz,
+    deleting = false, deletion_error = $1::text, deletion_cancelled = $2::boolean,
+    updated_at = $3::timestamptz,
     version = version + 1
-WHERE id = $3::uuid AND deleting AND deletion_job_id = $4::uuid
+WHERE id = $4::uuid AND deleting AND deletion_job_id = $5::uuid
 `
 
 type FinishRepositoryDeletionFailedParams struct {
-	Message string
-	At      pgtype.Timestamptz
-	ID      pgtype.UUID
-	JobID   pgtype.UUID
+	Message   string
+	Cancelled bool
+	At        pgtype.Timestamptz
+	ID        pgtype.UUID
+	JobID     pgtype.UUID
 }
 
-// The deletion failed: the repository is active again with the error. 0
-// rows: ErrConflict.
+// The deletion failed or was cancelled: the repository is active again
+// with the error. 0 rows: ErrConflict.
 func (q *Queries) FinishRepositoryDeletionFailed(ctx context.Context, arg FinishRepositoryDeletionFailedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, finishRepositoryDeletionFailed,
 		arg.Message,
+		arg.Cancelled,
 		arg.At,
 		arg.ID,
 		arg.JobID,
@@ -178,7 +181,7 @@ func (q *Queries) FinishRepositoryDeletionSucceeded(ctx context.Context, arg Fin
 }
 
 const getRepositories = `-- name: GetRepositories :many
-SELECT id, owner_id, name, description, remote_id, path, password_enc, restic_id, format_version, snapshots_refreshed_at, snapshots_truncated, created_at, updated_at, deleted_at, version, deleting, deletion_job_id, deletion_requested_at, deletion_error, data_deleted_at FROM restic_repositories WHERE id = ANY ($1::uuid[]) ORDER BY id
+SELECT id, owner_id, name, description, remote_id, path, password_enc, restic_id, format_version, snapshots_refreshed_at, snapshots_truncated, created_at, updated_at, deleted_at, version, deleting, deletion_job_id, deletion_requested_at, deletion_error, deletion_cancelled, data_deleted_at FROM restic_repositories WHERE id = ANY ($1::uuid[]) ORDER BY id
 `
 
 // The repositories of ids that exist (deleted ones included), by ID,
@@ -212,6 +215,7 @@ func (q *Queries) GetRepositories(ctx context.Context, ids []pgtype.UUID) ([]Res
 			&i.DeletionJobID,
 			&i.DeletionRequestedAt,
 			&i.DeletionError,
+			&i.DeletionCancelled,
 			&i.DataDeletedAt,
 		); err != nil {
 			return nil, err
@@ -225,7 +229,7 @@ func (q *Queries) GetRepositories(ctx context.Context, ids []pgtype.UUID) ([]Res
 }
 
 const getRepository = `-- name: GetRepository :one
-SELECT r.id, r.owner_id, r.name, r.description, r.remote_id, r.path, r.password_enc, r.restic_id, r.format_version, r.snapshots_refreshed_at, r.snapshots_truncated, r.created_at, r.updated_at, r.deleted_at, r.version, r.deleting, r.deletion_job_id, r.deletion_requested_at, r.deletion_error, r.data_deleted_at,
+SELECT r.id, r.owner_id, r.name, r.description, r.remote_id, r.path, r.password_enc, r.restic_id, r.format_version, r.snapshots_refreshed_at, r.snapshots_truncated, r.created_at, r.updated_at, r.deleted_at, r.version, r.deleting, r.deletion_job_id, r.deletion_requested_at, r.deletion_error, r.deletion_cancelled, r.data_deleted_at,
        coalesce(sn.snapshot_count, 0)::int AS snapshot_count, sn.latest_at,
        coalesce(lt.latest_bytes, 0)::bigint AS latest_bytes,
        lb.id AS last_backup_id, coalesce(lb.status, '')::text AS last_backup_status,
@@ -314,6 +318,7 @@ func (q *Queries) GetRepository(ctx context.Context, arg GetRepositoryParams) (G
 		&i.ResticRepository.DeletionJobID,
 		&i.ResticRepository.DeletionRequestedAt,
 		&i.ResticRepository.DeletionError,
+		&i.ResticRepository.DeletionCancelled,
 		&i.ResticRepository.DataDeletedAt,
 		&i.SnapshotCount,
 		&i.LatestAt,
@@ -440,7 +445,7 @@ func (q *Queries) ListPendingDeletions(ctx context.Context, arg ListPendingDelet
 }
 
 const listRepositories = `-- name: ListRepositories :many
-SELECT r.id, r.owner_id, r.name, r.description, r.remote_id, r.path, r.password_enc, r.restic_id, r.format_version, r.snapshots_refreshed_at, r.snapshots_truncated, r.created_at, r.updated_at, r.deleted_at, r.version, r.deleting, r.deletion_job_id, r.deletion_requested_at, r.deletion_error, r.data_deleted_at,
+SELECT r.id, r.owner_id, r.name, r.description, r.remote_id, r.path, r.password_enc, r.restic_id, r.format_version, r.snapshots_refreshed_at, r.snapshots_truncated, r.created_at, r.updated_at, r.deleted_at, r.version, r.deleting, r.deletion_job_id, r.deletion_requested_at, r.deletion_error, r.deletion_cancelled, r.data_deleted_at,
        coalesce(sn.snapshot_count, 0)::int AS snapshot_count, sn.latest_at,
        coalesce(lt.latest_bytes, 0)::bigint AS latest_bytes,
        lb.id AS last_backup_id, coalesce(lb.status, '')::text AS last_backup_status,
@@ -535,6 +540,7 @@ func (q *Queries) ListRepositories(ctx context.Context, arg ListRepositoriesPara
 			&i.ResticRepository.DeletionJobID,
 			&i.ResticRepository.DeletionRequestedAt,
 			&i.ResticRepository.DeletionError,
+			&i.ResticRepository.DeletionCancelled,
 			&i.ResticRepository.DataDeletedAt,
 			&i.SnapshotCount,
 			&i.LatestAt,
@@ -613,7 +619,7 @@ func (q *Queries) LockLiveRepository(ctx context.Context, id pgtype.UUID) (pgtyp
 const markRepositoryDeleting = `-- name: MarkRepositoryDeleting :execrows
 UPDATE restic_repositories SET
     deleting = true, deletion_job_id = $1::uuid, deletion_requested_at = $2::timestamptz,
-    deletion_error = '', updated_at = $2::timestamptz, version = version + 1
+    deletion_error = '', deletion_cancelled = false, updated_at = $2::timestamptz, version = version + 1
 WHERE id = $3::uuid AND deleted_at IS NULL AND NOT deleting
 `
 
@@ -701,7 +707,7 @@ UPDATE restic_repositories SET
     updated_at = $4::timestamptz,
     version = version + 1
 WHERE id = $5::uuid AND version = $6::bigint AND deleted_at IS NULL
-RETURNING id, owner_id, name, description, remote_id, path, password_enc, restic_id, format_version, snapshots_refreshed_at, snapshots_truncated, created_at, updated_at, deleted_at, version, deleting, deletion_job_id, deletion_requested_at, deletion_error, data_deleted_at
+RETURNING id, owner_id, name, description, remote_id, path, password_enc, restic_id, format_version, snapshots_refreshed_at, snapshots_truncated, created_at, updated_at, deleted_at, version, deleting, deletion_job_id, deletion_requested_at, deletion_error, deletion_cancelled, data_deleted_at
 `
 
 type UpdateRepositoryParams struct {
@@ -744,6 +750,7 @@ func (q *Queries) UpdateRepository(ctx context.Context, arg UpdateRepositoryPara
 		&i.DeletionJobID,
 		&i.DeletionRequestedAt,
 		&i.DeletionError,
+		&i.DeletionCancelled,
 		&i.DataDeletedAt,
 	)
 	return i, err

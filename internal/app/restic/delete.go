@@ -189,7 +189,7 @@ func deletionOutcome(p PendingDeletion) DeletionOutcome {
 	case domain.JobSucceeded:
 		return DeletionOutcome{Succeeded: true}
 	case domain.JobCancelled:
-		return DeletionOutcome{Error: "the deletion was cancelled; some repository files may already be gone"}
+		return DeletionOutcome{Cancelled: true, Error: "the deletion was cancelled; some repository files may already be gone"}
 	case "":
 		return DeletionOutcome{Error: "the deletion job was never created; try again"}
 	}

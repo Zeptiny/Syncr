@@ -415,6 +415,25 @@ func TestRepositoryToProto(t *testing.T) {
 		}
 	}
 
+	// After an attempt that did not delete the data, the outcome says how
+	// it ended; while deleting, and without an error, there is none.
+	for _, tt := range []struct {
+		deleting, cancelled bool
+		msg                 string
+		want                syncrv1.RepositoryDeletionOutcome
+	}{
+		{false, false, "boom", syncrv1.RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_FAILED},
+		{false, true, "stopped", syncrv1.RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_CANCELLED},
+		{true, true, "stale", syncrv1.RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_UNSPECIFIED},
+		{false, true, "", syncrv1.RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_UNSPECIFIED},
+	} {
+		ended := repositoryToProto(restic.Repo{ID: id, RemoteID: remote, Version: 1, Deleting: tt.deleting, DeletionJobID: job,
+			DeletionError: tt.msg, DeletionCancelled: tt.cancelled}, remotes.Ref{})
+		if ended.GetDeletionOutcome() != tt.want || ended.GetDeletionError() != tt.msg {
+			t.Errorf("deleting=%v cancelled=%v error=%q: outcome %v, want %v", tt.deleting, tt.cancelled, tt.msg, ended.GetDeletionOutcome(), tt.want)
+		}
+	}
+
 	// A repository that was never deleting or listed.
 	plain := repositoryToProto(restic.Repo{ID: id, RemoteID: remote, Version: 1}, remotes.Ref{})
 	if plain.GetDeletionJobId() != "" || plain.GetDeletionRequestedAt() != nil || plain.GetStats().GetLastBackup() != nil ||

@@ -37,6 +37,7 @@ import { ProbeService } from "@/gen/syncr/v1/probe_pb";
 import type { Remote } from "@/gen/syncr/v1/remotes_pb";
 import {
   RepositoryCreateMode,
+  RepositoryDeletionOutcome,
   RepositorySchema,
   ResticService,
   type Repository,
@@ -593,6 +594,7 @@ export function data(now: number): M5Data {
   archive.repo.deletionRequestedAt = ts(now - 2 * DAY);
   archive.repo.deletionError =
     "deleting the data failed: repository_locked: another restic client is using the repository; nothing was deleted";
+  archive.repo.deletionOutcome = RepositoryDeletionOutcome.FAILED;
   const alice = repo(
     {
       id: ids.aliceBackups,
@@ -1243,8 +1245,10 @@ export function createM5(d: M5Deps): M5 {
       } else if (j.status === JobStatus.CANCELLED) {
         r.repo.deletionError =
           "the deletion was cancelled; some repository files may already be gone";
+        r.repo.deletionOutcome = RepositoryDeletionOutcome.CANCELLED;
       } else {
         r.repo.deletionError = `deleting the data failed: ${j.error?.message ?? "the job did not finish"}`;
+        r.repo.deletionOutcome = RepositoryDeletionOutcome.FAILED;
       }
     }
   };
@@ -1639,6 +1643,7 @@ export function createM5(d: M5Deps): M5 {
         r.repo.deletionJobId = j.id;
         r.repo.deletionRequestedAt = ts(Date.now());
         r.repo.deletionError = "";
+        r.repo.deletionOutcome = RepositoryDeletionOutcome.UNSPECIFIED;
         for (const s of d.schedules) {
           if (s.repository?.id !== r.repo.id || !s.enabled) continue;
           s.enabled = false;

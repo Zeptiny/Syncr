@@ -499,6 +499,13 @@ func repositoryToProto(r restic.Repo, remote remotes.Ref) *syncrv1.Repository {
 		out.DeletionJobId = r.DeletionJobID.String()
 		out.DeletionRequestedAt = ts(r.DeletionRequestedAt)
 	}
+	switch {
+	case r.Deleting || r.DeletionError == "":
+	case r.DeletionCancelled:
+		out.DeletionOutcome = syncrv1.RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_CANCELLED
+	default:
+		out.DeletionOutcome = syncrv1.RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_FAILED
+	}
 	return out
 }
 

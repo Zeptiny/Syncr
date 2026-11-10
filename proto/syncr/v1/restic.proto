@@ -74,6 +74,17 @@ enum RepositoryCreateMode {
   REPOSITORY_CREATE_MODE_CONNECT = 2;
 }
 
+// RepositoryDeletionOutcome is how a repository's last data deletion ended
+// without deleting the data.
+enum RepositoryDeletionOutcome {
+  // No attempt has ended that way (none was made, or one is pending).
+  REPOSITORY_DELETION_OUTCOME_UNSPECIFIED = 0;
+  // The deletion job failed or was interrupted, or was never created.
+  REPOSITORY_DELETION_OUTCOME_FAILED = 1;
+  // The deletion job was cancelled.
+  REPOSITORY_DELETION_OUTCOME_CANCELLED = 2;
+}
+
 // Repository is one of the caller's restic repositories. The password is
 // never returned.
 message Repository {
@@ -111,14 +122,18 @@ message Repository {
 
   // Data deletion (DeleteRepository with delete_data): deleting is set
   // while its job (deletion_job_id) is pending. After a failed attempt
-  // deleting is false and deletion_job_id, deletion_requested_at and
-  // deletion_error describe that attempt.
+  // deleting is false and deletion_job_id, deletion_requested_at,
+  // deletion_outcome and deletion_error describe that attempt.
   bool deleting = 13;
   string deletion_job_id = 14;
   google.protobuf.Timestamp deletion_requested_at = 15;
   string deletion_error = 16;
 
-  reserved 17 to 29;
+  // How the last attempt ended, if it did not delete the data (failed or
+  // cancelled); unspecified otherwise. deletion_error is its message.
+  RepositoryDeletionOutcome deletion_outcome = 17;
+
+  reserved 18 to 29;
 }
 
 // RepositoryJobRef is the newest job of a kind on a repository.

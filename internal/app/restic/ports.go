@@ -56,7 +56,8 @@ type Repository interface {
 	// MarkDeleting moves a live repository that is not deleting to
 	// Deleting, with DeletionJobID = jobID (not zero: ErrInvalidArgument),
 	// DeletionRequestedAt = at,
-	// DeletionError = "", UpdatedAt = at and Version + 1. In the same
+	// DeletionError = "", DeletionCancelled = false, UpdatedAt = at and
+	// Version + 1. In the same
 	// transaction it pauses the repository's enabled schedules (Enabled
 	// false, NextRunAt zero, PausedReason "repository_deleting", UpdatedAt
 	// at, Version + 1) and cancels their open runs (status cancelled,
@@ -79,7 +80,8 @@ type Repository interface {
 	//     = at, UpdatedAt = at, PasswordEnc = nil, Deleting = false,
 	//     Version + 1, and removes the cached snapshots;
 	//   - otherwise: Deleting = false, DeletionError = o.Error (clipped to
-	//     MaxDeletionErrorLen runes), UpdatedAt = at, Version + 1. The
+	//     MaxDeletionErrorLen runes), DeletionCancelled = o.Cancelled,
+	//     UpdatedAt = at, Version + 1. The
 	//     password, DeletionJobID and the paused schedules are kept.
 	FinishDeletion(ctx context.Context, id domain.ResticRepoID, jobID domain.JobID, o DeletionOutcome, at time.Time) error
 

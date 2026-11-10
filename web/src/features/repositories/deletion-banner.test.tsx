@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { JobStatus } from "@/gen/syncr/v1/api_pb";
+import { RepositoryDeletionOutcome } from "@/gen/syncr/v1/restic_pb";
 import * as m5 from "@/mock/m5";
 import { m5Api } from "@/test/m5-api";
 import { renderInRouter } from "@/test/render";
@@ -108,6 +109,7 @@ describe("DeletionBanner", () => {
     const state = api.repo(m5.ids.archive2019);
     state.repo.deletionError =
       "the deletion was cancelled; some repository files may already be gone";
+    state.repo.deletionOutcome = RepositoryDeletionOutcome.CANCELLED;
     renderInRouter(
       <DeletionBanner
         repository={state.repo}

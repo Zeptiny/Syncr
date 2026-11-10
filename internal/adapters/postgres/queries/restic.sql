@@ -146,7 +146,7 @@ WHERE id = sqlc.arg(id)::uuid AND deleted_at IS NULL AND NOT deleting;
 -- GetRepositoryState tells NotFound from Conflict (already deleting).
 UPDATE restic_repositories SET
     deleting = true, deletion_job_id = sqlc.arg(job_id)::uuid, deletion_requested_at = sqlc.arg(at)::timestamptz,
-    deletion_error = '', updated_at = sqlc.arg(at)::timestamptz, version = version + 1
+    deletion_error = '', deletion_cancelled = false, updated_at = sqlc.arg(at)::timestamptz, version = version + 1
 WHERE id = sqlc.arg(id)::uuid AND deleted_at IS NULL AND NOT deleting;
 
 -- name: PauseRepositorySchedules :exec
@@ -189,10 +189,11 @@ UPDATE restic_repositories SET
 WHERE id = sqlc.arg(id)::uuid AND deleting AND deletion_job_id = sqlc.arg(job_id)::uuid;
 
 -- name: FinishRepositoryDeletionFailed :execrows
--- The deletion failed: the repository is active again with the error. 0
--- rows: ErrConflict.
+-- The deletion failed or was cancelled: the repository is active again
+-- with the error. 0 rows: ErrConflict.
 UPDATE restic_repositories SET
-    deleting = false, deletion_error = sqlc.arg(message)::text, updated_at = sqlc.arg(at)::timestamptz,
+    deleting = false, deletion_error = sqlc.arg(message)::text, deletion_cancelled = sqlc.arg(cancelled)::boolean,
+    updated_at = sqlc.arg(at)::timestamptz,
     version = version + 1
 WHERE id = sqlc.arg(id)::uuid AND deleting AND deletion_job_id = sqlc.arg(job_id)::uuid;
 

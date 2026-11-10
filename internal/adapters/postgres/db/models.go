@@ -153,6 +153,7 @@ type ResticRepository struct {
 	DeletionJobID        pgtype.UUID
 	DeletionRequestedAt  pgtype.Timestamptz
 	DeletionError        string
+	DeletionCancelled    bool
 	DataDeletedAt        pgtype.Timestamptz
 }
 

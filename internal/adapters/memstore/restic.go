@@ -293,7 +293,7 @@ func (s *Store) MarkDeleting(_ context.Context, id domain.ResticRepoID, jobID do
 		return restic.Repo{}, fmt.Errorf("repository %s is already deleting (job %s): %w", id, row.repo.DeletionJobID, domain.ErrConflict)
 	}
 	r := &row.repo
-	r.Deleting, r.DeletionJobID, r.DeletionRequestedAt, r.DeletionError, r.UpdatedAt = true, jobID, at, "", at
+	r.Deleting, r.DeletionJobID, r.DeletionRequestedAt, r.DeletionError, r.DeletionCancelled, r.UpdatedAt = true, jobID, at, "", false, at
 	r.Version++
 	s.repos[id] = row
 	for sid, sc := range s.schedules {
@@ -360,7 +360,7 @@ func (s *Store) FinishDeletion(_ context.Context, id domain.ResticRepoID, jobID 
 		r.DeletedAt, r.DataDeletedAt, r.PasswordEnc = at, at, nil
 		row.snaps = nil
 	} else {
-		r.DeletionError = clipRunes(o.Error, restic.MaxDeletionErrorLen)
+		r.DeletionError, r.DeletionCancelled = clipRunes(o.Error, restic.MaxDeletionErrorLen), o.Cancelled
 	}
 	s.repos[id] = row
 	return nil

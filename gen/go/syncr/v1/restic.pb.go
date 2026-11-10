@@ -74,6 +74,60 @@ func (RepositoryCreateMode) EnumDescriptor() ([]byte, []int) {
 	return file_syncr_v1_restic_proto_rawDescGZIP(), []int{0}
 }
 
+// RepositoryDeletionOutcome is how a repository's last data deletion ended
+// without deleting the data.
+type RepositoryDeletionOutcome int32
+
+const (
+	// No attempt has ended that way (none was made, or one is pending).
+	RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_UNSPECIFIED RepositoryDeletionOutcome = 0
+	// The deletion job failed or was interrupted, or was never created.
+	RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_FAILED RepositoryDeletionOutcome = 1
+	// The deletion job was cancelled.
+	RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_CANCELLED RepositoryDeletionOutcome = 2
+)
+
+// Enum value maps for RepositoryDeletionOutcome.
+var (
+	RepositoryDeletionOutcome_name = map[int32]string{
+		0: "REPOSITORY_DELETION_OUTCOME_UNSPECIFIED",
+		1: "REPOSITORY_DELETION_OUTCOME_FAILED",
+		2: "REPOSITORY_DELETION_OUTCOME_CANCELLED",
+	}
+	RepositoryDeletionOutcome_value = map[string]int32{
+		"REPOSITORY_DELETION_OUTCOME_UNSPECIFIED": 0,
+		"REPOSITORY_DELETION_OUTCOME_FAILED":      1,
+		"REPOSITORY_DELETION_OUTCOME_CANCELLED":   2,
+	}
+)
+
+func (x RepositoryDeletionOutcome) Enum() *RepositoryDeletionOutcome {
+	p := new(RepositoryDeletionOutcome)
+	*p = x
+	return p
+}
+
+func (x RepositoryDeletionOutcome) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RepositoryDeletionOutcome) Descriptor() protoreflect.EnumDescriptor {
+	return file_syncr_v1_restic_proto_enumTypes[1].Descriptor()
+}
+
+func (RepositoryDeletionOutcome) Type() protoreflect.EnumType {
+	return &file_syncr_v1_restic_proto_enumTypes[1]
+}
+
+func (x RepositoryDeletionOutcome) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RepositoryDeletionOutcome.Descriptor instead.
+func (RepositoryDeletionOutcome) EnumDescriptor() ([]byte, []int) {
+	return file_syncr_v1_restic_proto_rawDescGZIP(), []int{1}
+}
+
 // Repository is one of the caller's restic repositories. The password is
 // never returned.
 type Repository struct {
@@ -103,14 +157,17 @@ type Repository struct {
 	Version int64 `protobuf:"varint,12,opt,name=version,proto3" json:"version,omitempty"`
 	// Data deletion (DeleteRepository with delete_data): deleting is set
 	// while its job (deletion_job_id) is pending. After a failed attempt
-	// deleting is false and deletion_job_id, deletion_requested_at and
-	// deletion_error describe that attempt.
+	// deleting is false and deletion_job_id, deletion_requested_at,
+	// deletion_outcome and deletion_error describe that attempt.
 	Deleting            bool                   `protobuf:"varint,13,opt,name=deleting,proto3" json:"deleting,omitempty"`
 	DeletionJobId       string                 `protobuf:"bytes,14,opt,name=deletion_job_id,json=deletionJobId,proto3" json:"deletion_job_id,omitempty"`
 	DeletionRequestedAt *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=deletion_requested_at,json=deletionRequestedAt,proto3" json:"deletion_requested_at,omitempty"`
 	DeletionError       string                 `protobuf:"bytes,16,opt,name=deletion_error,json=deletionError,proto3" json:"deletion_error,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// How the last attempt ended, if it did not delete the data (failed or
+	// cancelled); unspecified otherwise. deletion_error is its message.
+	DeletionOutcome RepositoryDeletionOutcome `protobuf:"varint,17,opt,name=deletion_outcome,json=deletionOutcome,proto3,enum=syncr.v1.RepositoryDeletionOutcome" json:"deletion_outcome,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Repository) Reset() {
@@ -253,6 +310,13 @@ func (x *Repository) GetDeletionError() string {
 		return x.DeletionError
 	}
 	return ""
+}
+
+func (x *Repository) GetDeletionOutcome() RepositoryDeletionOutcome {
+	if x != nil {
+		return x.DeletionOutcome
+	}
+	return RepositoryDeletionOutcome_REPOSITORY_DELETION_OUTCOME_UNSPECIFIED
 }
 
 // RepositoryJobRef is the newest job of a kind on a repository.
@@ -1393,7 +1457,7 @@ var File_syncr_v1_restic_proto protoreflect.FileDescriptor
 
 const file_syncr_v1_restic_proto_rawDesc = "" +
 	"\n" +
-	"\x15syncr/v1/restic.proto\x12\bsyncr.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x12syncr/v1/api.proto\x1a\x13syncr/v1/link.proto\x1a\x14syncr/v1/probe.proto\"\xf9\x04\n" +
+	"\x15syncr/v1/restic.proto\x12\bsyncr.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x12syncr/v1/api.proto\x1a\x13syncr/v1/link.proto\x1a\x14syncr/v1/probe.proto\"\xc9\x05\n" +
 	"\n" +
 	"Repository\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
@@ -1414,7 +1478,8 @@ const file_syncr_v1_restic_proto_rawDesc = "" +
 	"\bdeleting\x18\r \x01(\bR\bdeleting\x12&\n" +
 	"\x0fdeletion_job_id\x18\x0e \x01(\tR\rdeletionJobId\x12N\n" +
 	"\x15deletion_requested_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\x13deletionRequestedAt\x12%\n" +
-	"\x0edeletion_error\x18\x10 \x01(\tR\rdeletionErrorJ\x04\b\x11\x10\x1e\"\xd4\x01\n" +
+	"\x0edeletion_error\x18\x10 \x01(\tR\rdeletionError\x12N\n" +
+	"\x10deletion_outcome\x18\x11 \x01(\x0e2#.syncr.v1.RepositoryDeletionOutcomeR\x0fdeletionOutcomeJ\x04\b\x12\x10\x1e\"\xd4\x01\n" +
 	"\x10RepositoryJobRef\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12+\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x13.syncr.v1.JobStatusR\x06status\x129\n" +
@@ -1514,7 +1579,11 @@ const file_syncr_v1_restic_proto_rawDesc = "" +
 	"\x14RepositoryCreateMode\x12&\n" +
 	"\"REPOSITORY_CREATE_MODE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bREPOSITORY_CREATE_MODE_INIT\x10\x01\x12\"\n" +
-	"\x1eREPOSITORY_CREATE_MODE_CONNECT\x10\x022\x8e\x05\n" +
+	"\x1eREPOSITORY_CREATE_MODE_CONNECT\x10\x02*\x9b\x01\n" +
+	"\x19RepositoryDeletionOutcome\x12+\n" +
+	"'REPOSITORY_DELETION_OUTCOME_UNSPECIFIED\x10\x00\x12&\n" +
+	"\"REPOSITORY_DELETION_OUTCOME_FAILED\x10\x01\x12)\n" +
+	"%REPOSITORY_DELETION_OUTCOME_CANCELLED\x10\x022\x8e\x05\n" +
 	"\rResticService\x12^\n" +
 	"\x10ListRepositories\x12!.syncr.v1.ListRepositoriesRequest\x1a\".syncr.v1.ListRepositoriesResponse\"\x03\x90\x02\x01\x12U\n" +
 	"\rGetRepository\x12\x1e.syncr.v1.GetRepositoryRequest\x1a\x1f.syncr.v1.GetRepositoryResponse\"\x03\x90\x02\x01\x12[\n" +
@@ -1537,80 +1606,82 @@ func file_syncr_v1_restic_proto_rawDescGZIP() []byte {
 	return file_syncr_v1_restic_proto_rawDescData
 }
 
-var file_syncr_v1_restic_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_syncr_v1_restic_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_syncr_v1_restic_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_syncr_v1_restic_proto_goTypes = []any{
 	(RepositoryCreateMode)(0),        // 0: syncr.v1.RepositoryCreateMode
-	(*Repository)(nil),               // 1: syncr.v1.Repository
-	(*RepositoryJobRef)(nil),         // 2: syncr.v1.RepositoryJobRef
-	(*RepositoryStats)(nil),          // 3: syncr.v1.RepositoryStats
-	(*RepositoryInput)(nil),          // 4: syncr.v1.RepositoryInput
-	(*ListRepositoriesRequest)(nil),  // 5: syncr.v1.ListRepositoriesRequest
-	(*ListRepositoriesResponse)(nil), // 6: syncr.v1.ListRepositoriesResponse
-	(*GetRepositoryRequest)(nil),     // 7: syncr.v1.GetRepositoryRequest
-	(*GetRepositoryResponse)(nil),    // 8: syncr.v1.GetRepositoryResponse
-	(*CreateRepositoryRequest)(nil),  // 9: syncr.v1.CreateRepositoryRequest
-	(*CreateRepositoryResponse)(nil), // 10: syncr.v1.CreateRepositoryResponse
-	(*UpdateRepositoryRequest)(nil),  // 11: syncr.v1.UpdateRepositoryRequest
-	(*UpdateRepositoryResponse)(nil), // 12: syncr.v1.UpdateRepositoryResponse
-	(*DeleteRepositoryRequest)(nil),  // 13: syncr.v1.DeleteRepositoryRequest
-	(*DeleteRepositoryResponse)(nil), // 14: syncr.v1.DeleteRepositoryResponse
-	(*ListSnapshotsRequest)(nil),     // 15: syncr.v1.ListSnapshotsRequest
-	(*ListSnapshotsResponse)(nil),    // 16: syncr.v1.ListSnapshotsResponse
-	(*BrowseSnapshotRequest)(nil),    // 17: syncr.v1.BrowseSnapshotRequest
-	(*BrowseSnapshotResponse)(nil),   // 18: syncr.v1.BrowseSnapshotResponse
-	(*JobRemoteRef)(nil),             // 19: syncr.v1.JobRemoteRef
-	(*timestamppb.Timestamp)(nil),    // 20: google.protobuf.Timestamp
-	(JobStatus)(0),                   // 21: syncr.v1.JobStatus
-	(*ProbeWorkerRef)(nil),           // 22: syncr.v1.ProbeWorkerRef
-	(*ResticSnapshot)(nil),           // 23: syncr.v1.ResticSnapshot
-	(*ProbeEntry)(nil),               // 24: syncr.v1.ProbeEntry
+	(RepositoryDeletionOutcome)(0),   // 1: syncr.v1.RepositoryDeletionOutcome
+	(*Repository)(nil),               // 2: syncr.v1.Repository
+	(*RepositoryJobRef)(nil),         // 3: syncr.v1.RepositoryJobRef
+	(*RepositoryStats)(nil),          // 4: syncr.v1.RepositoryStats
+	(*RepositoryInput)(nil),          // 5: syncr.v1.RepositoryInput
+	(*ListRepositoriesRequest)(nil),  // 6: syncr.v1.ListRepositoriesRequest
+	(*ListRepositoriesResponse)(nil), // 7: syncr.v1.ListRepositoriesResponse
+	(*GetRepositoryRequest)(nil),     // 8: syncr.v1.GetRepositoryRequest
+	(*GetRepositoryResponse)(nil),    // 9: syncr.v1.GetRepositoryResponse
+	(*CreateRepositoryRequest)(nil),  // 10: syncr.v1.CreateRepositoryRequest
+	(*CreateRepositoryResponse)(nil), // 11: syncr.v1.CreateRepositoryResponse
+	(*UpdateRepositoryRequest)(nil),  // 12: syncr.v1.UpdateRepositoryRequest
+	(*UpdateRepositoryResponse)(nil), // 13: syncr.v1.UpdateRepositoryResponse
+	(*DeleteRepositoryRequest)(nil),  // 14: syncr.v1.DeleteRepositoryRequest
+	(*DeleteRepositoryResponse)(nil), // 15: syncr.v1.DeleteRepositoryResponse
+	(*ListSnapshotsRequest)(nil),     // 16: syncr.v1.ListSnapshotsRequest
+	(*ListSnapshotsResponse)(nil),    // 17: syncr.v1.ListSnapshotsResponse
+	(*BrowseSnapshotRequest)(nil),    // 18: syncr.v1.BrowseSnapshotRequest
+	(*BrowseSnapshotResponse)(nil),   // 19: syncr.v1.BrowseSnapshotResponse
+	(*JobRemoteRef)(nil),             // 20: syncr.v1.JobRemoteRef
+	(*timestamppb.Timestamp)(nil),    // 21: google.protobuf.Timestamp
+	(JobStatus)(0),                   // 22: syncr.v1.JobStatus
+	(*ProbeWorkerRef)(nil),           // 23: syncr.v1.ProbeWorkerRef
+	(*ResticSnapshot)(nil),           // 24: syncr.v1.ResticSnapshot
+	(*ProbeEntry)(nil),               // 25: syncr.v1.ProbeEntry
 }
 var file_syncr_v1_restic_proto_depIdxs = []int32{
-	19, // 0: syncr.v1.Repository.remote:type_name -> syncr.v1.JobRemoteRef
-	3,  // 1: syncr.v1.Repository.stats:type_name -> syncr.v1.RepositoryStats
-	20, // 2: syncr.v1.Repository.created_at:type_name -> google.protobuf.Timestamp
-	20, // 3: syncr.v1.Repository.updated_at:type_name -> google.protobuf.Timestamp
-	20, // 4: syncr.v1.Repository.deletion_requested_at:type_name -> google.protobuf.Timestamp
-	21, // 5: syncr.v1.RepositoryJobRef.status:type_name -> syncr.v1.JobStatus
-	20, // 6: syncr.v1.RepositoryJobRef.created_at:type_name -> google.protobuf.Timestamp
-	20, // 7: syncr.v1.RepositoryJobRef.finished_at:type_name -> google.protobuf.Timestamp
-	20, // 8: syncr.v1.RepositoryStats.latest_snapshot_at:type_name -> google.protobuf.Timestamp
-	20, // 9: syncr.v1.RepositoryStats.snapshots_refreshed_at:type_name -> google.protobuf.Timestamp
-	2,  // 10: syncr.v1.RepositoryStats.last_backup:type_name -> syncr.v1.RepositoryJobRef
-	2,  // 11: syncr.v1.RepositoryStats.last_check:type_name -> syncr.v1.RepositoryJobRef
-	0,  // 12: syncr.v1.RepositoryInput.mode:type_name -> syncr.v1.RepositoryCreateMode
-	1,  // 13: syncr.v1.ListRepositoriesResponse.repositories:type_name -> syncr.v1.Repository
-	1,  // 14: syncr.v1.GetRepositoryResponse.repository:type_name -> syncr.v1.Repository
-	4,  // 15: syncr.v1.CreateRepositoryRequest.input:type_name -> syncr.v1.RepositoryInput
-	1,  // 16: syncr.v1.CreateRepositoryResponse.repository:type_name -> syncr.v1.Repository
-	22, // 17: syncr.v1.CreateRepositoryResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	1,  // 18: syncr.v1.UpdateRepositoryResponse.repository:type_name -> syncr.v1.Repository
-	22, // 19: syncr.v1.DeleteRepositoryResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	23, // 20: syncr.v1.ListSnapshotsResponse.snapshots:type_name -> syncr.v1.ResticSnapshot
-	20, // 21: syncr.v1.ListSnapshotsResponse.refreshed_at:type_name -> google.protobuf.Timestamp
-	22, // 22: syncr.v1.ListSnapshotsResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	24, // 23: syncr.v1.BrowseSnapshotResponse.entries:type_name -> syncr.v1.ProbeEntry
-	22, // 24: syncr.v1.BrowseSnapshotResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	5,  // 25: syncr.v1.ResticService.ListRepositories:input_type -> syncr.v1.ListRepositoriesRequest
-	7,  // 26: syncr.v1.ResticService.GetRepository:input_type -> syncr.v1.GetRepositoryRequest
-	9,  // 27: syncr.v1.ResticService.CreateRepository:input_type -> syncr.v1.CreateRepositoryRequest
-	11, // 28: syncr.v1.ResticService.UpdateRepository:input_type -> syncr.v1.UpdateRepositoryRequest
-	13, // 29: syncr.v1.ResticService.DeleteRepository:input_type -> syncr.v1.DeleteRepositoryRequest
-	15, // 30: syncr.v1.ResticService.ListSnapshots:input_type -> syncr.v1.ListSnapshotsRequest
-	17, // 31: syncr.v1.ResticService.BrowseSnapshot:input_type -> syncr.v1.BrowseSnapshotRequest
-	6,  // 32: syncr.v1.ResticService.ListRepositories:output_type -> syncr.v1.ListRepositoriesResponse
-	8,  // 33: syncr.v1.ResticService.GetRepository:output_type -> syncr.v1.GetRepositoryResponse
-	10, // 34: syncr.v1.ResticService.CreateRepository:output_type -> syncr.v1.CreateRepositoryResponse
-	12, // 35: syncr.v1.ResticService.UpdateRepository:output_type -> syncr.v1.UpdateRepositoryResponse
-	14, // 36: syncr.v1.ResticService.DeleteRepository:output_type -> syncr.v1.DeleteRepositoryResponse
-	16, // 37: syncr.v1.ResticService.ListSnapshots:output_type -> syncr.v1.ListSnapshotsResponse
-	18, // 38: syncr.v1.ResticService.BrowseSnapshot:output_type -> syncr.v1.BrowseSnapshotResponse
-	32, // [32:39] is the sub-list for method output_type
-	25, // [25:32] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	20, // 0: syncr.v1.Repository.remote:type_name -> syncr.v1.JobRemoteRef
+	4,  // 1: syncr.v1.Repository.stats:type_name -> syncr.v1.RepositoryStats
+	21, // 2: syncr.v1.Repository.created_at:type_name -> google.protobuf.Timestamp
+	21, // 3: syncr.v1.Repository.updated_at:type_name -> google.protobuf.Timestamp
+	21, // 4: syncr.v1.Repository.deletion_requested_at:type_name -> google.protobuf.Timestamp
+	1,  // 5: syncr.v1.Repository.deletion_outcome:type_name -> syncr.v1.RepositoryDeletionOutcome
+	22, // 6: syncr.v1.RepositoryJobRef.status:type_name -> syncr.v1.JobStatus
+	21, // 7: syncr.v1.RepositoryJobRef.created_at:type_name -> google.protobuf.Timestamp
+	21, // 8: syncr.v1.RepositoryJobRef.finished_at:type_name -> google.protobuf.Timestamp
+	21, // 9: syncr.v1.RepositoryStats.latest_snapshot_at:type_name -> google.protobuf.Timestamp
+	21, // 10: syncr.v1.RepositoryStats.snapshots_refreshed_at:type_name -> google.protobuf.Timestamp
+	3,  // 11: syncr.v1.RepositoryStats.last_backup:type_name -> syncr.v1.RepositoryJobRef
+	3,  // 12: syncr.v1.RepositoryStats.last_check:type_name -> syncr.v1.RepositoryJobRef
+	0,  // 13: syncr.v1.RepositoryInput.mode:type_name -> syncr.v1.RepositoryCreateMode
+	2,  // 14: syncr.v1.ListRepositoriesResponse.repositories:type_name -> syncr.v1.Repository
+	2,  // 15: syncr.v1.GetRepositoryResponse.repository:type_name -> syncr.v1.Repository
+	5,  // 16: syncr.v1.CreateRepositoryRequest.input:type_name -> syncr.v1.RepositoryInput
+	2,  // 17: syncr.v1.CreateRepositoryResponse.repository:type_name -> syncr.v1.Repository
+	23, // 18: syncr.v1.CreateRepositoryResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	2,  // 19: syncr.v1.UpdateRepositoryResponse.repository:type_name -> syncr.v1.Repository
+	23, // 20: syncr.v1.DeleteRepositoryResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	24, // 21: syncr.v1.ListSnapshotsResponse.snapshots:type_name -> syncr.v1.ResticSnapshot
+	21, // 22: syncr.v1.ListSnapshotsResponse.refreshed_at:type_name -> google.protobuf.Timestamp
+	23, // 23: syncr.v1.ListSnapshotsResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	25, // 24: syncr.v1.BrowseSnapshotResponse.entries:type_name -> syncr.v1.ProbeEntry
+	23, // 25: syncr.v1.BrowseSnapshotResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	6,  // 26: syncr.v1.ResticService.ListRepositories:input_type -> syncr.v1.ListRepositoriesRequest
+	8,  // 27: syncr.v1.ResticService.GetRepository:input_type -> syncr.v1.GetRepositoryRequest
+	10, // 28: syncr.v1.ResticService.CreateRepository:input_type -> syncr.v1.CreateRepositoryRequest
+	12, // 29: syncr.v1.ResticService.UpdateRepository:input_type -> syncr.v1.UpdateRepositoryRequest
+	14, // 30: syncr.v1.ResticService.DeleteRepository:input_type -> syncr.v1.DeleteRepositoryRequest
+	16, // 31: syncr.v1.ResticService.ListSnapshots:input_type -> syncr.v1.ListSnapshotsRequest
+	18, // 32: syncr.v1.ResticService.BrowseSnapshot:input_type -> syncr.v1.BrowseSnapshotRequest
+	7,  // 33: syncr.v1.ResticService.ListRepositories:output_type -> syncr.v1.ListRepositoriesResponse
+	9,  // 34: syncr.v1.ResticService.GetRepository:output_type -> syncr.v1.GetRepositoryResponse
+	11, // 35: syncr.v1.ResticService.CreateRepository:output_type -> syncr.v1.CreateRepositoryResponse
+	13, // 36: syncr.v1.ResticService.UpdateRepository:output_type -> syncr.v1.UpdateRepositoryResponse
+	15, // 37: syncr.v1.ResticService.DeleteRepository:output_type -> syncr.v1.DeleteRepositoryResponse
+	17, // 38: syncr.v1.ResticService.ListSnapshots:output_type -> syncr.v1.ListSnapshotsResponse
+	19, // 39: syncr.v1.ResticService.BrowseSnapshot:output_type -> syncr.v1.BrowseSnapshotResponse
+	33, // [33:40] is the sub-list for method output_type
+	26, // [26:33] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_syncr_v1_restic_proto_init() }
@@ -1626,7 +1697,7 @@ func file_syncr_v1_restic_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_syncr_v1_restic_proto_rawDesc), len(file_syncr_v1_restic_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
