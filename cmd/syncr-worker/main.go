@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/Zeptiny/Syncr/internal/platform/config"
 	"github.com/Zeptiny/Syncr/internal/platform/version"
@@ -56,9 +57,16 @@ type env struct {
 	host service.Host
 	// link starts the link transport inside `run`; nil means startLink.
 	link linkStarter
-	// setup replaces the collaborators of `setup` and `service`; the zero
-	// value means the real service manager, controller and network.
+	// setup replaces the collaborators of `setup`, `service` and
+	// `upgrade`; the zero value means the real service manager, controller
+	// and network.
 	setup setupOverrides
+	// upgrade replaces the downloads and file changes of `upgrade`; the zero
+	// value means the real ones.
+	upgrade upgradeOverrides
+	// lockWait is how long `run` waits for a data directory lock that
+	// another process holds; zero means dataDirLockWait.
+	lockWait time.Duration
 }
 
 func (e *env) serviceHost() service.Host {
@@ -98,6 +106,7 @@ func commands() []command {
 		{name: "setup", summary: "enroll this machine and install the worker service", run: setupCmd},
 		{name: "service", summary: "install, remove, start, stop or inspect the worker service", run: serviceCmd},
 		{name: "tools", summary: "provision and inspect the pinned rclone and restic binaries", run: toolsCmd},
+		{name: "upgrade", summary: "replace this worker with another release and restart it", run: upgradeCmd},
 		{name: "version", summary: "print version information", run: versionCmd},
 	}
 }

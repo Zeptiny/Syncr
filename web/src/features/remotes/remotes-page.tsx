@@ -23,6 +23,7 @@ import { copyText } from "@/lib/clipboard";
 import { tsDate } from "@/lib/format";
 
 import { BackendIcon } from "./backend-icon";
+import { isUnverified, UnverifiedBadge } from "./host-keys";
 
 const col = createColumnHelper<Remote>();
 
@@ -55,8 +56,11 @@ export function RemotesPage() {
             <BackendIcon id={r.backendType} />
             <div className="flex min-w-0 flex-col">
               <span className="truncate font-medium">{r.name}</span>
-              <span className="truncate text-xs text-muted-foreground">
-                {backends.get(r.backendType)?.label ?? r.backendType}
+              <span className="flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                <span className="truncate">
+                  {backends.get(r.backendType)?.label ?? r.backendType}
+                </span>
+                {isUnverified(r) && <UnverifiedBadge />}
               </span>
             </div>
           </div>

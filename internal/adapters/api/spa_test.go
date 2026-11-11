@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -174,6 +177,146 @@ func TestUIContentType(t *testing.T) {
 	} {
 		if got := uiContentType(name); got != want {
 			t.Errorf("uiContentType(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestSPAGzip: a compressible file is served gzipped only to requests that
+// accept gzip, with its own Content-Length and ETag and Vary on both
+// variants; other files and the API are never gzipped by the UI handler.
+func TestSPAGzip(t *testing.T) {
+	t.Parallel()
+	bigJS := strings.Repeat("console.log('syncr');\n", 200)
+	bigIndex := testIndex + strings.Repeat("<!-- padding -->", 50)
+	ui := testUI()
+	ui["index.html"] = &fstest.MapFile{Data: []byte(bigIndex)}
+	ui["assets/app-1.js"] = &fstest.MapFile{Data: []byte(bigJS)}
+	ui["assets/font-1.woff2"] = &fstest.MapFile{Data: []byte(strings.Repeat("wOF2", 200))}
+	srv := httptest.NewServer(NewHandler(Deps{Logger: logging.Discard(), UI: ui}))
+	t.Cleanup(srv.Close)
+	// A client that neither asks for nor decodes gzip by itself.
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+	t.Cleanup(client.CloseIdleConnections)
+	// reply is what get received (its body read and closed).
+	type reply struct {
+		StatusCode int
+		Header     http.Header
+	}
+	get := func(t *testing.T, method, p string, hdr ...string) (reply, []byte) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+p, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < len(hdr); i += 2 {
+			req.Header.Set(hdr[i], hdr[i+1])
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return reply{resp.StatusCode, resp.Header}, body
+	}
+	gunzip := func(t *testing.T, b []byte) string {
+		t.Helper()
+		zr, err := gzip.NewReader(bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := io.ReadAll(zr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+
+	for _, tt := range []struct{ path, want, typ string }{
+		{"/assets/app-1.js", bigJS, "text/javascript; charset=utf-8"},
+		{"/index.html", bigIndex, "text/html; charset=utf-8"},
+		{"/jobs/some-route", bigIndex, "text/html; charset=utf-8"},
+	} {
+		plain, plainBody := get(t, "GET", tt.path)
+		zipped, zippedBody := get(t, "GET", tt.path, "Accept-Encoding", "br;q=1, gzip;q=0.8")
+		if plain.StatusCode != http.StatusOK || plain.Header.Get("Content-Encoding") != "" || string(plainBody) != tt.want {
+			t.Errorf("%s without gzip: %d %q, %d bytes", tt.path, plain.StatusCode, plain.Header.Get("Content-Encoding"), len(plainBody))
+		}
+		if zipped.StatusCode != http.StatusOK || zipped.Header.Get("Content-Encoding") != "gzip" || gunzip(t, zippedBody) != tt.want {
+			t.Fatalf("%s with gzip: %d %q", tt.path, zipped.StatusCode, zipped.Header.Get("Content-Encoding"))
+		}
+		if got := zipped.Header.Get("Content-Length"); got != strconv.Itoa(len(zippedBody)) || len(zippedBody) >= len(tt.want) {
+			t.Errorf("%s: Content-Length %s for %d gzipped bytes of %d", tt.path, got, len(zippedBody), len(tt.want))
+		}
+		for _, resp := range []reply{plain, zipped} {
+			if resp.Header.Get("Vary") != "Accept-Encoding" || resp.Header.Get("Content-Type") != tt.typ ||
+				resp.Header.Get("Content-Security-Policy") != uiContentSecurityPolicy || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+				t.Errorf("%s: headers %v", tt.path, resp.Header)
+			}
+		}
+		pe, ze := plain.Header.Get("ETag"), zipped.Header.Get("ETag")
+		if pe == "" || ze == "" || pe == ze {
+			t.Errorf("%s: ETags %q and %q, want two different ones", tt.path, pe, ze)
+		}
+		// Each variant revalidates against its own ETag only.
+		if resp, body := get(t, "GET", tt.path, "Accept-Encoding", "gzip", "If-None-Match", ze); resp.StatusCode != http.StatusNotModified || len(body) != 0 || resp.Header.Get("Content-Encoding") != "" {
+			t.Errorf("%s: gzip revalidation = %d, %q", tt.path, resp.StatusCode, resp.Header.Get("Content-Encoding"))
+		}
+		if resp, _ := get(t, "GET", tt.path, "If-None-Match", pe); resp.StatusCode != http.StatusNotModified {
+			t.Errorf("%s: plain revalidation = %d", tt.path, resp.StatusCode)
+		}
+		if resp, body := get(t, "GET", tt.path, "Accept-Encoding", "gzip", "If-None-Match", pe); resp.StatusCode != http.StatusOK || gunzip(t, body) != tt.want {
+			t.Errorf("%s: the plain ETag revalidated the gzipped copy: %d", tt.path, resp.StatusCode)
+		}
+		if resp, body := get(t, "GET", tt.path, "Accept-Encoding", "gzip", "If-None-Match", `W/"other", `+ze); resp.StatusCode != http.StatusNotModified || len(body) != 0 {
+			t.Errorf("%s: revalidation with a list = %d", tt.path, resp.StatusCode)
+		}
+		// No ranges of the gzipped copy: the whole of it.
+		if resp, body := get(t, "GET", tt.path, "Accept-Encoding", "gzip", "Range", "bytes=0-9"); resp.StatusCode != http.StatusOK || gunzip(t, body) != tt.want ||
+			resp.Header.Get("Accept-Ranges") != "" {
+			t.Errorf("%s: range of the gzipped copy = %d, Accept-Ranges %q", tt.path, resp.StatusCode, resp.Header.Get("Accept-Ranges"))
+		}
+		if resp, body := get(t, "HEAD", tt.path, "Accept-Encoding", "gzip"); resp.StatusCode != http.StatusOK || len(body) != 0 ||
+			resp.Header.Get("Content-Encoding") != "gzip" || resp.Header.Get("Content-Length") != strconv.Itoa(len(zippedBody)) {
+			t.Errorf("%s: HEAD = %d %v", tt.path, resp.StatusCode, resp.Header)
+		}
+	}
+
+	// Accept-Encoding values that do not allow gzip.
+	for _, ae := range []string{"", "identity", "br", "gzip;q=0", "*;q=0", "gzip;q=0, *", "gzip;q=x"} {
+		if resp, _ := get(t, "GET", "/assets/app-1.js", "Accept-Encoding", ae); resp.Header.Get("Content-Encoding") != "" {
+			t.Errorf("Accept-Encoding %q got %q", ae, resp.Header.Get("Content-Encoding"))
+		}
+	}
+	for _, ae := range []string{"gzip", "GZIP", "x-gzip", "*", "deflate, gzip;q=0.5", "*;q=0.1"} {
+		if resp, _ := get(t, "GET", "/assets/app-1.js", "Accept-Encoding", ae); resp.Header.Get("Content-Encoding") != "gzip" {
+			t.Errorf("Accept-Encoding %q not gzipped", ae)
+		}
+	}
+	// Fonts, tiny files and the API are never gzipped by the UI handler.
+	for _, p := range []string{"/assets/font-1.woff2", "/assets/index-abc123.js", "/healthz", "/syncr.v1.Nope/Get", "/assets/missing-1.js"} {
+		resp, _ := get(t, "GET", p, "Accept-Encoding", "gzip")
+		if resp.Header.Get("Content-Encoding") != "" || resp.Header.Get("Vary") != "" {
+			t.Errorf("%s: Content-Encoding %q, Vary %q", p, resp.Header.Get("Content-Encoding"), resp.Header.Get("Vary"))
+		}
+	}
+}
+
+func TestAcceptsGzip(t *testing.T) {
+	t.Parallel()
+	for v, want := range map[string]bool{
+		"gzip": true, "gzip, deflate, br, zstd": true, " GZip ;Q=0.5": true, "x-gzip": true, "*": true,
+		"": false, "identity": false, "gzip;q=0": false, "gzip;q=0.0, *": false, "gzip;q=2": false, "*;q=0": false, "br;q=1": false,
+	} {
+		h := http.Header{}
+		if v != "" {
+			h.Set("Accept-Encoding", v)
+		}
+		if got := acceptsGzip(h); got != want {
+			t.Errorf("acceptsGzip(%q) = %v, want %v", v, got, want)
 		}
 	}
 }

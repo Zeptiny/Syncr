@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -71,17 +72,52 @@ func (s *Store) LatestJobSamples(ctx context.Context, ids []domain.JobID) (map[d
 	return out, nil
 }
 
-// ListJobSamples implements jobs.SampleRepository.
-func (s *Store) ListJobSamples(ctx context.Context, id domain.JobID) ([]jobs.Sample, error) {
-	rows, err := s.q.ListJobSamples(ctx, pgID(id))
+// ListJobSamples implements jobs.SampleRepository: one statement returns
+// the thinned samples with the job's sample count (see the query).
+func (s *Store) ListJobSamples(ctx context.Context, id domain.JobID, maxPoints int) ([]jobs.Sample, int, error) {
+	rows, err := s.q.ListJobSamples(ctx, db.ListJobSamplesParams{JobID: pgID(id), MaxPoints: int64(maxPoints)})
 	if err != nil {
-		return nil, mapErr(fmt.Sprintf("list samples of job %s", id), err)
+		return nil, 0, mapErr(fmt.Sprintf("list samples of job %s", id), err)
 	}
 	out := make([]jobs.Sample, len(rows))
+	total := 0
 	for i, r := range rows {
-		if out[i], err = sampleFrom(r); err != nil {
-			return nil, err
+		out[i], err = sampleFrom(db.JobSample{
+			JobID: r.JobID, T: r.T, Bytes: r.Bytes, TotalBytes: r.TotalBytes, Files: r.Files, TotalFiles: r.TotalFiles,
+			Checks: r.Checks, Deletes: r.Deletes, Renames: r.Renames, Errors: r.Errors, ElapsedNs: r.ElapsedNs,
+		})
+		if err != nil {
+			return nil, 0, err
 		}
+		total = int(r.Total)
 	}
-	return out, nil
+	return out, total, nil
+}
+
+// PurgeJobSamples implements jobs.SampleRepository: one statement that
+// deletes the samples of the next finished jobs after the cursor that still
+// have samples (see the query). The zero cursor is passed as -infinity, so
+// the query has one plan for both.
+func (s *Store) PurgeJobSamples(ctx context.Context, finishedBefore time.Time, after jobs.PurgeCursor, maxJobs int) (int, jobs.PurgeCursor, error) {
+	if maxJobs <= 0 {
+		return 0, after, fmt.Errorf("purge job samples: %w: max jobs %d is not positive", domain.ErrInvalidArgument, maxJobs)
+	}
+	from := pgtype.Timestamptz{InfinityModifier: pgtype.NegativeInfinity, Valid: true}
+	if !after.FinishedAt.IsZero() {
+		from = pgTime(after.FinishedAt)
+	}
+	r, err := s.q.PurgeJobSamples(ctx, db.PurgeJobSamplesParams{
+		FinishedBefore: pgTime(finishedBefore), AfterFinishedAt: from, AfterID: pgID(after.ID), MaxJobs: int64(maxJobs),
+	})
+	if err != nil {
+		return 0, after, mapErr("purge job samples", err)
+	}
+	if !r.LastID.Valid {
+		return 0, after, nil
+	}
+	next := jobs.PurgeCursor{FinishedAt: timeFrom(r.LastFinishedAt)}
+	if err := decodeID(&next.ID, r.LastID); err != nil {
+		return 0, after, err
+	}
+	return int(r.Deleted), next, nil
 }

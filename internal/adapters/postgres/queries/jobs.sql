@@ -9,7 +9,7 @@ INSERT INTO jobs (
     stat_bytes, stat_total_bytes, stat_files, stat_total_files, stat_checks,
     stat_deletes, stat_renames, stat_errors, stat_elapsed_ns,
     error_code, error_message, warnings, exit_code, output, version, schedule_id,
-    repository_id, concurrency_keys
+    repository_id, concurrency_keys, time_limit_ns
 )
 SELECT
     sqlc.arg(id)::uuid, sqlc.arg(worker_id)::uuid, sqlc.arg(owner_id)::uuid, sqlc.arg(kind)::text,
@@ -23,7 +23,8 @@ SELECT
     sqlc.arg(stat_renames)::bigint, sqlc.arg(stat_errors)::bigint, sqlc.arg(stat_elapsed_ns)::bigint,
     sqlc.arg(error_code)::text, sqlc.arg(error_message)::text, sqlc.arg(warnings)::text[],
     sqlc.arg(exit_code)::integer, sqlc.narg(output)::bytea, sqlc.arg(version)::bigint,
-    sqlc.narg(schedule_id)::uuid, sqlc.narg(repository_id)::uuid, sqlc.arg(concurrency_keys)::text[]
+    sqlc.narg(schedule_id)::uuid, sqlc.narg(repository_id)::uuid, sqlc.arg(concurrency_keys)::text[],
+    sqlc.arg(time_limit_ns)::bigint
 WHERE EXISTS (
     SELECT 1 FROM workers WHERE workers.id = sqlc.arg(worker_id)::uuid AND workers.removed_at IS NULL FOR SHARE
 );
@@ -73,6 +74,7 @@ UPDATE jobs SET
     warnings = sqlc.arg(warnings),
     exit_code = sqlc.arg(exit_code),
     output = sqlc.arg(output),
+    time_limit_ns = sqlc.arg(time_limit_ns),
     version = version + 1
 WHERE id = sqlc.arg(id) AND version = sqlc.arg(expected_version)
 RETURNING *;

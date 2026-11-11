@@ -11,8 +11,11 @@
 //     through a Transport (*dispatch.ProbeBroker) and maps the outcome. It
 //     implements restic.Prober for the repository use cases.
 //   - Service is the API-facing part (api.ProbeService): browsing a
-//     worker's folders, browsing a remote and testing a remote. It speaks
-//     the generated response types, because the API cannot import
+//     worker's folders, browsing a remote, testing a remote and fetching
+//     an SFTP server's host keys (GetSftpHostKeys, Milestone 6: the worker
+//     only runs SSH handshakes and sends no credentials; the controller
+//     validates the address first and checks the keys it gets back). It
+//     speaks the generated response types, because the API cannot import
 //     controller packages.
 //   - DataDeleter starts a repository's restic_delete_data job
 //     (restic.Deletions). It is here because it shares the worker pick and
@@ -51,6 +54,9 @@
 //	TIMEOUT, BUSY, cancelled, no answer, offline      domain.ErrUnavailable
 //	an outdated worker, no usable worker              domain.ErrFailedPrecondition
 //	any other failure the worker reports              domain.ErrFailedPrecondition (scrubbed, clipped)
+//	host keys: unreachable, not SSH, no answer in
+//	  time (TEMPORARY, EXECUTION_FAILED, TIMEOUT)     domain.ErrFailedPrecondition (the worker's message)
+//	host keys: a malformed host or port               *domain.ValidationError on "host" or "port"
 //	too many probes of one user                       domain.ErrRateLimited
 //
 // A failure the worker reported also carries a *restic.ProbeError (code

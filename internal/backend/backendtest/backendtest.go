@@ -14,7 +14,8 @@
 //     must set every field, and rejects unknown keys, values in the wrong
 //     map (a secret in Options, a non-secret in Secrets) and missing
 //     required fields, as a *domain.ValidationError whose messages contain
-//     no values;
+//     no values; it also rejects every configuration of the type's
+//     backend.InvalidExampler, naming the example's field;
 //  4. ToRclone: it only emits declared rclone option names, secret values
 //     only in Rclone.Secrets (never in Options, Root or Backend), obscured
 //     keys that are secret fields marked Obscure, Backend equal to the ID
@@ -84,7 +85,10 @@ func Run(t *testing.T, typ backend.Type, opts ...Option) {
 		opt(&o)
 	}
 	t.Run("Descriptor", func(t *testing.T) { checkDescriptor(t, typ) })
-	t.Run("Validate", func(t *testing.T) { checkValidate(t, typ) })
+	t.Run("Validate", func(t *testing.T) {
+		checkValidate(t, typ)
+		checkInvalid(t, typ)
+	})
 	t.Run("ToRclone", func(t *testing.T) { checkToRclone(t, typ, o) })
 }
 
@@ -142,6 +146,9 @@ func checkDescriptor(t reporter, typ backend.Type) {
 		if f.Kind == backend.KindMembers {
 			members++
 		}
+	}
+	if caps.ObjectStore && (caps.Local || caps.Union) {
+		t.Errorf("Capabilities.ObjectStore on a local or union type")
 	}
 	if members > 1 || (members == 1) != caps.Union {
 		t.Errorf("%d members fields with Capabilities.Union = %v; a union has exactly one, other types none", members, caps.Union)
@@ -332,6 +339,31 @@ func checkValidate(t reporter, typ backend.Type) {
 		what = fmt.Sprintf("required field %q missing", f.Name)
 		if paths := validationFields(t, what, typ.Validate(missing)); paths != nil && !has(paths, path) {
 			t.Errorf("%s: fields %v do not name %s", what, paths, path)
+		}
+	}
+}
+
+// checkInvalid checks that typ rejects each of its invalid examples, naming
+// the example's field, without echoing a value (part of check 3).
+func checkInvalid(t reporter, typ backend.Type) {
+	ie, ok := typ.(backend.InvalidExampler)
+	if !ok {
+		return
+	}
+	for _, ex := range ie.InvalidExamples() {
+		what := fmt.Sprintf("invalid example %q", ex.Name)
+		if ex.Field == "" {
+			t.Errorf("%s: names no field", what)
+			continue
+		}
+		cfg := ex.Config.Clone()
+		err := typ.Validate(cfg)
+		if paths := validationFields(t, what, err); paths != nil && !slices.Contains(paths, ex.Field) {
+			t.Errorf("%s: fields %v do not name %s", what, paths, ex.Field)
+		}
+		noValues(t, what, err, ex.Config)
+		if !reflect.DeepEqual(cfg, ex.Config) {
+			t.Errorf("%s: Validate changed its input", what)
 		}
 	}
 }

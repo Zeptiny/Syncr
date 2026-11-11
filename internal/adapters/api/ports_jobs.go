@@ -18,7 +18,10 @@ type JobService interface {
 	List(ctx context.Context, actor domain.Actor, f jobs.ListFilter) (jobs.Page, error)
 	Cancel(ctx context.Context, actor domain.Actor, id domain.JobID) (jobs.Job, error)
 	Watch(ctx context.Context, actor domain.Actor, id domain.JobID, fn func(jobs.Update) error) error
-	Samples(ctx context.Context, actor domain.Actor, id domain.JobID) ([]jobs.Sample, error)
+	// ListSamples returns at most maxPoints samples of a job, evenly
+	// thinned, and how many it has (0 means jobs.DefaultSamplePoints; the
+	// service caps maxPoints at jobs.MaxSamplePoints).
+	ListSamples(ctx context.Context, actor domain.Actor, id domain.JobID, maxPoints int) ([]jobs.Sample, int, error)
 	// LatestSamples is only called for jobs the actor has just read; one
 	// store query for all of them.
 	LatestSamples(ctx context.Context, ids []domain.JobID) (map[domain.JobID]jobs.Sample, error)

@@ -124,6 +124,17 @@ service WorkerAdminService {
   rpc SetWorkerLabels(SetWorkerLabelsRequest) returns (SetWorkerLabelsResponse) {
     option idempotency_level = IDEMPOTENT;
   }
+
+  // GetWorkerUpgradeCommands returns the commands that upgrade a worker in
+  // place (`syncr-worker upgrade`) to the controller's release, for the
+  // worker's operating system: one for a system service and one for a
+  // per-user service. Running jobs are interrupted by the restart the
+  // upgrade does. Empty when the worker's operating system is unknown (it
+  // never connected) or has no release build. NOT_FOUND for an unknown or
+  // removed worker.
+  rpc GetWorkerUpgradeCommands(GetWorkerUpgradeCommandsRequest) returns (GetWorkerUpgradeCommandsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
 }
 
 // Worker is an enrolled or registered worker. Secrets are never returned.
@@ -161,7 +172,15 @@ message Worker {
   // any worker with a label.
   repeated string labels = 10;
 
-  reserved 11 to 19;
+  // The worker should be upgraded (GetWorkerUpgradeCommands): its latest
+  // Hello lacks a link feature this controller knows, or the worker and the
+  // controller are both release builds and the worker's version is older
+  // (by semantic versioning: v2.0.0-rc.1 < v2.0.0 < v2.0.1). A worker newer
+  // than the controller is not outdated. Computed by the controller, never
+  // stored; false until the worker has connected once.
+  bool outdated = 11;
+
+  reserved 12 to 19;
 }
 
 // WorkerStatus is a worker's connection status.
@@ -345,6 +364,16 @@ message RemoveWorkerRequest {
 // RemoveWorkerResponse is empty.
 message RemoveWorkerResponse {}
 
+// GetWorkerUpgradeCommandsRequest names the worker to upgrade.
+message GetWorkerUpgradeCommandsRequest {
+  string worker_id = 1;
+}
+
+// GetWorkerUpgradeCommandsResponse lists the worker's upgrade commands.
+message GetWorkerUpgradeCommandsResponse {
+  repeated InstallCommand commands = 1;
+}
+
 // SetWorkerLabelsRequest replaces a worker's labels.
 message SetWorkerLabelsRequest {
   string worker_id = 1;
@@ -417,7 +446,10 @@ service JobService {
   }
 
   // ListJobSamples returns the stored progress samples of a job (one about
-  // every five seconds while it ran), oldest first, for charts.
+  // every five seconds while it ran), oldest first, for charts: at most
+  // max_points of them, evenly thinned. The samples of a job that finished
+  // longer ago than the controller's jobs.sample_retention (30 days by
+  // default) are deleted; its final counters stay on the job.
   rpc ListJobSamples(ListJobSamplesRequest) returns (ListJobSamplesResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
@@ -505,7 +537,16 @@ message Job {
   // order; empty for kinds without any.
   repeated JobDetail details = 24;
 
-  reserved 25 to 29;
+  // The job's effective time limit: its definition's max_runtime or, when
+  // that is unset, the controller's jobs.default_max_runtime (jobs only the
+  // system starts, such as restic_delete_data, never get the default).
+  // Once a worker accepted the job, the limit it was sent then, which a
+  // later change of the default does not change; for a queued job, the
+  // limit it will be sent. Unset when the job has none, or ended before a
+  // worker accepted it. A job stopped by it fails with TIME_LIMIT.
+  google.protobuf.Duration time_limit = 25;
+
+  reserved 26 to 29;
 }
 
 // JobRepositoryRef names the restic repository a job or schedule uses.
@@ -565,6 +606,17 @@ message JobRemoteRef {
 // with the remotes' credentials, when it dispatches the job. Field names of
 // the oneof are the job kinds (the JobSpec operation names).
 message JobDefinition {
+  // Hard time limit of the job, for every kind: the worker stops the job
+  // this long after its process started and the job fails with TIME_LIMIT.
+  // 1 minute to 366 days; unset means the controller's default
+  // (jobs.default_max_runtime, none unless configured). Unlike rclone's
+  // max_duration (RcloneTransferOptions), which only stops starting new
+  // transfers, it ends the job. A worker that cannot enforce it fails the
+  // job with WORKER_OUTDATED instead of running it without a limit.
+  google.protobuf.Duration max_runtime = 1;
+
+  reserved 2 to 9;
+
   oneof operation {
     RcloneTransferDefinition rclone_transfer = 10;
 
@@ -873,11 +925,20 @@ message WatchJobResponse {
 // ListJobSamplesRequest names a job.
 message ListJobSamplesRequest {
   string job_id = 1;
+
+  // At most this many samples: a job with more is evenly thinned, always
+  // keeping its first and its last sample. 0 means 1000; larger values are
+  // capped at 5000; negative ones are INVALID_ARGUMENT.
+  int32 max_points = 2;
 }
 
 // ListJobSamplesResponse lists the job's stored samples, oldest first.
 message ListJobSamplesResponse {
   repeated JobProgress samples = 1;
+
+  // How many samples the job has stored; more than len(samples) means they
+  // were thinned.
+  int32 total = 2;
 }
 
 // JobProgress is a live progress sample. Rates are derived by clients from

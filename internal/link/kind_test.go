@@ -47,7 +47,7 @@ func TestKinds(t *testing.T) {
 			t.Errorf("IsKind(%q) = false", k)
 		}
 	}
-	for _, k := range []string{"", "remotes", "operation", "rclone", "RcloneTransfer"} {
+	for _, k := range []string{"", "remotes", "max_runtime", "operation", "rclone", "RcloneTransfer"} {
 		if IsKind(k) {
 			t.Errorf("IsKind(%q) = true", k)
 		}

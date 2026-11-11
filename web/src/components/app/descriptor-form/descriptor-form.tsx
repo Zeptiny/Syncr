@@ -4,7 +4,7 @@ import { FormProvider, useForm, type FieldPath, type Resolver } from "react-hook
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { FieldKind, type Backend, type Remote } from "@/gen/syncr/v1/remotes_pb";
+import { FieldKind, type Backend, type BackendField, type Remote } from "@/gen/syncr/v1/remotes_pb";
 import { errorMessage, fieldViolations } from "@/lib/errors";
 
 import { DescriptorFields } from "./descriptor-fields";
@@ -41,6 +41,11 @@ export interface RemoteFormProps {
    * that returns the form's current, unsaved input (e.g. "Test remote").
    */
   extra?: (input: () => RemoteInputInit) => React.ReactNode;
+  /**
+   * renderField overrides a descriptor field's control (e.g. SFTP host keys
+   * with a fetch button); undefined falls back to the default control.
+   */
+  renderField?: (field: BackendField, idPrefix: string) => React.ReactNode | undefined;
 }
 
 /**
@@ -58,6 +63,7 @@ export function RemoteForm({
   onCancel,
   footer,
   extra,
+  renderField,
 }: RemoteFormProps) {
   const idPrefix = useId().replaceAll(":", "");
   const schema = useMemo(
@@ -138,7 +144,9 @@ export function RemoteForm({
                   backends={backends}
                   selfId={remote?.id}
                 />
-              ) : undefined
+              ) : (
+                renderField?.(f, idPrefix)
+              )
             }
           />
         </div>

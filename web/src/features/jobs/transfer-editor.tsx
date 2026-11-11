@@ -108,6 +108,9 @@ export function QuantityInput<U extends string>({
   units,
   onChange,
   placeholder,
+  help,
+  error,
+  optional,
 }: {
   id: string;
   label: string;
@@ -116,9 +119,12 @@ export function QuantityInput<U extends string>({
   units: { id: U; label?: string }[];
   onChange: (value: string, unit: U) => void;
   placeholder?: string;
+  help?: React.ReactNode;
+  error?: string;
+  optional?: boolean;
 }) {
   return (
-    <FieldShell id={id} label={label}>
+    <FieldShell id={id} label={label} help={help} error={error} optional={optional}>
       <div className="flex gap-2">
         <Input
           id={id}
@@ -126,6 +132,8 @@ export function QuantityInput<U extends string>({
           className="tabular min-w-0 flex-1 bg-card"
           value={value}
           placeholder={placeholder ?? "Default"}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : help ? `${id}-help` : undefined}
           onChange={(e) => onChange(e.target.value.trim(), unit)}
         />
         <Select value={unit} onValueChange={(u) => onChange(value, u as U)}>
@@ -399,6 +407,7 @@ export function TransferEditor({
                       onChange({ ...s, maxDuration, maxDurationUnit })
                     }
                     placeholder="No limit"
+                    help="rclone's max duration: no new transfer starts after this. For a hard stop, set a time limit."
                   />
                   <NumberInput
                     id="opt-retries"

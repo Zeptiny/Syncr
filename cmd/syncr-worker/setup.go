@@ -20,6 +20,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/worker/service"
 	"github.com/Zeptiny/Syncr/internal/worker/setup"
 	"github.com/Zeptiny/Syncr/internal/worker/tlscert"
+	"github.com/Zeptiny/Syncr/internal/worker/tools"
 )
 
 // tokenEnv carries the enrollment token without putting it on the command
@@ -211,12 +212,35 @@ func (p toolProvisioner) Provision(ctx context.Context, toolsDir string, progres
 	if err != nil {
 		return nil, err
 	}
+	p.prune(ctx, toolsDir, progress)
 	var out []setup.ToolStatus
 	for _, n := range []string{toolRclone, toolRestic} {
 		r := resolved[n]
 		out = append(out, setup.ToolStatus{Name: n, Version: r.Version, Source: string(r.Source), Path: r.Path})
 	}
 	return out, nil
+}
+
+// prune removes the managed installs of tool versions other than the
+// pinned ones from toolsDir (tools.Installer.Prune), once the pinned tools
+// resolved: what an earlier version of the worker installed there. It is
+// not fatal; problems are reported through progress. A tools directory
+// that does not exist holds nothing to remove.
+func (p toolProvisioner) prune(ctx context.Context, toolsDir string, progress func(string)) {
+	if _, err := os.Stat(toolsDir); err != nil {
+		return
+	}
+	inst, err := tools.NewInstaller(tools.InstallerOptions{Dir: toolsDir})
+	if err == nil {
+		var removed []string
+		removed, err = inst.Prune(ctx, p.e.tools.pinned().Pins())
+		for _, dir := range removed {
+			progress("removed the tool version this release no longer uses: " + dir)
+		}
+	}
+	if err != nil {
+		progress("could not remove the tool versions this release no longer uses (they stay installed): " + err.Error())
+	}
 }
 
 // probeTLS connects to addr and returns the fingerprint of the certificate

@@ -1,6 +1,7 @@
 package proc
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -100,7 +101,7 @@ func runHelper(mode string, args []string) int {
 			return 12
 		}
 		return 0
-	case "orphan": // leaves a grandchild holding stdout open, then exits 0
+	case "orphan": // leaves a grandchild that left its process group holding stdout open, then exits 0
 		self, err := os.Executable()
 		if err != nil {
 			return 10
@@ -108,13 +109,69 @@ func runHelper(mode string, args []string) int {
 		cmd := exec.Command(self) // deliberately outlives this helper
 		cmd.Env = append(os.Environ(), helperEnv+"=block")
 		cmd.Stdout = os.Stdout
+		leaveGroup(cmd)
 		if err := cmd.Start(); err != nil {
 			return 11
 		}
 		fmt.Printf("grandchild=%d\n", cmd.Process.Pid)
 		return 0
+	case "tree": // args: exit|trap|ignore; starts a "grandchild" holding stdout, then behaves like that mode
+		return runTree(args[0])
+	case "grandchild": // reports a stop signal on stdout instead of exiting; runs for a minute
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt)
+		fmt.Fprintln(os.Stderr, "ready") // to the parent, which waits for it
+		select {
+		case <-sig:
+			fmt.Println("grandchild interrupted")
+			time.Sleep(time.Minute)
+		case <-time.After(time.Minute):
+		}
+		return 0
 	}
 	fmt.Fprintf(os.Stderr, "unknown helper mode %q\n", mode)
+	return 99
+}
+
+// runTree starts a "grandchild" that inherits stdout and waits until it is
+// ready (its signal handler installed), prints its PID, then: "exit" exits 0
+// at once; "trap" prints ready and exits 3 on the stop signal; "ignore"
+// prints ready and ignores the stop signal, so it must be killed.
+func runTree(mode string) int {
+	self, err := os.Executable()
+	if err != nil {
+		return 10
+	}
+	cmd := exec.Command(self) // stays in this helper's process group
+	cmd.Env = append(os.Environ(), helperEnv+"=grandchild")
+	cmd.Stdout = os.Stdout
+	ready, err := cmd.StderrPipe()
+	if err != nil {
+		return 11
+	}
+	if err := cmd.Start(); err != nil {
+		return 11
+	}
+	fmt.Printf("grandchild=%d\n", cmd.Process.Pid)
+	if _, err := bufio.NewReader(ready).ReadString('\n'); err != nil {
+		return 12
+	}
+	switch mode {
+	case "exit":
+		return 0
+	case "trap":
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt)
+		fmt.Println("ready")
+		<-sig
+		fmt.Println("stopping")
+		return 3
+	case "ignore":
+		signal.Ignore(os.Interrupt)
+		fmt.Println("ready")
+		time.Sleep(time.Minute)
+		return 0
+	}
 	return 99
 }
 
@@ -373,35 +430,6 @@ func TestRunAlreadyCanceled(t *testing.T) {
 	}
 	if res.ExitCode != -1 {
 		t.Errorf("ExitCode = %d, want -1", res.ExitCode)
-	}
-}
-
-func TestRunOrphanedPipesDoNotHang(t *testing.T) {
-	t.Parallel()
-	spec := helperSpec(t, "orphan")
-	spec.GracePeriod = 300 * time.Millisecond
-	spec.Stdout = func(l Line) {
-		if pid, ok := strings.CutPrefix(string(l.Data), "grandchild="); ok {
-			if n, err := strconv.Atoi(pid); err == nil {
-				t.Cleanup(func() {
-					if p, err := os.FindProcess(n); err == nil {
-						_ = p.Kill()
-					}
-				})
-			}
-		}
-	}
-
-	start := time.Now()
-	res, err := New(Options{}).Run(t.Context(), spec)
-	if elapsed := time.Since(start); elapsed > 10*time.Second {
-		t.Fatalf("Run took %v; pipes held by the grandchild were not closed", elapsed)
-	}
-	if !errors.Is(err, exec.ErrWaitDelay) {
-		t.Errorf("Run() error = %v, want exec.ErrWaitDelay", err)
-	}
-	if res.ExitCode != 0 {
-		t.Errorf("ExitCode = %d, want 0", res.ExitCode)
 	}
 }
 

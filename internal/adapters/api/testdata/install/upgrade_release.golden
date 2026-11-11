@@ -1,0 +1,18 @@
+### INSTALL_PLATFORM_LINUX / INSTALL_SCOPE_SYSTEM / sh: Linux (system service)
+# Needs sudo. Replaces /usr/local/bin/syncr-worker and restarts the system service. Installs v2.0.0, the controller's version. Running jobs are interrupted by the restart. If the new version does not stay up, the old one is put back.
+sudo /usr/local/bin/syncr-worker upgrade --version 'v2.0.0'
+
+### INSTALL_PLATFORM_LINUX / INSTALL_SCOPE_USER / sh: Linux (current user)
+# Run as the user the worker runs as. Replaces ~/.local/bin/syncr-worker and restarts that user's service. Installs v2.0.0, the controller's version. Running jobs are interrupted by the restart. If the new version does not stay up, the old one is put back.
+"$HOME/.local/bin/syncr-worker" upgrade --user --version 'v2.0.0'
+
+### INSTALL_PLATFORM_WINDOWS / INSTALL_SCOPE_SYSTEM / powershell: Windows (system service)
+# Run in an elevated PowerShell (Run as administrator). Replaces the worker in Program Files and restarts the Windows service. Installs v2.0.0, the controller's version. Running jobs are interrupted by the restart. If the new version does not stay up, the old one is put back.
+$d = Join-Path $env:ProgramFiles 'Syncr'
+& "$d\syncr-worker.exe" upgrade --version 'v2.0.0'
+
+### INSTALL_PLATFORM_WINDOWS / INSTALL_SCOPE_USER / powershell: Windows (current user)
+# Run in a normal PowerShell as the user the worker runs as. Replaces the worker in that user's programs folder and restarts its scheduled task. Installs v2.0.0, the controller's version. Running jobs are interrupted by the restart. If the new version does not stay up, the old one is put back.
+$d = Join-Path $env:LOCALAPPDATA 'Programs\Syncr'
+& "$d\syncr-worker.exe" upgrade --user --version 'v2.0.0'
+

@@ -54,7 +54,10 @@ type Config struct {
 
 	// ScratchRoot is the directory under which each job gets a private
 	// scratch directory (mode 0700), used as the child's temp directory and
-	// removed when the job ends.
+	// removed when the job ends. ScratchRoot itself is the children's
+	// working directory, so a process that outlives its job cannot keep the
+	// job's directory busy (Windows refuses to remove a directory that is a
+	// process's working directory).
 	ScratchRoot string
 
 	// CacheDir is the worker-controlled restic cache directory
@@ -237,7 +240,7 @@ func (e *engine) exec(ctx context.Context, x execution) (runner.Result, *session
 	pres, err := e.cfg.Supervisor.Run(ctx, proc.Spec{
 		Path:   e.cfg.ResticPath,
 		Args:   argv,
-		Dir:    scratch,
+		Dir:    e.cfg.ScratchRoot,
 		Env:    env,
 		Stdout: s.stdout,
 		Stderr: s.line,
@@ -326,11 +329,13 @@ func (e *engine) baseEnv(remotes []*syncrv1.RemoteDefinition, password string, v
 // scratchDir creates the private directory name under ScratchRoot and
 // returns it with a function that removes it.
 //
-// The directory is restic's working and temporary directory, and so also
-// that of the rclone process restic starts for an rclone: repository. restic
-// does not wait for that process to exit, so on Windows it can still hold the
-// directory open when the job ends (or when a job with the same ID starts):
-// proc.RemoveAll retries until it lets go.
+// The directory is restic's temporary directory, and so also that of the
+// rclone process restic starts for an rclone: repository; their working
+// directory is ScratchRoot. Should a process of the job outlive it (the
+// supervisor stops the whole tree, but on Windows only where it could set
+// up a Job Object), it may still hold files of the directory open when the
+// job ends (or when a job with the same ID starts): proc.RemoveAll retries
+// until it lets go.
 func (e *engine) scratchDir(name, logID string) (string, func(), error) {
 	root := e.cfg.ScratchRoot
 	if err := os.MkdirAll(root, 0o700); err != nil {

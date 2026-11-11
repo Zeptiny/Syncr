@@ -78,6 +78,20 @@
 // waiting job counts from when it became the head of its keys
 // (Repository.ListQueuedJobs).
 //
+// # Time limits and retention (Milestone 6)
+//
+// A job may have a hard time limit (docs/adr/0014-job-time-limits-retention.md):
+// its definition's max_runtime or, when it sets none, the controller's
+// default; EffectiveTimeLimit is the rule. The worker enforces it and
+// reports a FAILED job with CodeTimeLimit, which this service records like
+// any other failure (the notifier, the schedule's run and the concurrency
+// keys see an ordinary failed job).
+//
+// The progress samples of finished jobs are kept for
+// Config.SampleRetention; PurgeSamples, called hourly by the composition
+// root, deletes the older ones in batches. Jobs themselves, with their
+// final counters, are never deleted (see the ADR).
+//
 // Allowed dependencies: the standard library and internal/domain; every
 // other collaborator is a port declared in ports.go.
 package jobs

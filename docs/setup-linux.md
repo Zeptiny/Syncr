@@ -21,12 +21,18 @@ curl -fsSL "https://github.com/Zeptiny/Syncr/releases/latest/download/syncr-work
   && sudo /usr/local/bin/syncr-worker setup --controller 'https://syncr.example.com' --token 'syncr_et_...'
 ```
 
-It downloads the release archive (`workers.download_base_url` on the
-controller points it at a mirror), installs the binary where the service
-runs it, and runs setup. The controller URL is its `http.public_url`, or the
+It downloads the release archive, installs the binary where the service
+runs it, and runs setup. The UI's command downloads the controller's own
+release (`.../releases/download/v2.0.0/...` for a v2.0.0 controller), so a
+new worker runs the controller's version; the `latest` URL above, which a
+development build of the controller shows, installs the newest release. If
+the controller sets `workers.download_base_url` (empty by default), the
+command downloads from that mirror instead (a value of
+`https://github.com/Zeptiny/Syncr/releases/latest/download`, the default of
+builds before v2.0.0, counts as unset; the controller warns at start that it
+should be removed). The controller URL is its `http.public_url`, or the
 address your browser uses when that is unset. If `syncr-worker` is already
-installed (release archives are published from Milestone 6 on; until then
-build it with `make build`), run only the last line:
+installed, run only the last line:
 
 ```sh
 # put the binary where it will live; the service runs exactly this path
@@ -36,6 +42,26 @@ sudo syncr-worker setup --controller https://syncr.example.com --token syncr_et_
 
 The worker shows as online on the **Workers** page within seconds.
 
+### Verifying a download
+
+The command trusts HTTPS to GitHub. To install by hand and check the
+archive against the release's `checksums.txt` first (and, optionally, its
+GitHub build provenance):
+
+```sh
+base=https://github.com/Zeptiny/Syncr/releases/latest/download   # or releases/download/v2.0.0
+arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+curl -fsSLO "$base/checksums.txt"
+curl -fsSLO "$base/syncr-worker_linux_$arch.tar.gz"
+sha256sum --ignore-missing -c checksums.txt     # must print: syncr-worker_linux_<arch>.tar.gz: OK
+gh attestation verify "syncr-worker_linux_$arch.tar.gz" --owner Zeptiny   # optional, needs the GitHub CLI
+tar -xzf "syncr-worker_linux_$arch.tar.gz" syncr-worker
+sudo install -m 0755 syncr-worker /usr/local/bin/syncr-worker
+syncr-worker version
+```
+
+Then run setup as above.
+
 Sample output:
 
 ```
@@ -43,8 +69,8 @@ Syncr worker setup: active worker, system scope
 
 ==> Preparing directories
 ==> Provisioning rclone and restic (pinned versions, checksum-verified)
-    rclone 1.70.0 (managed) /var/lib/syncr/tools/rclone/1.70.0/linux-amd64/rclone
-    restic 0.18.0 (managed) /var/lib/syncr/tools/restic/0.18.0/linux-amd64/restic
+    rclone 1.75.2 (managed) /var/lib/syncr/tools/rclone/1.75.2/linux-amd64/rclone
+    restic 0.19.1 (managed) /var/lib/syncr/tools/restic/0.19.1/linux-amd64/restic
 ==> Enrolling with https://syncr.example.com
     enrolled as "myhost", worker ID 0b6f8f0e-52a5-4a3f-9a5d-2f2a7c9f1e11
 ==> Writing the configuration
@@ -153,6 +179,23 @@ it, add a drop-in: `sudo systemctl edit syncr-worker`, for example
 `User=syncr` (then `chown -R syncr /var/lib/syncr` and make the config
 readable by that user) or `ReadWritePaths=` with `ProtectSystem=strict`.
 
+## Upgrading
+
+Upgrade the controller first. An older worker then shows as **Outdated** in
+the web UI, and its page shows the command that upgrades it, for example:
+
+```sh
+sudo /usr/local/bin/syncr-worker upgrade --version 'v2.0.1'
+"$HOME/.local/bin/syncr-worker" upgrade --user --version 'v2.0.1'   # --user workers
+```
+
+It verifies the download, fetches the new version's rclone and restic,
+replaces the binary, restarts the service, and puts the old version back if
+the new one does not stay up. Running jobs are interrupted by the restart.
+It keeps running if your SSH connection drops; run it inside `tmux` or
+`screen` (or with `nohup`) to see how it ended after reconnecting. Details,
+the manual steps and containers: [upgrading](upgrade.md).
+
 ## Labels and schedules
 
 Schedules run on one worker or on any worker with a label. An admin sets a
@@ -173,8 +216,8 @@ minutes.
 The folders in `local_roots` are also what the web UI can browse on this
 worker, back up with restic and restore into
 ([restic backups](restic.md)). Browsing, remote tests and restic jobs need
-a current worker: one that shows as **outdated** in the web UI is updated
-by running `setup` again with the new binary.
+a current worker: one that shows as **Outdated** in the web UI is upgraded
+with `syncr-worker upgrade` ([above](#upgrading)).
 
 ## Uninstall
 
@@ -193,6 +236,11 @@ Then remove the worker in the controller UI (**Workers**, the worker,
 | Config | `/etc/syncr/worker.yaml` (0600) | `~/.config/syncr/worker.yaml` |
 | Data, tools, certificate | `/var/lib/syncr` | `~/.local/share/syncr` |
 | Logs | `journalctl -u syncr-worker -f` | `journalctl --user -u syncr-worker -f` |
+
+The tools directory (`<data dir>/tools`, or `tools.dir`) belongs to this
+worker alone: setup and upgrades delete the rclone and restic versions in it
+that the worker no longer pins. Do not point `tools.dir` at a directory
+that other programs, or a worker of another version, use.
 
 ## Troubleshooting
 

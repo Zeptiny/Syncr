@@ -38,9 +38,29 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 syncr \
-    && useradd --system --uid 10001 --gid syncr --home-dir /var/lib/syncr --create-home --shell /usr/sbin/nologin syncr
+    && useradd --system --uid 10001 --gid syncr --home-dir /var/lib/syncr --create-home --shell /usr/sbin/nologin syncr \
+    && install -d -m 0755 /usr/share/doc/rclone /usr/share/doc/restic
 COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
 COPY --from=restic /usr/bin/restic /usr/local/bin/restic
+# The image redistributes rclone (MIT) and restic (BSD 2-Clause): their
+# licence texts at the pinned versions, verified by SHA-256. A new version
+# needs the new checksums (sha256sum of the files at its tag).
+#
+# The worker runs as uid 10001, so the files must be world-readable and
+# their directories world-searchable. A downloaded file starts as 0600, so
+# --chmod is needed; but BuildKit also creates the missing parent
+# directories with an octal --chmod mode (moby/buildkit#5943): "--chmod=644"
+# made /usr/share/doc/rclone 0644, without its search bit, and nobody but
+# root could open the file. Hence the directories are created above with
+# 0755, and the mode is symbolic (not used for created directories): X
+# adds no execute bit to the file, so it ends up 0644. Symbolic --chmod
+# needs Dockerfile syntax 1.14 or later (the syntax line above selects the
+# newest 1.x).
+ARG RCLONE_VERSION RESTIC_VERSION
+ADD --checksum=sha256:8cd2e9e750b90a04b7d82dbbca3930c696ae0309d7c10464f90a44f45754cd04 --chmod=u=rwX,go=rX \
+    https://raw.githubusercontent.com/rclone/rclone/v${RCLONE_VERSION}/COPYING /usr/share/doc/rclone/COPYING
+ADD --checksum=sha256:6f08a01a9fab5b24e139a09f15cc24a73087c7bc09e3bacf099fdf2d767bf897 --chmod=u=rwX,go=rX \
+    https://raw.githubusercontent.com/restic/restic/v${RESTIC_VERSION}/LICENSE /usr/share/doc/restic/LICENSE
 COPY --from=build /out/syncr-worker /usr/local/bin/syncr-worker
 USER syncr:syncr
 WORKDIR /var/lib/syncr

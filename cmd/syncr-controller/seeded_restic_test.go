@@ -88,7 +88,8 @@ func TestRunSeededRestic(t *testing.T) {
 	ids := map[string]string{}
 	for _, w := range workers.Msg.GetWorkers() {
 		ids[w.GetName()] = w.GetId()
-		if up := w.GetName() == "nas-01" || w.GetName() == "backup-host" || w.GetName() == "office-pc"; up != slices.Contains(w.GetInfo().GetFeatures(), "probe") {
+		// attic-nas runs probes too; it only lacks the time limits.
+		if up := w.GetName() != "laptop"; up != slices.Contains(w.GetInfo().GetFeatures(), "probe") {
 			t.Errorf("worker %s features = %v", w.GetName(), w.GetInfo().GetFeatures())
 		}
 	}

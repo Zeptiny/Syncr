@@ -1,14 +1,23 @@
-# Syncr quick start: the controller (API and web UI) and Postgres.
-# Production-style: data in named volumes, secrets from deploy/.env,
-# restart policies, health checks.
+# Syncr quick start: the controller (API and web UI) and Postgres, from the
+# published images. Production-style: data in named volumes, secrets from
+# .env next to this file, restart policies, health checks.
 #
-#   cp deploy/.env.example deploy/.env      # then fill in the two secrets
-#   docker compose -f deploy/docker-compose.yml up -d --build --wait
-#   docker compose -f deploy/docker-compose.yml logs controller | grep setup_code
+#   cp .env.example .env          # then fill in the two secrets
+#   docker compose up -d --wait
+#   docker compose logs controller | grep setup_code
+#
+# (In a checkout the files are deploy/docker-compose.yml and deploy/.env;
+# docker-compose.build.yml builds the images from source instead.)
 #
 # Then open the web UI (http://127.0.0.1:8080, or SYNCR_PUBLIC_URL), enter
 # the setup code from the log and create the first admin account. Until
 # that is done the controller logs a new code on every start.
+#
+# Images: ghcr.io/zeptiny/syncr-controller and ghcr.io/zeptiny/syncr-worker.
+# SYNCR_VERSION picks the tag: 2 (the default: the newest 2.x release), 2.0,
+# an exact version such as 2.0.0, or a release candidate such as
+# 2.0.0-rc.1. Upgrading: back up the database, then `docker compose pull`
+# and `docker compose up -d --wait` (docs/upgrade.md).
 #
 # The controller listens on port 8080 with plain HTTP. Browsers should and
 # workers on other machines must reach it over HTTPS (workers accept plain
@@ -18,6 +27,9 @@
 # (SYNCR_HTTP_TLS_CERT_FILE / _KEY_FILE below). Behind a proxy, set the
 # proxy's read/idle timeout above 40 s (workers long-poll for 25 s) and
 # allow request bodies of 16 MiB.
+#
+# One controller per database: a second one waits until the first stops
+# (docs/adr/0015-single-controller-guard.md).
 #
 # For development dependencies only (Postgres, MinIO, SFTP with public
 # credentials) see docker-compose.dev.yml instead.
@@ -29,7 +41,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: syncr
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: syncr
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -40,17 +52,14 @@ services:
       retries: 20
 
   controller:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.controller
-    image: ${SYNCR_CONTROLLER_IMAGE:-syncr-controller:local}
+    image: ghcr.io/zeptiny/syncr-controller:${SYNCR_VERSION:-2}
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       SYNCR_DATABASE_URL: postgres://syncr:${POSTGRES_PASSWORD}@postgres:5432/syncr?sslmode=disable
-      SYNCR_SECRETS_KEY: ${SYNCR_SECRETS_KEY:?set SYNCR_SECRETS_KEY in deploy/.env}
+      SYNCR_SECRETS_KEY: ${SYNCR_SECRETS_KEY:?set SYNCR_SECRETS_KEY in .env}
       # The URL browsers and workers use, e.g. https://syncr.example.com
       # (empty: the browser's address goes into worker install commands).
       SYNCR_PUBLIC_URL: ${SYNCR_PUBLIC_URL:-}
@@ -91,11 +100,11 @@ services:
   # starts reuse it. Mount the directories jobs may use under /data; the
   # container user (uid 10001) needs access to them.
   #
+  # A worker in a container is upgraded by pulling its new image, not with
+  # `syncr-worker upgrade`.
+  #
   # worker:
-  #   build:
-  #     context: ..
-  #     dockerfile: deploy/Dockerfile.worker
-  #   image: ${SYNCR_WORKER_IMAGE:-syncr-worker:local}
+  #   image: ghcr.io/zeptiny/syncr-worker:${SYNCR_VERSION:-2}
   #   restart: unless-stopped
   #   network_mode: service:controller
   #   depends_on:

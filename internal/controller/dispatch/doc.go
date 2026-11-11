@@ -151,9 +151,17 @@
 //	  definition needs (jobkind RequiredOS: Windows VSS)   invalid_spec, saying which system
 //	the worker lacks a link feature the kind requires
 //	  (an older version; jobkind RequiredFeatures)         worker_outdated
+//	the job has a time limit and the worker does not
+//	  report link.FeatureJobTimeLimit                      worker_outdated, saying so
 //	the definition cannot be decoded, checked or built     invalid_spec
 //	a remote's credentials cannot be used (decryption)     internal
 //	anything else (e.g. the store is down)                 none: the call fails, the next poll retries
+//
+// The spec carries the job's time limit (JobSpec.max_runtime;
+// docs/adr/0014-job-time-limits-retention.md): its definition's
+// max_runtime, else SpecsConfig.DefaultMaxRuntime, except for the kinds
+// only the system starts (Specs.TimeLimit). The worker enforces it and
+// reports FAILED with TIME_LIMIT, which ends the job failed (time_limit).
 //
 // # Reconcile
 //

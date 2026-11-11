@@ -8,19 +8,20 @@
 //                           01-setup (default: skipped unless SYNCR_UI_MOCK=1)
 //   SYNCR_UI_USER           sign-in user (default admin)
 //   SYNCR_UI_PASSWORD       sign-in password (default syncr-demo-admin)
-//   SYNCR_SCREENSHOT_SET    m5 (default), m4 or m3: which milestone's shot list
+//   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4 or m3: which milestone's shot list
 //   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/<set>)
 //   SYNCR_SCREENSHOT_ONLY   comma-separated shot names to take (default all)
 //   SYNCR_SCREENSHOT_MOBILE 1 to also take 390px-wide shots
 //   SYNCR_SCREENSHOT_FULL   1 to capture whole pages instead of the viewport
 //   SYNCR_UI_MOCK           1 when the UI runs with VITE_SYNCR_MOCK=1
-//   CHROMIUM_PATH           Chromium executable (default: the cached
-//                           ~/.cache/ms-playwright/chromium-1140 build; set
-//                           it when the host caches another build)
+//   CHROMIUM_PATH           Chromium executable (default: the first cached
+//                           ~/.cache/ms-playwright build found, 1217 or 1140;
+//                           set it when the host caches another build)
 /* global window -- used inside page.addInitScript, which runs in the browser */
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright-core";
@@ -31,18 +32,21 @@ const mock = process.env.SYNCR_UI_MOCK === "1";
 const setupUrl = (process.env.SYNCR_SETUP_URL ?? (mock ? base : "")).replace(/\/$/, "");
 const user = process.env.SYNCR_UI_USER ?? "admin";
 const password = process.env.SYNCR_UI_PASSWORD ?? "syncr-demo-admin";
-const set = ["m3", "m4"].includes(process.env.SYNCR_SCREENSHOT_SET)
+const set = ["m3", "m4", "m5"].includes(process.env.SYNCR_SCREENSHOT_SET)
   ? process.env.SYNCR_SCREENSHOT_SET
-  : "m5";
+  : "m6";
 const outDir = resolve(
   process.env.SYNCR_SCREENSHOT_DIR ?? join(here, `../../docs/screenshots/${set}`),
 );
 const only = process.env.SYNCR_SCREENSHOT_ONLY?.split(",").filter(Boolean);
 const mobile = process.env.SYNCR_SCREENSHOT_MOBILE === "1";
 const fullPage = process.env.SYNCR_SCREENSHOT_FULL === "1";
+const cachedChromium = [
+  ".cache/ms-playwright/chromium-1217/chrome-linux64/chrome",
+  ".cache/ms-playwright/chromium-1140/chrome-linux/chrome",
+].map((p) => join(homedir(), p));
 const executablePath =
-  process.env.CHROMIUM_PATH ??
-  join(homedir(), ".cache/ms-playwright/chromium-1140/chrome-linux/chrome");
+  process.env.CHROMIUM_PATH ?? cachedChromium.find((p) => existsSync(p)) ?? cachedChromium[0];
 
 const wanted = (name) => !only || only.some((o) => name.includes(o));
 
@@ -75,7 +79,8 @@ async function settle(page, ms = 600) {
 async function shot(page, name) {
   const file = join(outDir, `${name}.png`);
   await page.screenshot({ path: file, fullPage });
-  console.log(`saved ${file}`);
+  // Relative, so the log carries no home directory.
+  console.log(`saved ${relative(process.cwd(), file)}`);
 }
 
 async function signIn(page) {
@@ -451,10 +456,116 @@ async function m5(browser) {
   }
 }
 
+// sftpForm opens a new SFTP remote with its server filled in, so "Fetch
+// from server" can run.
+async function sftpForm(page) {
+  await page.goto(`${base}/remotes/new?type=sftp`);
+  await settle(page);
+  await page.getByLabel("Name").first().fill("NAS over SSH");
+  await page.getByLabel("Host", { exact: true }).fill("nas.example.net");
+  await page.getByLabel("User", { exact: true }).fill("backup");
+}
+
+// fetchKeys presses "Fetch from server" and waits for the fingerprints.
+async function fetchKeys(page) {
+  await page.getByRole("button", { name: "Fetch from server" }).click();
+  await page.getByText(/The server offered|Could not read the server/).waitFor({ timeout: 20_000 });
+  await settle(page, 300);
+}
+
+// The M6 shots. They expect the dev seed of the integration pass (see the
+// step D report): a transfer that failed by its 6h time limit (source path
+// "raw"); the SFTP remotes "Storage box" (no host keys) and "Offsite SSH"
+// (with keys); the online, outdated worker attic-nas (linux/amd64); a
+// canned sftp_host_keys probe answer.
+const m6Shots = [
+  [
+    "01-time-limit-field",
+    async (p) => {
+      await p.goto(`${base}/jobs/new`);
+      await settle(p);
+      await p.getByRole("textbox", { name: /^Stop the job after/ }).fill("6");
+      await settle(p, 300);
+      await scrollTo(p, p.getByRole("heading", { name: "Options" }));
+    },
+  ],
+  [
+    "02-job-failed-time-limit",
+    // Failed jobs only (status 5) whose paths mention raw.
+    async (p) => openRow(p, "/jobs?status=5&q=raw", "Photos"),
+  ],
+  [
+    "03-sftp-form-unverified",
+    async (p) => {
+      await sftpForm(p);
+      await scrollTo(p, p.locator(`[data-field$="-host_keys"]`), 220);
+    },
+  ],
+  [
+    "04-sftp-form-keys-fetched",
+    async (p) => {
+      await sftpForm(p);
+      await fetchKeys(p);
+      await scrollTo(p, p.locator(`[data-field$="-host_keys"]`), 96);
+    },
+  ],
+  ["05-remotes-unverified", async (p) => (await p.goto(`${base}/remotes`), settle(p))],
+  ["06-workers-outdated", async (p) => (await p.goto(`${base}/workers`), settle(p))],
+  [
+    "07-worker-upgrade",
+    async (p) => {
+      await openRow(p, "/workers", "attic-nas");
+      await p.getByRole("button", { name: "Copy command" }).first().waitFor();
+      await settle(p, 300);
+    },
+  ],
+];
+
+// m6 takes the milestone 6 shots: light at 1440×900, then the upgrade card
+// in dark and the fetched host keys at phone width (and every shot at
+// 390 px with MOBILE=1).
+async function m6(browser) {
+  const variants = [{ suffix: "", width: 1440, height: 900 }];
+  if (mobile) variants.push({ suffix: "-mobile", width: 390, height: 844 });
+  for (const v of variants) {
+    const p = await newPage(browser, v);
+    await signIn(p);
+    for (const [name, go] of m6Shots) {
+      if (!wanted(name)) continue;
+      await go(p);
+      await shot(p, name + v.suffix);
+    }
+    await p.context().close();
+  }
+  if (wanted("08-worker-upgrade-dark")) {
+    const p = await newPage(browser, { dark: true });
+    await signIn(p);
+    await openRow(p, "/workers", "attic-nas");
+    await p.getByRole("button", { name: "Copy command" }).first().waitFor();
+    await settle(p, 300);
+    await shot(p, "08-worker-upgrade-dark");
+    await p.context().close();
+  }
+  if (wanted("09-sftp-keys-mobile") && !mobile) {
+    const p = await newPage(browser, { width: 390, height: 844 });
+    await signIn(p);
+    await sftpForm(p);
+    await fetchKeys(p);
+    // Below the 56 px header: the panel's title, then its keys and button.
+    await scrollTo(p, p.getByText(/The server offered/), 72);
+    await shot(p, "09-sftp-keys-mobile");
+    await p.context().close();
+  }
+}
+
 async function main() {
   await mkdir(outDir, { recursive: true });
   const browser = await chromium.launch({ executablePath, args: ["--no-sandbox"] });
   try {
+    if (set === "m6") {
+      await m6(browser);
+      return;
+    }
     if (set === "m5") {
       await m5(browser);
       return;

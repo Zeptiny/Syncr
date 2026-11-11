@@ -560,6 +560,128 @@ func (x *TestRemoteResponse) GetUsage() *ProbeUsage {
 	return nil
 }
 
+// GetSftpHostKeysRequest names the SSH server whose host keys to fetch.
+type GetSftpHostKeysRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Host name or IP address, as an sftp remote's host option takes it
+	// (required).
+	Host string `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
+	// TCP port, 1 to 65535; 0 means 22.
+	Port int32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	// The worker to connect from; empty lets the controller choose (any
+	// online worker that can run the probe).
+	WorkerId      string `protobuf:"bytes,3,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSftpHostKeysRequest) Reset() {
+	*x = GetSftpHostKeysRequest{}
+	mi := &file_syncr_v1_probe_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSftpHostKeysRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSftpHostKeysRequest) ProtoMessage() {}
+
+func (x *GetSftpHostKeysRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_probe_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSftpHostKeysRequest.ProtoReflect.Descriptor instead.
+func (*GetSftpHostKeysRequest) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_probe_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *GetSftpHostKeysRequest) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *GetSftpHostKeysRequest) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *GetSftpHostKeysRequest) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+// GetSftpHostKeysResponse lists the server's host keys.
+type GetSftpHostKeysResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One entry per key type the server offers. Joined as "<algorithm>
+	// <key>" lines they are the value of the remote's host_keys option.
+	Keys []*SftpHostKey `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
+	// The worker that connected to the server.
+	Worker        *ProbeWorkerRef `protobuf:"bytes,2,opt,name=worker,proto3" json:"worker,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSftpHostKeysResponse) Reset() {
+	*x = GetSftpHostKeysResponse{}
+	mi := &file_syncr_v1_probe_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSftpHostKeysResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSftpHostKeysResponse) ProtoMessage() {}
+
+func (x *GetSftpHostKeysResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_probe_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSftpHostKeysResponse.ProtoReflect.Descriptor instead.
+func (*GetSftpHostKeysResponse) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_probe_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetSftpHostKeysResponse) GetKeys() []*SftpHostKey {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+func (x *GetSftpHostKeysResponse) GetWorker() *ProbeWorkerRef {
+	if x != nil {
+		return x.Worker
+	}
+	return nil
+}
+
 var File_syncr_v1_probe_proto protoreflect.FileDescriptor
 
 const file_syncr_v1_probe_proto_rawDesc = "" +
@@ -608,12 +730,22 @@ const file_syncr_v1_probe_proto_rawDesc = "" +
 	"\x06sample\x18\a \x03(\tR\x06sample\x12\x1c\n" +
 	"\ttruncated\x18\b \x01(\bR\ttruncated\x12*\n" +
 	"\x05usage\x18\t \x01(\v2\x14.syncr.v1.ProbeUsageR\x05usageJ\x04\b\n" +
-	"\x10\x142\x93\x02\n" +
+	"\x10\x14\"c\n" +
+	"\x16GetSftpHostKeysRequest\x12\x12\n" +
+	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\x05R\x04port\x12\x1b\n" +
+	"\tworker_id\x18\x03 \x01(\tR\bworkerIdJ\x04\b\x04\x10\n" +
+	"\"|\n" +
+	"\x17GetSftpHostKeysResponse\x12)\n" +
+	"\x04keys\x18\x01 \x03(\v2\x15.syncr.v1.SftpHostKeyR\x04keys\x120\n" +
+	"\x06worker\x18\x02 \x01(\v2\x18.syncr.v1.ProbeWorkerRefR\x06workerJ\x04\b\x03\x10\n" +
+	"2\xed\x02\n" +
 	"\fProbeService\x12[\n" +
 	"\x0fListWorkerFiles\x12 .syncr.v1.ListWorkerFilesRequest\x1a!.syncr.v1.ListWorkerFilesResponse\"\x03\x90\x02\x01\x12[\n" +
 	"\x0fListRemoteFiles\x12 .syncr.v1.ListRemoteFilesRequest\x1a!.syncr.v1.ListRemoteFilesResponse\"\x03\x90\x02\x01\x12I\n" +
 	"\n" +
-	"TestRemote\x12\x1b.syncr.v1.TestRemoteRequest\x1a\x1c.syncr.v1.TestRemoteResponse\"\x00B\x8d\x01\n" +
+	"TestRemote\x12\x1b.syncr.v1.TestRemoteRequest\x1a\x1c.syncr.v1.TestRemoteResponse\"\x00\x12X\n" +
+	"\x0fGetSftpHostKeys\x12 .syncr.v1.GetSftpHostKeysRequest\x1a!.syncr.v1.GetSftpHostKeysResponse\"\x00B\x8d\x01\n" +
 	"\fcom.syncr.v1B\n" +
 	"ProbeProtoP\x01Z0github.com/Zeptiny/Syncr/gen/go/syncr/v1;syncrv1\xa2\x02\x03SXX\xaa\x02\bSyncr.V1\xca\x02\bSyncr\\V1\xe2\x02\x14Syncr\\V1\\GPBMetadata\xea\x02\tSyncr::V1b\x06proto3"
 
@@ -629,7 +761,7 @@ func file_syncr_v1_probe_proto_rawDescGZIP() []byte {
 	return file_syncr_v1_probe_proto_rawDescData
 }
 
-var file_syncr_v1_probe_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_syncr_v1_probe_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_syncr_v1_probe_proto_goTypes = []any{
 	(*ProbeWorkerRef)(nil),          // 0: syncr.v1.ProbeWorkerRef
 	(*ListWorkerFilesRequest)(nil),  // 1: syncr.v1.ListWorkerFilesRequest
@@ -638,31 +770,38 @@ var file_syncr_v1_probe_proto_goTypes = []any{
 	(*ListRemoteFilesResponse)(nil), // 4: syncr.v1.ListRemoteFilesResponse
 	(*TestRemoteRequest)(nil),       // 5: syncr.v1.TestRemoteRequest
 	(*TestRemoteResponse)(nil),      // 6: syncr.v1.TestRemoteResponse
-	(*ProbeEntry)(nil),              // 7: syncr.v1.ProbeEntry
-	(*RemoteInput)(nil),             // 8: syncr.v1.RemoteInput
-	(*durationpb.Duration)(nil),     // 9: google.protobuf.Duration
-	(*ProbeUsage)(nil),              // 10: syncr.v1.ProbeUsage
+	(*GetSftpHostKeysRequest)(nil),  // 7: syncr.v1.GetSftpHostKeysRequest
+	(*GetSftpHostKeysResponse)(nil), // 8: syncr.v1.GetSftpHostKeysResponse
+	(*ProbeEntry)(nil),              // 9: syncr.v1.ProbeEntry
+	(*RemoteInput)(nil),             // 10: syncr.v1.RemoteInput
+	(*durationpb.Duration)(nil),     // 11: google.protobuf.Duration
+	(*ProbeUsage)(nil),              // 12: syncr.v1.ProbeUsage
+	(*SftpHostKey)(nil),             // 13: syncr.v1.SftpHostKey
 }
 var file_syncr_v1_probe_proto_depIdxs = []int32{
-	7,  // 0: syncr.v1.ListWorkerFilesResponse.entries:type_name -> syncr.v1.ProbeEntry
+	9,  // 0: syncr.v1.ListWorkerFilesResponse.entries:type_name -> syncr.v1.ProbeEntry
 	0,  // 1: syncr.v1.ListWorkerFilesResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	7,  // 2: syncr.v1.ListRemoteFilesResponse.entries:type_name -> syncr.v1.ProbeEntry
+	9,  // 2: syncr.v1.ListRemoteFilesResponse.entries:type_name -> syncr.v1.ProbeEntry
 	0,  // 3: syncr.v1.ListRemoteFilesResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	8,  // 4: syncr.v1.TestRemoteRequest.input:type_name -> syncr.v1.RemoteInput
+	10, // 4: syncr.v1.TestRemoteRequest.input:type_name -> syncr.v1.RemoteInput
 	0,  // 5: syncr.v1.TestRemoteResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	9,  // 6: syncr.v1.TestRemoteResponse.latency:type_name -> google.protobuf.Duration
-	10, // 7: syncr.v1.TestRemoteResponse.usage:type_name -> syncr.v1.ProbeUsage
-	1,  // 8: syncr.v1.ProbeService.ListWorkerFiles:input_type -> syncr.v1.ListWorkerFilesRequest
-	3,  // 9: syncr.v1.ProbeService.ListRemoteFiles:input_type -> syncr.v1.ListRemoteFilesRequest
-	5,  // 10: syncr.v1.ProbeService.TestRemote:input_type -> syncr.v1.TestRemoteRequest
-	2,  // 11: syncr.v1.ProbeService.ListWorkerFiles:output_type -> syncr.v1.ListWorkerFilesResponse
-	4,  // 12: syncr.v1.ProbeService.ListRemoteFiles:output_type -> syncr.v1.ListRemoteFilesResponse
-	6,  // 13: syncr.v1.ProbeService.TestRemote:output_type -> syncr.v1.TestRemoteResponse
-	11, // [11:14] is the sub-list for method output_type
-	8,  // [8:11] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	11, // 6: syncr.v1.TestRemoteResponse.latency:type_name -> google.protobuf.Duration
+	12, // 7: syncr.v1.TestRemoteResponse.usage:type_name -> syncr.v1.ProbeUsage
+	13, // 8: syncr.v1.GetSftpHostKeysResponse.keys:type_name -> syncr.v1.SftpHostKey
+	0,  // 9: syncr.v1.GetSftpHostKeysResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	1,  // 10: syncr.v1.ProbeService.ListWorkerFiles:input_type -> syncr.v1.ListWorkerFilesRequest
+	3,  // 11: syncr.v1.ProbeService.ListRemoteFiles:input_type -> syncr.v1.ListRemoteFilesRequest
+	5,  // 12: syncr.v1.ProbeService.TestRemote:input_type -> syncr.v1.TestRemoteRequest
+	7,  // 13: syncr.v1.ProbeService.GetSftpHostKeys:input_type -> syncr.v1.GetSftpHostKeysRequest
+	2,  // 14: syncr.v1.ProbeService.ListWorkerFiles:output_type -> syncr.v1.ListWorkerFilesResponse
+	4,  // 15: syncr.v1.ProbeService.ListRemoteFiles:output_type -> syncr.v1.ListRemoteFilesResponse
+	6,  // 16: syncr.v1.ProbeService.TestRemote:output_type -> syncr.v1.TestRemoteResponse
+	8,  // 17: syncr.v1.ProbeService.GetSftpHostKeys:output_type -> syncr.v1.GetSftpHostKeysResponse
+	14, // [14:18] is the sub-list for method output_type
+	10, // [10:14] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_syncr_v1_probe_proto_init() }
@@ -678,7 +817,7 @@ func file_syncr_v1_probe_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_syncr_v1_probe_proto_rawDesc), len(file_syncr_v1_probe_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

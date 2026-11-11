@@ -4,7 +4,9 @@
 //
 // The Executor only dispatches: each operation is implemented where its
 // tool lives (the restic and rclone Probers, the local path policy), behind
-// the small interfaces declared here. The Executor adds what every probe
+// the small interfaces declared here. The one operation without a tool,
+// sftp_host_keys, is answered here by SSHScanner, which speaks just enough
+// SSH to read a server's host keys. The Executor adds what every probe
 // needs: a bound on concurrent probes (more are refused as BUSY at once,
 // never queued), a timeout with a hard cap (link.MaxProbeTimeout, shared
 // with the controller), bounds on listing sizes and on the encoded result,
@@ -24,6 +26,7 @@
 // probe specs, which carry secrets, are never logged.
 //
 // Allowed dependencies: the standard library, the generated protobuf code,
-// internal/link, internal/worker/localfs and the runner contract
-// (internal/worker/runner, for its error codes; not the concrete runners).
+// internal/link, internal/worker/localfs, the runner contract
+// (internal/worker/runner, for its error codes; not the concrete runners)
+// and golang.org/x/crypto/ssh (not its subpackages).
 package probe

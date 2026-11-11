@@ -214,6 +214,10 @@ const (
 	// The worker lacks a link feature the job's kind requires (it must be
 	// upgraded), checked when the job would be dispatched. Status FAILED.
 	JobErrorCode_JOB_ERROR_CODE_WORKER_OUTDATED JobErrorCode = 26
+	// Set by workers (Milestone 6): the job's time limit
+	// (JobSpec.max_runtime) was reached, so the worker stopped it the way it
+	// stops a cancelled job. Status FAILED; the work done so far is kept.
+	JobErrorCode_JOB_ERROR_CODE_TIME_LIMIT JobErrorCode = 27
 )
 
 // Enum value maps for JobErrorCode.
@@ -245,6 +249,7 @@ var (
 		24: "JOB_ERROR_CODE_REMOTE_UNAVAILABLE",
 		25: "JOB_ERROR_CODE_REPOSITORY_UNAVAILABLE",
 		26: "JOB_ERROR_CODE_WORKER_OUTDATED",
+		27: "JOB_ERROR_CODE_TIME_LIMIT",
 	}
 	JobErrorCode_value = map[string]int32{
 		"JOB_ERROR_CODE_UNSPECIFIED":            0,
@@ -273,6 +278,7 @@ var (
 		"JOB_ERROR_CODE_REMOTE_UNAVAILABLE":     24,
 		"JOB_ERROR_CODE_REPOSITORY_UNAVAILABLE": 25,
 		"JOB_ERROR_CODE_WORKER_OUTDATED":        26,
+		"JOB_ERROR_CODE_TIME_LIMIT":             27,
 	}
 )
 
@@ -1463,7 +1469,8 @@ type Hello struct {
 	LocalRoots []string `protobuf:"bytes,8,rep,name=local_roots,json=localRoots,proto3" json:"local_roots,omitempty"`
 	// Link features this worker implements, e.g. "probe" (it answers
 	// RunProbe and Probe), "restic.v2" (it honours the Milestone 5 restic spec
-	// fields) and "restic.delete" (it runs restic_delete_data). The controller
+	// fields), "restic.delete" (it runs restic_delete_data) and
+	// "job.time_limit" (it enforces JobSpec.max_runtime). The controller
 	// sends a worker only what its features allow; a worker that reports none
 	// is treated as a Milestone 4 worker.
 	Features []string `protobuf:"bytes,9,rep,name=features,proto3" json:"features,omitempty"`
@@ -2627,6 +2634,13 @@ type JobSpec struct {
 	// only for this job's child process, as RCLONE_CONFIG_<ALIAS>_* environment
 	// variables.
 	Remotes []*RemoteDefinition `protobuf:"bytes,1,rep,name=remotes,proto3" json:"remotes,omitempty"`
+	// Hard time limit: this long after the worker started the job's process
+	// (measured on its monotonic clock, not from queueing), it stops the
+	// process as it stops a cancelled job (interrupt, grace period, kill, and
+	// the rest of the process tree) and reports FAILED with TIME_LIMIT. Unset
+	// or zero means none. Sent only to workers whose Hello lists the
+	// "job.time_limit" feature.
+	MaxRuntime *durationpb.Duration `protobuf:"bytes,2,opt,name=max_runtime,json=maxRuntime,proto3" json:"max_runtime,omitempty"`
 	// The operation to run. The name of the set field is the job kind (e.g.
 	// "rclone_transfer", "restic_backup") that selects the worker runner.
 	//
@@ -2679,6 +2693,13 @@ func (*JobSpec) Descriptor() ([]byte, []int) {
 func (x *JobSpec) GetRemotes() []*RemoteDefinition {
 	if x != nil {
 		return x.Remotes
+	}
+	return nil
+}
+
+func (x *JobSpec) GetMaxRuntime() *durationpb.Duration {
+	if x != nil {
+		return x.MaxRuntime
 	}
 	return nil
 }
@@ -5266,6 +5287,7 @@ type ProbeSpec struct {
 	//	*ProbeSpec_ResticLs
 	//	*ProbeSpec_ResticInit
 	//	*ProbeSpec_ResticConfig
+	//	*ProbeSpec_SftpHostKeys
 	Op            isProbeSpec_Op `protobuf_oneof:"op"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -5378,6 +5400,15 @@ func (x *ProbeSpec) GetResticConfig() *ProbeResticConfig {
 	return nil
 }
 
+func (x *ProbeSpec) GetSftpHostKeys() *ProbeSftpHostKeys {
+	if x != nil {
+		if x, ok := x.Op.(*ProbeSpec_SftpHostKeys); ok {
+			return x.SftpHostKeys
+		}
+	}
+	return nil
+}
+
 type isProbeSpec_Op interface {
 	isProbeSpec_Op()
 }
@@ -5410,6 +5441,12 @@ type ProbeSpec_ResticConfig struct {
 	ResticConfig *ProbeResticConfig `protobuf:"bytes,16,opt,name=restic_config,json=resticConfig,proto3,oneof"`
 }
 
+type ProbeSpec_SftpHostKeys struct {
+	// Milestone 6: an SFTP server's host keys, fetched by the worker itself
+	// (no tool, no remote).
+	SftpHostKeys *ProbeSftpHostKeys `protobuf:"bytes,17,opt,name=sftp_host_keys,json=sftpHostKeys,proto3,oneof"`
+}
+
 func (*ProbeSpec_ListLocal) isProbeSpec_Op() {}
 
 func (*ProbeSpec_ListRemote) isProbeSpec_Op() {}
@@ -5423,6 +5460,8 @@ func (*ProbeSpec_ResticLs) isProbeSpec_Op() {}
 func (*ProbeSpec_ResticInit) isProbeSpec_Op() {}
 
 func (*ProbeSpec_ResticConfig) isProbeSpec_Op() {}
+
+func (*ProbeSpec_SftpHostKeys) isProbeSpec_Op() {}
 
 // ProbeListLocal lists a folder on the worker's filesystem (Go, no tool).
 type ProbeListLocal struct {
@@ -5824,6 +5863,67 @@ func (x *ProbeResticConfig) GetRepository() *ResticRepository {
 	return nil
 }
 
+// ProbeSftpHostKeys asks an SSH (SFTP) server for its host keys, so they
+// can be pinned in a remote's host_keys option. The worker connects
+// directly (proxy options of a remote are not honoured), once per host key
+// algorithm so that it finds every key type the server offers, and aborts
+// each handshake once it has the key: no credentials are sent and nothing
+// is changed. Each connection attempt has a 10s dial timeout within the
+// probe's timeout.
+type ProbeSftpHostKeys struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Host name or IP address of the server.
+	Host string `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
+	// TCP port, 1 to 65535; 0 means 22.
+	Port          int32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProbeSftpHostKeys) Reset() {
+	*x = ProbeSftpHostKeys{}
+	mi := &file_syncr_v1_link_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeSftpHostKeys) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeSftpHostKeys) ProtoMessage() {}
+
+func (x *ProbeSftpHostKeys) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_link_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeSftpHostKeys.ProtoReflect.Descriptor instead.
+func (*ProbeSftpHostKeys) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *ProbeSftpHostKeys) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *ProbeSftpHostKeys) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
 // ProbeResult is the outcome of a probe.
 type ProbeResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -5844,6 +5944,7 @@ type ProbeResult struct {
 	//	*ProbeResult_Usage
 	//	*ProbeResult_Snapshots
 	//	*ProbeResult_RepositoryConfig
+	//	*ProbeResult_SftpHostKeys
 	Output        isProbeResult_Output `protobuf_oneof:"output"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -5851,7 +5952,7 @@ type ProbeResult struct {
 
 func (x *ProbeResult) Reset() {
 	*x = ProbeResult{}
-	mi := &file_syncr_v1_link_proto_msgTypes[64]
+	mi := &file_syncr_v1_link_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5863,7 +5964,7 @@ func (x *ProbeResult) String() string {
 func (*ProbeResult) ProtoMessage() {}
 
 func (x *ProbeResult) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[64]
+	mi := &file_syncr_v1_link_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5876,7 +5977,7 @@ func (x *ProbeResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeResult.ProtoReflect.Descriptor instead.
 func (*ProbeResult) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{64}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *ProbeResult) GetProbeId() string {
@@ -5950,6 +6051,15 @@ func (x *ProbeResult) GetRepositoryConfig() *ResticRepositoryConfig {
 	return nil
 }
 
+func (x *ProbeResult) GetSftpHostKeys() *SftpHostKeys {
+	if x != nil {
+		if x, ok := x.Output.(*ProbeResult_SftpHostKeys); ok {
+			return x.SftpHostKeys
+		}
+	}
+	return nil
+}
+
 type isProbeResult_Output interface {
 	isProbeResult_Output()
 }
@@ -5974,6 +6084,11 @@ type ProbeResult_RepositoryConfig struct {
 	RepositoryConfig *ResticRepositoryConfig `protobuf:"bytes,13,opt,name=repository_config,json=repositoryConfig,proto3,oneof"`
 }
 
+type ProbeResult_SftpHostKeys struct {
+	// sftp_host_keys.
+	SftpHostKeys *SftpHostKeys `protobuf:"bytes,14,opt,name=sftp_host_keys,json=sftpHostKeys,proto3,oneof"`
+}
+
 func (*ProbeResult_Listing) isProbeResult_Output() {}
 
 func (*ProbeResult_Usage) isProbeResult_Output() {}
@@ -5981,6 +6096,8 @@ func (*ProbeResult_Usage) isProbeResult_Output() {}
 func (*ProbeResult_Snapshots) isProbeResult_Output() {}
 
 func (*ProbeResult_RepositoryConfig) isProbeResult_Output() {}
+
+func (*ProbeResult_SftpHostKeys) isProbeResult_Output() {}
 
 // ProbeListing is one listed folder.
 type ProbeListing struct {
@@ -5998,7 +6115,7 @@ type ProbeListing struct {
 
 func (x *ProbeListing) Reset() {
 	*x = ProbeListing{}
-	mi := &file_syncr_v1_link_proto_msgTypes[65]
+	mi := &file_syncr_v1_link_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6010,7 +6127,7 @@ func (x *ProbeListing) String() string {
 func (*ProbeListing) ProtoMessage() {}
 
 func (x *ProbeListing) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[65]
+	mi := &file_syncr_v1_link_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6023,7 +6140,7 @@ func (x *ProbeListing) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeListing.ProtoReflect.Descriptor instead.
 func (*ProbeListing) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{65}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *ProbeListing) GetPath() string {
@@ -6069,7 +6186,7 @@ type ProbeEntry struct {
 
 func (x *ProbeEntry) Reset() {
 	*x = ProbeEntry{}
-	mi := &file_syncr_v1_link_proto_msgTypes[66]
+	mi := &file_syncr_v1_link_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6081,7 +6198,7 @@ func (x *ProbeEntry) String() string {
 func (*ProbeEntry) ProtoMessage() {}
 
 func (x *ProbeEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[66]
+	mi := &file_syncr_v1_link_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6094,7 +6211,7 @@ func (x *ProbeEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeEntry.ProtoReflect.Descriptor instead.
 func (*ProbeEntry) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{66}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *ProbeEntry) GetName() string {
@@ -6159,7 +6276,7 @@ type ProbeUsage struct {
 
 func (x *ProbeUsage) Reset() {
 	*x = ProbeUsage{}
-	mi := &file_syncr_v1_link_proto_msgTypes[67]
+	mi := &file_syncr_v1_link_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6171,7 +6288,7 @@ func (x *ProbeUsage) String() string {
 func (*ProbeUsage) ProtoMessage() {}
 
 func (x *ProbeUsage) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[67]
+	mi := &file_syncr_v1_link_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6184,7 +6301,7 @@ func (x *ProbeUsage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeUsage.ProtoReflect.Descriptor instead.
 func (*ProbeUsage) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{67}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *ProbeUsage) GetTotal() int64 {
@@ -6249,7 +6366,7 @@ type ResticRepositoryConfig struct {
 
 func (x *ResticRepositoryConfig) Reset() {
 	*x = ResticRepositoryConfig{}
-	mi := &file_syncr_v1_link_proto_msgTypes[68]
+	mi := &file_syncr_v1_link_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6261,7 +6378,7 @@ func (x *ResticRepositoryConfig) String() string {
 func (*ResticRepositoryConfig) ProtoMessage() {}
 
 func (x *ResticRepositoryConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_link_proto_msgTypes[68]
+	mi := &file_syncr_v1_link_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6274,7 +6391,7 @@ func (x *ResticRepositoryConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResticRepositoryConfig.ProtoReflect.Descriptor instead.
 func (*ResticRepositoryConfig) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_link_proto_rawDescGZIP(), []int{68}
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *ResticRepositoryConfig) GetId() string {
@@ -6289,6 +6406,122 @@ func (x *ResticRepositoryConfig) GetVersion() int32 {
 		return x.Version
 	}
 	return 0
+}
+
+// SftpHostKeys are the host keys an SSH server offered (sftp_host_keys).
+type SftpHostKeys struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One entry per key type the server offers; never empty for an OK
+	// result.
+	Keys          []*SftpHostKey `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SftpHostKeys) Reset() {
+	*x = SftpHostKeys{}
+	mi := &file_syncr_v1_link_proto_msgTypes[70]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SftpHostKeys) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SftpHostKeys) ProtoMessage() {}
+
+func (x *SftpHostKeys) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_link_proto_msgTypes[70]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SftpHostKeys.ProtoReflect.Descriptor instead.
+func (*SftpHostKeys) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{70}
+}
+
+func (x *SftpHostKeys) GetKeys() []*SftpHostKey {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+// SftpHostKey is one public host key of an SSH server. Its algorithm and
+// key are the second and third fields of a known_hosts line, which is the
+// form rclone's sftp host_keys option takes ("<algorithm> <key>").
+type SftpHostKey struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The key type, as known_hosts and the key itself name it, e.g.
+	// "ssh-ed25519", "ecdsa-sha2-nistp256" or "ssh-rsa".
+	Algorithm string `protobuf:"bytes,1,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
+	// The public key in the SSH wire format, standard base64 with padding.
+	Key string `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	// The key's SHA-256 fingerprint as `ssh-keygen -l` prints it:
+	// "SHA256:" and the unpadded standard base64 of the digest of the wire
+	// format.
+	FingerprintSha256 string `protobuf:"bytes,3,opt,name=fingerprint_sha256,json=fingerprintSha256,proto3" json:"fingerprint_sha256,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *SftpHostKey) Reset() {
+	*x = SftpHostKey{}
+	mi := &file_syncr_v1_link_proto_msgTypes[71]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SftpHostKey) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SftpHostKey) ProtoMessage() {}
+
+func (x *SftpHostKey) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_link_proto_msgTypes[71]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SftpHostKey.ProtoReflect.Descriptor instead.
+func (*SftpHostKey) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_link_proto_rawDescGZIP(), []int{71}
+}
+
+func (x *SftpHostKey) GetAlgorithm() string {
+	if x != nil {
+		return x.Algorithm
+	}
+	return ""
+}
+
+func (x *SftpHostKey) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *SftpHostKey) GetFingerprintSha256() string {
+	if x != nil {
+		return x.FingerprintSha256
+	}
+	return ""
 }
 
 var File_syncr_v1_link_proto protoreflect.FileDescriptor
@@ -6443,9 +6676,11 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\"(\n" +
 	"\tCancelJob\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobIdJ\x04\b\x02\x10\n" +
-	"\"\x9c\x05\n" +
+	"\"\xd8\x05\n" +
 	"\aJobSpec\x124\n" +
-	"\aremotes\x18\x01 \x03(\v2\x1a.syncr.v1.RemoteDefinitionR\aremotes\x12C\n" +
+	"\aremotes\x18\x01 \x03(\v2\x1a.syncr.v1.RemoteDefinitionR\aremotes\x12:\n" +
+	"\vmax_runtime\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\n" +
+	"maxRuntime\x12C\n" +
 	"\x0frclone_transfer\x18\n" +
 	" \x01(\v2\x18.syncr.v1.RcloneTransferH\x00R\x0ercloneTransfer\x127\n" +
 	"\vrestic_init\x18\x14 \x01(\v2\x14.syncr.v1.ResticInitH\x00R\n" +
@@ -6457,7 +6692,7 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\x0erestic_restore\x18\x19 \x01(\v2\x17.syncr.v1.ResticRestoreH\x00R\rresticRestore\x12F\n" +
 	"\x10restic_snapshots\x18\x1a \x01(\v2\x19.syncr.v1.ResticSnapshotsH\x00R\x0fresticSnapshots\x12J\n" +
 	"\x12restic_delete_data\x18\x1b \x01(\v2\x1a.syncr.v1.ResticDeleteDataH\x00R\x10resticDeleteDataB\v\n" +
-	"\toperationJ\x04\b\x02\x10\n" +
+	"\toperationJ\x04\b\x03\x10\n" +
 	"\"\xb4\x03\n" +
 	"\x10RemoteDefinition\x12\x14\n" +
 	"\x05alias\x18\x01 \x01(\tR\x05alias\x12!\n" +
@@ -6700,7 +6935,7 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\x06result\x18\x02 \x01(\v2\x15.syncr.v1.ProbeResultR\x06resultJ\x04\b\x03\x10\n" +
 	"\"\x1d\n" +
 	"\x15CompleteProbeResponseJ\x04\b\x01\x10\n" +
-	"\"\xfb\x03\n" +
+	"\"\xc0\x04\n" +
 	"\tProbeSpec\x124\n" +
 	"\aremotes\x18\x01 \x03(\v2\x1a.syncr.v1.RemoteDefinitionR\aremotes\x129\n" +
 	"\n" +
@@ -6713,7 +6948,8 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\trestic_ls\x18\x0e \x01(\v2\x17.syncr.v1.ProbeResticLsH\x00R\bresticLs\x12<\n" +
 	"\vrestic_init\x18\x0f \x01(\v2\x19.syncr.v1.ProbeResticInitH\x00R\n" +
 	"resticInit\x12B\n" +
-	"\rrestic_config\x18\x10 \x01(\v2\x1b.syncr.v1.ProbeResticConfigH\x00R\fresticConfigB\x04\n" +
+	"\rrestic_config\x18\x10 \x01(\v2\x1b.syncr.v1.ProbeResticConfigH\x00R\fresticConfig\x12C\n" +
+	"\x0esftp_host_keys\x18\x11 \x01(\v2\x1b.syncr.v1.ProbeSftpHostKeysH\x00R\fsftpHostKeysB\x04\n" +
 	"\x02opJ\x04\b\x02\x10\n" +
 	"\"h\n" +
 	"\x0eProbeListLocal\x12\x12\n" +
@@ -6757,7 +6993,11 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\n" +
 	"repository\x18\x01 \x01(\v2\x1a.syncr.v1.ResticRepositoryR\n" +
 	"repositoryJ\x04\b\x02\x10\n" +
-	"\"\xba\x03\n" +
+	"\"A\n" +
+	"\x11ProbeSftpHostKeys\x12\x12\n" +
+	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\x05R\x04portJ\x04\b\x03\x10\n" +
+	"\"\xfa\x03\n" +
 	"\vProbeResult\x12\x19\n" +
 	"\bprobe_id\x18\x01 \x01(\tR\aprobeId\x12-\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x15.syncr.v1.ProbeStatusR\x06status\x12(\n" +
@@ -6767,7 +7007,8 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	" \x01(\v2\x16.syncr.v1.ProbeListingH\x00R\alisting\x12,\n" +
 	"\x05usage\x18\v \x01(\v2\x14.syncr.v1.ProbeUsageH\x00R\x05usage\x12?\n" +
 	"\tsnapshots\x18\f \x01(\v2\x1f.syncr.v1.ResticSnapshotsOutputH\x00R\tsnapshots\x12O\n" +
-	"\x11repository_config\x18\r \x01(\v2 .syncr.v1.ResticRepositoryConfigH\x00R\x10repositoryConfigB\b\n" +
+	"\x11repository_config\x18\r \x01(\v2 .syncr.v1.ResticRepositoryConfigH\x00R\x10repositoryConfig\x12>\n" +
+	"\x0esftp_host_keys\x18\x0e \x01(\v2\x16.syncr.v1.SftpHostKeysH\x00R\fsftpHostKeysB\b\n" +
 	"\x06outputJ\x04\b\x05\x10\n" +
 	"\"v\n" +
 	"\fProbeListing\x12\x12\n" +
@@ -6805,6 +7046,14 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\x16ResticRepositoryConfig\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x05R\aversionJ\x04\b\x03\x10\n" +
+	"\"?\n" +
+	"\fSftpHostKeys\x12)\n" +
+	"\x04keys\x18\x01 \x03(\v2\x15.syncr.v1.SftpHostKeyR\x04keysJ\x04\b\x02\x10\n" +
+	"\"r\n" +
+	"\vSftpHostKey\x12\x1c\n" +
+	"\talgorithm\x18\x01 \x01(\tR\talgorithm\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\x12-\n" +
+	"\x12fingerprint_sha256\x18\x03 \x01(\tR\x11fingerprintSha256J\x04\b\x04\x10\n" +
 	"*Z\n" +
 	"\n" +
 	"WorkerMode\x12\x1b\n" +
@@ -6815,7 +7064,7 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\x1dJOB_RESULT_STATUS_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bJOB_RESULT_STATUS_SUCCEEDED\x10\x01\x12\x1c\n" +
 	"\x18JOB_RESULT_STATUS_FAILED\x10\x02\x12\x1f\n" +
-	"\x1bJOB_RESULT_STATUS_CANCELLED\x10\x03*\x95\a\n" +
+	"\x1bJOB_RESULT_STATUS_CANCELLED\x10\x03*\xb4\a\n" +
 	"\fJobErrorCode\x12\x1e\n" +
 	"\x1aJOB_ERROR_CODE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bJOB_ERROR_CODE_INVALID_SPEC\x10\x01\x12#\n" +
@@ -6843,7 +7092,8 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\x1dJOB_ERROR_CODE_WORKER_REMOVED\x10\x17\x12%\n" +
 	"!JOB_ERROR_CODE_REMOTE_UNAVAILABLE\x10\x18\x12)\n" +
 	"%JOB_ERROR_CODE_REPOSITORY_UNAVAILABLE\x10\x19\x12\"\n" +
-	"\x1eJOB_ERROR_CODE_WORKER_OUTDATED\x10\x1a*\xa2\x01\n" +
+	"\x1eJOB_ERROR_CODE_WORKER_OUTDATED\x10\x1a\x12\x1d\n" +
+	"\x19JOB_ERROR_CODE_TIME_LIMIT\x10\x1b*\xa2\x01\n" +
 	"\x11UnionUpstreamMode\x12#\n" +
 	"\x1fUNION_UPSTREAM_MODE_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eUNION_UPSTREAM_MODE_READ_WRITE\x10\x01\x12!\n" +
@@ -6900,7 +7150,7 @@ func file_syncr_v1_link_proto_rawDescGZIP() []byte {
 }
 
 var file_syncr_v1_link_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
-var file_syncr_v1_link_proto_msgTypes = make([]protoimpl.MessageInfo, 71)
+var file_syncr_v1_link_proto_msgTypes = make([]protoimpl.MessageInfo, 74)
 var file_syncr_v1_link_proto_goTypes = []any{
 	(WorkerMode)(0),                // 0: syncr.v1.WorkerMode
 	(JobResultStatus)(0),           // 1: syncr.v1.JobResultStatus
@@ -6975,21 +7225,24 @@ var file_syncr_v1_link_proto_goTypes = []any{
 	(*ProbeResticLs)(nil),          // 70: syncr.v1.ProbeResticLs
 	(*ProbeResticInit)(nil),        // 71: syncr.v1.ProbeResticInit
 	(*ProbeResticConfig)(nil),      // 72: syncr.v1.ProbeResticConfig
-	(*ProbeResult)(nil),            // 73: syncr.v1.ProbeResult
-	(*ProbeListing)(nil),           // 74: syncr.v1.ProbeListing
-	(*ProbeEntry)(nil),             // 75: syncr.v1.ProbeEntry
-	(*ProbeUsage)(nil),             // 76: syncr.v1.ProbeUsage
-	(*ResticRepositoryConfig)(nil), // 77: syncr.v1.ResticRepositoryConfig
-	nil,                            // 78: syncr.v1.RemoteDefinition.OptionsEntry
-	nil,                            // 79: syncr.v1.RemoteDefinition.SecretsEntry
-	(*durationpb.Duration)(nil),    // 80: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),  // 81: google.protobuf.Timestamp
+	(*ProbeSftpHostKeys)(nil),      // 73: syncr.v1.ProbeSftpHostKeys
+	(*ProbeResult)(nil),            // 74: syncr.v1.ProbeResult
+	(*ProbeListing)(nil),           // 75: syncr.v1.ProbeListing
+	(*ProbeEntry)(nil),             // 76: syncr.v1.ProbeEntry
+	(*ProbeUsage)(nil),             // 77: syncr.v1.ProbeUsage
+	(*ResticRepositoryConfig)(nil), // 78: syncr.v1.ResticRepositoryConfig
+	(*SftpHostKeys)(nil),           // 79: syncr.v1.SftpHostKeys
+	(*SftpHostKey)(nil),            // 80: syncr.v1.SftpHostKey
+	nil,                            // 81: syncr.v1.RemoteDefinition.OptionsEntry
+	nil,                            // 82: syncr.v1.RemoteDefinition.SecretsEntry
+	(*durationpb.Duration)(nil),    // 83: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),  // 84: google.protobuf.Timestamp
 }
 var file_syncr_v1_link_proto_depIdxs = []int32{
 	19,  // 0: syncr.v1.ReportRequest.events:type_name -> syncr.v1.Event
 	31,  // 1: syncr.v1.ReportRequest.acks:type_name -> syncr.v1.CommandAck
 	28,  // 2: syncr.v1.ReportRequest.state:type_name -> syncr.v1.WorkerState
-	80,  // 3: syncr.v1.PollRequest.wait:type_name -> google.protobuf.Duration
+	83,  // 3: syncr.v1.PollRequest.wait:type_name -> google.protobuf.Duration
 	31,  // 4: syncr.v1.PollRequest.acks:type_name -> syncr.v1.CommandAck
 	30,  // 5: syncr.v1.PollResponse.commands:type_name -> syncr.v1.Command
 	30,  // 6: syncr.v1.CommandRequest.commands:type_name -> syncr.v1.Command
@@ -6997,19 +7250,19 @@ var file_syncr_v1_link_proto_depIdxs = []int32{
 	19,  // 8: syncr.v1.PullResponse.events:type_name -> syncr.v1.Event
 	28,  // 9: syncr.v1.PullResponse.state:type_name -> syncr.v1.WorkerState
 	0,   // 10: syncr.v1.EnrollRequest.mode:type_name -> syncr.v1.WorkerMode
-	81,  // 11: syncr.v1.Event.time:type_name -> google.protobuf.Timestamp
+	84,  // 11: syncr.v1.Event.time:type_name -> google.protobuf.Timestamp
 	20,  // 12: syncr.v1.Event.hello:type_name -> syncr.v1.Hello
 	22,  // 13: syncr.v1.Event.job_started:type_name -> syncr.v1.JobStarted
 	23,  // 14: syncr.v1.Event.progress:type_name -> syncr.v1.Progress
 	25,  // 15: syncr.v1.Event.job_result:type_name -> syncr.v1.JobResult
 	21,  // 16: syncr.v1.Hello.tools:type_name -> syncr.v1.ToolVersion
 	24,  // 17: syncr.v1.Progress.stats:type_name -> syncr.v1.JobStats
-	80,  // 18: syncr.v1.JobStats.elapsed:type_name -> google.protobuf.Duration
+	83,  // 18: syncr.v1.JobStats.elapsed:type_name -> google.protobuf.Duration
 	1,   // 19: syncr.v1.JobResult.status:type_name -> syncr.v1.JobResultStatus
 	27,  // 20: syncr.v1.JobResult.error:type_name -> syncr.v1.JobError
 	24,  // 21: syncr.v1.JobResult.stats:type_name -> syncr.v1.JobStats
-	81,  // 22: syncr.v1.JobResult.started_at:type_name -> google.protobuf.Timestamp
-	81,  // 23: syncr.v1.JobResult.finished_at:type_name -> google.protobuf.Timestamp
+	84,  // 22: syncr.v1.JobResult.started_at:type_name -> google.protobuf.Timestamp
+	84,  // 23: syncr.v1.JobResult.finished_at:type_name -> google.protobuf.Timestamp
 	26,  // 24: syncr.v1.JobResult.output:type_name -> syncr.v1.JobOutput
 	44,  // 25: syncr.v1.JobOutput.restic_backup:type_name -> syncr.v1.ResticBackupOutput
 	47,  // 26: syncr.v1.JobOutput.restic_forget:type_name -> syncr.v1.ResticForgetOutput
@@ -7019,98 +7272,102 @@ var file_syncr_v1_link_proto_depIdxs = []int32{
 	58,  // 30: syncr.v1.JobOutput.restic_delete_data:type_name -> syncr.v1.ResticDeleteDataOutput
 	2,   // 31: syncr.v1.JobError.code:type_name -> syncr.v1.JobErrorCode
 	29,  // 32: syncr.v1.WorkerState.jobs:type_name -> syncr.v1.ActiveJob
-	81,  // 33: syncr.v1.ActiveJob.started_at:type_name -> google.protobuf.Timestamp
+	84,  // 33: syncr.v1.ActiveJob.started_at:type_name -> google.protobuf.Timestamp
 	32,  // 34: syncr.v1.Command.start_job:type_name -> syncr.v1.StartJob
 	33,  // 35: syncr.v1.Command.cancel_job:type_name -> syncr.v1.CancelJob
 	59,  // 36: syncr.v1.Command.run_probe:type_name -> syncr.v1.RunProbe
 	60,  // 37: syncr.v1.Command.cancel_probe:type_name -> syncr.v1.CancelProbe
 	34,  // 38: syncr.v1.StartJob.spec:type_name -> syncr.v1.JobSpec
 	35,  // 39: syncr.v1.JobSpec.remotes:type_name -> syncr.v1.RemoteDefinition
-	38,  // 40: syncr.v1.JobSpec.rclone_transfer:type_name -> syncr.v1.RcloneTransfer
-	42,  // 41: syncr.v1.JobSpec.restic_init:type_name -> syncr.v1.ResticInit
-	43,  // 42: syncr.v1.JobSpec.restic_backup:type_name -> syncr.v1.ResticBackup
-	46,  // 43: syncr.v1.JobSpec.restic_forget:type_name -> syncr.v1.ResticForget
-	48,  // 44: syncr.v1.JobSpec.restic_prune:type_name -> syncr.v1.ResticPrune
-	49,  // 45: syncr.v1.JobSpec.restic_check:type_name -> syncr.v1.ResticCheck
-	51,  // 46: syncr.v1.JobSpec.restic_restore:type_name -> syncr.v1.ResticRestore
-	53,  // 47: syncr.v1.JobSpec.restic_snapshots:type_name -> syncr.v1.ResticSnapshots
-	57,  // 48: syncr.v1.JobSpec.restic_delete_data:type_name -> syncr.v1.ResticDeleteData
-	78,  // 49: syncr.v1.RemoteDefinition.options:type_name -> syncr.v1.RemoteDefinition.OptionsEntry
-	79,  // 50: syncr.v1.RemoteDefinition.secrets:type_name -> syncr.v1.RemoteDefinition.SecretsEntry
-	36,  // 51: syncr.v1.RemoteDefinition.union_upstreams:type_name -> syncr.v1.UnionUpstream
-	37,  // 52: syncr.v1.UnionUpstream.location:type_name -> syncr.v1.Location
-	3,   // 53: syncr.v1.UnionUpstream.mode:type_name -> syncr.v1.UnionUpstreamMode
-	4,   // 54: syncr.v1.RcloneTransfer.mode:type_name -> syncr.v1.RcloneTransferMode
-	37,  // 55: syncr.v1.RcloneTransfer.source:type_name -> syncr.v1.Location
-	37,  // 56: syncr.v1.RcloneTransfer.destination:type_name -> syncr.v1.Location
-	39,  // 57: syncr.v1.RcloneTransfer.options:type_name -> syncr.v1.RcloneTransferOptions
-	80,  // 58: syncr.v1.RcloneTransferOptions.max_duration:type_name -> google.protobuf.Duration
-	40,  // 59: syncr.v1.RcloneTransferOptions.filters:type_name -> syncr.v1.FilterRule
-	5,   // 60: syncr.v1.FilterRule.action:type_name -> syncr.v1.FilterAction
-	37,  // 61: syncr.v1.ResticRepository.location:type_name -> syncr.v1.Location
-	41,  // 62: syncr.v1.ResticInit.repository:type_name -> syncr.v1.ResticRepository
-	41,  // 63: syncr.v1.ResticBackup.repository:type_name -> syncr.v1.ResticRepository
-	41,  // 64: syncr.v1.ResticForget.repository:type_name -> syncr.v1.ResticRepository
-	45,  // 65: syncr.v1.ResticForget.policy:type_name -> syncr.v1.ResticRetentionPolicy
-	41,  // 66: syncr.v1.ResticPrune.repository:type_name -> syncr.v1.ResticRepository
-	41,  // 67: syncr.v1.ResticCheck.repository:type_name -> syncr.v1.ResticRepository
-	41,  // 68: syncr.v1.ResticRestore.repository:type_name -> syncr.v1.ResticRepository
-	6,   // 69: syncr.v1.ResticRestore.overwrite:type_name -> syncr.v1.ResticRestoreOverwrite
-	41,  // 70: syncr.v1.ResticSnapshots.repository:type_name -> syncr.v1.ResticRepository
-	55,  // 71: syncr.v1.ResticSnapshotsOutput.snapshots:type_name -> syncr.v1.ResticSnapshot
-	81,  // 72: syncr.v1.ResticSnapshot.time:type_name -> google.protobuf.Timestamp
-	56,  // 73: syncr.v1.ResticSnapshot.summary:type_name -> syncr.v1.ResticSnapshotSummary
-	81,  // 74: syncr.v1.ResticSnapshotSummary.backup_start:type_name -> google.protobuf.Timestamp
-	81,  // 75: syncr.v1.ResticSnapshotSummary.backup_end:type_name -> google.protobuf.Timestamp
-	41,  // 76: syncr.v1.ResticDeleteData.repository:type_name -> syncr.v1.ResticRepository
-	65,  // 77: syncr.v1.RunProbe.spec:type_name -> syncr.v1.ProbeSpec
-	80,  // 78: syncr.v1.RunProbe.timeout:type_name -> google.protobuf.Duration
-	59,  // 79: syncr.v1.ProbeRequest.probe:type_name -> syncr.v1.RunProbe
-	73,  // 80: syncr.v1.ProbeResponse.result:type_name -> syncr.v1.ProbeResult
-	73,  // 81: syncr.v1.CompleteProbeRequest.result:type_name -> syncr.v1.ProbeResult
-	35,  // 82: syncr.v1.ProbeSpec.remotes:type_name -> syncr.v1.RemoteDefinition
-	66,  // 83: syncr.v1.ProbeSpec.list_local:type_name -> syncr.v1.ProbeListLocal
-	67,  // 84: syncr.v1.ProbeSpec.list_remote:type_name -> syncr.v1.ProbeListRemote
-	68,  // 85: syncr.v1.ProbeSpec.about:type_name -> syncr.v1.ProbeAbout
-	69,  // 86: syncr.v1.ProbeSpec.restic_snapshots:type_name -> syncr.v1.ProbeResticSnapshots
-	70,  // 87: syncr.v1.ProbeSpec.restic_ls:type_name -> syncr.v1.ProbeResticLs
-	71,  // 88: syncr.v1.ProbeSpec.restic_init:type_name -> syncr.v1.ProbeResticInit
-	72,  // 89: syncr.v1.ProbeSpec.restic_config:type_name -> syncr.v1.ProbeResticConfig
-	37,  // 90: syncr.v1.ProbeListRemote.location:type_name -> syncr.v1.Location
-	37,  // 91: syncr.v1.ProbeAbout.location:type_name -> syncr.v1.Location
-	41,  // 92: syncr.v1.ProbeResticSnapshots.repository:type_name -> syncr.v1.ResticRepository
-	41,  // 93: syncr.v1.ProbeResticLs.repository:type_name -> syncr.v1.ResticRepository
-	41,  // 94: syncr.v1.ProbeResticInit.repository:type_name -> syncr.v1.ResticRepository
-	41,  // 95: syncr.v1.ProbeResticConfig.repository:type_name -> syncr.v1.ResticRepository
-	7,   // 96: syncr.v1.ProbeResult.status:type_name -> syncr.v1.ProbeStatus
-	27,  // 97: syncr.v1.ProbeResult.error:type_name -> syncr.v1.JobError
-	80,  // 98: syncr.v1.ProbeResult.elapsed:type_name -> google.protobuf.Duration
-	74,  // 99: syncr.v1.ProbeResult.listing:type_name -> syncr.v1.ProbeListing
-	76,  // 100: syncr.v1.ProbeResult.usage:type_name -> syncr.v1.ProbeUsage
-	54,  // 101: syncr.v1.ProbeResult.snapshots:type_name -> syncr.v1.ResticSnapshotsOutput
-	77,  // 102: syncr.v1.ProbeResult.repository_config:type_name -> syncr.v1.ResticRepositoryConfig
-	75,  // 103: syncr.v1.ProbeListing.entries:type_name -> syncr.v1.ProbeEntry
-	8,   // 104: syncr.v1.ProbeEntry.type:type_name -> syncr.v1.ProbeEntryType
-	81,  // 105: syncr.v1.ProbeEntry.mod_time:type_name -> google.protobuf.Timestamp
-	9,   // 106: syncr.v1.ControllerLinkService.Report:input_type -> syncr.v1.ReportRequest
-	11,  // 107: syncr.v1.ControllerLinkService.Poll:input_type -> syncr.v1.PollRequest
-	63,  // 108: syncr.v1.ControllerLinkService.CompleteProbe:input_type -> syncr.v1.CompleteProbeRequest
-	13,  // 109: syncr.v1.WorkerLinkService.Command:input_type -> syncr.v1.CommandRequest
-	15,  // 110: syncr.v1.WorkerLinkService.Pull:input_type -> syncr.v1.PullRequest
-	61,  // 111: syncr.v1.WorkerLinkService.Probe:input_type -> syncr.v1.ProbeRequest
-	17,  // 112: syncr.v1.EnrollmentService.Enroll:input_type -> syncr.v1.EnrollRequest
-	10,  // 113: syncr.v1.ControllerLinkService.Report:output_type -> syncr.v1.ReportResponse
-	12,  // 114: syncr.v1.ControllerLinkService.Poll:output_type -> syncr.v1.PollResponse
-	64,  // 115: syncr.v1.ControllerLinkService.CompleteProbe:output_type -> syncr.v1.CompleteProbeResponse
-	14,  // 116: syncr.v1.WorkerLinkService.Command:output_type -> syncr.v1.CommandResponse
-	16,  // 117: syncr.v1.WorkerLinkService.Pull:output_type -> syncr.v1.PullResponse
-	62,  // 118: syncr.v1.WorkerLinkService.Probe:output_type -> syncr.v1.ProbeResponse
-	18,  // 119: syncr.v1.EnrollmentService.Enroll:output_type -> syncr.v1.EnrollResponse
-	113, // [113:120] is the sub-list for method output_type
-	106, // [106:113] is the sub-list for method input_type
-	106, // [106:106] is the sub-list for extension type_name
-	106, // [106:106] is the sub-list for extension extendee
-	0,   // [0:106] is the sub-list for field type_name
+	83,  // 40: syncr.v1.JobSpec.max_runtime:type_name -> google.protobuf.Duration
+	38,  // 41: syncr.v1.JobSpec.rclone_transfer:type_name -> syncr.v1.RcloneTransfer
+	42,  // 42: syncr.v1.JobSpec.restic_init:type_name -> syncr.v1.ResticInit
+	43,  // 43: syncr.v1.JobSpec.restic_backup:type_name -> syncr.v1.ResticBackup
+	46,  // 44: syncr.v1.JobSpec.restic_forget:type_name -> syncr.v1.ResticForget
+	48,  // 45: syncr.v1.JobSpec.restic_prune:type_name -> syncr.v1.ResticPrune
+	49,  // 46: syncr.v1.JobSpec.restic_check:type_name -> syncr.v1.ResticCheck
+	51,  // 47: syncr.v1.JobSpec.restic_restore:type_name -> syncr.v1.ResticRestore
+	53,  // 48: syncr.v1.JobSpec.restic_snapshots:type_name -> syncr.v1.ResticSnapshots
+	57,  // 49: syncr.v1.JobSpec.restic_delete_data:type_name -> syncr.v1.ResticDeleteData
+	81,  // 50: syncr.v1.RemoteDefinition.options:type_name -> syncr.v1.RemoteDefinition.OptionsEntry
+	82,  // 51: syncr.v1.RemoteDefinition.secrets:type_name -> syncr.v1.RemoteDefinition.SecretsEntry
+	36,  // 52: syncr.v1.RemoteDefinition.union_upstreams:type_name -> syncr.v1.UnionUpstream
+	37,  // 53: syncr.v1.UnionUpstream.location:type_name -> syncr.v1.Location
+	3,   // 54: syncr.v1.UnionUpstream.mode:type_name -> syncr.v1.UnionUpstreamMode
+	4,   // 55: syncr.v1.RcloneTransfer.mode:type_name -> syncr.v1.RcloneTransferMode
+	37,  // 56: syncr.v1.RcloneTransfer.source:type_name -> syncr.v1.Location
+	37,  // 57: syncr.v1.RcloneTransfer.destination:type_name -> syncr.v1.Location
+	39,  // 58: syncr.v1.RcloneTransfer.options:type_name -> syncr.v1.RcloneTransferOptions
+	83,  // 59: syncr.v1.RcloneTransferOptions.max_duration:type_name -> google.protobuf.Duration
+	40,  // 60: syncr.v1.RcloneTransferOptions.filters:type_name -> syncr.v1.FilterRule
+	5,   // 61: syncr.v1.FilterRule.action:type_name -> syncr.v1.FilterAction
+	37,  // 62: syncr.v1.ResticRepository.location:type_name -> syncr.v1.Location
+	41,  // 63: syncr.v1.ResticInit.repository:type_name -> syncr.v1.ResticRepository
+	41,  // 64: syncr.v1.ResticBackup.repository:type_name -> syncr.v1.ResticRepository
+	41,  // 65: syncr.v1.ResticForget.repository:type_name -> syncr.v1.ResticRepository
+	45,  // 66: syncr.v1.ResticForget.policy:type_name -> syncr.v1.ResticRetentionPolicy
+	41,  // 67: syncr.v1.ResticPrune.repository:type_name -> syncr.v1.ResticRepository
+	41,  // 68: syncr.v1.ResticCheck.repository:type_name -> syncr.v1.ResticRepository
+	41,  // 69: syncr.v1.ResticRestore.repository:type_name -> syncr.v1.ResticRepository
+	6,   // 70: syncr.v1.ResticRestore.overwrite:type_name -> syncr.v1.ResticRestoreOverwrite
+	41,  // 71: syncr.v1.ResticSnapshots.repository:type_name -> syncr.v1.ResticRepository
+	55,  // 72: syncr.v1.ResticSnapshotsOutput.snapshots:type_name -> syncr.v1.ResticSnapshot
+	84,  // 73: syncr.v1.ResticSnapshot.time:type_name -> google.protobuf.Timestamp
+	56,  // 74: syncr.v1.ResticSnapshot.summary:type_name -> syncr.v1.ResticSnapshotSummary
+	84,  // 75: syncr.v1.ResticSnapshotSummary.backup_start:type_name -> google.protobuf.Timestamp
+	84,  // 76: syncr.v1.ResticSnapshotSummary.backup_end:type_name -> google.protobuf.Timestamp
+	41,  // 77: syncr.v1.ResticDeleteData.repository:type_name -> syncr.v1.ResticRepository
+	65,  // 78: syncr.v1.RunProbe.spec:type_name -> syncr.v1.ProbeSpec
+	83,  // 79: syncr.v1.RunProbe.timeout:type_name -> google.protobuf.Duration
+	59,  // 80: syncr.v1.ProbeRequest.probe:type_name -> syncr.v1.RunProbe
+	74,  // 81: syncr.v1.ProbeResponse.result:type_name -> syncr.v1.ProbeResult
+	74,  // 82: syncr.v1.CompleteProbeRequest.result:type_name -> syncr.v1.ProbeResult
+	35,  // 83: syncr.v1.ProbeSpec.remotes:type_name -> syncr.v1.RemoteDefinition
+	66,  // 84: syncr.v1.ProbeSpec.list_local:type_name -> syncr.v1.ProbeListLocal
+	67,  // 85: syncr.v1.ProbeSpec.list_remote:type_name -> syncr.v1.ProbeListRemote
+	68,  // 86: syncr.v1.ProbeSpec.about:type_name -> syncr.v1.ProbeAbout
+	69,  // 87: syncr.v1.ProbeSpec.restic_snapshots:type_name -> syncr.v1.ProbeResticSnapshots
+	70,  // 88: syncr.v1.ProbeSpec.restic_ls:type_name -> syncr.v1.ProbeResticLs
+	71,  // 89: syncr.v1.ProbeSpec.restic_init:type_name -> syncr.v1.ProbeResticInit
+	72,  // 90: syncr.v1.ProbeSpec.restic_config:type_name -> syncr.v1.ProbeResticConfig
+	73,  // 91: syncr.v1.ProbeSpec.sftp_host_keys:type_name -> syncr.v1.ProbeSftpHostKeys
+	37,  // 92: syncr.v1.ProbeListRemote.location:type_name -> syncr.v1.Location
+	37,  // 93: syncr.v1.ProbeAbout.location:type_name -> syncr.v1.Location
+	41,  // 94: syncr.v1.ProbeResticSnapshots.repository:type_name -> syncr.v1.ResticRepository
+	41,  // 95: syncr.v1.ProbeResticLs.repository:type_name -> syncr.v1.ResticRepository
+	41,  // 96: syncr.v1.ProbeResticInit.repository:type_name -> syncr.v1.ResticRepository
+	41,  // 97: syncr.v1.ProbeResticConfig.repository:type_name -> syncr.v1.ResticRepository
+	7,   // 98: syncr.v1.ProbeResult.status:type_name -> syncr.v1.ProbeStatus
+	27,  // 99: syncr.v1.ProbeResult.error:type_name -> syncr.v1.JobError
+	83,  // 100: syncr.v1.ProbeResult.elapsed:type_name -> google.protobuf.Duration
+	75,  // 101: syncr.v1.ProbeResult.listing:type_name -> syncr.v1.ProbeListing
+	77,  // 102: syncr.v1.ProbeResult.usage:type_name -> syncr.v1.ProbeUsage
+	54,  // 103: syncr.v1.ProbeResult.snapshots:type_name -> syncr.v1.ResticSnapshotsOutput
+	78,  // 104: syncr.v1.ProbeResult.repository_config:type_name -> syncr.v1.ResticRepositoryConfig
+	79,  // 105: syncr.v1.ProbeResult.sftp_host_keys:type_name -> syncr.v1.SftpHostKeys
+	76,  // 106: syncr.v1.ProbeListing.entries:type_name -> syncr.v1.ProbeEntry
+	8,   // 107: syncr.v1.ProbeEntry.type:type_name -> syncr.v1.ProbeEntryType
+	84,  // 108: syncr.v1.ProbeEntry.mod_time:type_name -> google.protobuf.Timestamp
+	80,  // 109: syncr.v1.SftpHostKeys.keys:type_name -> syncr.v1.SftpHostKey
+	9,   // 110: syncr.v1.ControllerLinkService.Report:input_type -> syncr.v1.ReportRequest
+	11,  // 111: syncr.v1.ControllerLinkService.Poll:input_type -> syncr.v1.PollRequest
+	63,  // 112: syncr.v1.ControllerLinkService.CompleteProbe:input_type -> syncr.v1.CompleteProbeRequest
+	13,  // 113: syncr.v1.WorkerLinkService.Command:input_type -> syncr.v1.CommandRequest
+	15,  // 114: syncr.v1.WorkerLinkService.Pull:input_type -> syncr.v1.PullRequest
+	61,  // 115: syncr.v1.WorkerLinkService.Probe:input_type -> syncr.v1.ProbeRequest
+	17,  // 116: syncr.v1.EnrollmentService.Enroll:input_type -> syncr.v1.EnrollRequest
+	10,  // 117: syncr.v1.ControllerLinkService.Report:output_type -> syncr.v1.ReportResponse
+	12,  // 118: syncr.v1.ControllerLinkService.Poll:output_type -> syncr.v1.PollResponse
+	64,  // 119: syncr.v1.ControllerLinkService.CompleteProbe:output_type -> syncr.v1.CompleteProbeResponse
+	14,  // 120: syncr.v1.WorkerLinkService.Command:output_type -> syncr.v1.CommandResponse
+	16,  // 121: syncr.v1.WorkerLinkService.Pull:output_type -> syncr.v1.PullResponse
+	62,  // 122: syncr.v1.WorkerLinkService.Probe:output_type -> syncr.v1.ProbeResponse
+	18,  // 123: syncr.v1.EnrollmentService.Enroll:output_type -> syncr.v1.EnrollResponse
+	117, // [117:124] is the sub-list for method output_type
+	110, // [110:117] is the sub-list for method input_type
+	110, // [110:110] is the sub-list for extension type_name
+	110, // [110:110] is the sub-list for extension extendee
+	0,   // [0:110] is the sub-list for field type_name
 }
 
 func init() { file_syncr_v1_link_proto_init() }
@@ -7159,21 +7416,23 @@ func file_syncr_v1_link_proto_init() {
 		(*ProbeSpec_ResticLs)(nil),
 		(*ProbeSpec_ResticInit)(nil),
 		(*ProbeSpec_ResticConfig)(nil),
+		(*ProbeSpec_SftpHostKeys)(nil),
 	}
-	file_syncr_v1_link_proto_msgTypes[64].OneofWrappers = []any{
+	file_syncr_v1_link_proto_msgTypes[65].OneofWrappers = []any{
 		(*ProbeResult_Listing)(nil),
 		(*ProbeResult_Usage)(nil),
 		(*ProbeResult_Snapshots)(nil),
 		(*ProbeResult_RepositoryConfig)(nil),
+		(*ProbeResult_SftpHostKeys)(nil),
 	}
-	file_syncr_v1_link_proto_msgTypes[67].OneofWrappers = []any{}
+	file_syncr_v1_link_proto_msgTypes[68].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_syncr_v1_link_proto_rawDesc), len(file_syncr_v1_link_proto_rawDesc)),
 			NumEnums:      9,
-			NumMessages:   71,
+			NumMessages:   74,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

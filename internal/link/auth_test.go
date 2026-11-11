@@ -56,6 +56,8 @@ func TestErrorCodeNames(t *testing.T) {
 		{syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_MISMATCH, "repository_mismatch"},
 		{syncrv1.JobErrorCode_JOB_ERROR_CODE_REPOSITORY_UNAVAILABLE, "repository_unavailable"},
 		{syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_OUTDATED, "worker_outdated"},
+		// Milestone 6: set by workers (jobs.CodeTimeLimit).
+		{syncrv1.JobErrorCode_JOB_ERROR_CODE_TIME_LIMIT, "time_limit"},
 		{syncrv1.JobErrorCode(999), "unspecified"},
 	}
 	for _, tt := range tests {

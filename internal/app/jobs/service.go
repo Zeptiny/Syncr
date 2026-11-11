@@ -22,15 +22,23 @@ type Config struct {
 	SampleInterval time.Duration
 	// MaxDefinitionBytes bounds an encoded job definition.
 	MaxDefinitionBytes int
+	// SampleRetention is how long the progress samples of a finished job
+	// are kept (jobs.sample_retention): PurgeSamples deletes the samples of
+	// the jobs that finished longer ago. At least MinSampleRetention.
+	SampleRetention time.Duration
+	// KeepSamples turns the purge off: PurgeSamples deletes nothing and
+	// SampleRetention is ignored (jobs.sample_retention: 0). It is a
+	// separate field so that the zero Config keeps the default retention.
+	KeepSamples bool
 }
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
-	return Config{SampleInterval: 5 * time.Second, MaxDefinitionBytes: 1 << 20}
+	return Config{SampleInterval: 5 * time.Second, MaxDefinitionBytes: 1 << 20, SampleRetention: DefaultSampleRetention}
 }
 
 // Deps are the service's collaborators. All are required except Remotes,
-// Repositories, Activity and Logger.
+// Repositories, Activity, TimeLimits and Logger.
 type Deps struct {
 	Jobs     Repository
 	Samples  SampleRepository
@@ -50,6 +58,9 @@ type Deps struct {
 	// Activity aggregates finished jobs for the dashboard (Activity,
 	// CountUnfinished); optional, those use cases fail without it.
 	Activity ActivityRepository
+	// TimeLimits computes the time limit MarkDispatched records in
+	// Job.TimeLimit; without it, jobs are recorded without one.
+	TimeLimits TimeLimits
 	// Logger defaults to discarding.
 	Logger *slog.Logger
 }
@@ -67,8 +78,12 @@ type Service struct {
 	remotes  RemoteChecker
 	repos    RepositoryChecker
 	activity ActivityRepository
+	limits   TimeLimits
 	log      *slog.Logger
 	cfg      Config
+
+	// purge is where the sample purge goes on from (PurgeSamples).
+	purge purgeState
 
 	mu sync.Mutex
 	// lastStored is the last stored sample per running job, for the rate
@@ -90,8 +105,12 @@ func New(d Deps, cfg Config) (*Service, error) {
 	def := DefaultConfig()
 	cfg.SampleInterval = cmp.Or(cfg.SampleInterval, def.SampleInterval)
 	cfg.MaxDefinitionBytes = cmp.Or(cfg.MaxDefinitionBytes, def.MaxDefinitionBytes)
+	cfg.SampleRetention = cmp.Or(cfg.SampleRetention, def.SampleRetention)
 	if cfg.SampleInterval < 0 || cfg.MaxDefinitionBytes < 0 {
 		return nil, fmt.Errorf("jobs: invalid config %+v", cfg)
+	}
+	if !cfg.KeepSamples && cfg.SampleRetention < MinSampleRetention {
+		return nil, fmt.Errorf("jobs: invalid config: sample retention %v is shorter than %v", cfg.SampleRetention, MinSampleRetention)
 	}
 	log := d.Logger
 	if log == nil {
@@ -100,7 +119,7 @@ func New(d Deps, cfg Config) (*Service, error) {
 	return &Service{
 		repo: d.Jobs, samples: d.Samples, clock: d.Clock, ids: d.IDs,
 		broker: d.Broker, notifier: d.Notifier, waker: d.Waker, remotes: d.Remotes, repos: d.Repositories, activity: d.Activity,
-		log: log, cfg: cfg,
+		limits: d.TimeLimits, log: log, cfg: cfg,
 		lastStored: make(map[domain.JobID]lastSample), lastPrune: d.Clock.Now(),
 	}, nil
 }
@@ -338,16 +357,33 @@ func (s *Service) LatestSamples(ctx context.Context, ids []domain.JobID) (map[do
 }
 
 // Samples returns the stored progress samples of a job the actor may see,
-// oldest first.
+// oldest first: ListSamples with DefaultSamplePoints, without the total.
 func (s *Service) Samples(ctx context.Context, actor domain.Actor, id domain.JobID) ([]Sample, error) {
+	out, _, err := s.ListSamples(ctx, actor, id, DefaultSamplePoints)
+	return out, err
+}
+
+// ListSamples returns the stored progress samples of a job the actor may
+// see, oldest first, evenly thinned to at most maxPoints (always with the
+// first and the last; see SampleRepository.ListJobSamples), and how many
+// the job has stored. maxPoints 0 means DefaultSamplePoints; more than
+// MaxSamplePoints is capped; a negative one is ErrInvalidArgument.
+func (s *Service) ListSamples(ctx context.Context, actor domain.Actor, id domain.JobID, maxPoints int) (samples []Sample, total int, err error) {
+	switch {
+	case maxPoints < 0:
+		return nil, 0, fmt.Errorf("samples of job %s: %w: max points %d is negative", id, domain.ErrInvalidArgument, maxPoints)
+	case maxPoints == 0:
+		maxPoints = DefaultSamplePoints
+	}
+	maxPoints = min(maxPoints, MaxSamplePoints)
 	if _, err := s.Get(ctx, actor, id); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	out, err := s.samples.ListJobSamples(ctx, id)
+	out, total, err := s.samples.ListJobSamples(ctx, id, maxPoints)
 	if err != nil {
-		return nil, fmt.Errorf("samples of job %s: %w", id, err)
+		return nil, 0, fmt.Errorf("samples of job %s: %w", id, err)
 	}
-	return out, nil
+	return out, total, nil
 }
 
 // List returns a page of jobs matching f, newest first: the actor's own

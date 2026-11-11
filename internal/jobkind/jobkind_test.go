@@ -86,6 +86,12 @@ func TestRegistry(t *testing.T) {
 	if got := r.Describe(transfer("", "/src"), jobkind.Names{}); got != "echo /src" {
 		t.Errorf("Describe = %q, want the kind's description", got)
 	}
+	if got := r.DescribeOperation(transfer("", "/src"), jobkind.Names{}); got != "echo /src" {
+		t.Errorf("DescribeOperation = %q, want the kind's description", got)
+	}
+	if got := r.DescribeOperation(nil, jobkind.Names{}); got != "" {
+		t.Errorf("DescribeOperation(nil) = %q, want empty", got)
+	}
 	if got := r.Describe(nil, jobkind.Names{}); got != "" {
 		t.Errorf("Describe(nil) = %q, want empty", got)
 	}
@@ -96,6 +102,9 @@ func TestRegistry(t *testing.T) {
 	}
 	if _, _, err := empty.Check(transfer("", "/src")); !isValidation(err, "definition.operation") || !strings.Contains(err.Error(), "not supported") {
 		t.Errorf("Check on an empty registry = %v", err)
+	}
+	if got := empty.DescribeOperation(transfer("", "/src"), jobkind.Names{}); got != "rclone_transfer" {
+		t.Errorf("DescribeOperation on an empty registry = %q, want the kind name", got)
 	}
 	if got := empty.Describe(transfer("", "/src"), jobkind.Names{}); got != "rclone_transfer" {
 		t.Errorf("Describe on an empty registry = %q, want the kind name", got)

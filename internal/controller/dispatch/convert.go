@@ -45,6 +45,10 @@ func infoFromHello(h *syncrv1.Hello, at time.Time) workers.Info {
 
 // outcomeFromResult maps a worker's JobResult to the outcome the job
 // service records (which turns an unrequested CANCELLED into interrupted).
+// A job its worker stopped at its time limit (TIME_LIMIT, which workers
+// report as FAILED) is failed whatever status came with the code, so it
+// notifies and fails its schedule's run like any other failure
+// (jobs.CodeTimeLimit).
 func outcomeFromResult(r *syncrv1.JobResult) jobs.Outcome {
 	o := jobs.Outcome{
 		Stats:      statsFromProto(r.GetStats()),
@@ -54,6 +58,11 @@ func outcomeFromResult(r *syncrv1.JobResult) jobs.Outcome {
 	}
 	if r.GetError() != nil {
 		o.Error = jobs.JobError{Code: link.ErrorCodeName(r.GetError().GetCode()), Message: r.GetError().GetMessage()}
+	}
+	if r.GetError().GetCode() == syncrv1.JobErrorCode_JOB_ERROR_CODE_TIME_LIMIT &&
+		r.GetStatus() != syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED {
+		o.Status = domain.JobFailed
+		return o
 	}
 	switch r.GetStatus() {
 	case syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED:

@@ -69,7 +69,7 @@ func TestVerifyErrorFields(t *testing.T) {
 		{ModeConnect, "not_found", "", ""},
 	}
 	for _, tt := range tests {
-		err := verifyErrorFields(tt.mode, &ProbeError{Code: tt.code, Message: "what restic said"})
+		err := verifyErrorFields(tt.mode, &ProbeError{Code: tt.code, Message: "what restic said"}, false)
 		var verr *domain.ValidationError
 		if tt.field == "" {
 			if !errors.Is(err, domain.ErrFailedPrecondition) || errors.As(err, &verr) || !strings.Contains(err.Error(), "what restic said") {
@@ -81,7 +81,7 @@ func TestVerifyErrorFields(t *testing.T) {
 			t.Errorf("%s/%s: %v, want %s: %s", tt.mode, tt.code, err, tt.field, tt.message)
 		}
 	}
-	if err := verifyErrorFields(ModeInit, &ProbeError{}); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if err := verifyErrorFields(ModeInit, &ProbeError{}, false); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Errorf("an empty probe error: %v", err)
 	}
 }
@@ -91,15 +91,21 @@ func TestVerifyErrorScrubs(t *testing.T) {
 	const pw = "sentinel-password"
 	pe := &ProbeError{Code: "execution_failed", Message: "Fatal: bad key " + pw}
 	wrapped := errors.Join(domain.ErrFailedPrecondition, pe)
-	if err := verifyError(ModeConnect, wrapped, pw); strings.Contains(err.Error(), pw) || !errors.Is(err, domain.ErrFailedPrecondition) {
+	if err := verifyError(ModeConnect, wrapped, pw, false); strings.Contains(err.Error(), pw) || !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Errorf("verifyError(probe error) = %v", err)
 	}
 	plain := errors.Join(domain.ErrUnavailable, errors.New("worker said "+pw))
-	if err := verifyError(ModeConnect, plain, pw); strings.Contains(err.Error(), pw) || !errors.Is(err, domain.ErrUnavailable) {
+	if err := verifyError(ModeConnect, plain, pw, false); strings.Contains(err.Error(), pw) || !errors.Is(err, domain.ErrUnavailable) {
 		t.Errorf("verifyError(other error) = %v", err)
 	}
+	// The quoted and URL-escaped forms a tool may print are removed too.
+	const quoted = `pass"word\`
+	echoed := errors.Join(domain.ErrUnavailable, errors.New(`worker said "pass\"word\\" and pass%22word%5C`))
+	if err := verifyError(ModeConnect, echoed, quoted, false); strings.Contains(err.Error(), "word") || !errors.Is(err, domain.ErrUnavailable) {
+		t.Errorf("verifyError(escaped forms) = %v", err)
+	}
 	clean := errors.New("nothing secret")
-	if err := verifyError(ModeConnect, clean, pw); !errors.Is(err, clean) {
+	if err := verifyError(ModeConnect, clean, pw, false); !errors.Is(err, clean) {
 		t.Errorf("verifyError(clean) = %v, want it unchanged", err)
 	}
 }

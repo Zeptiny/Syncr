@@ -1,18 +1,24 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/Zeptiny/Syncr/internal/platform/config"
 	"github.com/Zeptiny/Syncr/internal/platform/logging"
 	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
+	"github.com/Zeptiny/Syncr/internal/worker/datadir"
+	"github.com/Zeptiny/Syncr/internal/worker/paths"
 	"github.com/Zeptiny/Syncr/internal/worker/service"
+	"github.com/Zeptiny/Syncr/internal/worker/upgrade"
 )
 
 // runCmd runs the worker: it assembles it (tools, local_roots policy,
@@ -54,12 +60,27 @@ func runCmd(ctx context.Context, e *env, args []string) error {
 		}
 	}
 
-	work := func(ctx context.Context, log io.Writer) error { return runWorker(ctx, e, path, log) }
+	// A worker that logs to a file (the Windows user task, whose console
+	// is hidden) also logs the error it stops with there: run prints it on
+	// stderr, which nobody sees then.
+	logFailure := *logFile != ""
+	work := func(ctx context.Context, log io.Writer) error { return runWorker(ctx, e, path, log, logFailure) }
 	if host := e.serviceHost(); host.Managed() {
 		return host.Run(ctx, service.Name, logOut, work)
 	}
 	return work(ctx, logOut)
 }
+
+// errBrokenRelease is how a build with brokenRelease (the upgrade test's
+// broken release) fails once it started.
+var errBrokenRelease = errors.New("this build is the broken release of the upgrade test (-tags syncr_broken_release): it does not run")
+
+// dataDirLockWait is how long `run` waits for the data directory's lock
+// while another process holds it (datadir.Lock): long enough for the
+// process of a worker that its service manager has just stopped to exit,
+// short enough that a second worker on the same directory is refused
+// soon.
+const dataDirLockWait = 20 * time.Second
 
 // maxLogFileBytes is the size at which --log-file is rotated at startup.
 const maxLogFileBytes = 10 << 20
@@ -81,20 +102,65 @@ func openLogFile(path string) (*os.File, error) {
 	return f, nil
 }
 
-// runWorker loads the configuration, builds the worker, starts the link and
-// waits for ctx.
-func runWorker(ctx context.Context, e *env, configPath string, logOut io.Writer) error {
+// runWorker loads the configuration, takes the data directory, builds the
+// worker, starts the link and waits for ctx. With logFailure, the error it
+// returns is also logged to logOut (with the configured logger once it
+// exists, a plain one before).
+//
+// Before anything else uses the data directory it takes its lock
+// (datadir.Lock: a second worker on the same directory is refused, as two
+// would remove each other's job files), released once the worker stopped.
+// While another process holds it, it waits up to dataDirLockWait and says
+// so: a service manager may start it while the worker it replaces is
+// still exiting. Holding it, it removes what jobs of an earlier process
+// left in the scratch directories (that process is gone, so nothing uses
+// them), and what an earlier upgrade left next to the executable
+// (upgrade.RemoveLeftover, which never removes a backup an upgrade in
+// progress may still need). Neither cleanup is fatal. run never prunes
+// tool versions: a worker rolled back by an upgrade still needs its own.
+func runWorker(ctx context.Context, e *env, configPath string, logOut io.Writer, logFailure bool) (err error) {
+	logger := slog.New(slog.NewTextHandler(logOut, nil))
+	if logFailure {
+		defer func() {
+			if err != nil {
+				logger.Error("the worker stopped with an error", "error", err.Error())
+			}
+		}()
+	}
 	cfg := workerconfig.Default()
 	if err := config.Load(configPath, e.lookupEnv, &cfg); err != nil {
 		return err
 	}
-	logger, err := logging.New(logOut, cfg.Log)
+	configured, err := logging.New(logOut, cfg.Log)
 	if err != nil {
 		return err
 	}
+	logger = configured
 
 	logger.Info("worker starting",
 		"version", e.info.Version, "commit", e.info.Commit, "os", runtime.GOOS, "arch", runtime.GOARCH)
+	dataDir, err := resolveDataDir(cfg, e.pathsEnv())
+	if err != nil {
+		return err
+	}
+	wait := cmp.Or(e.lockWait, dataDirLockWait)
+	release, err := datadir.Lock(ctx, dataDir, wait, func(lockFile string) {
+		logger.Warn("another process holds the data directory's lock; waiting for it to exit (a worker that is still stopping "+
+			"lets it go in a moment, a second worker on this data directory does not)", "lock_file", lockFile, "wait", wait.String())
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			logger.Info("stopped while waiting for the data directory's lock")
+			return nil
+		}
+		return err
+	}
+	defer func() {
+		if err := release(); err != nil {
+			logger.Warn("releasing the data directory lock failed", "error", err.Error())
+		}
+	}()
+	cleanStart(dataDir, logger)
 	w, err := buildWorker(ctx, cfg, workerDeps{
 		paths:      e.pathsEnv(),
 		bundledDir: executableDir(),
@@ -109,10 +175,33 @@ func runWorker(ctx context.Context, e *env, configPath string, logOut io.Writer)
 	if err != nil {
 		return err
 	}
+	if brokenRelease {
+		stop()
+		return errBrokenRelease
+	}
 	<-ctx.Done()
 	stop()
 	logger.Info("worker stopped")
 	return nil
+}
+
+// cleanStart removes the files that jobs of an earlier worker process left
+// in the scratch directories of dataDir, and the leftovers of an earlier
+// upgrade next to the executable that no upgrade can still need
+// (upgrade.RemoveLeftover). Failures are logged; the worker starts anyway.
+func cleanStart(dataDir string, log *slog.Logger) {
+	scratch := paths.ScratchDir(dataDir)
+	if err := datadir.RemoveContents(filepath.Join(scratch, "rclone"), filepath.Join(scratch, "restic")); err != nil {
+		log.Warn("could not remove all files earlier jobs left in the scratch directory; they stay until the next start",
+			"scratch_dir", scratch, "error", err.Error())
+	}
+	exe, err := executablePath()
+	if err != nil {
+		return
+	}
+	if err := upgrade.RemoveLeftover(exe); err != nil {
+		log.Info("what an earlier upgrade left next to the worker binary could not be removed yet; the next start tries again", "error", err.Error())
+	}
 }
 
 // versionCmd prints build information.

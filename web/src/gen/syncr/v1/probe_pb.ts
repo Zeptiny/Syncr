@@ -6,7 +6,7 @@ import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegen
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import type { Duration } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_duration } from "@bufbuild/protobuf/wkt";
-import type { ProbeEntry, ProbeUsage } from "./link_pb";
+import type { ProbeEntry, ProbeUsage, SftpHostKey } from "./link_pb";
 import { file_syncr_v1_link } from "./link_pb";
 import type { RemoteInput } from "./remotes_pb";
 import { file_syncr_v1_remotes } from "./remotes_pb";
@@ -16,7 +16,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file syncr/v1/probe.proto.
  */
 export const file_syncr_v1_probe: GenFile = /*@__PURE__*/
-  fileDesc("ChRzeW5jci92MS9wcm9iZS5wcm90bxIIc3luY3IudjEiMAoOUHJvYmVXb3JrZXJSZWYSCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCUoECAMQBiJSChZMaXN0V29ya2VyRmlsZXNSZXF1ZXN0EhEKCXdvcmtlcl9pZBgBIAEoCRIMCgRwYXRoGAIgASgJEhEKCWRpcnNfb25seRgDIAEoCEoECAQQCiKRAQoXTGlzdFdvcmtlckZpbGVzUmVzcG9uc2USDAoEcGF0aBgBIAEoCRIlCgdlbnRyaWVzGAIgAygLMhQuc3luY3IudjEuUHJvYmVFbnRyeRIRCgl0cnVuY2F0ZWQYAyABKAgSKAoGd29ya2VyGAQgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgFEAoiZQoWTGlzdFJlbW90ZUZpbGVzUmVxdWVzdBIRCglyZW1vdGVfaWQYASABKAkSDAoEcGF0aBgCIAEoCRIRCgl3b3JrZXJfaWQYAyABKAkSEQoJZGlyc19vbmx5GAQgASgISgQIBRAKIpEBChdMaXN0UmVtb3RlRmlsZXNSZXNwb25zZRIMCgRwYXRoGAEgASgJEiUKB2VudHJpZXMYAiADKAsyFC5zeW5jci52MS5Qcm9iZUVudHJ5EhEKCXRydW5jYXRlZBgDIAEoCBIoCgZ3b3JrZXIYBCABKAsyGC5zeW5jci52MS5Qcm9iZVdvcmtlclJlZkoECAUQCiJzChFUZXN0UmVtb3RlUmVxdWVzdBIRCglyZW1vdGVfaWQYASABKAkSJAoFaW5wdXQYAiABKAsyFS5zeW5jci52MS5SZW1vdGVJbnB1dBIRCgl3b3JrZXJfaWQYAyABKAkSDAoEcGF0aBgEIAEoCUoECAUQCiL4AQoSVGVzdFJlbW90ZVJlc3BvbnNlEgoKAm9rGAEgASgIEg0KBWVycm9yGAIgASgJEhIKCmVycm9yX2NvZGUYAyABKAkSKAoGd29ya2VyGAQgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWYSKgoHbGF0ZW5jeRgFIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbhIPCgdlbnRyaWVzGAYgASgFEg4KBnNhbXBsZRgHIAMoCRIRCgl0cnVuY2F0ZWQYCCABKAgSIwoFdXNhZ2UYCSABKAsyFC5zeW5jci52MS5Qcm9iZVVzYWdlSgQIChAUMpMCCgxQcm9iZVNlcnZpY2USWwoPTGlzdFdvcmtlckZpbGVzEiAuc3luY3IudjEuTGlzdFdvcmtlckZpbGVzUmVxdWVzdBohLnN5bmNyLnYxLkxpc3RXb3JrZXJGaWxlc1Jlc3BvbnNlIgOQAgESWwoPTGlzdFJlbW90ZUZpbGVzEiAuc3luY3IudjEuTGlzdFJlbW90ZUZpbGVzUmVxdWVzdBohLnN5bmNyLnYxLkxpc3RSZW1vdGVGaWxlc1Jlc3BvbnNlIgOQAgESSQoKVGVzdFJlbW90ZRIbLnN5bmNyLnYxLlRlc3RSZW1vdGVSZXF1ZXN0Ghwuc3luY3IudjEuVGVzdFJlbW90ZVJlc3BvbnNlIgBCjQEKDGNvbS5zeW5jci52MUIKUHJvYmVQcm90b1ABWjBnaXRodWIuY29tL1plcHRpbnkvU3luY3IvZ2VuL2dvL3N5bmNyL3YxO3N5bmNydjGiAgNTWFiqAghTeW5jci5WMcoCCFN5bmNyXFYx4gIUU3luY3JcVjFcR1BCTWV0YWRhdGHqAglTeW5jcjo6VjFiBnByb3RvMw", [file_google_protobuf_duration, file_syncr_v1_link, file_syncr_v1_remotes]);
+  fileDesc("ChRzeW5jci92MS9wcm9iZS5wcm90bxIIc3luY3IudjEiMAoOUHJvYmVXb3JrZXJSZWYSCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCUoECAMQBiJSChZMaXN0V29ya2VyRmlsZXNSZXF1ZXN0EhEKCXdvcmtlcl9pZBgBIAEoCRIMCgRwYXRoGAIgASgJEhEKCWRpcnNfb25seRgDIAEoCEoECAQQCiKRAQoXTGlzdFdvcmtlckZpbGVzUmVzcG9uc2USDAoEcGF0aBgBIAEoCRIlCgdlbnRyaWVzGAIgAygLMhQuc3luY3IudjEuUHJvYmVFbnRyeRIRCgl0cnVuY2F0ZWQYAyABKAgSKAoGd29ya2VyGAQgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgFEAoiZQoWTGlzdFJlbW90ZUZpbGVzUmVxdWVzdBIRCglyZW1vdGVfaWQYASABKAkSDAoEcGF0aBgCIAEoCRIRCgl3b3JrZXJfaWQYAyABKAkSEQoJZGlyc19vbmx5GAQgASgISgQIBRAKIpEBChdMaXN0UmVtb3RlRmlsZXNSZXNwb25zZRIMCgRwYXRoGAEgASgJEiUKB2VudHJpZXMYAiADKAsyFC5zeW5jci52MS5Qcm9iZUVudHJ5EhEKCXRydW5jYXRlZBgDIAEoCBIoCgZ3b3JrZXIYBCABKAsyGC5zeW5jci52MS5Qcm9iZVdvcmtlclJlZkoECAUQCiJzChFUZXN0UmVtb3RlUmVxdWVzdBIRCglyZW1vdGVfaWQYASABKAkSJAoFaW5wdXQYAiABKAsyFS5zeW5jci52MS5SZW1vdGVJbnB1dBIRCgl3b3JrZXJfaWQYAyABKAkSDAoEcGF0aBgEIAEoCUoECAUQCiL4AQoSVGVzdFJlbW90ZVJlc3BvbnNlEgoKAm9rGAEgASgIEg0KBWVycm9yGAIgASgJEhIKCmVycm9yX2NvZGUYAyABKAkSKAoGd29ya2VyGAQgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWYSKgoHbGF0ZW5jeRgFIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbhIPCgdlbnRyaWVzGAYgASgFEg4KBnNhbXBsZRgHIAMoCRIRCgl0cnVuY2F0ZWQYCCABKAgSIwoFdXNhZ2UYCSABKAsyFC5zeW5jci52MS5Qcm9iZVVzYWdlSgQIChAUIk0KFkdldFNmdHBIb3N0S2V5c1JlcXVlc3QSDAoEaG9zdBgBIAEoCRIMCgRwb3J0GAIgASgFEhEKCXdvcmtlcl9pZBgDIAEoCUoECAQQCiJuChdHZXRTZnRwSG9zdEtleXNSZXNwb25zZRIjCgRrZXlzGAEgAygLMhUuc3luY3IudjEuU2Z0cEhvc3RLZXkSKAoGd29ya2VyGAIgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgDEAoy7QIKDFByb2JlU2VydmljZRJbCg9MaXN0V29ya2VyRmlsZXMSIC5zeW5jci52MS5MaXN0V29ya2VyRmlsZXNSZXF1ZXN0GiEuc3luY3IudjEuTGlzdFdvcmtlckZpbGVzUmVzcG9uc2UiA5ACARJbCg9MaXN0UmVtb3RlRmlsZXMSIC5zeW5jci52MS5MaXN0UmVtb3RlRmlsZXNSZXF1ZXN0GiEuc3luY3IudjEuTGlzdFJlbW90ZUZpbGVzUmVzcG9uc2UiA5ACARJJCgpUZXN0UmVtb3RlEhsuc3luY3IudjEuVGVzdFJlbW90ZVJlcXVlc3QaHC5zeW5jci52MS5UZXN0UmVtb3RlUmVzcG9uc2UiABJYCg9HZXRTZnRwSG9zdEtleXMSIC5zeW5jci52MS5HZXRTZnRwSG9zdEtleXNSZXF1ZXN0GiEuc3luY3IudjEuR2V0U2Z0cEhvc3RLZXlzUmVzcG9uc2UiAEKNAQoMY29tLnN5bmNyLnYxQgpQcm9iZVByb3RvUAFaMGdpdGh1Yi5jb20vWmVwdGlueS9TeW5jci9nZW4vZ28vc3luY3IvdjE7c3luY3J2MaICA1NYWKoCCFN5bmNyLlYxygIIU3luY3JcVjHiAhRTeW5jclxWMVxHUEJNZXRhZGF0YeoCCVN5bmNyOjpWMWIGcHJvdG8z", [file_google_protobuf_duration, file_syncr_v1_link, file_syncr_v1_remotes]);
 
 /**
  * ProbeWorkerRef names the worker that ran a probe.
@@ -336,8 +336,74 @@ export const TestRemoteResponseSchema: GenMessage<TestRemoteResponse> = /*@__PUR
   messageDesc(file_syncr_v1_probe, 6);
 
 /**
- * ProbeService browses workers and remotes and tests remotes, through a
- * worker.
+ * GetSftpHostKeysRequest names the SSH server whose host keys to fetch.
+ *
+ * @generated from message syncr.v1.GetSftpHostKeysRequest
+ */
+export type GetSftpHostKeysRequest = Message<"syncr.v1.GetSftpHostKeysRequest"> & {
+  /**
+   * Host name or IP address, as an sftp remote's host option takes it
+   * (required).
+   *
+   * @generated from field: string host = 1;
+   */
+  host: string;
+
+  /**
+   * TCP port, 1 to 65535; 0 means 22.
+   *
+   * @generated from field: int32 port = 2;
+   */
+  port: number;
+
+  /**
+   * The worker to connect from; empty lets the controller choose (any
+   * online worker that can run the probe).
+   *
+   * @generated from field: string worker_id = 3;
+   */
+  workerId: string;
+};
+
+/**
+ * Describes the message syncr.v1.GetSftpHostKeysRequest.
+ * Use `create(GetSftpHostKeysRequestSchema)` to create a new message.
+ */
+export const GetSftpHostKeysRequestSchema: GenMessage<GetSftpHostKeysRequest> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_probe, 7);
+
+/**
+ * GetSftpHostKeysResponse lists the server's host keys.
+ *
+ * @generated from message syncr.v1.GetSftpHostKeysResponse
+ */
+export type GetSftpHostKeysResponse = Message<"syncr.v1.GetSftpHostKeysResponse"> & {
+  /**
+   * One entry per key type the server offers. Joined as "<algorithm>
+   * <key>" lines they are the value of the remote's host_keys option.
+   *
+   * @generated from field: repeated syncr.v1.SftpHostKey keys = 1;
+   */
+  keys: SftpHostKey[];
+
+  /**
+   * The worker that connected to the server.
+   *
+   * @generated from field: syncr.v1.ProbeWorkerRef worker = 2;
+   */
+  worker?: ProbeWorkerRef | undefined;
+};
+
+/**
+ * Describes the message syncr.v1.GetSftpHostKeysResponse.
+ * Use `create(GetSftpHostKeysResponseSchema)` to create a new message.
+ */
+export const GetSftpHostKeysResponseSchema: GenMessage<GetSftpHostKeysResponse> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_probe, 8);
+
+/**
+ * ProbeService browses workers and remotes, tests remotes and fetches SFTP
+ * host keys, through a worker.
  *
  * Remotes are the caller's (NOT_FOUND otherwise, admins included); any user
  * may browse any worker's local roots (workers are shared). Worker-side
@@ -384,6 +450,25 @@ export const ProbeService: GenService<{
     methodKind: "unary";
     input: typeof TestRemoteRequestSchema;
     output: typeof TestRemoteResponseSchema;
+  },
+  /**
+   * GetSftpHostKeys asks an SFTP (SSH) server for its host keys, through a
+   * worker, so they can be pinned in an sftp remote's host_keys option
+   * (Milestone 6). It sends no credentials and changes nothing, but it
+   * makes the worker connect to the host and port the caller names, so it
+   * is rate limited like the other probes and accepts no GET requests.
+   * Trust on first use: the caller should compare the fingerprints with the
+   * server's own (e.g. `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`).
+   * A malformed host or port is INVALID_ARGUMENT on "host" or "port"; a
+   * server the worker cannot reach, or one that does not speak SSH, is
+   * FAILED_PRECONDITION with the worker's message.
+   *
+   * @generated from rpc syncr.v1.ProbeService.GetSftpHostKeys
+   */
+  getSftpHostKeys: {
+    methodKind: "unary";
+    input: typeof GetSftpHostKeysRequestSchema;
+    output: typeof GetSftpHostKeysResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_syncr_v1_probe, 0);

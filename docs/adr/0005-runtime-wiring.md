@@ -40,11 +40,21 @@ This record fixes those rules.
                                                                 previous_keys) ── broker (live WatchJob updates)
 ```
 
-- **Store.** `database.url` selects Postgres (`postgres.Open`, then
-  `Migrate` under its advisory lock). Without it the controller refuses to
-  start, unless `dev.memory_store: true` explicitly selects the in-memory
-  store, which logs a loud warning and loses everything on exit (demos and
-  tests only).
+- **Store.** `database.url` selects Postgres, opened in this order:
+  `postgres.Open`; `AcquireControllerLock`, the single-controller guard
+  (ADR 0015), which waits while another controller holds it; `Migrate`
+  under its own advisory lock; only then the services and the listener. A
+  second controller therefore never changes the schema under a running one
+  and serves nothing while it waits. If opening fails after the guard was
+  taken, the store is closed and the guard released. When the guard is lost
+  to another controller (`ControllerLock.Lost`), the controller's context is
+  cancelled with `errLockLost` as its cause: it shuts down in the usual
+  order and exits non-zero, so its service manager restarts it and it waits
+  for the guard. A stop requested while it still waits is a clean exit.
+  Without `database.url` the controller refuses to start, unless
+  `dev.memory_store: true` explicitly selects the in-memory store (no guard),
+  which logs a loud warning and loses everything on exit (demos and tests
+  only).
 - **Secrets.** `secrets.key` is required to serve; `previous_keys` keep
   older ciphertexts readable during a rotation.
 - **Services.** `clock.System`, `idgen.UUIDv7`, `crypto/rand.Reader`, and
@@ -90,14 +100,21 @@ This record fixes those rules.
   `setup_code`. It warns when session cookies would not be Secure, and about
   the removed `api.admin_token`. `dev.seed` (only with `dev.memory_store`)
   fills the store with demo data (`internal/devseed`) before that check.
+- **Time limits and samples (Milestone 6, ADR 0014).** `dispatch.NewSpecs`
+  gets `SpecsConfig{DefaultMaxRuntime: jobs.default_max_runtime}`, and the
+  same `*dispatch.Specs` is the API's `TimeLimits`, so `Job.time_limit` is
+  the limit the worker is sent. `jobs.Config` gets `SampleRetention`
+  (`jobs.sample_retention`) and `KeepSamples` (when it is 0).
 - **Background loops**, started in this order: the dispatch-timeout
   sweeper (it also ends the jobs of workers out of contact for
   `workers.lost_after`, ADR 0002), the passive supervisor, the scheduler
-  (ADR 0009), the notification outbox (ADR 0010), the hourly session and
-  API token purge (`users.Service.PurgeExpired`) and, with `dev.seed`, the
-  demo animation.
+  (ADR 0009), the notification outbox (ADR 0010), the restic service's
+  completion of data deletions (ADR 0011), the hourly session and API token
+  purge (`users.Service.PurgeExpired`), the hourly job sample purge
+  (`jobs.Service.PurgeSamples`; both purges also run once at start) and,
+  with `dev.seed`, the demo animation.
 
-**Controller shutdown** (SIGINT/SIGTERM), each step logged:
+**Controller shutdown** (SIGINT/SIGTERM, or a lost guard), each step logged:
 
 1. The server's lifetime context ends. It is the API's `BaseContext` (open
    WatchJob streams end with `Unavailable`) and the link's `Lifetime`
@@ -106,12 +123,24 @@ This record fixes those rules.
    API calls finish.
 3. The background loops stop: the dispatch-timeout sweeper, the passive
    supervisor (and its loops), the scheduler, the notification outbox (it
-   records the outcome of the sends in flight first), the purge and the
-   demo animation. They outlive the HTTP server so nothing they start races
-   a closed store.
-4. The store is closed.
+   records the outcome of the sends in flight first), the deletions loop,
+   the purges and the demo animation. They outlive the HTTP server so
+   nothing they start races a closed store.
+4. The store is closed, and then the single-controller guard is released
+   (it unlocks, then closes its connection): a controller waiting for it
+   starts only once this one has stopped writing.
 
 ### Worker (`cmd/syncr-worker/link.go`)
+
+**Worker start** (`syncr-worker run`, Milestone 6): after the configuration
+and the logger, the worker takes the lock on `<data_dir>/worker.lock`
+(a second worker on the same data directory exits with a message) and holds
+it until it has stopped. Holding it, it removes what jobs of an earlier
+process left in `scratch/rclone` and `scratch/restic`, and the old binary
+an upgrade left next to the executable; neither cleanup is fatal. Only then
+does it resolve its tools and build the runners. `run` never removes old
+tool versions (a worker rolled back by `syncr-worker upgrade` still needs
+its own); `setup` and `upgrade` do, once the new pins resolved.
 
 ```
  runner registry (rclone, restic) ──► agent (MaxConcurrentJobs, ProgressInterval,

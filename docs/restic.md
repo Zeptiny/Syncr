@@ -129,8 +129,9 @@ A remote on a worker's local folder can only be browsed through that
 worker.
 
 Probes and the restic jobs need a current worker. A worker that is too old
-shows as **outdated** on its page; jobs sent to it fail with
-`worker_outdated`. Update it with the same `setup` command.
+shows as **Outdated** on its page; jobs sent to it fail with
+`worker_outdated`. Upgrade it with the command on its page
+(`syncr-worker upgrade`, see [upgrading](upgrade.md)).
 
 ## Deleting a repository
 

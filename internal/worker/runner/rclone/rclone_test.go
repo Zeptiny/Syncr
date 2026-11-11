@@ -179,6 +179,11 @@ func TestRunSuccess(t *testing.T) {
 		filepath.Dir(sup.spec.Dir) != f.scratch || env[rcloneenv.EnvCacheDir] != filepath.Join(sup.spec.Dir, "cache") {
 		t.Errorf("isolation env = %q, dir %q", env, sup.spec.Dir)
 	}
+	for _, name := range append(rcloneenv.TempVars(), rcloneenv.EnvTempDir) {
+		if env[name] != filepath.Join(sup.spec.Dir, "tmp") {
+			t.Errorf("%s = %q, want the job's temp directory", name, env[name])
+		}
+	}
 	if !strings.HasPrefix(filepath.Base(sup.spec.Dir), "rclone-0b8a5a8e-6c1f-4a8e-9a43-1d2f3e4c5b6a-") {
 		t.Errorf("scratch dir name = %q", filepath.Base(sup.spec.Dir))
 	}

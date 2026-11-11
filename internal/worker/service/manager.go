@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"runtime"
 	"strings"
+	"time"
 
 	kservice "github.com/kardianos/service"
 )
@@ -27,6 +28,11 @@ type deps struct {
 	// taskUser is the account a Windows user task runs as ("DOMAIN\name").
 	taskUser func() (string, error)
 	tempDir  func() string
+	// serviceCommandLine reads a Windows Service's command line from the
+	// Service Control Manager.
+	serviceCommandLine func(name string) (string, error)
+	// sleep waits d or until ctx ends (polling a task while it stops).
+	sleep func(ctx context.Context, d time.Duration) error
 }
 
 // NewManager returns the Manager for the operating system the program runs
@@ -41,7 +47,22 @@ func NewManager() Manager {
 		runner:     execRunner{},
 		taskUser:   currentUser,
 		tempDir:    os.TempDir,
+
+		serviceCommandLine: serviceCommandLine,
+		sleep:              sleepCtx,
 	})
+}
+
+// sleepCtx waits d or until ctx ends.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-t.C:
+		return nil
+	}
 }
 
 func currentUser() (string, error) {
@@ -58,7 +79,7 @@ type manager struct {
 }
 
 func newManager(d deps) *manager {
-	return &manager{deps: d, tasks: &taskManager{runner: d.runner, user: d.taskUser, tempDir: d.tempDir}}
+	return &manager{deps: d, tasks: &taskManager{runner: d.runner, user: d.taskUser, tempDir: d.tempDir, sleep: d.sleep}}
 }
 
 // noopProgram satisfies kservice.Interface for control operations, which
@@ -237,6 +258,17 @@ func (m *manager) control(ctx context.Context, spec Spec, action string) error {
 	}
 	if st == StateNotInstalled {
 		return fmt.Errorf("%s: %w", spec.Name, ErrNotInstalled)
+	}
+	// A stopped service is not stopped again, and restarting it starts it.
+	// The Windows Service Control Manager refuses to stop a service that is
+	// not running, so a stop would fail and kardianos' Restart (stop, then
+	// start) too; ending a task that does not run fails with a message in
+	// the display language. systemd's restart starts a stopped unit anyway.
+	switch {
+	case action == "stop" && st == StateStopped:
+		return nil
+	case action == "restart" && st == StateStopped:
+		action = "start"
 	}
 	if m.useTask(spec) {
 		return m.tasks.control(ctx, spec, action)

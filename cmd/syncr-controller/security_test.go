@@ -29,11 +29,29 @@ import (
 )
 
 // TestDownloadBaseURLDefaultsAgree: the configuration's default download
-// base URL is the API's.
+// base URL is the API's, and the configuration leaves it unset.
 func TestDownloadBaseURLDefaultsAgree(t *testing.T) {
 	t.Parallel()
 	if controllerconfig.DefaultDownloadBaseURL != api.DefaultDownloadBaseURL {
 		t.Errorf("config default %q, api default %q", controllerconfig.DefaultDownloadBaseURL, api.DefaultDownloadBaseURL)
+	}
+	// Unset by default, so a release build's commands download its own
+	// release (api.InstallConfig treats any value as a mirror).
+	ac, err := newAPIConfig(controllerconfig.Default())
+	if err != nil || ac.install.DownloadBaseURL != "" {
+		t.Errorf("default install config = %+v (%v), want no download base URL", ac.install, err)
+	}
+	// The old default, still in a configuration, counts as unset; a mirror
+	// is kept.
+	for value, want := range map[string]string{
+		controllerconfig.DefaultDownloadBaseURL + "/": "",
+		"https://mirror.example.com/syncr":            "https://mirror.example.com/syncr",
+	} {
+		cfg := controllerconfig.Default()
+		cfg.Workers.DownloadBaseURL = value
+		if ac, err := newAPIConfig(cfg); err != nil || ac.install.DownloadBaseURL != want {
+			t.Errorf("download_base_url %q: install config = %+v (%v), want %q", value, ac.install, err, want)
+		}
 	}
 }
 
@@ -163,8 +181,16 @@ type seeded struct {
 
 func startSeeded(t *testing.T) *seeded {
 	t.Helper()
+	return startSeededWith(t, nil)
+}
+
+// startSeededWith starts a seeded controller with further settings.
+func startSeededWith(t *testing.T, extra map[string]string) *seeded {
+	t.Helper()
 	logs := &syncBuffer{}
-	addr := startController(t, devEnv(map[string]string{"SYNCR_DEV_SEED": "true", "SYNCR_LOG_LEVEL": "debug"}), logs)
+	env := devEnv(map[string]string{"SYNCR_DEV_SEED": "true", "SYNCR_LOG_LEVEL": "debug"})
+	maps.Copy(env, extra)
+	addr := startController(t, env, logs)
 	return &seeded{t: t, base: "http://" + addr.String(), logs: logs}
 }
 
@@ -219,7 +245,7 @@ func TestRunSeeded(t *testing.T) {
 		t.Fatalf("ListJobSamples = %d samples (%v)", len(samples.Msg.GetSamples()), err)
 	}
 	workers, err := syncrv1connect.NewWorkerAdminServiceClient(admin, s.base).ListWorkers(ctx, connect.NewRequest(&syncrv1.ListWorkersRequest{}))
-	if err != nil || len(workers.Msg.GetWorkers()) != 4 {
+	if err != nil || len(workers.Msg.GetWorkers()) != 5 {
 		t.Fatalf("ListWorkers = %v (%v)", workers, err)
 	}
 	checkSeededMilestone4(t, s, admin)

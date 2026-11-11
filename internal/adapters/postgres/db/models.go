@@ -98,6 +98,7 @@ type Job struct {
 	NotifiedAt        pgtype.Timestamptz
 	RepositoryID      pgtype.UUID
 	ConcurrencyKeys   []string
+	TimeLimitNs       int64
 }
 
 type JobRemote struct {

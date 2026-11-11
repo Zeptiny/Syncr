@@ -45,8 +45,9 @@ type Jobs interface {
 // domain.ErrInvalidArgument (the definition cannot be decoded or built)
 // with "invalid_spec" (a *WrongOSError, a worker on another operating system
 // than the definition needs, too, with a message saying so),
-// ErrWorkerOutdated (the worker lacks a feature the kind requires) with
-// "worker_outdated", domain.ErrFailedPrecondition (a
+// ErrWorkerOutdated (the worker lacks a feature the kind requires, or
+// ErrTimeLimitUnsupported: the job has a time limit the worker cannot
+// enforce) with "worker_outdated", domain.ErrFailedPrecondition (a
 // remote's stored credentials cannot be used, e.g. they no longer decrypt)
 // with "internal". Any other error is returned to the worker's call and
 // retried on its next poll.

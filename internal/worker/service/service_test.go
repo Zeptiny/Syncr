@@ -154,6 +154,8 @@ type harness struct {
 	m      *manager
 	svc    *fakeService
 	runner *fakeRunner
+	// imagePath is the Windows Service's command line; "" means none.
+	imagePath string
 }
 
 func newHarness(goos, platform string, elevated bool) *harness {
@@ -172,6 +174,13 @@ func newHarness(goos, platform string, elevated bool) *harness {
 		runner:   h.runner,
 		taskUser: func() (string, error) { return `PC\alice`, nil },
 		tempDir:  os.TempDir,
+		serviceCommandLine: func(name string) (string, error) {
+			if h.imagePath == "" {
+				return "", fmt.Errorf("%s: %w", name, ErrNotInstalled)
+			}
+			return h.imagePath, nil
+		},
+		sleep: func(context.Context, time.Duration) error { return nil },
 	})
 	return h
 }
@@ -334,6 +343,28 @@ func TestControlAndUninstall(t *testing.T) {
 		// Uninstall stops a running service first.
 		if want := []string{"start", "stop", "restart", "stop", "uninstall"}; !slices.Equal(h.svc.calls, want) {
 			t.Errorf("calls = %v, want %v", h.svc.calls, want)
+		}
+	})
+	t.Run("restarting a stopped service starts it", func(t *testing.T) {
+		t.Parallel()
+		// The SCM refuses to stop a service that is not running, so a
+		// restart (stop, then start) of a stopped one would fail.
+		h := newHarness("windows", "windows-service", true)
+		h.svc.status, h.svc.statusEr = kservice.StatusStopped, nil
+		h.svc.failOn = map[string]error{"restart": errors.New("the service has not been started")}
+		if err := h.m.Restart(t.Context(), spec); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(h.svc.calls, []string{"start"}) {
+			t.Errorf("calls = %v, want start", h.svc.calls)
+		}
+		// Stopping it again is nothing to do, not an error.
+		h.svc.failOn = map[string]error{"stop": errors.New("the service has not been started")}
+		if err := h.m.Stop(t.Context(), spec); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(h.svc.calls, []string{"start"}) {
+			t.Errorf("calls = %v, want no stop", h.svc.calls)
 		}
 	})
 	t.Run("uninstall removes a service whose stop fails", func(t *testing.T) {

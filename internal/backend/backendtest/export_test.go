@@ -14,5 +14,6 @@ func Check(r interface {
 	}
 	checkDescriptor(r, typ)
 	checkValidate(r, typ)
+	checkInvalid(r, typ)
 	checkToRclone(r, typ, o)
 }

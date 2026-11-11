@@ -8,7 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf16"
+)
+
+// How long a stop waits for the task's instance to end, and how often it
+// looks.
+const (
+	taskStopTimeout = 30 * time.Second
+	taskStopPoll    = 500 * time.Millisecond
 )
 
 // taskManager runs the worker as a Scheduled Task that starts at the user's
@@ -27,6 +35,8 @@ type taskManager struct {
 	runner  commandRunner
 	user    func() (string, error)
 	tempDir func() string
+	// sleep waits d or until ctx ends.
+	sleep func(ctx context.Context, d time.Duration) error
 }
 
 // taskDocument is the Task Scheduler 1.2 XML schema, reduced to what the
@@ -199,7 +209,11 @@ func (t *taskManager) install(ctx context.Context, spec Spec) error {
 }
 
 func (t *taskManager) uninstall(ctx context.Context, spec Spec) error {
-	_, _, _ = t.schtasks(ctx, "/End", "/TN", spec.Name) // not running is fine
+	// Not running is fine, and a worker that does not end in time is no
+	// reason to keep the task.
+	if _, code, err := t.schtasks(ctx, "/End", "/TN", spec.Name); err == nil && code == 0 {
+		_ = t.waitEnded(ctx, spec)
+	}
 	out, code, err := t.schtasks(ctx, "/Delete", "/TN", spec.Name, "/F")
 	if err != nil {
 		return err
@@ -210,6 +224,14 @@ func (t *taskManager) uninstall(ctx context.Context, spec Spec) error {
 	return nil
 }
 
+// control starts, stops or restarts the task.
+//
+// schtasks /End returns once Task Scheduler was asked to end the instance,
+// not when the worker's process has exited, so a stop waits until the
+// task's state is no longer Running. A restart needs that: the task's
+// MultipleInstancesPolicy is IgnoreNew, so a /Run while the old instance is
+// still ending is dropped without an error, and the task would stay stopped.
+// It also lets an upgrade replace the binary of a worker that has exited.
 func (t *taskManager) control(ctx context.Context, spec Spec, action string) error {
 	if action == "restart" {
 		if err := t.control(ctx, spec, "stop"); err != nil {
@@ -231,7 +253,30 @@ func (t *taskManager) control(ctx context.Context, spec Spec, action string) err
 		}
 		return fmt.Errorf("%s the scheduled task: schtasks exited with code %d: %s", action, code, out)
 	}
+	if action == "stop" {
+		return t.waitEnded(ctx, spec)
+	}
 	return nil
+}
+
+// waitEnded waits until the task's instance has ended (its state is no
+// longer Running), for at most taskStopTimeout.
+func (t *taskManager) waitEnded(ctx context.Context, spec Spec) error {
+	for waited := time.Duration(0); ; waited += taskStopPoll {
+		running, err := t.running(ctx, spec)
+		if err != nil {
+			return fmt.Errorf("wait for the scheduled task to end: %w", err)
+		}
+		if !running {
+			return nil
+		}
+		if waited >= taskStopTimeout {
+			return fmt.Errorf("the scheduled task %s is still running %s after it was ended", spec.Name, taskStopTimeout)
+		}
+		if err := t.sleep(ctx, taskStopPoll); err != nil {
+			return fmt.Errorf("wait for the scheduled task to end: %w", err)
+		}
+	}
 }
 
 // status queries existence with schtasks (its exit code does not depend on
@@ -245,15 +290,27 @@ func (t *taskManager) status(ctx context.Context, spec Spec) (State, error) {
 	if code != 0 {
 		return StateNotInstalled, nil
 	}
-	script := "(Get-ScheduledTask -TaskName '" + strings.ReplaceAll(spec.Name, "'", "''") + "').State"
-	out, code, err := t.runner.Run(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	running, err := t.running(ctx, spec)
 	if err != nil {
 		return StateNotInstalled, err
 	}
-	if code != 0 {
-		return StateNotInstalled, fmt.Errorf("query the scheduled task state: %s", out)
+	if running {
+		return StateRunning, nil
 	}
-	return parseTaskState(out), nil
+	return StateStopped, nil
+}
+
+// running reports whether the task's state is Running.
+func (t *taskManager) running(ctx context.Context, spec Spec) (bool, error) {
+	script := "(Get-ScheduledTask -TaskName '" + strings.ReplaceAll(spec.Name, "'", "''") + "').State"
+	out, code, err := t.runner.Run(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	if err != nil {
+		return false, err
+	}
+	if code != 0 {
+		return false, fmt.Errorf("query the scheduled task state: %s", out)
+	}
+	return parseTaskState(out) == StateRunning, nil
 }
 
 func parseTaskState(out string) State {

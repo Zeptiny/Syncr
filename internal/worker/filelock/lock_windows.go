@@ -1,6 +1,6 @@
 //go:build windows
 
-package tools
+package filelock
 
 import (
 	"errors"

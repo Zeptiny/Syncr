@@ -134,11 +134,24 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	e.deps = devseed.Deps{
-		Users: us, Remotes: rs, Workers: ws, Jobs: js, Kinds: kinds, Contacts: cs, Channels: channels,
+		Users: us, Remotes: rs, Workers: ws, Jobs: js, Kinds: kinds, TimeLimits: definitionLimits{}, Contacts: cs, Channels: channels,
 		Cipher: ring, Probes: devseed.NewProbes(e.clock),
 		Store: e.store, Clock: e.clock, Logger: log,
 	}
 	return e
+}
+
+// definitionLimits is the seed's jobs.TimeLimits in these tests: a job's
+// definition's max_runtime (the controller's spec builder adds its
+// default, which the tests have none of).
+type definitionLimits struct{}
+
+func (definitionLimits) TimeLimitOf(j jobs.Job) time.Duration {
+	def, err := jobkind.Unmarshal(j.Definition)
+	if err != nil {
+		return 0
+	}
+	return def.GetMaxRuntime().AsDuration()
 }
 
 func (e *env) seed(t *testing.T) *devseed.Seed {
@@ -172,6 +185,7 @@ func TestSeed(t *testing.T) {
 	// Workers in every connection state.
 	want := map[string]domain.WorkerStatus{
 		"nas-01": domain.WorkerOnline, "office-pc": domain.WorkerOffline, "backup-host": domain.WorkerOnline, "laptop": domain.WorkerPending,
+		"attic-nas": domain.WorkerOnline,
 	}
 	ws, err := e.deps.Workers.List(ctx, workers.ListFilter{})
 	if err != nil || len(ws) != len(want) {
@@ -284,7 +298,7 @@ func TestSeed(t *testing.T) {
 
 	// The demo remotes' secrets are stored encrypted, never logged (the
 	// demo passwords are public and logged on purpose).
-	for _, secret := range []string{"syncr-demo-minio-secret", "syncr-demo-sftp-password", "syncr-demo-webdav-password", "K001syncrDemo"} {
+	for _, secret := range []string{"syncr-demo-minio-secret", "syncr-demo-sftp-password", "syncr-demo-webdav-password", "K001syncrDemo", "syncr-demo-offsite-password"} {
 		if strings.Contains(e.logs.String(), secret) {
 			t.Errorf("the log contains %q", secret)
 		}

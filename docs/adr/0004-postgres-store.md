@@ -108,9 +108,17 @@ the wait with the context.
 - `ListJobs` uses optional-filter predicates (`$1 IS NULL OR ...`) in one
   static statement. That is simple and safe; if the planner picks poor plans
   at large volumes, split the query per filter combination.
-- Sample retention is not implemented yet. `job_samples` is keyed by
-  `(job_id, t)`, so deleting by time or relying on cascade from the job is
-  cheap when it is added.
+- Sample retention is implemented (Milestone 6, ADR 0014): once an hour
+  the controller deletes the samples of the jobs that finished more than
+  `jobs.sample_retention` ago (default 30 days; 0 keeps them).
+  `PurgeJobSamples` is one `DELETE` per batch of at most 50 jobs, oldest
+  finished first, through `jobs_finished_idx` and the `(job_id, t)` primary
+  key, each batch going on from a `(finished_at, id)` cursor, repeated
+  until a batch deletes nothing; unfinished jobs are never touched. Job rows and their final counters stay, and so do schedule runs:
+  purging jobs would corrupt the restic snapshot cache's change mark (ADR
+  0014). `ListJobSamples` thins a long chart at read time to at most
+  `max_points` samples (default 1000, at most 5000), always with the first
+  and the last, by the same rank rule in both stores.
 - Tests run the contract suite and the migration tests against a real
   `postgres:17-alpine` (testcontainers): one container per package run, one
   database per test cloned from a migrated template database.

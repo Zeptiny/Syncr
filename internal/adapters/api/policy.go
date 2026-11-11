@@ -107,6 +107,7 @@ func newPolicy() map[string]access {
 		syncrv1connect.WorkerAdminServiceRenameWorkerProcedure:              admin,
 		syncrv1connect.WorkerAdminServiceRemoveWorkerProcedure:              admin,
 		syncrv1connect.WorkerAdminServiceSetWorkerLabelsProcedure:           admin,
+		syncrv1connect.WorkerAdminServiceGetWorkerUpgradeCommandsProcedure:  admin,
 
 		syncrv1connect.JobServiceRunJobProcedure:         user,
 		syncrv1connect.JobServiceGetJobProcedure:         user,
@@ -164,6 +165,9 @@ func newPolicy() map[string]access {
 		syncrv1connect.ProbeServiceListWorkerFilesProcedure: user,
 		syncrv1connect.ProbeServiceListRemoteFilesProcedure: user,
 		syncrv1connect.ProbeServiceTestRemoteProcedure:      user,
+		// Milestone 6: any user may fetch a server's host keys (rate
+		// limited by the probe use cases, like the probes above).
+		syncrv1connect.ProbeServiceGetSftpHostKeysProcedure: user,
 	}
 }
 

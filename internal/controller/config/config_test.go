@@ -96,7 +96,8 @@ func TestValidate(t *testing.T) {
 		{"setup code short", func(c *Config) { c.Auth.SetupCode = "ABCDE-FGHIJ-KLMNO" }, "at least 16 characters"},
 		{"setup code control", func(c *Config) { c.Auth.SetupCode = "ABCDEFGHIJKLMNOP\x00" }, "control characters"},
 		{"download base url", func(c *Config) { c.Workers.DownloadBaseURL = "https://mirror.example.com/syncr" }, ""},
-		{"download base url empty", func(c *Config) { c.Workers.DownloadBaseURL = "" }, "workers.download_base_url"},
+		{"download base url empty (the GitHub releases)", func(c *Config) { c.Workers.DownloadBaseURL = "" }, ""},
+		{"download base url relative", func(c *Config) { c.Workers.DownloadBaseURL = "mirror/syncr" }, "workers.download_base_url"},
 		{"download base url scheme", func(c *Config) { c.Workers.DownloadBaseURL = "file:///srv" }, "workers.download_base_url"},
 		{"lost after", func(c *Config) { c.Workers.LostAfter = 24 * time.Hour }, ""},
 		{"lost after minimum", func(c *Config) { c.Workers.LostAfter = MinLostAfter }, ""},
@@ -274,7 +275,7 @@ func TestDefaultAuth(t *testing.T) {
 	if cfg.Auth.CookieSecure != CookieSecureAuto || cfg.Auth.SessionIdleTimeout != 7*24*time.Hour || cfg.Auth.SessionMaxAge != 30*24*time.Hour || !cfg.Auth.SetupCode.IsZero() {
 		t.Errorf("Auth = %+v", cfg.Auth)
 	}
-	if cfg.Workers.DownloadBaseURL != DefaultDownloadBaseURL || cfg.Workers.LostAfter != time.Hour || cfg.HTTP.PublicURL != "" || cfg.Dev.Seed {
+	if cfg.Workers.DownloadBaseURL != "" || cfg.Workers.LostAfter != time.Hour || cfg.HTTP.PublicURL != "" || cfg.Dev.Seed {
 		t.Errorf("Workers = %+v, HTTP.PublicURL = %q, Dev = %+v", cfg.Workers, cfg.HTTP.PublicURL, cfg.Dev)
 	}
 }
@@ -292,6 +293,29 @@ func TestParseTrustedProxies(t *testing.T) {
 	for i := range want {
 		if got[i].String() != want[i] {
 			t.Errorf("[%d] = %s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
+// TestEffectiveDownloadBaseURL: the old default, the latest release, counts
+// as unset (and is reported as ignored); a mirror and the empty default are
+// used as they are.
+func TestEffectiveDownloadBaseURL(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		value, want string
+		ignored     bool
+	}{
+		{"", "", false},
+		{"https://mirror.example.com/syncr", "https://mirror.example.com/syncr", false},
+		{"https://github.com/Zeptiny/Syncr/releases/download/v2.0.0", "https://github.com/Zeptiny/Syncr/releases/download/v2.0.0", false},
+		{DefaultDownloadBaseURL, "", true},
+		{DefaultDownloadBaseURL + "/", "", true},
+		{"https://github.com/zeptiny/syncr/releases/latest/download", "", true},
+	} {
+		got, ignored := Workers{DownloadBaseURL: tt.value}.EffectiveDownloadBaseURL()
+		if got != tt.want || ignored != tt.ignored {
+			t.Errorf("EffectiveDownloadBaseURL(%q) = %q, %v; want %q, %v", tt.value, got, ignored, tt.want, tt.ignored)
 		}
 	}
 }

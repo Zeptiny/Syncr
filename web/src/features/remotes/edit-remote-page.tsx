@@ -23,6 +23,7 @@ import { tsDate } from "@/lib/format";
 import { invalidateService } from "@/lib/invalidate";
 
 import { BackendIcon } from "./backend-icon";
+import { HOST_KEYS_FIELD, HostKeysField } from "./host-keys";
 
 /** EditRemotePage edits a remote and offers to delete it. */
 export function EditRemotePage({ remoteId }: { remoteId: string }) {
@@ -86,6 +87,11 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
             await invalidateService(queryClient, RemoteService);
             toast.success(`Saved ${input.name ?? remote.name}`);
           }}
+          renderField={(f, idPrefix) =>
+            f.name === HOST_KEYS_FIELD ? (
+              <HostKeysField field={f} idPrefix={idPrefix} workers={workers.data?.workers ?? []} />
+            ) : undefined
+          }
           extra={(input) => (
             <TestRemoteButton
               remoteId={remote.id}
@@ -122,6 +128,8 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
                 : "Its saved credentials are erased. Past jobs keep its name; queued jobs that use it will fail."
         }
         confirmLabel="Delete remote"
+        // The controller refuses while repositories or unions use the remote.
+        confirmDisabled={repos.isPending || repositories.length > 0 || inUse}
         onConfirm={async () => {
           await del.mutateAsync({ remoteId: remote.id });
           await invalidateService(queryClient, RemoteService);

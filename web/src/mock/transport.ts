@@ -36,6 +36,7 @@ import * as fx from "@/test/fixtures";
 
 import { registerM4 } from "./m4";
 import * as m5mock from "./m5";
+import * as m6 from "./m6";
 
 const passwords: Record<string, string> = { admin: "syncr-demo-admin", alice: "syncr-demo-alice" };
 const SESSION_KEY = "syncr.mock.session";
@@ -74,11 +75,16 @@ export function createMockTransport(): Transport {
   const now = Date.now();
   const users = fx.users(now);
   const workers = m5mock.workers(now);
-  let remotes = fx.remotes(now);
+  m6.applyWorkers(workers);
+  workers.push(m6.atticWorker(now));
+  let remotes = [...fx.remotes(now), m6.verifiedRemote(now)].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
   const hist = fx.history(now);
   const m5data = m5mock.data(now);
   hist.schedules.push(...m5data.schedules);
-  const jobs = [...fx.jobs(now), ...hist.jobs, ...m5data.jobs].sort(
+  const limited = m6.timeLimitJob(now);
+  const jobs = [...fx.jobs(now), ...hist.jobs, ...m5data.jobs, limited.job].sort(
     (a, b) =>
       timestampMs(b.createdAt ?? timestampFromMs(0)) -
       timestampMs(a.createdAt ?? timestampFromMs(0)),
@@ -90,6 +96,7 @@ export function createMockTransport(): Transport {
 
   const running = jobs.find((j) => j.id === fx.ids.runningJob);
   const history = new Map<string, ReturnType<typeof fx.samples>>();
+  history.set(limited.job.id, limited.samples);
   if (running?.stats) {
     history.set(running.id, fx.samples(now, 6 * 60_000, Number(running.stats.bytes)));
     lastTick.set(running.id, now);
@@ -567,7 +574,7 @@ export function createMockTransport(): Transport {
       getJob: (req) => ({ job: job(req.jobId) }),
       listJobSamples: (req) => {
         job(req.jobId);
-        return { samples: history.get(req.jobId) ?? [] };
+        return m6.listSamples(history.get(req.jobId) ?? [], req.maxPoints);
       },
       cancelJob: (req) => {
         const j = job(req.jobId);
@@ -635,5 +642,8 @@ export function createMockTransport(): Transport {
         }
       },
     });
+
+    // Last: its methods replace the unimplemented ones registered above.
+    m6.registerM6(router, { me, workers, invalid, sleep: (ms) => sleep(ms) });
   });
 }

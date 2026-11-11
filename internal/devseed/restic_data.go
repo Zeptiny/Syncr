@@ -387,9 +387,11 @@ func demoResticJobs() []demoJob {
 		docsBackup(2, 1*d+11*h+20*m, 2*m+55*s),
 		{owner: ownerAdmin, worker: "backup-host", def: checkDef(repoOldLaptop, 0), static: true,
 			status: domain.JobRunning, created: oldLaptopCheckAgo, queue: 2 * s},
+		// The fourth backup of the NAS documents, a bit over half done: its
+		// totals are what the earlier ones read (docsBackup), at about 5 MiB/s.
 		{owner: ownerAdmin, worker: "nas-01", def: backupDef(repoNASDocs, false, "/srv/docs"), static: true,
-			status: domain.JobRunning, created: 7 * m, queue: 2 * s,
-			stats: jobs.Stats{TotalBytes: 46 * gib, TotalFiles: 4160}},
+			status: domain.JobRunning, created: 7 * m, queue: 2 * s, rate: 5 * mib,
+			stats: jobs.Stats{TotalBytes: docs.processed + 3*40*mib, TotalFiles: docs.fileCount + 3*6}},
 		{owner: ownerAdmin, worker: "backup-host", def: backupDef(repoNASDocs, false, "/srv/docs"),
 			status: domain.JobQueued, created: 3 * m},
 	}

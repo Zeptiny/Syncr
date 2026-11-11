@@ -43,6 +43,19 @@
 // stops the admission of new work instead of losing results; results of
 // running jobs are always appended.
 //
+// # Time limits
+//
+// A job whose spec has a positive max_runtime is stopped once that much
+// time has passed since it started running (JobStarted; time spent queued
+// does not count), measured on the monotonic clock: its context is
+// cancelled with a cause wrapping ErrTimeLimit, so the runner stops its tool
+// as for a cancel (stop request, grace period, kill, and the rest of the
+// process tree), and the job reports FAILED with code TIME_LIMIT and a
+// message such as "stopped after 6h0m0s: the job's time limit was
+// reached". Whichever comes first decides the outcome: a CancelJob or a
+// shutdown before the limit still reports CANCELLED. A negative or invalid
+// max_runtime is rejected as INVALID_SPEC.
+//
 // # Shutdown
 //
 // Shutdown cancels queued and running jobs, waits for their CANCELLED
@@ -107,6 +120,9 @@ var (
 	// ErrShuttingDown is the cause of a job stopped because the worker is
 	// shutting down.
 	ErrShuttingDown = errors.New("job cancelled because the worker is shutting down")
+	// ErrTimeLimit is wrapped by the cause of a job stopped at its time
+	// limit (JobSpec.max_runtime).
+	ErrTimeLimit = errors.New("the job's time limit was reached")
 )
 
 // Runners resolves the runner of a job spec. *runner.Registry implements it.
@@ -172,6 +188,12 @@ type Config struct {
 	// Logger receives operational logs (never job specs or secrets). Nil
 	// discards them.
 	Logger *slog.Logger
+
+	// AfterFunc calls f in its own goroutine once d has passed on the
+	// monotonic clock and returns a function that cancels the call (as
+	// time.Timer.Stop does). It times job limits. Nil means time.AfterFunc;
+	// tests replace it to reach a limit at a moment they choose.
+	AfterFunc func(d time.Duration, f func()) (stop func() bool)
 }
 
 // jobState is where a job is in its life on the worker.
@@ -197,6 +219,8 @@ type job struct {
 	ctx       context.Context
 	cancel    context.CancelCauseFunc
 	startedAt time.Time
+	// stopLimit cancels the time limit's timer; nil without a limit.
+	stopLimit func() bool
 }
 
 // Agent runs jobs on behalf of the controller. Create it with New.
@@ -207,6 +231,7 @@ type Agent struct {
 	maxOutputBytes   int
 	out              *outbox.Outbox
 	log              *slog.Logger
+	afterFunc        func(time.Duration, func()) func() bool
 
 	// base is the parent of every job context; stop cancels it on shutdown.
 	base context.Context
@@ -284,6 +309,7 @@ func New(cfg Config) (*Agent, error) {
 		progressInterval: cfg.ProgressInterval,
 		maxOutputBytes:   cmp.Or(cfg.MaxOutputBytes, DefaultMaxOutputBytes),
 		log:              cfg.Logger,
+		afterFunc:        cfg.AfterFunc,
 		active:           make(map[string]*job),
 		finished:         make(map[string]struct{}),
 	}
@@ -295,6 +321,9 @@ func New(cfg Config) (*Agent, error) {
 	}
 	if a.log == nil {
 		a.log = slog.New(slog.DiscardHandler)
+	}
+	if a.afterFunc == nil {
+		a.afterFunc = func(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop }
 	}
 	a.base, a.stop = context.WithCancelCause(context.Background())
 	a.out = outbox.New(a.hello(cfg.Identity), cfg.Outbox)
@@ -377,6 +406,11 @@ func (a *Agent) startJob(ctx context.Context, sj *syncrv1.StartJob) bool {
 		a.log.DebugContext(ctx, "duplicate start job command", "job_id", id)
 		return true
 	}
+	if err := checkTimeLimit(sj.GetSpec()); err != nil {
+		a.log.WarnContext(ctx, "job rejected", "job_id", id, "kind", link.KindOf(sj.GetSpec()), "error", err.Error())
+		a.finishLocked(id, failedResult(id, syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, err.Error(), time.Time{}, runner.Result{ExitCode: -1}))
+		return true
+	}
 	rn, err := a.runners.ForSpec(sj.GetSpec())
 	if err != nil {
 		a.log.WarnContext(ctx, "job rejected", "job_id", id, "kind", link.KindOf(sj.GetSpec()), "error", err.Error())
@@ -442,9 +476,43 @@ func (a *Agent) admitLocked() {
 		a.slots++
 		j.state = stateRunning
 		j.startedAt = time.Now()
+		a.startLimitLocked(j)
 		a.appendLocked(&syncrv1.Event{Payload: &syncrv1.Event_JobStarted{JobStarted: &syncrv1.JobStarted{JobId: j.id}}})
 		a.wg.Go(func() { a.run(j) })
 	}
+}
+
+// startLimitLocked arms the time limit of j, which has just started
+// running: once it is reached, j's context is cancelled with a cause that
+// wraps ErrTimeLimit and names the limit. A limit reached after j finished
+// changes nothing, because the first cause of a context is the one kept.
+func (a *Agent) startLimitLocked(j *job) {
+	limit := j.spec.GetMaxRuntime().AsDuration()
+	if limit <= 0 {
+		return
+	}
+	cause := fmt.Errorf("stopped after %s: %w", limit, ErrTimeLimit)
+	id, cancel := j.id, j.cancel
+	j.stopLimit = a.afterFunc(limit, func() {
+		a.log.Info("stopping job: its time limit was reached", "job_id", id, "time_limit", limit.String())
+		cancel(cause)
+	})
+}
+
+// checkTimeLimit rejects a max_runtime that is not a valid, non-negative
+// duration.
+func checkTimeLimit(spec *syncrv1.JobSpec) error {
+	d := spec.GetMaxRuntime()
+	if d == nil {
+		return nil
+	}
+	if err := d.CheckValid(); err != nil {
+		return fmt.Errorf("invalid max_runtime: %w", err)
+	}
+	if d.AsDuration() < 0 {
+		return fmt.Errorf("invalid max_runtime %s: it is negative", d.AsDuration())
+	}
+	return nil
 }
 
 // awaitCapacityLocked starts the goroutine that resumes admission once the
@@ -485,6 +553,8 @@ func (a *Agent) run(j *job) {
 			"internal worker error: the job runner crashed", j.startedAt, res)
 	case err == nil:
 		result = succeededResult(j.id, j.startedAt, res, a.maxOutputBytes)
+	case errors.Is(context.Cause(j.ctx), ErrTimeLimit):
+		result = failedResult(j.id, syncrv1.JobErrorCode_JOB_ERROR_CODE_TIME_LIMIT, context.Cause(j.ctx).Error(), j.startedAt, res)
 	case j.ctx.Err() != nil:
 		result = cancelledResult(j.id, context.Cause(j.ctx), j.startedAt, res)
 	default:
@@ -515,6 +585,10 @@ func (a *Agent) invoke(j *job, emit runner.EmitFunc) (res runner.Result, err err
 func (a *Agent) finishJobLocked(j *job, result *syncrv1.JobResult) {
 	if j.state == stateRunning {
 		a.slots--
+	}
+	if j.stopLimit != nil {
+		j.stopLimit()
+		j.stopLimit = nil
 	}
 	delete(a.active, j.id)
 	a.order = slices.DeleteFunc(a.order, func(id string) bool { return id == j.id })

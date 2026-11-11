@@ -140,10 +140,10 @@ func TestProberSnapshots(t *testing.T) {
 	if !slices.Equal(c.args, want) {
 		t.Errorf("args = %q\nwant %q", c.args, want)
 	}
-	if filepath.Base(c.dir) != "probe-"+testProbeID {
-		t.Errorf("scratch = %q", c.dir)
+	if scratch := c.env["TMPDIR"]; filepath.Base(scratch) != "probe-"+testProbeID || filepath.Dir(scratch) != c.dir || c.dir != te.scratch {
+		t.Errorf("TMPDIR = %q, working directory %q; want the probe's directory under the scratch root %q", scratch, c.dir, te.scratch)
 	}
-	if _, err := os.Stat(c.dir); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(c.env["TMPDIR"]); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("scratch directory left behind: %v", err)
 	}
 	if c.env["RESTIC_PASSWORD"] != testPassword || c.env["RESTIC_CACHE_DIR"] != te.cache {

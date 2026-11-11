@@ -12,6 +12,7 @@ import (
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
@@ -1023,3 +1024,142 @@ func TestBlockersAreLookedUpForQueuedKeyedJobsOnly(t *testing.T) {
 
 // panicJobs is a JobService none of whose methods may be called.
 type panicJobs struct{ JobService }
+
+// TestListJobSamplesThinned: max_points thins the samples (first and last
+// kept), 0 is the default, a huge value is capped, a negative one is
+// refused; total counts every stored sample.
+func TestListJobSamplesThinned(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := t.Context()
+	j := e.runJob()
+	c := e.jobsClient()
+	e.startRunning(j)
+	t0 := e.clock.Now()
+	const stored = 7
+	for i := range stored { // 5 s apart, so each one is stored
+		smp := jobs.Sample{Time: t0.Add(time.Duration(i) * 5 * time.Second), Stats: jobs.Stats{Bytes: int64(i)}}
+		if _, err := e.jsvc.RecordProgress(ctx, e.worker, e.jobID(j), testEpoch, smp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tt := range []struct {
+		maxPoints int32
+		want      []int64
+	}{
+		{0, []int64{0, 1, 2, 3, 4, 5, 6}},
+		{2, []int64{0, 6}},
+		{3, []int64{0, 3, 6}},
+		{7, []int64{0, 1, 2, 3, 4, 5, 6}},
+		{1 << 30, []int64{0, 1, 2, 3, 4, 5, 6}},
+	} {
+		resp, err := c.ListJobSamples(ctx, connect.NewRequest(&syncrv1.ListJobSamplesRequest{JobId: j.GetId(), MaxPoints: tt.maxPoints}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []int64
+		for _, s := range resp.Msg.GetSamples() {
+			got = append(got, s.GetStats().GetBytes())
+		}
+		if !slices.Equal(got, tt.want) || resp.Msg.GetTotal() != stored {
+			t.Errorf("max_points %d: samples %v, total %d; want %v, %d", tt.maxPoints, got, resp.Msg.GetTotal(), tt.want, stored)
+		}
+	}
+	_, err := c.ListJobSamples(ctx, connect.NewRequest(&syncrv1.ListJobSamplesRequest{JobId: j.GetId(), MaxPoints: -1}))
+	wantCode(t, err, connect.CodeInvalidArgument)
+}
+
+// fakeLimits is a TimeLimits with a default limit, as the dispatcher
+// computes it.
+type fakeLimits struct{ def time.Duration }
+
+func (f fakeLimits) TimeLimit(def *syncrv1.JobDefinition) time.Duration {
+	return jobs.EffectiveTimeLimit(def.GetMaxRuntime().AsDuration(), f.def, false)
+}
+
+// TestJobTimeLimit: Job.time_limit of a queued job is the effective limit (the
+// definition's, else the default). The title never names a limit: the job
+// page shows time_limit by itself.
+func TestJobTimeLimit(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, func(d *Deps) { d.TimeLimits = fakeLimits{def: 2 * time.Hour} })
+	ctx := t.Context()
+	run := func(def *syncrv1.JobDefinition) *syncrv1.Job {
+		t.Helper()
+		resp, err := e.jobsClient().RunJob(ctx, connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: def}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Msg.GetJob()
+	}
+	own := testDefinition()
+	own.MaxRuntime = durationpb.New(6 * time.Hour)
+	j := run(own)
+	if j.GetTimeLimit().AsDuration() != 6*time.Hour || j.GetTitle() == "" || strings.Contains(j.GetTitle(), "Time limit") {
+		t.Errorf("own limit: time_limit %v, title %q", j.GetTimeLimit(), j.GetTitle())
+	}
+	got, err := e.jobsClient().GetJob(ctx, connect.NewRequest(&syncrv1.GetJobRequest{JobId: j.GetId()}))
+	if err != nil || got.Msg.GetJob().GetTimeLimit().AsDuration() != 6*time.Hour {
+		t.Errorf("GetJob time_limit = %v (%v)", got, err)
+	}
+	if j := run(testDefinition()); j.GetTimeLimit().AsDuration() != 2*time.Hour || strings.Contains(j.GetTitle(), "Time limit") {
+		t.Errorf("default limit: time_limit %v, title %q", j.GetTimeLimit(), j.GetTitle())
+	}
+	bad := testDefinition()
+	bad.MaxRuntime = durationpb.New(30 * time.Second)
+	_, err = e.jobsClient().RunJob(ctx, connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: bad}))
+	if codeOf(t, err) != connect.CodeInvalidArgument || violation(err, "definition.max_runtime") == "" {
+		t.Errorf("a 30s limit: %v", err)
+	}
+
+	// A job a worker accepted shows the limit it was sent then (stored at
+	// dispatch), not today's default of 2h, also once it finished.
+	limitOf := func(id string) *durationpb.Duration {
+		t.Helper()
+		resp, err := e.jobsClient().GetJob(ctx, connect.NewRequest(&syncrv1.GetJobRequest{JobId: id}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Msg.GetJob().GetTimeLimit()
+	}
+	for _, sent := range []time.Duration{30 * time.Minute, 0} {
+		j := run(testDefinition())
+		id, err := domain.ParseJobID(j.GetId())
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored, err := e.store.GetJob(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored.Status, stored.Epoch, stored.DispatchedAt, stored.TimeLimit = domain.JobDispatched, "e", e.clock.Now(), sent
+		if stored, err = e.store.UpdateJob(ctx, stored); err != nil {
+			t.Fatal(err)
+		}
+		if got := limitOf(j.GetId()); got.AsDuration() != sent || (sent == 0) != (got == nil) {
+			t.Errorf("dispatched with %v: time_limit %v", sent, got)
+		}
+		stored.Status, stored.FinishedAt = domain.JobSucceeded, e.clock.Now()
+		if _, err := e.store.UpdateJob(ctx, stored); err != nil {
+			t.Fatal(err)
+		}
+		if got := limitOf(j.GetId()); got.AsDuration() != sent || (sent == 0) != (got == nil) {
+			t.Errorf("finished after a dispatch with %v: time_limit %v", sent, got)
+		}
+	}
+	// A job that ended before any worker accepted it ran under no limit.
+	queued := run(testDefinition())
+	if _, err := e.jobsClient().CancelJob(ctx, connect.NewRequest(&syncrv1.CancelJobRequest{JobId: queued.GetId()})); err != nil {
+		t.Fatal(err)
+	}
+	if got := limitOf(queued.GetId()); got != nil {
+		t.Errorf("cancelled while queued: time_limit %v, want none", got)
+	}
+
+	// Without the dependency the field is unset.
+	plain := newEnv(t)
+	resp, err := plain.jobsClient().RunJob(ctx, connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: plain.worker.String(), Definition: own}))
+	if err != nil || resp.Msg.GetJob().GetTimeLimit() != nil {
+		t.Errorf("without TimeLimits: %v (%v)", resp, err)
+	}
+}

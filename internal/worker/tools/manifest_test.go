@@ -78,6 +78,10 @@ func TestManifestValidate(t *testing.T) {
 		{name: "traversal entry", mutate: func(s *Spec) { setArtifact(s, func(a *Artifact) { a.Entry = "../tool" }) }, wantErr: "clean relative path"},
 		{name: "missing zip entry", mutate: func(s *Spec) { setArtifact(s, func(a *Artifact) { a.Entry = "" }) }, wantErr: "clean relative path"},
 		{name: "bz2 with entry", mutate: func(s *Spec) { setArtifact(s, func(a *Artifact) { a.Format = FormatBzip2 }) }, wantErr: "no entry"},
+		{name: "tar.gz", mutate: func(s *Spec) { setArtifact(s, func(a *Artifact) { a.Format = FormatTarGz }) }},
+		{name: "tar.gz without entry", mutate: func(s *Spec) {
+			setArtifact(s, func(a *Artifact) { a.Format, a.Entry = FormatTarGz, "" })
+		}, wantErr: "clean relative path"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

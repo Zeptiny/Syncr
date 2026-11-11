@@ -4,12 +4,14 @@ Self-hosted manager for [rclone](https://rclone.org/) sync jobs and
 [restic](https://restic.net/) backups: one controller with a web UI, any
 number of workers on servers and desktops (Linux first, Windows second).
 
-> **Status: v2 rewrite in progress. Milestone 5 complete: restic
-> repositories.** Workers enroll and run rclone transfers and restic backups
-> over the link (active or passive), by hand or on cron schedules; snapshots
-> can be browsed and restored, and contacts on Discord, email or webhooks
-> hear how jobs went. Hardening and the first release come next. The
-> previous Django version lives on `main` (tag `django-final`).
+> **Status: released, version 2.** Workers enroll and run rclone transfers
+> and restic backups over the link (active or passive), by hand or on cron
+> schedules; snapshots can be browsed and restored, contacts on Discord,
+> email or webhooks hear how jobs went, and workers upgrade in place.
+> Releases: [GitHub](https://github.com/Zeptiny/Syncr/releases), notes in
+> [docs/releases/](docs/releases/). Syncr 2 is a rewrite and does not read
+> the old Django version's data (tag `django-final`): it is a fresh install
+> ([v2.0.0 notes](docs/releases/v2.0.0.md)).
 
 ## Architecture
 
@@ -54,25 +56,43 @@ Design records: [architecture](docs/adr/0001-architecture.md),
 [notifications](docs/adr/0010-notifications.md),
 [restic repositories](docs/adr/0011-restic-repositories.md),
 [worker probes](docs/adr/0012-worker-probes.md),
-[concurrency keys](docs/adr/0013-concurrency-keys.md).
+[concurrency keys](docs/adr/0013-concurrency-keys.md),
+[job time limits and retention](docs/adr/0014-job-time-limits-retention.md),
+[one controller per database](docs/adr/0015-single-controller-guard.md),
+[releases and versioning](docs/adr/0016-releases-versioning.md).
 
 ## Quick start
 
-**1. Start the controller and Postgres** (on the server, from a checkout):
+**1. Start the controller and Postgres** on the server, with Docker Compose
+and the published images (no checkout needed):
 
 ```sh
-cp deploy/.env.example deploy/.env   # fill in POSTGRES_PASSWORD, SYNCR_SECRETS_KEY (and SYNCR_PUBLIC_URL behind a proxy)
-chmod 600 deploy/.env
-docker compose -f deploy/docker-compose.yml up -d --build --wait
+mkdir syncr && cd syncr
+v=v2.0.0   # the release whose compose file to use
+curl -fsSLo docker-compose.yml "https://raw.githubusercontent.com/Zeptiny/Syncr/$v/deploy/docker-compose.yml"
+curl -fsSLo .env "https://raw.githubusercontent.com/Zeptiny/Syncr/$v/deploy/.env.example"
+chmod 600 .env
+# Fill in the two secrets in .env (and SYNCR_PUBLIC_URL behind a proxy):
+#   POSTGRES_PASSWORD   e.g. openssl rand -hex 24
+#   SYNCR_SECRETS_KEY   e.g. openssl rand -base64 32
+docker compose up -d --wait
 curl http://127.0.0.1:8080/healthz   # ok
 ```
 
-Back up `SYNCR_SECRETS_KEY`: it encrypts the stored credentials of remotes
-and workers. The controller serves the web UI and the API with plain HTTP on
-port 8080. Browsers should, and workers on other machines must, reach it over
-HTTPS: put a TLS-terminating reverse proxy in front of it (read/idle timeout
-above 40 s, request bodies up to 16 MiB) and set `SYNCR_PUBLIC_URL` to its
-`https://` address, or let the controller serve TLS itself
+The compose file runs `ghcr.io/zeptiny/syncr-controller:2`, the newest 2.x
+release; `SYNCR_VERSION` in `.env` pins another tag, for example `2.0.0`.
+To try a release candidate, take its files (`v=v2.0.0-rc.1`) and set
+`SYNCR_VERSION=2.0.0-rc.1`. From a checkout, use
+`docker compose -f deploy/docker-compose.yml ...` with `deploy/.env`, and
+add `-f deploy/docker-compose.build.yml` to build the images from source.
+
+**Back up** the database and `SYNCR_SECRETS_KEY` (see
+[Backups](#backups-and-upgrades)). The controller serves the web UI and the
+API with plain HTTP on port 8080. Browsers should, and workers on other
+machines must, reach it over HTTPS: put a TLS-terminating reverse proxy in
+front of it (read/idle timeout above 40 s, request bodies up to 16 MiB) and
+set `SYNCR_PUBLIC_URL` to its `https://` address, or let the controller
+serve TLS itself
 (`SYNCR_HTTP_TLS_CERT_FILE`, `SYNCR_HTTP_TLS_KEY_FILE`; see the comments in
 [`deploy/docker-compose.yml`](deploy/docker-compose.yml)).
 
@@ -80,7 +100,7 @@ above 40 s, request bodies up to 16 MiB) and set `SYNCR_PUBLIC_URL` to its
 a one-time setup code at every start:
 
 ```sh
-docker compose -f deploy/docker-compose.yml logs controller | grep setup_code
+docker compose logs controller | grep setup_code
 # {"level":"WARN","msg":"first-run setup: open the web UI and enter this setup code","setup_code":"7QK2M-XC4PA-..."}
 ```
 
@@ -174,6 +194,48 @@ days: jobs by status and bytes moved over time, the success rate, running and
 queued jobs, missed runs, the next scheduled runs with their worker's state,
 worker health and the recent failures. Admins can switch to all users.
 
+### Backups and upgrades
+
+**What to back up:** the Postgres database (everything Syncr stores) and
+`SYNCR_SECRETS_KEY` (it encrypts the stored credentials of remotes,
+repositories and workers: a database backup without it cannot be used).
+With the compose file:
+
+```sh
+docker compose exec -T postgres pg_dump -U syncr -d syncr -Fc > syncr-$(date +%F).dump
+```
+
+Workers keep their enrollment in their config file and can be set up again
+from the UI; the backups themselves live in your restic repositories, whose
+passwords you keep a copy of.
+
+**Upgrading:** back up, upgrade the controller (`docker compose pull &&
+docker compose up -d --wait`; it migrates the database at start), then each
+worker with the command its page shows (`syncr-worker upgrade`, which puts
+the old version back if the new one does not start). A worker older than
+the controller shows as **Outdated**. Details, the manual steps and
+containers: [upgrading](docs/upgrade.md).
+
+**One controller per database.** A second controller started against the
+same database waits, logging "another controller is running against this
+database", and takes over when the first one stops, or about a minute after
+the first one's host crashed (the log names the old session and how to end
+it at once, `SELECT pg_terminate_backend(<pid>)`;
+[ADR 0015](docs/adr/0015-single-controller-guard.md)). Run one controller;
+a standby is fine.
+
+### Supported platforms
+
+| | |
+|---|---|
+| Controller | the image for Linux x86-64 and ARM64, or the binary (Linux x86-64/ARM64, Windows x86-64); PostgreSQL 17 |
+| Workers | Linux x86-64 and ARM64 with systemd (system or `--user`), or any Linux with `--no-service` or in the image; Windows 10 / Server 2016 or newer, x86-64 (service or `--user`) |
+| Web UI | current Firefox, Chrome, Edge and Safari |
+
+Release files, images and how releases are versioned:
+[ADR 0016](docs/adr/0016-releases-versioning.md). Reporting a vulnerability:
+[SECURITY.md](SECURITY.md).
+
 **Scripting the API.** Everything the UI does goes through the Connect API
 ([`proto/syncr/v1/`](proto/syncr/v1/)). For scripts, create a personal API
 token under **Settings, API tokens** (it acts as you, with your role) and
@@ -207,7 +269,7 @@ proto/syncr/v1/           wire contracts (api, auth, users, remotes, schedules, 
 gen/go/                   generated protobuf + Connect code (committed)
 web/                      React web UI (Vite, TypeScript); package web embeds web/dist with -tags webui
 cmd/syncr-controller/     controller composition root
-cmd/syncr-worker/         worker composition root and CLI (run, setup, tools, version)
+cmd/syncr-worker/         worker composition root and CLI (run, setup, service, tools, upgrade, version)
 internal/domain/          entity IDs, job status state machine, worker mode/status, domain errors
 internal/link/            link helpers shared by both sides (job kinds, error codes, auth headers)
 internal/app/users/       accounts, sessions, API tokens, first-run setup
@@ -244,6 +306,7 @@ internal/worker/outbox/   event buffer with (epoch, seq), acks and coalescing
 internal/worker/linkcore/ link envelopes for both transports, no networking
 internal/worker/transport/ active (Report/Poll loops) and passive (TLS server) transports
 internal/worker/setup/    `syncr-worker setup`: enroll, provision, configure, install, self-check
+internal/worker/upgrade/  `syncr-worker upgrade`: download, verify, provision tools, swap, restart or roll back
 internal/worker/service/  systemd / Windows Service / per-user service management
 internal/worker/tlscert/  self-signed certificate of a passive worker
 internal/worker/proc/     child-process supervisor (env allowlist, line streaming, cancellation)
@@ -256,8 +319,9 @@ internal/worker/config/   worker configuration
 internal/platform/        leaf helpers: config loading, logging, redaction, HTTP server, client IP, rate limits, network policy (netguard), version
 internal/devseed/         demo data for UI development and screenshots (dev.seed, in-memory store only)
 internal/e2e/             link end-to-end tests in one process; e2e/system runs the real binaries
-deploy/                   Dockerfiles, the quick-start compose file and the dev compose stack
+deploy/                   Dockerfiles, the quick-start compose file (with a build-from-source override) and the dev compose stack
 docs/adr/                 architecture decision records
+docs/releases/            release notes per version, the release process and the release candidate checklist
 ```
 
 ## Development
@@ -282,6 +346,7 @@ make web-check         # typecheck, lint, format-check and test the web UI
 make build             # bin/syncr-controller (with the UI after `make web`), bin/syncr-worker
 make dev-up            # Postgres 17, MinIO and SFTP on 127.0.0.1 (see deploy/docker-compose.dev.yml)
 make dev-seed          # a controller with demo data on the in-memory store (see below)
+make release-snapshot  # the release archives and checksums.txt in dist/ (GoReleaser, nothing published)
 ```
 
 The controller embeds the web UI only when built with `-tags webui` after
@@ -405,7 +470,7 @@ auth:
   session_max_age: 720h      # SYNCR_AUTH_SESSION_MAX_AGE: a session ends this long after the login
   setup_code: ""             # SYNCR_SETUP_CODE: preset first-run setup code (16+ chars); default: random, logged
 workers:
-  download_base_url: https://github.com/Zeptiny/Syncr/releases/latest/download  # SYNCR_WORKERS_DOWNLOAD_BASE_URL (install commands)
+  download_base_url: ""      # SYNCR_WORKERS_DOWNLOAD_BASE_URL: a mirror for the install and upgrade commands; empty: GitHub, the controller's own release
   lost_after: 1h             # SYNCR_WORKERS_LOST_AFTER: end the active jobs of a worker out of contact this long (at least 5m)
 log:
   level: info                # SYNCR_LOG_LEVEL: debug, info, warn, error
@@ -420,6 +485,9 @@ database:
   connect_timeout: 10s       # SYNCR_DATABASE_CONNECT_TIMEOUT
 schedules:
   tick: 10s                  # SYNCR_SCHEDULES_TICK: scheduler pass interval (1s to 5m; saves and finished jobs wake it earlier)
+jobs:
+  default_max_runtime: 0     # SYNCR_JOBS_DEFAULT_MAX_RUNTIME: time limit of jobs that set none (0: none; else 1m to 8784h, 366 days)
+  sample_retention: 720h     # SYNCR_JOBS_SAMPLE_RETENTION: keep a finished job's progress chart this long (at least 1h; 0: forever)
 notify:
   network_policy: private    # SYNCR_NOTIFY_NETWORK_POLICY: private (no loopback, link-local, metadata), public (no private networks either), any
   allowed_networks: []       # SYNCR_NOTIFY_ALLOWED_NETWORKS: CIDRs/IPs allowed anyway (comma-separated), e.g. 127.0.0.1 for a local relay
@@ -463,14 +531,28 @@ jobs and its late results are ignored. Raise the value for machines that
 sleep through long jobs (e.g. laptops); queued jobs still fail after the
 15 minute dispatch timeout.
 
+A job's time limit (the "Time limit" of its definition) is enforced by its
+worker: once the job has run that long, its processes are stopped and it
+ends `failed` (`time_limit`), notified like any failure, so the next job on
+its restic repository can start. `jobs.default_max_runtime` gives a limit to
+every job whose definition sets none; jobs the controller starts itself (a
+repository's data deletion) never get it. A worker built before 2.0 cannot
+enforce a limit and fails such jobs as `worker_outdated`. Once an hour the
+controller deletes the progress samples (the chart) of jobs that finished
+more than `jobs.sample_retention` ago; the jobs and their final counters
+are kept.
+
 `api.admin_token` (`SYNCR_ADMIN_TOKEN`) of Milestone 2 is gone: it is ignored
 with a warning. Create a personal API token in the UI instead.
 
-The database URL contains the password; it is never logged or printed. The
-Postgres store applies its embedded schema migrations under an advisory lock,
-so several controllers can start at once. For local
-development, `make dev-up` starts Postgres with the credentials from
-`deploy/docker-compose.dev.yml`.
+The database URL contains the password; it is never logged or printed. One
+controller runs per database: at start it takes a lock held for its
+lifetime, then applies the embedded schema migrations. A second controller
+on the same database waits for the lock and serves nothing until the first
+one stops ([ADR 0015](docs/adr/0015-single-controller-guard.md)). Reach
+Postgres directly or through a session-mode pool (not PgBouncer's
+transaction mode). For local development, `make dev-up` starts Postgres
+with the credentials from `deploy/docker-compose.dev.yml`.
 
 The secrets key encrypts the credentials of remotes and workers at rest. Back
 it up: without it, stored secrets cannot be read (jobs using such a remote
@@ -482,14 +564,22 @@ The worker accepts the same `log` section plus `data_dir`, `local_roots`,
 
 ### Images
 
+Releases publish `ghcr.io/zeptiny/syncr-controller` and
+`ghcr.io/zeptiny/syncr-worker` for linux/amd64 and linux/arm64, tagged
+`2.0.0`, `2.0`, `2` and `latest` (a release candidate only with its own
+tag, such as `2.0.0-rc.1`). To build them from source:
+
 ```sh
 docker build -f deploy/Dockerfile.controller -t syncr-controller .   # web UI embedded, distroless, non-root, HEALTHCHECK via -healthcheck
-docker build -f deploy/Dockerfile.worker -t syncr-worker .           # Debian slim, rclone v1.75.2, restic 0.19.1, non-root
+docker build -f deploy/Dockerfile.worker -t syncr-worker .           # Debian slim, rclone v1.75.2, restic 0.19.1 (with their licences), non-root
 ```
 
 [`deploy/docker-compose.yml`](deploy/docker-compose.yml) runs the controller
-with Postgres (see [Quick start](#quick-start)) and has an optional, commented
-worker service that enrolls on first start and keeps its configuration in a
-volume. The worker image's default command is
+with Postgres (see [Quick start](#quick-start));
+[`deploy/docker-compose.build.yml`](deploy/docker-compose.build.yml) builds
+the images from the checkout instead. The compose file has an optional,
+commented worker service that enrolls on first start and keeps its
+configuration in a volume. The worker image's default command is
 `run --config /var/lib/syncr/worker.yaml`; enroll it once with
-`setup --no-service --config /var/lib/syncr/worker.yaml ...`.
+`setup --no-service --config /var/lib/syncr/worker.yaml ...`. A worker in a
+container is upgraded by pulling its new image.

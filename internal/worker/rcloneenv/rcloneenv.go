@@ -42,12 +42,18 @@ import (
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 )
 
-// Isolation variables set by Isolate.
+// Isolation variables set by Isolate. Isolate also points the system temp
+// variables (TempVars) at the job's temp directory.
 const (
 	EnvConfig      = "RCLONE_CONFIG"
 	EnvCacheDir    = "RCLONE_CACHE_DIR"
+	EnvTempDir     = "RCLONE_TEMP_DIR"
 	EnvAskPassword = "RCLONE_ASK_PASSWORD" //nolint:gosec // G101 false positive: a variable name, not a credential
 )
+
+// TempVars are the variables that name the system temp directory: TMPDIR
+// on Unix, TEMP and TMP on Windows. Isolate sets all three.
+func TempVars() []string { return []string{"TMPDIR", "TEMP", "TMP"} }
 
 // Sentinel errors, matched with errors.Is.
 var (
@@ -182,13 +188,16 @@ func (b *Builder) Env(remotes []*syncrv1.RemoteDefinition) (map[string]string, e
 	return env.Vars(), nil
 }
 
-// Isolate creates an empty rclone config file and a cache directory inside
-// dir and returns the variables that point rclone at them, so a host
-// rclone.conf (e.g. a desktop user's ~/.config/rclone/rclone.conf) is never
-// read, rclone never prompts for a config password, and nothing is cached
-// outside dir. Environment variables are used rather than flags so that they
-// also reach rclone processes started by other tools (restic's rclone
-// backend).
+// Isolate creates an empty rclone config file, a cache directory and a temp
+// directory inside dir and returns the variables that point rclone at them,
+// so a host rclone.conf (e.g. a desktop user's
+// ~/.config/rclone/rclone.conf) is never read, rclone never prompts for a
+// config password, and nothing is cached or left as a temporary file
+// outside dir: rclone's own temp directory (--temp-dir, RCLONE_TEMP_DIR)
+// and the system temp variables (TempVars), for anything else the process
+// writes there, are dir/tmp. Environment variables are used rather than
+// flags so that they also reach rclone processes started by other tools
+// (restic's rclone backend).
 func Isolate(dir string) (map[string]string, error) {
 	if !filepath.IsAbs(dir) {
 		return nil, fmt.Errorf("rcloneenv: scratch dir %q is not absolute", dir)
@@ -196,6 +205,10 @@ func Isolate(dir string) (map[string]string, error) {
 	cache := filepath.Join(dir, "cache")
 	if err := os.MkdirAll(cache, 0o700); err != nil {
 		return nil, fmt.Errorf("rcloneenv: create cache dir: %w", err)
+	}
+	tmp := filepath.Join(dir, "tmp")
+	if err := os.MkdirAll(tmp, 0o700); err != nil {
+		return nil, fmt.Errorf("rcloneenv: create temp dir: %w", err)
 	}
 	conf := filepath.Join(dir, "rclone.conf")
 	f, err := os.OpenFile(conf, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // path is built from the caller's scratch dir
@@ -205,11 +218,16 @@ func Isolate(dir string) (map[string]string, error) {
 	if err := f.Close(); err != nil {
 		return nil, fmt.Errorf("rcloneenv: create empty config: %w", err)
 	}
-	return map[string]string{
+	vars := map[string]string{
 		EnvConfig:      conf,
 		EnvCacheDir:    cache,
+		EnvTempDir:     tmp,
 		EnvAskPassword: "false",
-	}, nil
+	}
+	for _, name := range TempVars() {
+		vars[name] = tmp
+	}
+	return vars, nil
 }
 
 // RemotePath returns the rclone path of path on the remote alias

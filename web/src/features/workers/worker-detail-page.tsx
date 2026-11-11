@@ -32,10 +32,11 @@ import { copyText } from "@/lib/clipboard";
 import { errorMessage } from "@/lib/errors";
 import { formatDateTime, tsDate } from "@/lib/format";
 import { invalidateService } from "@/lib/invalidate";
-import { workerModeLabel } from "@/lib/status";
-import { FEATURE_PROBE, hasFeature, isOnline, isOutdated } from "@/lib/workers";
+import { isTerminal, workerModeLabel } from "@/lib/status";
+import { FEATURE_PROBE, hasFeature, isOnline, isOutdated, outdatedHelp } from "@/lib/workers";
 import { JobsTable } from "@/features/jobs/jobs-table";
 
+import { UpgradeWorkerCard } from "./upgrade-card";
 import { WorkerLabelsPanel } from "./worker-labels";
 import { platformLabel } from "./workers-page";
 
@@ -108,7 +109,15 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
     { workerId },
     { refetchInterval: 10_000 },
   );
-  const jobs = useQuery(JobService.method.listJobs, { workerId, pageSize: 10 });
+  // Recent jobs follow the worker: often while one is unfinished.
+  const jobs = useQuery(
+    JobService.method.listJobs,
+    { workerId, pageSize: 10 },
+    {
+      refetchInterval: (query) =>
+        query.state.data?.jobs.some((j) => !isTerminal(j.status)) ? 5000 : 30_000,
+    },
+  );
   const remove = useMutation(WorkerAdminService.method.removeWorker);
   const [renaming, setRenaming] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -134,10 +143,7 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
           <>
             <StatusBadge worker={w.status} />
             {isOutdated(w) ? (
-              <StatusPill
-                meta={{ label: "Outdated: upgrade to use restic", tone: "warning" }}
-                title="This worker's version cannot browse files or work with restic repositories."
-              />
+              <StatusPill meta={{ label: "Outdated", tone: "warning" }} title={outdatedHelp(w)} />
             ) : (
               hasFeature(w, FEATURE_PROBE) && (
                 <StatusPill meta={{ label: "Probes: supported", tone: "neutral" }} />
@@ -167,6 +173,12 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
           )
         }
       />
+      {isOutdated(w) && <p className="mb-4 text-[13px] text-muted-foreground">{outdatedHelp(w)}</p>}
+      {isAdmin && isOutdated(w) && (
+        <div className="mb-6">
+          <UpgradeWorkerCard worker={w} />
+        </div>
+      )}
       <div className="mb-6 grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <Panel title="About this worker">
           <KeyValueList

@@ -1,4 +1,4 @@
-package tools
+package filelock
 
 import (
 	"context"
@@ -13,7 +13,7 @@ func TestLockExcludesAndReleases(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), ".lock")
 
-	release, err := acquireLock(t.Context(), path)
+	release, err := Acquire(t.Context(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +21,7 @@ func TestLockExcludesAndReleases(t *testing.T) {
 	// While held, a second acquirer blocks until its context ends.
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
-	if _, err := acquireLock(ctx, path); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := Acquire(ctx, path); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("second acquire while held: err = %v, want deadline exceeded", err)
 	}
 
@@ -29,7 +29,7 @@ func TestLockExcludesAndReleases(t *testing.T) {
 	if err := release(); err != nil {
 		t.Fatal(err)
 	}
-	release2, err := acquireLock(t.Context(), path)
+	release2, err := Acquire(t.Context(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestLockSerializesCriticalSections(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			release, err := acquireLock(t.Context(), path)
+			release, err := Acquire(t.Context(), path)
 			if err != nil {
 				t.Error(err)
 				return
@@ -72,6 +72,28 @@ func TestLockSerializesCriticalSections(t *testing.T) {
 	wg.Wait()
 	if maxSeen != 1 {
 		t.Errorf("%d holders inside the critical section at once", maxSeen)
+	}
+}
+
+func TestTryLock(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "worker.lock")
+	release, ok, err := TryLock(path)
+	if err != nil || !ok {
+		t.Fatalf("TryLock() = %v, %v; want the lock", ok, err)
+	}
+	if _, ok, err := TryLock(path); err != nil || ok {
+		t.Fatalf("second TryLock() while held = %v, %v; want ok=false", ok, err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	release, ok, err = TryLock(path)
+	if err != nil || !ok {
+		t.Fatalf("TryLock() after release = %v, %v", ok, err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -47,6 +47,15 @@
 // operating system, the scheduler picks a label's worker by both, and the
 // dispatcher checks both, finally, when it sends the job.
 //
+// # Time limits (Milestone 6)
+//
+// A definition's max_runtime applies to every kind: Registry.Check checks
+// its bounds (MinMaxRuntime to MaxMaxRuntime) and Registry.Describe adds it
+// to the description (notifications); Registry.DescribeOperation leaves it
+// out (job titles, next to the effective limit). Kinds do not see it: the dispatcher computes the
+// effective limit (with the controller's default) and writes it into the
+// spec.
+//
 // The package is pure: no I/O, no logging. Specs contain secrets and exist
 // only in memory.
 //
@@ -58,6 +67,7 @@ package jobkind
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -319,15 +329,26 @@ func (r *Registry) Get(name string) (Kind, bool) {
 
 // Check validates def with its kind and returns the kind's name and what
 // def refers to, with the concurrency keys of a Keyed kind (sorted, without
-// duplicates). Errors are *domain.ValidationError.
+// duplicates). It also checks the definition's time limit (max_runtime,
+// for every kind: unset or zero, or between MinMaxRuntime and
+// MaxMaxRuntime).
+// Errors are *domain.ValidationError.
 func (r *Registry) Check(def *syncrv1.JobDefinition) (kind string, refs Refs, err error) {
 	k, err := r.kindOf(def)
 	if err != nil {
 		return "", Refs{}, err
 	}
+	limitErr := checkMaxRuntime(def)
 	refs, err = k.Check(def)
 	if err != nil {
+		var verr *domain.ValidationError
+		if limitErr != nil && errors.As(err, &verr) {
+			err = &domain.ValidationError{Fields: append(slices.Clone(verr.Fields), limitErr.Fields...)}
+		}
 		return "", Refs{}, err
+	}
+	if limitErr != nil {
+		return "", Refs{}, limitErr
 	}
 	refs.ConcurrencyKeys = nil
 	if kk, ok := k.(Keyed); ok {
@@ -350,14 +371,32 @@ func (r *Registry) Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.JobS
 	return k.Build(def, in)
 }
 
-// Describe describes def with its kind (see Kind.Describe). A definition
-// of no registered kind is described by its kind name ("" if it has none).
-func (r *Registry) Describe(def *syncrv1.JobDefinition, names Names) string {
+// DescribeOperation describes what def does with its kind (see
+// Kind.Describe), e.g. "Copy Photos → B2 offsite": the title of a job,
+// whose page shows the effective time limit on its own. A definition of no
+// registered kind is described by its kind name ("" if it has none).
+func (r *Registry) DescribeOperation(def *syncrv1.JobDefinition, names Names) string {
 	k, err := r.kindOf(def)
 	if err != nil {
 		return KindOf(def)
 	}
 	return k.Describe(def, names)
+}
+
+// Describe is DescribeOperation followed by def's own time limit, e.g.
+// "Copy Photos → B2 offsite · Time limit 6h", for text that stands alone
+// (notifications). The controller's default limit is not part of the
+// definition, so it is not described.
+func (r *Registry) Describe(def *syncrv1.JobDefinition, names Names) string {
+	k, err := r.kindOf(def)
+	if err != nil {
+		return KindOf(def)
+	}
+	out := k.Describe(def, names)
+	if limit, ok := maxRuntime(def); ok {
+		out += " · Time limit " + formatDuration(limit)
+	}
+	return out
 }
 
 // Schedulable reports whether definitions of kind may be scheduled, and if

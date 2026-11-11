@@ -41,6 +41,9 @@ const (
 	ProbeServiceListRemoteFilesProcedure = "/syncr.v1.ProbeService/ListRemoteFiles"
 	// ProbeServiceTestRemoteProcedure is the fully-qualified name of the ProbeService's TestRemote RPC.
 	ProbeServiceTestRemoteProcedure = "/syncr.v1.ProbeService/TestRemote"
+	// ProbeServiceGetSftpHostKeysProcedure is the fully-qualified name of the ProbeService's
+	// GetSftpHostKeys RPC.
+	ProbeServiceGetSftpHostKeysProcedure = "/syncr.v1.ProbeService/GetSftpHostKeys"
 )
 
 // ProbeServiceClient is a client for the syncr.v1.ProbeService service.
@@ -56,6 +59,17 @@ type ProbeServiceClient interface {
 	// Worker-side failures are reported in the response (ok=false), not as
 	// errors.
 	TestRemote(context.Context, *connect.Request[v1.TestRemoteRequest]) (*connect.Response[v1.TestRemoteResponse], error)
+	// GetSftpHostKeys asks an SFTP (SSH) server for its host keys, through a
+	// worker, so they can be pinned in an sftp remote's host_keys option
+	// (Milestone 6). It sends no credentials and changes nothing, but it
+	// makes the worker connect to the host and port the caller names, so it
+	// is rate limited like the other probes and accepts no GET requests.
+	// Trust on first use: the caller should compare the fingerprints with the
+	// server's own (e.g. `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`).
+	// A malformed host or port is INVALID_ARGUMENT on "host" or "port"; a
+	// server the worker cannot reach, or one that does not speak SSH, is
+	// FAILED_PRECONDITION with the worker's message.
+	GetSftpHostKeys(context.Context, *connect.Request[v1.GetSftpHostKeysRequest]) (*connect.Response[v1.GetSftpHostKeysResponse], error)
 }
 
 // NewProbeServiceClient constructs a client for the syncr.v1.ProbeService service. By default, it
@@ -89,6 +103,12 @@ func NewProbeServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(probeServiceMethods.ByName("TestRemote")),
 			connect.WithClientOptions(opts...),
 		),
+		getSftpHostKeys: connect.NewClient[v1.GetSftpHostKeysRequest, v1.GetSftpHostKeysResponse](
+			httpClient,
+			baseURL+ProbeServiceGetSftpHostKeysProcedure,
+			connect.WithSchema(probeServiceMethods.ByName("GetSftpHostKeys")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -97,6 +117,7 @@ type probeServiceClient struct {
 	listWorkerFiles *connect.Client[v1.ListWorkerFilesRequest, v1.ListWorkerFilesResponse]
 	listRemoteFiles *connect.Client[v1.ListRemoteFilesRequest, v1.ListRemoteFilesResponse]
 	testRemote      *connect.Client[v1.TestRemoteRequest, v1.TestRemoteResponse]
+	getSftpHostKeys *connect.Client[v1.GetSftpHostKeysRequest, v1.GetSftpHostKeysResponse]
 }
 
 // ListWorkerFiles calls syncr.v1.ProbeService.ListWorkerFiles.
@@ -114,6 +135,11 @@ func (c *probeServiceClient) TestRemote(ctx context.Context, req *connect.Reques
 	return c.testRemote.CallUnary(ctx, req)
 }
 
+// GetSftpHostKeys calls syncr.v1.ProbeService.GetSftpHostKeys.
+func (c *probeServiceClient) GetSftpHostKeys(ctx context.Context, req *connect.Request[v1.GetSftpHostKeysRequest]) (*connect.Response[v1.GetSftpHostKeysResponse], error) {
+	return c.getSftpHostKeys.CallUnary(ctx, req)
+}
+
 // ProbeServiceHandler is an implementation of the syncr.v1.ProbeService service.
 type ProbeServiceHandler interface {
 	// ListWorkerFiles lists a folder on a worker's filesystem; an empty path
@@ -127,6 +153,17 @@ type ProbeServiceHandler interface {
 	// Worker-side failures are reported in the response (ok=false), not as
 	// errors.
 	TestRemote(context.Context, *connect.Request[v1.TestRemoteRequest]) (*connect.Response[v1.TestRemoteResponse], error)
+	// GetSftpHostKeys asks an SFTP (SSH) server for its host keys, through a
+	// worker, so they can be pinned in an sftp remote's host_keys option
+	// (Milestone 6). It sends no credentials and changes nothing, but it
+	// makes the worker connect to the host and port the caller names, so it
+	// is rate limited like the other probes and accepts no GET requests.
+	// Trust on first use: the caller should compare the fingerprints with the
+	// server's own (e.g. `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`).
+	// A malformed host or port is INVALID_ARGUMENT on "host" or "port"; a
+	// server the worker cannot reach, or one that does not speak SSH, is
+	// FAILED_PRECONDITION with the worker's message.
+	GetSftpHostKeys(context.Context, *connect.Request[v1.GetSftpHostKeysRequest]) (*connect.Response[v1.GetSftpHostKeysResponse], error)
 }
 
 // NewProbeServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -156,6 +193,12 @@ func NewProbeServiceHandler(svc ProbeServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(probeServiceMethods.ByName("TestRemote")),
 		connect.WithHandlerOptions(opts...),
 	)
+	probeServiceGetSftpHostKeysHandler := connect.NewUnaryHandler(
+		ProbeServiceGetSftpHostKeysProcedure,
+		svc.GetSftpHostKeys,
+		connect.WithSchema(probeServiceMethods.ByName("GetSftpHostKeys")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/syncr.v1.ProbeService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ProbeServiceListWorkerFilesProcedure:
@@ -164,6 +207,8 @@ func NewProbeServiceHandler(svc ProbeServiceHandler, opts ...connect.HandlerOpti
 			probeServiceListRemoteFilesHandler.ServeHTTP(w, r)
 		case ProbeServiceTestRemoteProcedure:
 			probeServiceTestRemoteHandler.ServeHTTP(w, r)
+		case ProbeServiceGetSftpHostKeysProcedure:
+			probeServiceGetSftpHostKeysHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -183,4 +228,8 @@ func (UnimplementedProbeServiceHandler) ListRemoteFiles(context.Context, *connec
 
 func (UnimplementedProbeServiceHandler) TestRemote(context.Context, *connect.Request[v1.TestRemoteRequest]) (*connect.Response[v1.TestRemoteResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ProbeService.TestRemote is not implemented"))
+}
+
+func (UnimplementedProbeServiceHandler) GetSftpHostKeys(context.Context, *connect.Request[v1.GetSftpHostKeysRequest]) (*connect.Response[v1.GetSftpHostKeysResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ProbeService.GetSftpHostKeys is not implemented"))
 }

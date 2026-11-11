@@ -452,6 +452,48 @@ func TestCreateMapsProbeErrors(t *testing.T) {
 	}
 }
 
+// TestNoRepositoryOnBucketStorage: on bucket storage (s3, b2) a mistyped
+// folder lists as empty, so "no restic repository" says so; elsewhere it
+// does not.
+func TestNoRepositoryOnBucketStorage(t *testing.T) {
+	t.Parallel()
+	const hint = "a folder that does not exist looks empty"
+	notFound := &restic.ProbeError{Code: "repository_not_found", Message: "Fatal: repository does not exist"}
+	message := func(t *testing.T, err error) string {
+		t.Helper()
+		var verr *domain.ValidationError
+		if !errors.As(err, &verr) || len(verr.Fields) != 1 || verr.Fields[0].Field != "path" {
+			t.Fatalf("err = %v, want a problem on path", err)
+		}
+		return verr.Fields[0].Message
+	}
+	ctx := context.Background()
+
+	e := newEnv(t)
+	e.prober.verifyErr = notFound
+	in := input(e.s3)
+	in.Mode = restic.ModeConnect
+	_, err := e.svc.Create(ctx, e.alice, in)
+	if msg := message(t, err); !strings.HasPrefix(msg, "no restic repository at this location") || !strings.Contains(msg, hint) {
+		t.Errorf("s3: %q, want the bucket hint", msg)
+	}
+	in = input(e.local)
+	in.Mode, in.WorkerID = restic.ModeConnect, e.worker
+	_, err = e.svc.Create(ctx, e.alice, in)
+	if msg := message(t, err); msg != "no restic repository at this location" {
+		t.Errorf("local: %q, want no hint", msg)
+	}
+
+	// A new password is verified too; the hint needs the remote's type.
+	e = newEnv(t)
+	r := e.create()
+	e.prober.verifyErr = notFound
+	_, err = e.svc.Update(ctx, e.alice, r.ID, r.Version, restic.Update{Name: r.Name, Password: "another-password"})
+	if msg := message(t, err); !strings.Contains(msg, hint) {
+		t.Errorf("update on s3: %q, want the bucket hint", msg)
+	}
+}
+
 func TestCreateUniqueness(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/Zeptiny/Syncr/internal/backend"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/platform/redact"
 )
 
 // Probe error codes the service maps to field errors (link error code
@@ -141,7 +142,7 @@ func (s *Service) Create(ctx context.Context, actor domain.Actor, in Input) (Cre
 	} else {
 		addFields(&v, checkPassword(in.Mode, in.Password))
 	}
-	local := false
+	local, objectStore := false, false
 	if in.RemoteID.IsZero() {
 		v.Add("remote_id", "is required")
 	} else {
@@ -160,7 +161,7 @@ func (s *Service) Create(ctx context.Context, actor domain.Actor, in Input) (Cre
 			case !typ.Capabilities().ResticRepository:
 				v.Add("remote_id", "this kind of remote cannot hold a restic repository")
 			default:
-				local = typ.Capabilities().Local
+				local, objectStore = typ.Capabilities().Local, typ.Capabilities().ObjectStore
 			}
 		}
 	}
@@ -191,7 +192,7 @@ func (s *Service) Create(ctx context.Context, actor domain.Actor, in Input) (Cre
 
 	res, err := s.prober.Verify(ctx, actor.UserID, Target{RemoteID: in.RemoteID, Path: path, Password: in.Password, WorkerID: in.WorkerID}, in.Mode == ModeInit)
 	if err != nil {
-		return Created{}, fmt.Errorf("%s: %w", op, verifyError(in.Mode, err, in.Password))
+		return Created{}, fmt.Errorf("%s: %w", op, verifyError(in.Mode, err, in.Password, objectStore))
 	}
 	if !hex64Pattern.MatchString(res.ResticID) {
 		return Created{}, fmt.Errorf("%s: %w: the worker reported an invalid repository ID", op, domain.ErrUnavailable)
@@ -316,7 +317,8 @@ func (s *Service) Update(ctx context.Context, actor domain.Actor, id domain.Rest
 			RepositoryID: id, RemoteID: cur.RemoteID, Path: cur.Path, Password: u.Password, WorkerID: u.WorkerID,
 		}, false)
 		if err != nil {
-			return Repo{}, fmt.Errorf("%s %s: %w", op, id, verifyError(ModeConnect, err, u.Password))
+			objectStore := isRepositoryNotFound(err) && s.objectStore(ctx, actor.UserID, cur.RemoteID)
+			return Repo{}, fmt.Errorf("%s %s: %w", op, id, verifyError(ModeConnect, err, u.Password, objectStore))
 		}
 		if res.ResticID != cur.ResticID {
 			return Repo{}, fmt.Errorf("%s %s: %w: the location now holds a different restic repository than the one stored", op, id, domain.ErrFailedPrecondition)
@@ -680,15 +682,28 @@ func checkTreePath(p string) string {
 	return ""
 }
 
+// noRepository is the message of a location without a restic repository;
+// objectStoreHint is added on bucket storage (backend.Capabilities
+// ObjectStore), where a mistyped folder does not fail but lists as empty.
+const (
+	noRepository    = "no restic repository at this location"
+	objectStoreHint = "; on this kind of remote a folder that does not exist looks empty, so check the path for typos"
+)
+
 // verifyErrorFields maps what a worker reported while initializing or
 // verifying a repository to the form field it concerns; anything else is
-// ErrFailedPrecondition with the worker's (scrubbed) message.
-func verifyErrorFields(mode Mode, pe *ProbeError) error {
+// ErrFailedPrecondition with the worker's (scrubbed) message. objectStore
+// says the remote is bucket storage, for the message of a location without
+// a repository.
+func verifyErrorFields(mode Mode, pe *ProbeError, objectStore bool) error {
 	switch {
 	case pe.Code == codeWrongPassword:
 		return fieldError("password", "is not this repository's password")
 	case pe.Code == codeRepositoryNotFound && mode == ModeConnect:
-		return fieldError("path", "no restic repository at this location")
+		if objectStore {
+			return fieldError("path", noRepository+objectStoreHint)
+		}
+		return fieldError("path", noRepository)
 	case pe.Code == codeAlreadyExists && mode == ModeInit:
 		return fieldError("mode", "a repository already exists here; choose Connect")
 	case pe.Code == codePathNotAllowed:
@@ -699,33 +714,45 @@ func verifyErrorFields(mode Mode, pe *ProbeError) error {
 
 // verifyError maps an error of Prober.Verify: a *ProbeError through
 // verifyErrorFields, anything else unchanged; the password never appears
-// in the result.
-func verifyError(mode Mode, err error, password string) error {
+// in the result. The prober scrubs what workers report; this is the last
+// line of defense for a password a worker echoed.
+func verifyError(mode Mode, err error, password string, objectStore bool) error {
 	var pe *ProbeError
 	if errors.As(err, &pe) {
 		clean := *pe
-		clean.Message = scrub(pe.Message, password)
-		return verifyErrorFields(mode, &clean)
+		clean.Message = redact.Scrub(pe.Message, password)
+		return verifyErrorFields(mode, &clean, objectStore)
 	}
 	return scrubError(err, password)
 }
 
-// scrub removes secret from text. The prober scrubs what workers report;
-// this is the last line of defense for a password a worker echoed.
-func scrub(text, secret string) string {
-	if secret == "" {
-		return text
-	}
-	return strings.ReplaceAll(text, secret, "[REDACTED]")
+// isRepositoryNotFound reports whether err is the worker's report that a
+// location holds no restic repository.
+func isRepositoryNotFound(err error) bool {
+	var pe *ProbeError
+	return errors.As(err, &pe) && pe.Code == codeRepositoryNotFound
 }
 
-// scrubError returns err unless its message contains secret; then an
-// error of the same domain class with the scrubbed message.
+// objectStore reports whether owner's remote is bucket storage (see
+// verifyErrorFields); false when that cannot be told.
+func (s *Service) objectStore(ctx context.Context, owner domain.UserID, remoteID domain.RemoteID) bool {
+	typeID, err := s.remotes.RemoteType(ctx, owner, remoteID)
+	if err != nil {
+		return false
+	}
+	typ, ok := s.backends.Get(typeID)
+	return ok && typ.Capabilities().ObjectStore
+}
+
+// scrubError returns err unless its message contains secret (in any form
+// redact.Scrub replaces); then an error of the same domain class with the
+// scrubbed message.
 func scrubError(err error, secret string) error {
-	if secret == "" || !strings.Contains(err.Error(), secret) {
+	msg := err.Error()
+	clean := redact.Scrub(msg, secret)
+	if clean == msg {
 		return err
 	}
-	clean := scrub(err.Error(), secret)
 	for _, class := range []error{
 		domain.ErrNotFound, domain.ErrUnavailable, domain.ErrFailedPrecondition, domain.ErrInvalidArgument,
 		domain.ErrRateLimited, context.Canceled, context.DeadlineExceeded,

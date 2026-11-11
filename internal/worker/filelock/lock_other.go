@@ -1,6 +1,6 @@
 //go:build !windows && !linux && !darwin && !freebsd && !netbsd && !openbsd && !dragonfly
 
-package tools
+package filelock
 
 import "errors"
 

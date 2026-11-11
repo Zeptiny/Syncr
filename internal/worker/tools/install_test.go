@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Zeptiny/Syncr/internal/worker/filelock"
 )
 
 var host = HostPlatform()
@@ -447,7 +449,7 @@ func TestInstallWaitsForLockAndHonorsContext(t *testing.T) {
 	dir := t.TempDir()
 	inst := newTestInstaller(t, srv, dir, nil)
 
-	release, err := acquireLock(t.Context(), filepath.Join(dir, lockFileName))
+	release, err := filelock.Acquire(t.Context(), filepath.Join(dir, lockFileName))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -272,6 +272,7 @@ func jobFrom(r db.Job) (jobs.Job, error) {
 		StartedAt:         timeFrom(r.StartedAt),
 		FinishedAt:        timeFrom(r.FinishedAt),
 		Requeues:          int(r.Requeues),
+		TimeLimit:         time.Duration(r.TimeLimitNs),
 		Stats: statsFrom(r.StatBytes, r.StatTotalBytes, r.StatFiles, r.StatTotalFiles,
 			r.StatChecks, r.StatDeletes, r.StatRenames, r.StatErrors, r.StatElapsedNs),
 		Error:    jobs.JobError{Code: r.ErrorCode, Message: r.ErrorMessage},

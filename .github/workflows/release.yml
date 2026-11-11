@@ -1,0 +1,251 @@
+name: Release
+
+# Publishes a release when a version tag is pushed (docs/adr/0016): the
+# binaries and checksums.txt as a GitHub release with build provenance,
+# the two images on GHCR, then a smoke test of what was published. Tags are
+# pushed by hand, after CI passed on the commit (the runbook in
+# docs/releases/README.md).
+
+on:
+  push:
+    tags: ["v*"]
+
+# Each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Actions are pinned to full commit SHAs (the comment names the release).
+env:
+  # Keep in sync with the Makefile and .github/workflows/ci.yml.
+  GORELEASER_VERSION: v2.20.1
+  REGISTRY: ghcr.io/zeptiny
+
+jobs:
+  prepare:
+    name: check the tag and its release notes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      notes: ${{ steps.check.outputs.notes }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: The tag is a release version with release notes
+        id: check
+        # Only vX.Y.Z and vX.Y.Z-rc.N: the versions the controller treats as
+        # releases (install and upgrade commands, outdated workers). The
+        # notes are docs/releases/<tag>.md; a release candidate may use those
+        # of its version (docs/releases/vX.Y.Z.md).
+        run: |
+          tag=$GITHUB_REF_NAME
+          if ! [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error::$tag is not a release version (vX.Y.Z or vX.Y.Z-rc.N)"
+            exit 1
+          fi
+          prerelease=false
+          notes=docs/releases/$tag.md
+          if [[ $tag == *-rc.* ]]; then
+            prerelease=true
+            if [ ! -f "$notes" ]; then notes=docs/releases/${tag%-rc.*}.md; fi
+          fi
+          if [ ! -f "$notes" ]; then
+            echo "::error::no release notes: add docs/releases/$tag.md"
+            exit 1
+          fi
+          echo "notes=$notes" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  binaries:
+    name: binaries (GoReleaser)
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # create the release and upload its assets
+      id-token: write # sign the provenance (Sigstore)
+      attestations: write # store the provenance
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0 # GoReleaser reads the tags
+      # No caches in a release build.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26
+          package-manager-cache: false
+      - name: Release notes
+        env:
+          NOTES: ${{ needs.prepare.outputs.notes }}
+        run: |
+          out="$RUNNER_TEMP/release-notes.md"
+          if [ "$NOTES" != "docs/releases/$GITHUB_REF_NAME.md" ]; then
+            printf '> **Release candidate** of %s, for testing before the release. Please report problems as issues.\n\n' \
+              "$(basename "$NOTES" .md)" > "$out"
+          fi
+          cat "$NOTES" >> "$out"
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: ${{ env.GORELEASER_VERSION }}
+          args: release --clean --release-notes ${{ runner.temp }}/release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+      - name: Build provenance of the archives and checksums.txt
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+
+  images:
+    name: image (${{ matrix.image }})
+    # After the binaries: a release whose GoReleaser run failed must not
+    # push images (and move 2.0, 2 and latest) for a version that has no
+    # release.
+    needs: [prepare, binaries]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write # push to GHCR
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: syncr-controller, dockerfile: Dockerfile.controller }
+          - { image: syncr-worker, dockerfile: Dockerfile.worker }
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Version build args
+        id: version
+        # The values GoReleaser gives the binaries: the tag, the full commit
+        # and the commit date.
+        run: |
+          {
+            echo "version=$GITHUB_REF_NAME"
+            echo "commit=$(git rev-parse HEAD)"
+            echo "built=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+      # The worker image runs apt-get for each platform.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image tags
+        id: meta
+        # v2.0.0 gives 2.0.0, 2.0, 2 and latest; a pre-release such as
+        # v2.0.0-rc.1 only its own tag, 2.0.0-rc.1.
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ matrix.image }}
+          flavor: latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ steps.version.outputs.commit }}
+            BUILD_TIME=${{ steps.version.outputs.built }}
+
+  smoke:
+    name: smoke test of the published release
+    needs: [prepare, binaries, images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read # the packages are private until made public once
+    env:
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+    steps:
+      - name: The release is published as the tag says
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          got=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"')
+          if [ "$got" != "false $PRERELEASE" ]; then
+            echo "::error::release $GITHUB_REF_NAME: draft and pre-release are '$got', want 'false $PRERELEASE'"
+            exit 1
+          fi
+      - name: The documented Linux install command gets a worker of this version
+        # As in docs/setup-linux.md and the UI's install commands, with this
+        # release's assets; then the archive is checked against checksums.txt.
+        run: |
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          curl -fsSL "$base/syncr-worker_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar -xz syncr-worker
+          ./syncr-worker version
+          v=$(./syncr-worker version | awk '{print $2}')
+          if [ "$v" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::the released worker reports $v, want $GITHUB_REF_NAME"
+            exit 1
+          fi
+          curl -fsSLO "$base/checksums.txt"
+          curl -fsSLO "$base/syncr-worker_linux_amd64.tar.gz"
+          sha256sum --strict --ignore-missing -c checksums.txt
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Both images report this version, for both platforms
+        run: |
+          tag=${GITHUB_REF_NAME#v}
+          for image in syncr-controller syncr-worker; do
+            ref="$REGISTRY/$image:$tag"
+            docker pull "$ref"
+            if [ "$image" = syncr-controller ]; then
+              out=$(docker run --rm "$ref" -version)
+            else
+              out=$(docker run --rm "$ref" version)
+            fi
+            echo "$out"
+            v=$(echo "$out" | awk '{print $2}')
+            if [ "$v" != "$GITHUB_REF_NAME" ]; then
+              echo "::error::$ref reports $v, want $GITHUB_REF_NAME"
+              exit 1
+            fi
+            platforms=$(docker buildx imagetools inspect --raw "$ref" | jq -r '[.manifests[].platform | select(.os == "linux") | .architecture] | sort | unique | join(",")')
+            if [ "$platforms" != "amd64,arm64" ]; then
+              echo "::error::$ref is built for [$platforms], want amd64,arm64"
+              exit 1
+            fi
+          done
+      - name: A final release also moves 2.0, 2 and latest
+        if: needs.prepare.outputs.prerelease == 'false'
+        run: |
+          tag=${GITHUB_REF_NAME#v}
+          minor=${tag%.*}
+          major=${tag%%.*}
+          for image in syncr-controller syncr-worker; do
+            want=$(docker buildx imagetools inspect "$REGISTRY/$image:$tag" --format '{{json .Manifest.Digest}}')
+            for alias in "$minor" "$major" latest; do
+              got=$(docker buildx imagetools inspect "$REGISTRY/$image:$alias" --format '{{json .Manifest.Digest}}')
+              if [ "$got" != "$want" ]; then
+                echo "::error::$image:$alias is $got, not $image:$tag ($want)"
+                exit 1
+              fi
+            done
+          done

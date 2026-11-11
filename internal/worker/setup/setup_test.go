@@ -168,6 +168,15 @@ func (f *fakeServices) Status(context.Context, service.Spec) (service.State, err
 	return f.state, f.statusErr
 }
 
+func (f *fakeServices) InstalledExecutable(context.Context, service.Spec) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.state == service.StateNotInstalled {
+		return "", service.ErrNotInstalled
+	}
+	return f.installed.Executable, nil
+}
+
 func (f *fakeServices) Info(spec service.Spec) service.Info {
 	return service.Info{Platform: "fake manager", Location: "fake://" + spec.Name, LogHint: "fake-logs " + spec.Name}
 }

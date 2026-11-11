@@ -26,7 +26,10 @@ type lifetime struct{}
 // goroutine that keeps its OS thread locked until the child has exited: no
 // other goroutine can run on that thread, and so none can retire it, while
 // the child runs.
-func (*lifetime) startChild(cmd *exec.Cmd, _ *slog.Logger) (<-chan error, error) {
+//
+// The waiting goroutine stops the child's process tree (tree.wait) before
+// it reaps the child.
+func (*lifetime) startChild(cmd *exec.Cmd, t *tree, log *slog.Logger) (<-chan error, error) {
 	cmd.SysProcAttr.Pdeathsig = syscall.SIGKILL
 	started := make(chan error, 1)
 	done := make(chan error, 1)
@@ -38,7 +41,7 @@ func (*lifetime) startChild(cmd *exec.Cmd, _ *slog.Logger) (<-chan error, error)
 			return
 		}
 		started <- nil
-		err := cmd.Wait()
+		err := t.wait(cmd, log)
 		// The child has exited and been reaped: the thread may be reused.
 		runtime.UnlockOSThread()
 		done <- err

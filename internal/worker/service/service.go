@@ -191,6 +191,13 @@ type Manager interface {
 	Stop(ctx context.Context, spec Spec) error
 	Restart(ctx context.Context, spec Spec) error
 	Status(ctx context.Context, spec Spec) (State, error)
+	// InstalledExecutable returns the program the installed service runs,
+	// as its definition names it (which may differ from spec.Executable:
+	// the service may have been installed from another copy of the
+	// worker). It returns ErrNotInstalled (wrapped) when the service does
+	// not exist, and ErrUnsupported (wrapped) where the service manager's
+	// definition cannot be read.
+	InstalledExecutable(ctx context.Context, spec Spec) (string, error)
 	// Info describes spec's service on this platform.
 	Info(spec Spec) Info
 }

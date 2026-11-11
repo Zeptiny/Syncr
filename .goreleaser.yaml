@@ -1,0 +1,122 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+#
+# Release build of syncr-controller and syncr-worker (GoReleaser v2; the
+# version is pinned as GORELEASER_VERSION in the Makefile and in
+# .github/workflows/{ci,release}.yml). docs/adr/0016-releases-versioning.md
+# explains the choices.
+#
+#   make release-snapshot   # local build into dist/, nothing is published
+#
+# The asset names are fixed: the install commands
+# (internal/adapters/api/install.go) and `syncr-worker upgrade`
+# (internal/worker/upgrade) download them. CI builds a snapshot on every
+# push and checks them (TestReleaseAssets*).
+version: 2
+
+project_name: syncr
+
+before:
+  hooks:
+    # The controller embeds web/dist (-tags webui), so a snapshot build is
+    # self-contained.
+    - npm ci --prefix web --no-audit --no-fund
+    - npm --prefix web run build
+
+git:
+  # The last tag of the Django version, not a version of this project.
+  ignore_tags:
+    - django-final
+
+builds:
+  - id: syncr-controller
+    main: ./cmd/syncr-controller
+    binary: syncr-controller
+    tags:
+      - webui
+    env: &env
+      - CGO_ENABLED=0
+    flags: &flags
+      - -trimpath
+    # The tag keeps its "v" (v2.0.0), as the UI and the install and upgrade
+    # commands expect ({{ .Version }} drops it). Snapshots report
+    # dev-<commit>, which is not a release version.
+    ldflags: &ldflags
+      - -s -w
+      - -X github.com/Zeptiny/Syncr/internal/platform/version.version={{ if .IsSnapshot }}dev-{{ .ShortCommit }}{{ else }}{{ .Tag }}{{ end }}
+      - -X github.com/Zeptiny/Syncr/internal/platform/version.commit={{ .FullCommit }}
+      - -X github.com/Zeptiny/Syncr/internal/platform/version.buildTime={{ .CommitDate }}
+    goos: &goos
+      - linux
+      - windows
+    goarch: &goarch
+      - amd64
+      - arm64
+    ignore: &ignore
+      - goos: windows
+        goarch: arm64
+    mod_timestamp: &mod_timestamp "{{ .CommitTimestamp }}"
+
+  - id: syncr-worker
+    main: ./cmd/syncr-worker
+    binary: syncr-worker
+    env: *env
+    flags: *flags
+    ldflags: *ldflags
+    goos: *goos
+    goarch: *goarch
+    ignore: *ignore
+    mod_timestamp: *mod_timestamp
+
+archives:
+  # One group per binary: syncr-worker_linux_amd64.tar.gz,
+  # syncr-worker_windows_amd64.zip, ... No version in the name, no wrapping
+  # directory: `tar -xz syncr-worker` and Expand-Archive need the binary at
+  # the root under exactly that name.
+  - id: syncr-controller
+    ids:
+      - syncr-controller
+    name_template: &archive_name "{{ .Binary }}_{{ .Os }}_{{ .Arch }}"
+    formats: &formats
+      - tar.gz
+    format_overrides: &format_overrides
+      - goos: windows
+        formats:
+          - zip
+    wrap_in_directory: false
+    builds_info: &builds_info
+      owner: root
+      group: root
+    # The binary only (the default adds README and LICENSE files); the
+    # glob matches nothing.
+    files: &files
+      - none*
+
+  - id: syncr-worker
+    ids:
+      - syncr-worker
+    name_template: *archive_name
+    formats: *formats
+    format_overrides: *format_overrides
+    wrap_in_directory: false
+    builds_info: *builds_info
+    files: *files
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+metadata:
+  mod_timestamp: "{{ .CommitTimestamp }}"
+
+release:
+  github:
+    owner: Zeptiny
+    name: Syncr
+  # A tag like v2.0.0-rc.1 makes a pre-release, which never becomes the
+  # latest release (releases/latest/download keeps the last final one).
+  prerelease: auto
+  make_latest: "{{ if .Prerelease }}false{{ else }}true{{ end }}"
+  name_template: "{{ .Tag }}"
+  # The notes are hand-written (docs/releases/<tag>.md); the release
+  # workflow passes them with --release-notes.
+  mode: replace

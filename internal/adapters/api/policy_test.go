@@ -143,6 +143,7 @@ func TestPolicyLevels(t *testing.T) {
 			syncrv1connect.WorkerAdminServiceCreateEnrollmentTokenProcedure, syncrv1connect.WorkerAdminServiceGetPassiveInstallCommandsProcedure,
 			syncrv1connect.WorkerAdminServiceRegisterPassiveWorkerProcedure, syncrv1connect.WorkerAdminServiceRenameWorkerProcedure,
 			syncrv1connect.WorkerAdminServiceRemoveWorkerProcedure, syncrv1connect.WorkerAdminServiceSetWorkerLabelsProcedure,
+			syncrv1connect.WorkerAdminServiceGetWorkerUpgradeCommandsProcedure,
 		},
 	}
 	for level, procs := range want {
@@ -250,6 +251,17 @@ func TestGuardChecksRoleAndMethod(t *testing.T) {
 	adminWorkers := syncrv1connect.NewWorkerAdminServiceClient(as(testAdmin, "token"), e.srv.URL)
 	if _, err := adminWorkers.RenameWorker(t.Context(), connect.NewRequest(&syncrv1.RenameWorkerRequest{WorkerId: e.worker.String(), Name: "x"})); err != nil {
 		t.Errorf("admin RenameWorker: %v", err)
+	}
+
+	// Upgrade commands are for admins; any user may fetch host keys.
+	_, err = userWorkers.GetWorkerUpgradeCommands(t.Context(), connect.NewRequest(&syncrv1.GetWorkerUpgradeCommandsRequest{WorkerId: e.worker.String()}))
+	wantCode(t, err, connect.CodePermissionDenied)
+	_, err = adminWorkers.GetWorkerUpgradeCommands(t.Context(), connect.NewRequest(&syncrv1.GetWorkerUpgradeCommandsRequest{WorkerId: e.worker.String()}))
+	wantPastGuard(t, err)
+	for _, a := range []domain.Actor{testUser, testAdmin} {
+		_, err = syncrv1connect.NewProbeServiceClient(as(a, "token"), e.srv.URL).GetSftpHostKeys(t.Context(),
+			connect.NewRequest(&syncrv1.GetSftpHostKeysRequest{Host: "sftp.example.com"}))
+		wantPastGuard(t, err)
 	}
 
 	// UserService is admin only.

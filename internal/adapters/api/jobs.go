@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
@@ -22,6 +23,17 @@ import (
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
 )
+
+// TimeLimits computes the effective time limit of a job: its definition's
+// max_runtime or else the controller's default (jobs.EffectiveTimeLimit).
+// *dispatch.Specs implements it, so the API shows the limit the dispatcher
+// will send to the worker of a queued job (Job.time_limit; a dispatched job
+// shows the limit stored when its worker accepted it).
+type TimeLimits interface {
+	// TimeLimit returns the limit of a job of definition def; zero for
+	// none.
+	TimeLimit(def *syncrv1.JobDefinition) time.Duration
+}
 
 // Why a WatchJob stream was ended by the server.
 var (
@@ -50,8 +62,11 @@ type jobHandler struct {
 	// workers tells RunJob the worker's operating system (the VSS check);
 	// nil skips the check.
 	workers WorkerNames
-	errs    errorMapper
-	log     *slog.Logger
+	// limits computes Job.time_limit of queued jobs; nil leaves it unset
+	// for them.
+	limits TimeLimits
+	errs   errorMapper
+	log    *slog.Logger
 	// base ends all watch streams when done (server shutdown).
 	base context.Context
 	// watchMax bounds a WatchJob stream; keepalive is the idle time after
@@ -138,12 +153,31 @@ func (h *jobHandler) protoJobs(ctx context.Context, js []jobs.Job) ([]*syncrv1.J
 			msg.WaitingForJobId = blocker.String()
 		}
 		if h.kinds != nil && msg.GetDefinition() != nil {
-			msg.Title = h.kinds.Describe(msg.GetDefinition(), names)
+			// The job page shows the effective time limit by itself, so
+			// the title leaves it out (notifications name it).
+			msg.Title = h.kinds.DescribeOperation(msg.GetDefinition(), names)
 			msg.Details = jobDetailsToProto(h.kinds.Summarize(j.Kind, msg.GetDefinition(), j.Output))
 		}
+		msg.TimeLimit = h.timeLimit(j, msg.GetDefinition())
 		out = append(out, msg)
 	}
 	return out, nil
+}
+
+// timeLimit is Job.time_limit of j (of definition def). A job a worker
+// accepted shows the limit that worker was sent, stored then
+// (jobs.Job.TimeLimit), so a finished job keeps the limit it ran with when
+// the controller's default changes later. A queued job shows the limit it
+// will be sent, by today's definition and default (h.limits). A job that
+// ended before any worker accepted it ran under no limit.
+func (h *jobHandler) timeLimit(j jobs.Job, def *syncrv1.JobDefinition) *durationpb.Duration {
+	switch {
+	case !j.DispatchedAt.IsZero():
+		return timeLimitToProto(j.TimeLimit)
+	case j.Status == domain.JobQueued && h.limits != nil && def != nil:
+		return timeLimitToProto(h.limits.TimeLimit(def))
+	}
+	return nil
 }
 
 // remoteRefs looks up the remotes of js.
@@ -399,18 +433,28 @@ func (h *jobHandler) ListJobs(ctx context.Context, req *connect.Request[syncrv1.
 }
 
 // ListJobSamples returns the stored progress samples of a job, oldest
-// first.
+// first, evenly thinned to max_points (0: 1000; capped at 5000; negative:
+// InvalidArgument), with how many the job has stored.
 func (h *jobHandler) ListJobSamples(ctx context.Context, req *connect.Request[syncrv1.ListJobSamplesRequest]) (*connect.Response[syncrv1.ListJobSamplesResponse], error) {
 	id, err := parseJobID(req.Msg.GetJobId())
 	if err != nil {
 		return nil, err
 	}
+	maxPoints := int(req.Msg.GetMaxPoints())
+	if maxPoints < 0 {
+		return nil, invalidField("max_points", "must not be negative")
+	}
 	actor, _ := ActorFrom(ctx)
-	smps, err := h.jobs.Samples(ctx, actor, id)
+	// The service maps 0 to jobs.DefaultSamplePoints and caps the rest at
+	// jobs.MaxSamplePoints.
+	smps, total, err := h.jobs.ListSamples(ctx, actor, id, maxPoints)
 	if err != nil {
 		return nil, h.fail(ctx, syncrv1connect.JobServiceListJobSamplesProcedure, err)
 	}
-	resp := &syncrv1.ListJobSamplesResponse{Samples: make([]*syncrv1.JobProgress, 0, len(smps))}
+	resp := &syncrv1.ListJobSamplesResponse{
+		Samples: make([]*syncrv1.JobProgress, 0, len(smps)),
+		Total:   int32(min(max(total, 0), 1<<31-1)),
+	}
 	for _, smp := range smps {
 		resp.Samples = append(resp.Samples, progressToProto(smp))
 	}

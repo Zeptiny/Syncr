@@ -26,16 +26,20 @@ import { StatusBadge } from "@/components/app/status-badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { JobService, JobStatus, WorkerAdminService, type Job } from "@/gen/syncr/v1/api_pb";
+import { JobErrorCode } from "@/gen/syncr/v1/link_pb";
+import { ResticService } from "@/gen/syncr/v1/restic_pb";
 import { UserService } from "@/gen/syncr/v1/users_pb";
 import { useNow } from "@/hooks/use-now";
 import { useSession } from "@/hooks/use-session";
 import { useWatchJob, type JobSample, type WatchResult } from "@/hooks/use-watch-job";
 import {
+  durationSeconds,
   formatBytes,
   formatCount,
   formatDateTime,
   formatDuration,
   formatEta,
+  formatLimit,
   formatRate,
   percent,
   rateBetween,
@@ -45,7 +49,13 @@ import {
 } from "@/lib/format";
 import { errorMessage } from "@/lib/errors";
 import { invalidateService } from "@/lib/invalidate";
-import { errorCodeLabel, isTerminal, kindLabel, transferModeLabel } from "@/lib/status";
+import {
+  errorCodeLabel,
+  isResticKind,
+  isTerminal,
+  kindLabel,
+  transferModeLabel,
+} from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 import { isEditableKind } from "./definition";
@@ -249,7 +259,8 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
   const cancel = useMutation(JobService.method.cancelJob);
   const rerun = useMutation(JobService.method.runJob);
   const [cancelling, setCancelling] = useState(false);
-  const now = useNow(1000).getTime();
+  // Only an unfinished job's clock moves: a finished page stays still.
+  const now = useNow(1000, !!job && !isTerminal(job.status)).getTime();
 
   if (q.error && !job) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
   if (!job) {
@@ -280,9 +291,14 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
   const errors = toNumber(job.stats?.errors);
   const owner = foreign ? users.data?.users.find((u) => u.id === job.ownerId) : undefined;
 
+  const limit = durationSeconds(job.timeLimit);
+  const timedOut = job.error?.code === JobErrorCode.TIME_LIMIT;
+
   const runAgain = async () => {
     const res = await rerun.mutateAsync({ workerId: job.workerId, definition: job.definition });
     await invalidateService(queryClient, JobService);
+    // A restic job changes its repository's state (running jobs, snapshots).
+    if (isResticKind(job.kind)) await invalidateService(queryClient, ResticService);
     toast.success("Job queued again");
     if (res.job) await navigate({ to: "/jobs/$jobId", params: { jobId: res.job.id } });
   };
@@ -393,7 +409,11 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
                 : formatEta(p.total - p.bytes, rate)
             }
             sub={
-              !terminal && elapsed !== undefined ? `${formatDuration(elapsed)} elapsed` : undefined
+              !terminal && elapsed !== undefined
+                ? `${formatDuration(elapsed)} elapsed${limit > 0 ? `, limit ${formatLimit(limit)}` : ""}`
+                : timedOut && limit > 0
+                  ? `Time limit ${formatLimit(limit)}`
+                  : undefined
             }
           />
           <StatCard
@@ -417,6 +437,13 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
                   <span className="font-normal"> (exit code {job.exitCode})</span>
                 )}
               </div>
+              {timedOut && (
+                <p className="mt-0.5 text-[13px] leading-5">
+                  It ran longer than its time limit
+                  {limit > 0 ? ` of ${formatLimit(limit)}` : ""}, so the worker stopped it. Raise
+                  the limit (Edit and run) if the job needs more time.
+                </p>
+              )}
               <p className="mt-0.5 font-mono text-[12.5px] leading-5 break-words">
                 {job.error.message}
               </p>
@@ -442,7 +469,22 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
         <JobOutputCards job={job} />
 
         <Panel title="Throughput" actions={<Connection watch={watch} terminal={terminal} />}>
-          <ProgressChart samples={watch.samples} live={!terminal} />
+          <ProgressChart
+            samples={watch.samples}
+            live={!terminal}
+            empty={
+              terminal && watch.history !== "loading"
+                ? "No progress history (it is kept for a limited time)"
+                : undefined
+            }
+            note={
+              watch.thinned
+                ? watch.total > watch.samples.length
+                  ? `Thinned: ${formatCount(watch.samples.length)} of ${formatCount(watch.total)} progress samples shown, evenly spread.`
+                  : "Thinned: older progress samples are left out, evenly spread."
+                : undefined
+            }
+          />
         </Panel>
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
@@ -466,6 +508,10 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
                   ) : (
                     "Removed"
                   ),
+                },
+                {
+                  label: "Time limit",
+                  value: limit > 0 ? formatLimit(limit) : "None",
                 },
                 {
                   label: "Started by",

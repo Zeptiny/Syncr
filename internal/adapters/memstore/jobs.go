@@ -207,11 +207,69 @@ func (s *Store) LatestJobSamples(_ context.Context, ids []domain.JobID) (map[dom
 	return out, nil
 }
 
-// ListJobSamples implements jobs.SampleRepository.
-func (s *Store) ListJobSamples(_ context.Context, id domain.JobID) ([]jobs.Sample, error) {
+// ListJobSamples implements jobs.SampleRepository, with the port's exact
+// thinning rule.
+func (s *Store) ListJobSamples(_ context.Context, id domain.JobID, maxPoints int) ([]jobs.Sample, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return slices.Clone(s.samples[id]), nil
+	list := s.samples[id]
+	n := len(list)
+	if maxPoints <= 0 || n <= maxPoints {
+		return slices.Clone(list), n, nil
+	}
+	out := make([]jobs.Sample, 0, maxPoints)
+	for r, smp := range list {
+		if keepSample(r, n, maxPoints) {
+			out = append(out, smp)
+		}
+	}
+	return out, n, nil
+}
+
+// keepSample reports whether ListJobSamples keeps the sample at rank r of
+// n when thinning them to maxPoints (n > maxPoints >= 1): the first one,
+// and then the first of each of maxPoints equal spans of ranks. The
+// Postgres query computes the same with integer division (r >= 1, so both
+// truncate like floor).
+func keepSample(r, n, maxPoints int) bool {
+	if r == 0 {
+		return true
+	}
+	return r*(maxPoints-1)/(n-1) > (r-1)*(maxPoints-1)/(n-1)
+}
+
+// PurgeJobSamples implements jobs.SampleRepository.
+func (s *Store) PurgeJobSamples(_ context.Context, finishedBefore time.Time, after jobs.PurgeCursor, maxJobs int) (int, jobs.PurgeCursor, error) {
+	if maxJobs <= 0 {
+		return 0, after, fmt.Errorf("purge job samples: %w: max jobs %d is not positive", domain.ErrInvalidArgument, maxJobs)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	order := func(a, b jobs.PurgeCursor) int {
+		return cmp.Or(a.FinishedAt.Compare(b.FinishedAt), compareIDs(a.ID, b.ID))
+	}
+	var due []jobs.PurgeCursor
+	for jid, list := range s.samples {
+		j, ok := s.jobs[jid]
+		if !ok || len(list) == 0 || j.FinishedAt.IsZero() || !j.FinishedAt.Before(finishedBefore) {
+			continue
+		}
+		if c := (jobs.PurgeCursor{FinishedAt: j.FinishedAt, ID: j.ID}); order(c, after) > 0 {
+			due = append(due, c)
+		}
+	}
+	// In (FinishedAt, ID) order, as Postgres walks them.
+	slices.SortFunc(due, order)
+	due = due[:min(len(due), maxJobs)]
+	deleted := 0
+	for _, c := range due {
+		deleted += len(s.samples[c.ID])
+		delete(s.samples, c.ID)
+	}
+	if len(due) == 0 {
+		return 0, after, nil
+	}
+	return deleted, due[len(due)-1], nil
 }
 
 // olderJob orders jobs by (CreatedAt, ID), the order of the concurrency

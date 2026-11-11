@@ -2,12 +2,15 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/xml"
+	"errors"
 	"os"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf16"
 )
 
@@ -96,6 +99,7 @@ type taskHarness struct {
 	tm     *taskManager
 	runner *fakeRunner
 	xml    string // task definition passed to /Create
+	sleeps int
 }
 
 func newTaskHarness(t *testing.T, reply func(name string, args []string) (string, int, error)) *taskHarness {
@@ -114,7 +118,8 @@ func newTaskHarness(t *testing.T, reply func(name string, args []string) (string
 		}
 		return "", 0, nil
 	}
-	h.tm = &taskManager{runner: h.runner, user: func() (string, error) { return `PC\alice`, nil }, tempDir: t.TempDir}
+	h.tm = &taskManager{runner: h.runner, user: func() (string, error) { return `PC\alice`, nil }, tempDir: t.TempDir,
+		sleep: func(context.Context, time.Duration) error { h.sleeps++; return nil }}
 	return h
 }
 
@@ -149,10 +154,18 @@ func TestTaskInstallFailure(t *testing.T) {
 	}
 }
 
+// taskStateQuery is the PowerShell call that reads the task's state.
+const taskStateQuery = "powershell.exe -NoProfile -NonInteractive -Command (Get-ScheduledTask -TaskName 'syncr-worker').State"
+
 func TestTaskControl(t *testing.T) {
 	t.Parallel()
 	spec := windowsUserSpec()
-	h := newTaskHarness(t, nil)
+	h := newTaskHarness(t, func(name string, _ []string) (string, int, error) {
+		if name == "powershell.exe" {
+			return "Ready", 0, nil
+		}
+		return "", 0, nil
+	})
 	ctx := context.Background()
 	for _, action := range []string{"start", "stop", "restart"} {
 		if err := h.tm.control(ctx, spec, action); err != nil {
@@ -165,9 +178,12 @@ func TestTaskControl(t *testing.T) {
 	want := []string{
 		"schtasks.exe /Run /TN syncr-worker",
 		"schtasks.exe /End /TN syncr-worker",
+		taskStateQuery,                       // stop waits for the instance to end
 		"schtasks.exe /End /TN syncr-worker", // restart: stop ...
+		taskStateQuery,                       // ... until it ended ...
 		"schtasks.exe /Run /TN syncr-worker", // ... then start
 		"schtasks.exe /End /TN syncr-worker", // uninstall: stop ...
+		taskStateQuery,
 		"schtasks.exe /Delete /TN syncr-worker /F",
 	}
 	if !slices.Equal(h.runner.calls, want) {
@@ -182,6 +198,117 @@ func TestTaskControl(t *testing.T) {
 	})
 	if err := h.tm.control(ctx, spec, "stop"); err == nil {
 		t.Error("a failing /End was ignored")
+	}
+}
+
+// TestTaskRestartWaitsForTheInstanceToEnd: /End returns before the worker
+// has exited, and a /Run meanwhile would be ignored (IgnoreNew), so the
+// restart runs the task only once its state left Running.
+func TestTaskRestartWaitsForTheInstanceToEnd(t *testing.T) {
+	t.Parallel()
+	polls := 0
+	h := newTaskHarness(t, func(name string, args []string) (string, int, error) {
+		if name != "powershell.exe" {
+			if slices.Contains(args, "/Run") && polls < 3 {
+				t.Errorf("/Run while the old instance is still running (poll %d)", polls)
+			}
+			return "", 0, nil
+		}
+		polls++
+		if polls < 3 {
+			return "Running", 0, nil
+		}
+		return "Ready", 0, nil
+	})
+	if err := h.tm.control(t.Context(), windowsUserSpec(), "restart"); err != nil {
+		t.Fatal(err)
+	}
+	if polls != 3 || h.sleeps != 2 {
+		t.Errorf("polled %d times and slept %d times, want 3 and 2", polls, h.sleeps)
+	}
+	if last := h.runner.calls[len(h.runner.calls)-1]; last != "schtasks.exe /Run /TN syncr-worker" {
+		t.Errorf("last call = %q", last)
+	}
+}
+
+func TestTaskStopTimesOut(t *testing.T) {
+	t.Parallel()
+	h := newTaskHarness(t, func(name string, _ []string) (string, int, error) {
+		if name == "powershell.exe" {
+			return "Running", 0, nil
+		}
+		return "", 0, nil
+	})
+	err := h.tm.control(t.Context(), windowsUserSpec(), "restart")
+	if err == nil || !strings.Contains(err.Error(), "still running") {
+		t.Fatalf("err = %v", err)
+	}
+	if want := int(taskStopTimeout / taskStopPoll); h.sleeps != want {
+		t.Errorf("slept %d times, want %d", h.sleeps, want)
+	}
+	if slices.Contains(h.runner.calls, "schtasks.exe /Run /TN syncr-worker") {
+		t.Error("restart ran the task although the old instance did not end")
+	}
+
+	// A cancelled wait ends the stop with the context's error.
+	h = newTaskHarness(t, func(name string, _ []string) (string, int, error) {
+		if name == "powershell.exe" {
+			return "Running", 0, nil
+		}
+		return "", 0, nil
+	})
+	h.tm.sleep = func(context.Context, time.Duration) error { return context.Canceled }
+	if err := h.tm.control(t.Context(), windowsUserSpec(), "stop"); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestTaskExecutable(t *testing.T) {
+	t.Parallel()
+	spec := windowsUserSpec()
+	for _, tt := range []struct {
+		name    string
+		exists  bool
+		out     string
+		code    int
+		want    string
+		wantErr string
+	}{
+		{"plain", true, base64.StdEncoding.EncodeToString([]byte(`C:\Users\Alice Smith\bin\syncr-worker.exe`)), 0, `C:\Users\Alice Smith\bin\syncr-worker.exe`, ""},
+		{"quoted, not ASCII", true, base64.StdEncoding.EncodeToString([]byte(`"C:\Users\Zoë\syncr-worker.exe"`)) + "\r\n", 0, `C:\Users\Zoë\syncr-worker.exe`, ""},
+		{"missing task", false, "", 0, "", "not installed"},
+		{"powershell fails", true, "Get-ScheduledTask : No MSFT_ScheduledTask objects found", 1, "", "No MSFT_ScheduledTask"},
+		{"not base64", true, "garbage!", 0, "", "unexpected output"},
+		{"no program", true, "", 0, "", "no program"},
+	} {
+		h := newTaskHarness(t, func(name string, _ []string) (string, int, error) {
+			if name == "schtasks.exe" {
+				if tt.exists {
+					return "", 0, nil
+				}
+				return "ERROR: The system cannot find the file specified.", 1, nil
+			}
+			return tt.out, tt.code, nil
+		})
+		got, err := h.tm.executable(t.Context(), spec)
+		if tt.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("%s: err = %v, want %q", tt.name, err, tt.wantErr)
+			}
+			if tt.name == "missing task" && !errors.Is(err, ErrNotInstalled) {
+				t.Errorf("%s: err = %v, want ErrNotInstalled", tt.name, err)
+			}
+			continue
+		}
+		if err != nil || got != tt.want {
+			t.Errorf("%s: executable = %q, %v; want %q", tt.name, got, err, tt.want)
+		}
+	}
+	h := newTaskHarness(t, nil)
+	_, _ = h.tm.executable(t.Context(), spec)
+	if n := len(h.runner.calls); n != 2 || !strings.Contains(h.runner.calls[1], "-TaskPath '\\' -TaskName 'syncr-worker'") ||
+		!strings.Contains(h.runner.calls[1], "ToBase64String") {
+		t.Errorf("calls = %q", h.runner.calls)
 	}
 }
 
@@ -212,6 +339,31 @@ func TestTaskStatus(t *testing.T) {
 		if err != nil || got != tt.want {
 			t.Errorf("%s: status = %v, %v; want %v", tt.name, got, err, tt.want)
 		}
+	}
+}
+
+// TestManagerRestartsAStoppedTaskByRunningIt: a restart of a task that does
+// not run only runs it; its /End would fail with a message in the display
+// language.
+func TestManagerRestartsAStoppedTaskByRunningIt(t *testing.T) {
+	t.Parallel()
+	h := newHarness("windows", "windows-service", false)
+	h.runner.reply = func(name string, args []string) (string, int, error) {
+		switch {
+		case name == "powershell.exe":
+			return "Ready", 0, nil
+		case slices.Contains(args, "/End"):
+			return "ERROR: There are no running instances of the task.", 1, nil
+		}
+		return "", 0, nil
+	}
+	if err := h.m.Restart(t.Context(), windowsUserSpec()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.runner.calls[len(h.runner.calls)-1]; got != "schtasks.exe /Run /TN syncr-worker" || slices.ContainsFunc(h.runner.calls, func(c string) bool {
+		return strings.Contains(c, "/End")
+	}) {
+		t.Errorf("calls = %q, want a /Run and no /End", h.runner.calls)
 	}
 }
 

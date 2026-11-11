@@ -658,6 +658,74 @@ func TestRequeue(t *testing.T) {
 	}
 }
 
+// fakeLimits is the jobs.TimeLimits of the tests: every job gets limit.
+type fakeLimits struct {
+	mu    sync.Mutex
+	limit time.Duration
+}
+
+func (f *fakeLimits) TimeLimitOf(jobs.Job) time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.limit
+}
+
+func (f *fakeLimits) set(d time.Duration) {
+	f.mu.Lock()
+	f.limit = d
+	f.mu.Unlock()
+}
+
+// TestMarkDispatchedRecordsTheTimeLimit: the limit the worker is sent is
+// stored when it accepts the job and stays with it, whatever the default
+// becomes later; a requeue clears it, and the next dispatch records the
+// limit of that moment.
+func TestMarkDispatchedRecordsTheTimeLimit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	limits := &fakeLimits{limit: 6 * time.Hour}
+	svc, err := jobs.New(jobs.Deps{
+		Jobs: e.store, Samples: e.store, Clock: e.clock, IDs: &idgen.Sequential{},
+		Broker: e.rec, Notifier: e.rec, Waker: e.rec, Remotes: e.remotes, TimeLimits: limits,
+	}, jobs.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.svc = svc
+
+	j := e.create(t)
+	if j.TimeLimit != 0 {
+		t.Errorf("a queued job has the limit %v", j.TimeLimit)
+	}
+	got, _, err := svc.MarkDispatched(ctx, e.worker, j.ID, epoch)
+	if err != nil || got.TimeLimit != 6*time.Hour {
+		t.Fatalf("MarkDispatched = %v, %v; want the limit 6h", got.TimeLimit, err)
+	}
+	limits.set(time.Hour) // the controller's default changed
+	if got, _, err = svc.MarkRunning(ctx, e.worker, j.ID, epoch, time.Time{}); err != nil || got.TimeLimit != 6*time.Hour {
+		t.Errorf("running: limit %v, %v; want the one it was dispatched with", got.TimeLimit, err)
+	}
+	if got, _, err = svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobSucceeded}); err != nil || got.TimeLimit != 6*time.Hour {
+		t.Errorf("finished: limit %v, %v; want the one it was dispatched with", got.TimeLimit, err)
+	}
+	if stored, err := e.store.GetJob(ctx, j.ID); err != nil || stored.TimeLimit != 6*time.Hour {
+		t.Errorf("stored limit %v, %v", stored.TimeLimit, err)
+	}
+
+	r := e.at(t, domain.JobDispatched)
+	if r.TimeLimit != time.Hour {
+		t.Fatalf("dispatched with %v, want the new default", r.TimeLimit)
+	}
+	if got, _, err = svc.Requeue(ctx, e.worker, r.ID, epoch); err != nil || got.TimeLimit != 0 {
+		t.Errorf("requeued: limit %v, %v; want none", got.TimeLimit, err)
+	}
+	limits.set(0)
+	if got, _, err = svc.MarkDispatched(ctx, e.worker, r.ID, epoch); err != nil || got.TimeLimit != 0 {
+		t.Errorf("dispatched again: limit %v, %v; want none", got.TimeLimit, err)
+	}
+}
+
 func TestProgressIsRateLimitedBeforeStorage(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -63,6 +63,9 @@ const (
 	// WorkerAdminServiceSetWorkerLabelsProcedure is the fully-qualified name of the
 	// WorkerAdminService's SetWorkerLabels RPC.
 	WorkerAdminServiceSetWorkerLabelsProcedure = "/syncr.v1.WorkerAdminService/SetWorkerLabels"
+	// WorkerAdminServiceGetWorkerUpgradeCommandsProcedure is the fully-qualified name of the
+	// WorkerAdminService's GetWorkerUpgradeCommands RPC.
+	WorkerAdminServiceGetWorkerUpgradeCommandsProcedure = "/syncr.v1.WorkerAdminService/GetWorkerUpgradeCommands"
 	// JobServiceRunJobProcedure is the fully-qualified name of the JobService's RunJob RPC.
 	JobServiceRunJobProcedure = "/syncr.v1.JobService/RunJob"
 	// JobServiceGetJobProcedure is the fully-qualified name of the JobService's GetJob RPC.
@@ -184,6 +187,14 @@ type WorkerAdminServiceClient interface {
 	// worker has at most 16. Labels are managed by admins, never reported by
 	// workers, so a worker cannot attract other users' jobs.
 	SetWorkerLabels(context.Context, *connect.Request[v1.SetWorkerLabelsRequest]) (*connect.Response[v1.SetWorkerLabelsResponse], error)
+	// GetWorkerUpgradeCommands returns the commands that upgrade a worker in
+	// place (`syncr-worker upgrade`) to the controller's release, for the
+	// worker's operating system: one for a system service and one for a
+	// per-user service. Running jobs are interrupted by the restart the
+	// upgrade does. Empty when the worker's operating system is unknown (it
+	// never connected) or has no release build. NOT_FOUND for an unknown or
+	// removed worker.
+	GetWorkerUpgradeCommands(context.Context, *connect.Request[v1.GetWorkerUpgradeCommandsRequest]) (*connect.Response[v1.GetWorkerUpgradeCommandsResponse], error)
 }
 
 // NewWorkerAdminServiceClient constructs a client for the syncr.v1.WorkerAdminService service. By
@@ -251,6 +262,13 @@ func NewWorkerAdminServiceClient(httpClient connect.HTTPClient, baseURL string, 
 			connect.WithIdempotency(connect.IdempotencyIdempotent),
 			connect.WithClientOptions(opts...),
 		),
+		getWorkerUpgradeCommands: connect.NewClient[v1.GetWorkerUpgradeCommandsRequest, v1.GetWorkerUpgradeCommandsResponse](
+			httpClient,
+			baseURL+WorkerAdminServiceGetWorkerUpgradeCommandsProcedure,
+			connect.WithSchema(workerAdminServiceMethods.ByName("GetWorkerUpgradeCommands")),
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -264,6 +282,7 @@ type workerAdminServiceClient struct {
 	renameWorker              *connect.Client[v1.RenameWorkerRequest, v1.RenameWorkerResponse]
 	removeWorker              *connect.Client[v1.RemoveWorkerRequest, v1.RemoveWorkerResponse]
 	setWorkerLabels           *connect.Client[v1.SetWorkerLabelsRequest, v1.SetWorkerLabelsResponse]
+	getWorkerUpgradeCommands  *connect.Client[v1.GetWorkerUpgradeCommandsRequest, v1.GetWorkerUpgradeCommandsResponse]
 }
 
 // CreateEnrollmentToken calls syncr.v1.WorkerAdminService.CreateEnrollmentToken.
@@ -306,6 +325,11 @@ func (c *workerAdminServiceClient) SetWorkerLabels(ctx context.Context, req *con
 	return c.setWorkerLabels.CallUnary(ctx, req)
 }
 
+// GetWorkerUpgradeCommands calls syncr.v1.WorkerAdminService.GetWorkerUpgradeCommands.
+func (c *workerAdminServiceClient) GetWorkerUpgradeCommands(ctx context.Context, req *connect.Request[v1.GetWorkerUpgradeCommandsRequest]) (*connect.Response[v1.GetWorkerUpgradeCommandsResponse], error) {
+	return c.getWorkerUpgradeCommands.CallUnary(ctx, req)
+}
+
 // WorkerAdminServiceHandler is an implementation of the syncr.v1.WorkerAdminService service.
 type WorkerAdminServiceHandler interface {
 	// CreateEnrollmentToken creates a short-lived, single-use token for
@@ -336,6 +360,14 @@ type WorkerAdminServiceHandler interface {
 	// worker has at most 16. Labels are managed by admins, never reported by
 	// workers, so a worker cannot attract other users' jobs.
 	SetWorkerLabels(context.Context, *connect.Request[v1.SetWorkerLabelsRequest]) (*connect.Response[v1.SetWorkerLabelsResponse], error)
+	// GetWorkerUpgradeCommands returns the commands that upgrade a worker in
+	// place (`syncr-worker upgrade`) to the controller's release, for the
+	// worker's operating system: one for a system service and one for a
+	// per-user service. Running jobs are interrupted by the restart the
+	// upgrade does. Empty when the worker's operating system is unknown (it
+	// never connected) or has no release build. NOT_FOUND for an unknown or
+	// removed worker.
+	GetWorkerUpgradeCommands(context.Context, *connect.Request[v1.GetWorkerUpgradeCommandsRequest]) (*connect.Response[v1.GetWorkerUpgradeCommandsResponse], error)
 }
 
 // NewWorkerAdminServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -399,6 +431,13 @@ func NewWorkerAdminServiceHandler(svc WorkerAdminServiceHandler, opts ...connect
 		connect.WithIdempotency(connect.IdempotencyIdempotent),
 		connect.WithHandlerOptions(opts...),
 	)
+	workerAdminServiceGetWorkerUpgradeCommandsHandler := connect.NewUnaryHandler(
+		WorkerAdminServiceGetWorkerUpgradeCommandsProcedure,
+		svc.GetWorkerUpgradeCommands,
+		connect.WithSchema(workerAdminServiceMethods.ByName("GetWorkerUpgradeCommands")),
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/syncr.v1.WorkerAdminService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkerAdminServiceCreateEnrollmentTokenProcedure:
@@ -417,6 +456,8 @@ func NewWorkerAdminServiceHandler(svc WorkerAdminServiceHandler, opts ...connect
 			workerAdminServiceRemoveWorkerHandler.ServeHTTP(w, r)
 		case WorkerAdminServiceSetWorkerLabelsProcedure:
 			workerAdminServiceSetWorkerLabelsHandler.ServeHTTP(w, r)
+		case WorkerAdminServiceGetWorkerUpgradeCommandsProcedure:
+			workerAdminServiceGetWorkerUpgradeCommandsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -458,6 +499,10 @@ func (UnimplementedWorkerAdminServiceHandler) SetWorkerLabels(context.Context, *
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.SetWorkerLabels is not implemented"))
 }
 
+func (UnimplementedWorkerAdminServiceHandler) GetWorkerUpgradeCommands(context.Context, *connect.Request[v1.GetWorkerUpgradeCommandsRequest]) (*connect.Response[v1.GetWorkerUpgradeCommandsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.GetWorkerUpgradeCommands is not implemented"))
+}
+
 // JobServiceClient is a client for the syncr.v1.JobService service.
 type JobServiceClient interface {
 	// RunJob queues a job on a worker. The definition refers to the caller's
@@ -495,7 +540,10 @@ type JobServiceClient interface {
 	// missed.
 	WatchJob(context.Context, *connect.Request[v1.WatchJobRequest]) (*connect.ServerStreamForClient[v1.WatchJobResponse], error)
 	// ListJobSamples returns the stored progress samples of a job (one about
-	// every five seconds while it ran), oldest first, for charts.
+	// every five seconds while it ran), oldest first, for charts: at most
+	// max_points of them, evenly thinned. The samples of a job that finished
+	// longer ago than the controller's jobs.sample_retention (30 days by
+	// default) are deleted; its final counters stay on the job.
 	ListJobSamples(context.Context, *connect.Request[v1.ListJobSamplesRequest]) (*connect.Response[v1.ListJobSamplesResponse], error)
 }
 
@@ -631,7 +679,10 @@ type JobServiceHandler interface {
 	// missed.
 	WatchJob(context.Context, *connect.Request[v1.WatchJobRequest], *connect.ServerStream[v1.WatchJobResponse]) error
 	// ListJobSamples returns the stored progress samples of a job (one about
-	// every five seconds while it ran), oldest first, for charts.
+	// every five seconds while it ran), oldest first, for charts: at most
+	// max_points of them, evenly thinned. The samples of a job that finished
+	// longer ago than the controller's jobs.sample_retention (30 days by
+	// default) are deleted; its final counters stay on the job.
 	ListJobSamples(context.Context, *connect.Request[v1.ListJobSamplesRequest]) (*connect.Response[v1.ListJobSamplesResponse], error)
 }
 

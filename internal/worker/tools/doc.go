@@ -20,7 +20,17 @@
 // archive to a temporary file, verifies its digest before opening it, and
 // extracts only the single expected binary under a size cap. Concurrent
 // installs (several workers, or two `setup` runs) are serialized with an
-// OS-level lock file.
+// OS-level lock file (internal/worker/filelock).
 //
-// Allowed dependencies: the standard library and internal/worker/proc.
+// Installer.Prune removes the managed installs of versions that are no
+// longer pinned. Only setup and an upgrade that passed its health check
+// call it; a running worker never does, so a worker rolled back to its
+// previous release still finds that release's tools.
+//
+// ExtractFile is the same member-by-name extraction for zip and tar.gz
+// archives, which the worker upgrade uses on its own verified release
+// archive.
+//
+// Allowed dependencies: the standard library, internal/worker/proc and
+// internal/worker/filelock.
 package tools

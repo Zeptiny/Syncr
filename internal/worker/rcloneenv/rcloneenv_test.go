@@ -496,10 +496,15 @@ func TestIsolate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	tmp := filepath.Join(dir, "tmp")
 	want := map[string]string{
 		EnvConfig:      filepath.Join(dir, "rclone.conf"),
 		EnvCacheDir:    filepath.Join(dir, "cache"),
+		EnvTempDir:     tmp,
 		EnvAskPassword: "false",
+		"TMPDIR":       tmp,
+		"TEMP":         tmp,
+		"TMP":          tmp,
 	}
 	if !maps.Equal(vars, want) {
 		t.Errorf("Isolate() = %q, want %q", vars, want)
@@ -507,8 +512,10 @@ func TestIsolate(t *testing.T) {
 	if fi, err := os.Stat(want[EnvConfig]); err != nil || fi.Size() != 0 || !fi.Mode().IsRegular() {
 		t.Errorf("config file: %v, %v", fi, err)
 	}
-	if fi, err := os.Stat(want[EnvCacheDir]); err != nil || !fi.IsDir() {
-		t.Errorf("cache dir: %v, %v", fi, err)
+	for _, d := range []string{want[EnvCacheDir], tmp} {
+		if fi, err := os.Stat(d); err != nil || !fi.IsDir() {
+			t.Errorf("%s: %v, %v", d, fi, err)
+		}
 	}
 
 	// An existing config file is never reused: it might not be empty.

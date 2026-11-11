@@ -37,8 +37,10 @@ import (
 	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	cactive "github.com/Zeptiny/Syncr/internal/controller/dispatch/active"
 	cpassive "github.com/Zeptiny/Syncr/internal/controller/dispatch/passive"
+	"github.com/Zeptiny/Syncr/internal/controller/probe"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
+	"github.com/Zeptiny/Syncr/internal/link"
 	"github.com/Zeptiny/Syncr/internal/platform/clock"
 	"github.com/Zeptiny/Syncr/internal/worker/agent"
 	"github.com/Zeptiny/Syncr/internal/worker/linkcore"
@@ -70,11 +72,14 @@ type controller struct {
 	srv     *httptest.Server
 	handler atomic.Pointer[http.Handler]
 
-	mu       sync.Mutex
-	hub      *dispatch.Hub
-	jobs     *jobs.Service
-	workers  *workers.Service
-	disp     *dispatch.Service
+	mu      sync.Mutex
+	hub     *dispatch.Hub
+	jobs    *jobs.Service
+	workers *workers.Service
+	disp    *dispatch.Service
+	// probes is the controller's probe use cases over its probe broker
+	// (dispatch.ProbeBroker), as the API's ProbeService calls them.
+	probes   *probe.Service
 	wake     chan struct{}
 	stop     context.CancelFunc
 	running  sync.WaitGroup
@@ -150,10 +155,22 @@ func (c *controller) start() {
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	c.disp, err = dispatch.New(dispatch.Deps{Jobs: c.jobs, Workers: c.workers, Specs: specs, Clock: c.clock, Hub: c.hub, Logger: log}, c.cfg)
+	broker, err := dispatch.NewProbeBroker(dispatch.ProbeBrokerDeps{Workers: c.workers, Hub: c.hub, Clock: c.clock, Logger: log},
+		dispatch.ProbeConfig{Grace: probeGrace})
 	if err != nil {
 		c.t.Fatal(err)
 	}
+	c.disp, err = dispatch.New(dispatch.Deps{Jobs: c.jobs, Workers: c.workers, Specs: specs, Probes: broker, Clock: c.clock, Hub: c.hub, Logger: log}, c.cfg)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	runner, err := probe.NewRunner(probe.Deps{
+		Transport: broker, Workers: c.workers, Jobs: c.jobs, Remotes: c.remotes, Limiter: allowAll{}, IDs: c.ids, Logger: log,
+	}, probe.Config{Timeout: probeTimeout, ResticTimeout: probeTimeout})
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	c.probes = probe.NewService(runner)
 	ctx, cancel := context.WithCancel(context.Background())
 	c.stop = cancel
 	link, err := cactive.New(cactive.Options{
@@ -212,6 +229,25 @@ func (c *controller) svc() (*jobs.Service, *workers.Service) {
 	defer c.mu.Unlock()
 	return c.jobs, c.workers
 }
+
+// probeService returns the current probe use cases.
+func (c *controller) probeService() *probe.Service {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.probes
+}
+
+// The probe timings of the tests: a listing may take probeTimeout, and the
+// controller waits probeGrace longer for the worker's answer.
+const (
+	probeTimeout = time.Second
+	probeGrace   = 200 * time.Millisecond
+)
+
+// allowAll is a probe rate limiter that never limits.
+type allowAll struct{}
+
+func (allowAll) Allow(string) bool { return true }
 
 // rootCAs trusts the test server's certificate.
 func (c *controller) rootCAs() *x509.CertPool {
@@ -354,6 +390,11 @@ func (f *fakeRemotes) Usable(ctx context.Context, owner domain.UserID, ids []dom
 		out[id] = r.Name
 	}
 	return out, nil
+}
+
+// Draft implements probe.Remotes; the tests never test a draft remote.
+func (f *fakeRemotes) Draft(context.Context, domain.Actor, domain.RemoteID, remotes.Input) (map[domain.RemoteID]remotes.Resolved, domain.RemoteID, error) {
+	return nil, domain.RemoteID{}, fmt.Errorf("draft remotes: %w", domain.ErrInvalidArgument)
 }
 
 func (f *fakeRemotes) Resolve(_ context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Resolved, error) {
@@ -611,8 +652,23 @@ func testSpec() *syncrv1.JobSpec {
 	}
 }
 
-// newAgent builds an agent over rn.
-func newAgent(t *testing.T, rn runner.Runner) (*agent.Agent, *linkcore.Core) {
+// workerOptions are what a test worker process reports and runs besides
+// jobs; the zero value is a worker of Milestone 4: no link features, no
+// probes.
+type workerOptions struct {
+	// prober answers the probes (linkcore.WithProber); nil refuses them.
+	prober linkcore.Prober
+	// features and probeOps are reported in the Hello.
+	features, probeOps []string
+}
+
+// upToDate is a worker of this build that answers probes with prober.
+func upToDate(prober linkcore.Prober) workerOptions {
+	return workerOptions{prober: prober, features: link.Features(), probeOps: link.ProbeOps()}
+}
+
+// newAgentWith builds an agent over rn reporting o, and its link core.
+func newAgentWith(t *testing.T, rn runner.Runner, o workerOptions) (*agent.Agent, *linkcore.Core) {
 	t.Helper()
 	reg := runner.NewRegistry()
 	if err := reg.Register(rn); err != nil {
@@ -620,7 +676,7 @@ func newAgent(t *testing.T, rn runner.Runner) (*agent.Agent, *linkcore.Core) {
 	}
 	a, err := agent.New(agent.Config{
 		Runners: reg, ProgressInterval: 20 * time.Millisecond, MaxConcurrentJobs: 4,
-		Identity: agent.Identity{WorkerVersion: "test", OS: "linux", Arch: "amd64", Hostname: "e2e"},
+		Identity: agent.Identity{WorkerVersion: "test", OS: "linux", Arch: "amd64", Hostname: "e2e", Features: o.features, ProbeOps: o.probeOps},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -630,7 +686,13 @@ func newAgent(t *testing.T, rn runner.Runner) (*agent.Agent, *linkcore.Core) {
 		defer cancel()
 		_ = a.Shutdown(ctx)
 	})
-	return a, linkcore.New(a, a.Outbox(), nil)
+	var opts []linkcore.Option
+	if o.prober != nil {
+		opts = append(opts, linkcore.WithProber(o.prober))
+	}
+	core := linkcore.New(a, a.Outbox(), nil, opts...)
+	t.Cleanup(core.Close) // runs first: ends the probes in flight
+	return a, core
 }
 
 // activeWorker is a worker process in active mode.
@@ -655,7 +717,13 @@ func activeOptions(c *controller, id domain.WorkerID, secret string) wactive.Opt
 // startActive starts a worker process with its own agent.
 func startActive(t *testing.T, rn runner.Runner, opts wactive.Options) *activeWorker {
 	t.Helper()
-	a, core := newAgent(t, rn)
+	return startActiveWith(t, rn, workerOptions{}, opts)
+}
+
+// startActiveWith starts a worker process reporting o.
+func startActiveWith(t *testing.T, rn runner.Runner, o workerOptions, opts wactive.Options) *activeWorker {
+	t.Helper()
+	a, core := newAgentWith(t, rn, o)
 	tr, err := wactive.New(core, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -692,6 +760,7 @@ func (w *activeWorker) shutdown(t *testing.T) error {
 // passiveWorker is a worker process in passive mode.
 type passiveWorker struct {
 	agent       *agent.Agent
+	core        *linkcore.Core
 	server      *wpassive.Server
 	url         string
 	fingerprint string
@@ -719,12 +788,19 @@ func listen(t *testing.T) net.Listener {
 // startPassiveOn starts a passive worker serving TLS on ln.
 func startPassiveOn(t *testing.T, rn runner.Runner, certFile, keyFile, secret string, ln net.Listener) *passiveWorker {
 	t.Helper()
-	a, core := newAgent(t, rn)
+	return startPassiveOnWith(t, rn, workerOptions{}, certFile, keyFile, secret, ln)
+}
+
+// startPassiveOnWith starts a passive worker reporting o, serving TLS on
+// ln.
+func startPassiveOnWith(t *testing.T, rn runner.Runner, o workerOptions, certFile, keyFile, secret string, ln net.Listener) *passiveWorker {
+	t.Helper()
+	a, core := newAgentWith(t, rn, o)
 	srv, err := wpassive.New(core, wpassive.Options{Addr: ln.Addr().String(), CertFile: certFile, KeyFile: keyFile, Secret: secret})
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &passiveWorker{agent: a, server: srv, url: "https://" + ln.Addr().String(), fingerprint: srv.Fingerprint(), served: make(chan error, 1)}
+	w := &passiveWorker{agent: a, core: core, server: srv, url: "https://" + ln.Addr().String(), fingerprint: srv.Fingerprint(), served: make(chan error, 1)}
 	go func() { w.served <- srv.Serve(ln) }()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)

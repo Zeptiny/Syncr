@@ -39,6 +39,8 @@ type Config struct {
 	Database Database `yaml:"database"`
 	// Schedules configures the scheduler.
 	Schedules Schedules `yaml:"schedules"`
+	// Jobs configures job time limits and the retention of job samples.
+	Jobs Jobs `yaml:"jobs"`
 	// Notify configures notifications and their network policy.
 	Notify Notify `yaml:"notify"`
 	// Probe bounds the short operations workers run for the UI.
@@ -231,10 +233,13 @@ func (a Auth) validate() error {
 // Workers configures what the controller tells new workers and when it
 // gives up on an unreachable one.
 type Workers struct {
-	// DownloadBaseURL is where the worker install commands download the
-	// syncr-worker release archives from (default DefaultDownloadBaseURL,
-	// the project's latest GitHub release). A mirror must serve the same
-	// file names.
+	// DownloadBaseURL is where the worker install and upgrade commands
+	// download the syncr-worker release archives from: a mirror, which must
+	// serve the release's file names (and checksums.txt). Empty, the
+	// default, means the project's GitHub releases: the release of the
+	// controller's own version when it is a release build, so new and
+	// upgraded workers run the controller's version, and the latest release
+	// (DefaultDownloadBaseURL) for a development build.
 	DownloadBaseURL string `yaml:"download_base_url" env:"SYNCR_WORKERS_DOWNLOAD_BASE_URL"`
 	// LostAfter ends the dispatched and running jobs of a worker that has
 	// been out of contact this long (default 1h, at least MinLostAfter):
@@ -247,15 +252,34 @@ type Workers struct {
 // worker counts as offline (45 s) and its reconnect backoff (30 s).
 const MinLostAfter = 5 * time.Minute
 
-// DefaultDownloadBaseURL is the default workers.download_base_url (equal to
-// api.DefaultDownloadBaseURL; a test in cmd/syncr-controller keeps them in
-// step).
+// DefaultDownloadBaseURL is where the commands of a development build
+// download from when workers.download_base_url is empty: the latest
+// release (equal to api.DefaultDownloadBaseURL; a test in
+// cmd/syncr-controller keeps them in step). A release build's commands use
+// its own release instead.
 const DefaultDownloadBaseURL = "https://github.com/Zeptiny/Syncr/releases/latest/download"
+
+// EffectiveDownloadBaseURL returns workers.download_base_url as the install
+// and upgrade commands use it, and whether the configured value is
+// ignored. A value equal to DefaultDownloadBaseURL (also with a trailing
+// slash, in any case) counts as unset: it was the setting's default before
+// v2.0.0 and may still be in configurations, and as a mirror it would make
+// a release build's commands install the latest release instead of the
+// controller's own (and give every upgrade command --from). The controller
+// warns at start that it should be removed.
+func (w Workers) EffectiveDownloadBaseURL() (base string, ignored bool) {
+	if w.DownloadBaseURL != "" && strings.EqualFold(strings.TrimRight(w.DownloadBaseURL, "/"), DefaultDownloadBaseURL) {
+		return "", true
+	}
+	return w.DownloadBaseURL, false
+}
 
 func (w Workers) validate() error {
 	var errs []error
-	if err := validateHTTPURL(w.DownloadBaseURL); err != nil {
-		errs = append(errs, fmt.Errorf("workers.download_base_url: %w", err))
+	if w.DownloadBaseURL != "" {
+		if err := validateHTTPURL(w.DownloadBaseURL); err != nil {
+			errs = append(errs, fmt.Errorf("workers.download_base_url: %w", err))
+		}
 	}
 	if w.LostAfter < MinLostAfter {
 		errs = append(errs, fmt.Errorf("workers.lost_after must be at least %v", MinLostAfter))
@@ -301,12 +325,13 @@ func Default() Config {
 			SessionIdleTimeout: 7 * 24 * time.Hour,
 			SessionMaxAge:      30 * 24 * time.Hour,
 		},
-		Workers: Workers{DownloadBaseURL: DefaultDownloadBaseURL, LostAfter: time.Hour},
+		Workers: Workers{LostAfter: time.Hour},
 		Database: Database{
 			MaxConns:       10,
 			ConnectTimeout: 10 * time.Second,
 		},
 		Schedules: Schedules{Tick: 10 * time.Second},
+		Jobs:      defaultJobs(),
 		Notify:    defaultNotify(),
 		Probe:     defaultProbe(),
 	}
@@ -315,8 +340,8 @@ func Default() Config {
 // Validate reports every invalid setting.
 func (c *Config) Validate() error {
 	return errors.Join(c.HTTP.validate(), c.Log.Validate(), c.Secrets.validate(), c.API.validate(),
-		c.Auth.validate(), c.Workers.validate(), c.Database.validate(), c.Schedules.validate(), c.Notify.validate(), c.Probe.validate(),
-		c.Dev.validate())
+		c.Auth.validate(), c.Workers.validate(), c.Database.validate(), c.Schedules.validate(), c.Jobs.validate(), c.Notify.validate(),
+		c.Probe.validate(), c.Dev.validate())
 }
 
 func (h HTTP) validate() error {

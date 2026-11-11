@@ -24,7 +24,7 @@ func TestControllerErrorCodesExistOnTheWire(t *testing.T) {
 	for _, code := range []string{
 		jobs.CodeInternal, jobs.CodeCancelled, jobs.CodeWorkerShutdown, jobs.CodeDispatchTimeout,
 		jobs.CodeWorkerRestarted, jobs.CodeWorkerLost, jobs.CodeWorkerRemoved, jobs.CodeInvalidSpec, jobs.CodeRemoteUnavailable,
-		jobs.CodeRepositoryUnavailable, jobs.CodeWorkerOutdated,
+		jobs.CodeRepositoryUnavailable, jobs.CodeWorkerOutdated, jobs.CodeTimeLimit,
 	} {
 		if link.ParseErrorCode(code) == syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSPECIFIED {
 			t.Errorf("jobs code %q has no JobErrorCode", code)

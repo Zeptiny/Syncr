@@ -33,9 +33,17 @@ export type WatchState = "connecting" | "live" | "reconnecting" | "ended" | "fai
 export interface WatchOptions {
   minBackoffMs?: number;
   maxBackoffMs?: number;
-  /** maxSamples caps the kept history; the oldest samples are dropped. */
+  /**
+   * maxSamples caps the kept samples: past it, the history is thinned
+   * evenly (first and last kept), so the chart keeps the job's start.
+   */
   maxSamples?: number;
+  /** maxPoints is how many stored samples to ask for (ListJobSamples.max_points). */
+  maxPoints?: number;
 }
+
+/** HISTORY_POINTS is how many stored samples the chart asks for. */
+export const HISTORY_POINTS = 1000;
 
 /** WatchResult is what useWatchJob returns. */
 export interface WatchResult {
@@ -43,6 +51,15 @@ export interface WatchResult {
   job: Job | undefined;
   /** samples is the chart history followed by live samples, oldest first. */
   samples: JobSample[];
+  /**
+   * history is "loading" until the stored samples have been read, then
+   * "loaded" (or "failed": the chart then has only live samples).
+   */
+  history: "loading" | "loaded" | "failed";
+  /** total is how many samples the controller stores for the job. */
+  total: number;
+  /** thinned is true when samples leaves some out: the stored ones, or older live ones. */
+  thinned: boolean;
   state: WatchState;
   /** attempt counts consecutive failed connections (0 while live). */
   attempt: number;
@@ -80,8 +97,39 @@ export function toSample(p: JobProgress): JobSample | undefined {
   };
 }
 
-/** appendSamples adds samples newer than the last one, keeping at most max. */
+/**
+ * thinSamples keeps m of the samples, evenly spread, always with the first
+ * and the last: the rule the controller thins stored samples with (the
+ * sample at rank r stays if r*(m-1)/(n-1) moves past (r-1)*(m-1)/(n-1),
+ * in integer division).
+ */
+export function thinSamples<T>(samples: T[], m: number): T[] {
+  const n = samples.length;
+  if (m <= 0 || n <= m) return samples;
+  if (m === 1) return [samples[n - 1]];
+  const out: T[] = [];
+  for (let r = 0; r < n; r++) {
+    if (r === 0 || Math.floor((r * (m - 1)) / (n - 1)) > Math.floor(((r - 1) * (m - 1)) / (n - 1)))
+      out.push(samples[r]);
+  }
+  return out;
+}
+
+/**
+ * appendSamples adds samples newer than the last one. Past max it thins the
+ * whole history to half of max (first and last kept) instead of dropping
+ * the oldest, so a long job's chart still starts at its start.
+ */
 export function appendSamples(prev: JobSample[], add: JobSample[], max: number): JobSample[] {
+  return mergeSamples(prev, add, max).samples;
+}
+
+/** mergeSamples is appendSamples that also tells whether it thinned. */
+function mergeSamples(
+  prev: JobSample[],
+  add: JobSample[],
+  max: number,
+): { samples: JobSample[]; thinned: boolean } {
   let last = prev.length ? prev[prev.length - 1].t : -Infinity;
   const fresh: JobSample[] = [];
   for (const s of add) {
@@ -90,9 +138,10 @@ export function appendSamples(prev: JobSample[], add: JobSample[], max: number):
       last = s.t;
     }
   }
-  if (!fresh.length) return prev;
+  if (!fresh.length) return { samples: prev, thinned: false };
   const next = prev.concat(fresh);
-  return next.length > max ? next.slice(next.length - max) : next;
+  if (next.length <= max) return { samples: next, thinned: false };
+  return { samples: thinSamples(next, Math.max(2, Math.floor(max / 2))), thinned: true };
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -121,17 +170,17 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 export function useWatchJob(jobId: string, opts: WatchOptions = {}): WatchResult {
   const transport = useTransport();
   const queryClient = useQueryClient();
-  const { minBackoffMs = 1000, maxBackoffMs = 30_000, maxSamples = 5000 } = opts;
+  const {
+    minBackoffMs = 1000,
+    maxBackoffMs = 30_000,
+    maxSamples = 5000,
+    maxPoints = HISTORY_POINTS,
+  } = opts;
   const [nonce, setNonce] = useState(0);
   const retry = useCallback(() => setNonce((n) => n + 1), []);
-  const [result, setResult] = useState<Omit<WatchResult, "retry"> & { jobId: string }>({
-    jobId,
-    job: undefined,
-    samples: [],
-    state: "connecting",
-    attempt: 0,
-    error: undefined,
-  });
+  const [result, setResult] = useState<Omit<WatchResult, "retry"> & { jobId: string }>(() =>
+    freshResult(jobId),
+  );
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -146,29 +195,36 @@ export function useWatchJob(jobId: string, opts: WatchOptions = {}): WatchResult
     const update = (patch: Partial<Omit<WatchResult, "retry">>) =>
       setResult((r) => (signal.aborted ? r : { ...r, ...patch }));
     const addSamples = (add: JobSample[]) =>
-      setResult((r) =>
-        signal.aborted ? r : { ...r, samples: appendSamples(r.samples, add, maxSamples) },
-      );
+      setResult((r) => {
+        if (signal.aborted) return r;
+        const m = mergeSamples(r.samples, add, maxSamples);
+        return m.samples === r.samples
+          ? r
+          : { ...r, samples: m.samples, thinned: r.thinned || m.thinned };
+      });
 
     async function loadHistory() {
       try {
-        const res = await client.listJobSamples({ jobId }, { signal });
+        const res = await client.listJobSamples({ jobId, maxPoints }, { signal });
         const history = res.samples.map(toSample).filter((s): s is JobSample => !!s);
         // History is older than anything the stream delivers; merge by time.
-        setResult((r) =>
-          signal.aborted
-            ? r
-            : {
-                ...r,
-                samples: appendSamples(
-                  history,
-                  r.samples.filter((s) => !history.length || s.t > history[history.length - 1].t),
-                  maxSamples,
-                ),
-              },
-        );
+        setResult((r) => {
+          if (signal.aborted) return r;
+          const live = r.samples.filter(
+            (s) => !history.length || s.t > history[history.length - 1].t,
+          );
+          const m = mergeSamples(history, live, maxSamples);
+          return {
+            ...r,
+            samples: m.samples,
+            history: "loaded",
+            total: res.total,
+            thinned: r.thinned || m.thinned || res.total > res.samples.length,
+          };
+        });
       } catch {
         // The chart starts empty; the live stream still fills it.
+        setResult((r) => (signal.aborted ? r : { ...r, history: "failed" }));
       }
     }
 
@@ -226,20 +282,27 @@ export function useWatchJob(jobId: string, opts: WatchOptions = {}): WatchResult
     void loadHistory();
     void watch();
     return () => ctrl.abort();
-  }, [jobId, transport, queryClient, minBackoffMs, maxBackoffMs, maxSamples, nonce]);
+  }, [jobId, transport, queryClient, minBackoffMs, maxBackoffMs, maxSamples, maxPoints, nonce]);
 
   // A new jobId starts from a clean slate until its effect reports.
   if (result.jobId !== jobId) {
-    const fresh = {
-      jobId,
-      job: undefined,
-      samples: [],
-      state: "connecting",
-      attempt: 0,
-      error: undefined,
-    } as const;
-    setResult({ ...fresh, samples: [] });
-    return { ...fresh, samples: [], retry };
+    const fresh = freshResult(jobId);
+    setResult(fresh);
+    return { ...fresh, retry };
   }
   return { ...result, retry };
+}
+
+function freshResult(jobId: string): Omit<WatchResult, "retry"> & { jobId: string } {
+  return {
+    jobId,
+    job: undefined,
+    samples: [],
+    history: "loading",
+    total: 0,
+    thinned: false,
+    state: "connecting",
+    attempt: 0,
+    error: undefined,
+  };
 }

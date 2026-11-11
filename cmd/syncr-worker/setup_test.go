@@ -42,6 +42,7 @@ func (c *cmdEnroller) Enroll(_ context.Context, req setup.EnrollRequest) (setup.
 type cmdServices struct {
 	mu    sync.Mutex
 	state service.State
+	exe   string // the installed service's program
 	calls []string
 }
 
@@ -52,6 +53,7 @@ func (s *cmdServices) Install(_ context.Context, sp service.Spec) error {
 	s.rec("install " + strings.Join(sp.Args, " "))
 	s.mu.Lock()
 	s.state = service.StateStopped
+	s.exe = sp.Executable
 	s.mu.Unlock()
 	return nil
 }
@@ -81,6 +83,14 @@ func (s *cmdServices) Status(context.Context, service.Spec) (service.State, erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state, nil
+}
+func (s *cmdServices) InstalledExecutable(context.Context, service.Spec) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == service.StateNotInstalled {
+		return "", service.ErrNotInstalled
+	}
+	return s.exe, nil
 }
 func (s *cmdServices) Info(service.Spec) service.Info {
 	return service.Info{Platform: "fake", Location: "fake://unit", LogHint: "fake-logs"}

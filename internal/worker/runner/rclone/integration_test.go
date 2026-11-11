@@ -5,24 +5,30 @@ package rclone
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"golang.org/x/crypto/ssh"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/worker/localfs"
+	"github.com/Zeptiny/Syncr/internal/worker/probe"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
@@ -629,4 +635,73 @@ func TestIntegrationSFTP(t *testing.T) {
 	}
 	roundTrip(t, it, def, "upload/syncr-it")
 	probeRemote(t, it, def, "upload/syncr-it", "upload/syncr-it/nope", true)
+	sftpHostKeys(t, it, ctr, def)
+}
+
+// sftpHostKeys checks the sftp_host_keys probe against the server: the keys
+// it fetches are the server's (every type it has), a listing that pins them
+// in host_keys works, and one that pins another key is refused by rclone.
+func sftpHostKeys(t *testing.T, it *itest, ctr testcontainers.Container, def *syncrv1.RemoteDefinition) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	port, err := strconv.Atoi(def.GetOptions()["port"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetched, err := (&probe.SSHScanner{}).HostKeys(ctx, def.GetOptions()["host"], port)
+	if err != nil {
+		t.Fatalf("fetch host keys: %v", err)
+	}
+	var want, got []string
+	for _, name := range []string{"ssh_host_ed25519_key.pub", "ssh_host_rsa_key.pub"} {
+		r, err := ctr.CopyFileFromContainer(ctx, "/etc/ssh/"+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(r)
+		_ = r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		k, _, _, _, err := ssh.ParseAuthorizedKey(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		want = append(want, k.Type()+" "+base64.StdEncoding.EncodeToString(k.Marshal())+" "+ssh.FingerprintSHA256(k))
+	}
+	var pins []string
+	for _, k := range fetched {
+		got = append(got, k.GetAlgorithm()+" "+k.GetKey()+" "+k.GetFingerprintSha256())
+		pins = append(pins, k.GetAlgorithm()+" "+k.GetKey())
+	}
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("fetched host keys\n%q\nwant the server's\n%q", got, want)
+	}
+
+	p := it.prober(t)
+	list := func(hostKeys string) error {
+		d := cloneDef(def)
+		d.Options["host_keys"] = hostKeys
+		_, err := p.List(ctx, "0195f0a4-3b7c-7d1e-9f00-0000000000df", []*syncrv1.RemoteDefinition{d},
+			&syncrv1.ProbeListRemote{Location: &syncrv1.Location{Remote: d.GetAlias(), Path: "upload/syncr-it"}})
+		return err
+	}
+	if err := list(strings.Join(pins, ",")); err != nil {
+		t.Errorf("listing with the fetched host keys pinned: %v", err)
+	}
+	_, other, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := ssh.NewPublicKey(other.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := otherKey.Type() + " " + base64.StdEncoding.EncodeToString(otherKey.Marshal())
+	if err := list(wrong); err == nil || !strings.Contains(err.Error(), "host key mismatch") {
+		t.Errorf("listing with another host key pinned = %v; want rclone to refuse the server's key", err)
+	}
 }

@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Zeptiny/Syncr/internal/worker/filelock"
 )
 
 // Installer limits and file names.
@@ -247,7 +249,7 @@ func (i *Installer) Install(ctx context.Context, spec Spec, p Platform) (Install
 	if err := os.MkdirAll(i.dir, 0o755); err != nil { //nolint:gosec // the tools directory must be readable by the worker service user
 		return Installed{}, fmt.Errorf("tools: create tools directory: %w", err)
 	}
-	release, err := acquireLock(ctx, filepath.Join(i.dir, lockFileName))
+	release, err := i.lock(ctx)
 	if err != nil {
 		return Installed{}, err
 	}
@@ -272,6 +274,16 @@ func (i *Installer) Install(ctx context.Context, spec Spec, p Platform) (Install
 		return Installed{}, fmt.Errorf("tools: freshly installed %s is unusable: %w", spec.Name, err)
 	}
 	return inst, nil
+}
+
+// lock takes the tools directory's install lock, waiting for other holders
+// (another worker, a concurrent setup or tools fetch) until ctx ends.
+func (i *Installer) lock(ctx context.Context) (release func() error, err error) {
+	release, err = filelock.Acquire(ctx, filepath.Join(i.dir, lockFileName))
+	if err != nil {
+		return nil, fmt.Errorf("tools: %w", err)
+	}
+	return release, nil
 }
 
 // install performs the download and replace; the caller holds the lock.
