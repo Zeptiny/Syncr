@@ -259,7 +259,14 @@ func sha(b []byte) string {
 // serves a v2.1.0 release for linux/amd64 at mirror.
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	dir := t.TempDir()
+	// The upgrade resolves the binary's path (filepath.EvalSymlinks), and so
+	// works in the canonical form of the directory: on Windows a temporary
+	// directory may be an 8.3 short path (C:\Users\RUNNER~1\...) that
+	// resolves to the long one.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	exe := filepath.Join(dir, BinaryName)
 	if err := os.WriteFile(exe, binaryFor(oldVersion), 0o755); err != nil {
 		t.Fatal(err)

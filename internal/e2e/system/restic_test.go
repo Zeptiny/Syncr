@@ -17,6 +17,7 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
+	"github.com/Zeptiny/Syncr/internal/link"
 )
 
 // resticPassword is the repositories' password in these tests: a sentinel
@@ -48,8 +49,8 @@ func newResticEnv(t *testing.T, passive bool) *resticEnv {
 			t.Fatalf("the worker does not report the feature %q: %v", f, info.GetInfo().GetFeatures())
 		}
 	}
-	if len(info.GetInfo().GetProbeOps()) != 7 {
-		t.Fatalf("the worker reports the probe operations %v, want all seven", info.GetInfo().GetProbeOps())
+	if got, want := info.GetInfo().GetProbeOps(), link.ProbeOps(); !slices.Equal(got, want) {
+		t.Fatalf("the worker reports the probe operations %v, want all of %v", got, want)
 	}
 	return &resticEnv{
 		t: t, c: c, w: w,
