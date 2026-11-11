@@ -1,6 +1,6 @@
 //go:build linux || darwin || freebsd || netbsd || openbsd || dragonfly
 
-package tools
+package filelock
 
 import (
 	"errors"
@@ -11,7 +11,7 @@ import (
 // tryLock takes flock(2) on path. flock locks belong to the open file
 // description, so they also exclude other goroutines of this process.
 func tryLock(path string) (func() error, bool, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // path is built from the configured tools directory
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // the caller chooses the lock file
 	if err != nil {
 		return nil, false, err
 	}

@@ -13,7 +13,12 @@ import (
 // SIGINT: rclone and restic treat it as a user abort and clean up (finish or
 // remove partial uploads, release repository locks). exec kills the child
 // with SIGKILL if it is still running after WaitDelay.
-func configureCmd(cmd *exec.Cmd) {
+//
+// The stop request goes to the child alone, never to its group: restic
+// releases its repository lock through the rclone process it started, so
+// that process must outlive restic's own cleanup. The rest of the group is
+// killed only once the child has exited (tree.wait).
+func configureCmd(cmd *exec.Cmd, _ *tree) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		// Signal the child itself through os.Process, which tracks whether it

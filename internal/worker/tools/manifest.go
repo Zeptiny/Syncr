@@ -35,6 +35,9 @@ const (
 	// FormatBzip2 is a single bzip2-compressed binary (restic's Linux
 	// releases); Artifact.Entry must be empty.
 	FormatBzip2 Format = "bz2"
+	// FormatTarGz is a gzip-compressed tar archive (the worker's own Linux
+	// releases); Artifact.Entry names the member holding the binary.
+	FormatTarGz Format = "tar.gz"
 )
 
 // Artifact is one downloadable release archive of a tool.
@@ -45,8 +48,8 @@ type Artifact struct {
 	SHA256 string
 	// Format is the archive format.
 	Format Format
-	// Entry is the slash-separated path of the binary inside a zip archive;
-	// empty for FormatBzip2.
+	// Entry is the slash-separated path of the binary inside a zip or tar.gz
+	// archive; empty for FormatBzip2.
 	Entry string
 }
 
@@ -187,9 +190,9 @@ func (a Artifact) validate() error {
 		errs = append(errs, errors.New("sha256 must be 64 lower-case hex digits"))
 	}
 	switch a.Format {
-	case FormatZip:
+	case FormatZip, FormatTarGz:
 		if !fs.ValidPath(a.Entry) || a.Entry == "." {
-			errs = append(errs, fmt.Errorf("zip entry %q is not a clean relative path", a.Entry))
+			errs = append(errs, fmt.Errorf("%s entry %q is not a clean relative path", a.Format, a.Entry))
 		}
 	case FormatBzip2:
 		if a.Entry != "" {

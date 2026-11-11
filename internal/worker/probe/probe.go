@@ -58,6 +58,9 @@ type Config struct {
 	Restic Restic
 	Rclone Rclone
 	Local  Local
+	// HostKeys answers sftp_host_keys, which needs no tool: nil means an
+	// SSHScanner with its defaults.
+	HostKeys HostKeys
 
 	// MaxConcurrent is how many probes run at once; more are refused as
 	// BUSY. Zero means DefaultMaxConcurrent.
@@ -124,6 +127,9 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.MaxResultBytes == 0 {
 		cfg.MaxResultBytes = DefaultMaxResultBytes
 	}
+	if cfg.HostKeys == nil {
+		cfg.HostKeys = &SSHScanner{}
+	}
 	log := cfg.Logger
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -151,6 +157,8 @@ func (e *Executor) supported(op string) bool {
 		return e.cfg.Rclone != nil
 	case "restic_snapshots", "restic_ls", "restic_init", "restic_config":
 		return e.cfg.Restic != nil
+	case "sftp_host_keys":
+		return true
 	}
 	return false
 }
@@ -308,6 +316,13 @@ func (e *Executor) run(ctx context.Context, op string, p *syncrv1.RunProbe, res 
 			return err
 		}
 		res.Output = &syncrv1.ProbeResult_RepositoryConfig{RepositoryConfig: c}
+	case "sftp_host_keys":
+		o := spec.GetSftpHostKeys()
+		keys, err := e.cfg.HostKeys.HostKeys(ctx, o.GetHost(), int(o.GetPort()))
+		if err != nil {
+			return err
+		}
+		res.Output = &syncrv1.ProbeResult_SftpHostKeys{SftpHostKeys: &syncrv1.SftpHostKeys{Keys: keys}}
 	}
 	return nil
 }

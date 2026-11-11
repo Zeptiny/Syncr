@@ -38,16 +38,29 @@ type lifetime struct {
 // If the job cannot be created or the child cannot be added (for example a
 // worker inside a job that does not allow nesting), the child runs anyway,
 // without that guarantee, and a warning is logged.
-func (l *lifetime) startChild(cmd *exec.Cmd, log *slog.Logger) (<-chan error, error) {
+//
+// The child is then added to a second Job Object of the run's own (t),
+// which becomes nested in the worker's: canceling the run terminates that
+// job, and so the child and everything it started, and so does the child's
+// exit (tree.wait). The order matters: a process already in a job can only
+// join an empty job, which then nests inside the first one. If the run's
+// job cannot be set up, the run continues as without it (cancel kills only
+// the child) and a warning is logged.
+func (l *lifetime) startChild(cmd *exec.Cmd, t *tree, log *slog.Logger) (<-chan error, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	if err := l.assign(cmd.Process.Pid); err != nil {
+	pid := cmd.Process.Pid
+	if err := l.assign(pid); err != nil {
 		log.Warn("tool process is not tied to the worker's lifetime; it keeps running if the worker is killed",
-			"pid", cmd.Process.Pid, "error", err.Error())
+			"pid", pid, "error", err.Error())
+	}
+	if err := t.attach(pid); err != nil {
+		log.Warn("processes a tool starts are not stopped with it; they may outlive a cancelled job",
+			"pid", pid, "error", err.Error())
 	}
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() { done <- t.wait(cmd, log) }()
 	return done, nil
 }
 

@@ -111,6 +111,39 @@ func TestIntegrationIsolatedFromHost(t *testing.T) {
 	}
 }
 
+// TestIntegrationPathsInsideJobDir asks the pinned rclone where it keeps
+// its config, cache and temporary files: all three must be inside the job's
+// directory, even with the worker's own TMPDIR pointing elsewhere.
+func TestIntegrationPathsInsideJobDir(t *testing.T) {
+	rcloneBinary(t)
+	t.Setenv("TMPDIR", t.TempDir()) // the worker's temp dir, passed to children by default
+	dir := t.TempDir()
+	env, err := NewBuilder(nil).Build(dir, []*syncrv1.RemoteDefinition{{Alias: "jobmem", BackendType: "memory"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, err := runRclone(t, env.Vars(), "config", "paths")
+	if err != nil {
+		t.Fatalf("rclone config paths: %v (stderr %q)", err, errOut)
+	}
+	got := map[string]string{}
+	for _, l := range out {
+		if k, v, ok := strings.Cut(l, ":"); ok {
+			got[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	want := map[string]string{
+		"Config file": filepath.Join(dir, "rclone.conf"),
+		"Cache dir":   filepath.Join(dir, "cache"),
+		"Temp dir":    filepath.Join(dir, "tmp"),
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q (output %q)", k, got[k], v, out)
+		}
+	}
+}
+
 // TestIntegrationValuesReachBackendUnchanged sends credentials full of
 // special characters to a WebDAV server and checks what arrives, and that a
 // path that looks like a connection string is just a path.

@@ -129,13 +129,6 @@ func (f *fixture) build() (*worker, error) {
 	return buildWorker(f.t.Context(), f.cfg, f.deps, f.log)
 }
 
-// servedProbeOps are the probe ops of the contract this worker answers:
-// all but sftp_host_keys, whose prober does not exist yet (remove the
-// exclusion with it).
-func servedProbeOps() []string {
-	return slices.DeleteFunc(link.ProbeOps(), func(op string) bool { return op == "sftp_host_keys" })
-}
-
 func TestBuildWorkerRegistersEveryRunner(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -153,8 +146,8 @@ func TestBuildWorkerRegistersEveryRunner(t *testing.T) {
 	}
 
 	// The probe executor runs every probe operation with the same tools.
-	if w.probes == nil || !slices.Equal(w.probes.Ops(), servedProbeOps()) {
-		t.Errorf("probes = %v, want every operation %v", w.probes, servedProbeOps())
+	if w.probes == nil || !slices.Equal(w.probes.Ops(), link.ProbeOps()) {
+		t.Errorf("probes = %v, want every operation %v", w.probes, link.ProbeOps())
 	}
 
 	for _, tool := range []string{toolRclone, toolRestic} {

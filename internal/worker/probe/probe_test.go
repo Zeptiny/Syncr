@@ -22,8 +22,9 @@ import (
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
 )
 
-// fakeTools implements Restic, Rclone and Local. Each call records its op
-// and bound, waits for delay (or the context) and answers from the fields.
+// fakeTools implements Restic, Rclone and HostKeys. Each call records its
+// op and bound, waits for delay (or the context) and answers from the
+// fields.
 type fakeTools struct {
 	delay time.Duration
 	err   error
@@ -113,6 +114,16 @@ func (f *fakeTools) About(ctx context.Context, _ string, _ []*syncrv1.RemoteDefi
 	return &syncrv1.ProbeUsage{Total: proto.Int64(100), Free: proto.Int64(40)}, nil
 }
 
+func (f *fakeTools) HostKeys(ctx context.Context, host string, port int) ([]*syncrv1.SftpHostKey, error) {
+	if err := f.wait(ctx, "sftp_host_keys", port); err != nil {
+		return nil, err
+	}
+	return []*syncrv1.SftpHostKey{
+		{Algorithm: "ssh-ed25519", Key: "AAAA" + host, FingerprintSha256: "SHA256:x"},
+		{Algorithm: "ecdsa-sha2-nistp256", Key: "AAAB" + host, FingerprintSha256: "SHA256:y"},
+	}, nil
+}
+
 // fakeLocal implements Local.
 type fakeLocal struct {
 	listing localfs.Listing
@@ -132,7 +143,7 @@ func newExecutor(t *testing.T, tools *fakeTools, local Local, mutate ...func(*Co
 	t.Helper()
 	cfg := Config{Local: local}
 	if tools != nil {
-		cfg.Restic, cfg.Rclone = tools, tools
+		cfg.Restic, cfg.Rclone, cfg.HostKeys = tools, tools, tools
 	}
 	for _, m := range mutate {
 		m(&cfg)
@@ -169,13 +180,6 @@ func specOf(op string, limit int32) *syncrv1.ProbeSpec {
 	return s
 }
 
-// servedOps are the ops of the contract this executor can run once every
-// prober is configured: all but sftp_host_keys, whose prober does not exist
-// yet (remove the exclusion with it).
-func servedOps() []string {
-	return slices.DeleteFunc(link.ProbeOps(), func(op string) bool { return op == "sftp_host_keys" })
-}
-
 func probeOf(op string, limit int32) *syncrv1.RunProbe {
 	return &syncrv1.RunProbe{ProbeId: "p-" + op, Spec: specOf(op, limit)}
 }
@@ -192,10 +196,10 @@ func TestEveryOpIsDispatched(t *testing.T) {
 	tools := &fakeTools{entries: 2, snapshots: 2}
 	local := &fakeLocal{listing: localfs.Listing{Entries: []localfs.Entry{{Name: "a", Path: "/srv/a", Dir: true}}}}
 	e := newExecutor(t, tools, local)
-	if !slices.Equal(e.Ops(), servedOps()) {
-		t.Errorf("Ops() = %v, want every op of the contract %v", e.Ops(), servedOps())
+	if !slices.Equal(e.Ops(), link.ProbeOps()) {
+		t.Errorf("Ops() = %v, want every op of the contract %v", e.Ops(), link.ProbeOps())
 	}
-	for _, op := range servedOps() {
+	for _, op := range link.ProbeOps() {
 		res := e.Probe(t.Context(), probeOf(op, 0))
 		if res.GetStatus() != syncrv1.ProbeStatus_PROBE_STATUS_OK || res.GetProbeId() != "p-"+op || res.GetError() != nil || res.GetElapsed() == nil {
 			t.Errorf("%s: result = %v", op, res)
@@ -217,6 +221,9 @@ func TestEveryOpIsDispatched(t *testing.T) {
 			ok = strings.HasPrefix(res.GetRepositoryConfig().GetId(), "abab")
 		case "restic_config":
 			ok = strings.HasPrefix(res.GetRepositoryConfig().GetId(), "cdcd")
+		case "sftp_host_keys":
+			keys := res.GetSftpHostKeys().GetKeys()
+			ok = len(keys) == 2 && keys[0].GetKey() == "AAAAsftp.example.com" && tools.bound == 22
 		}
 		if !ok {
 			t.Errorf("%s: output = %v", op, res.GetOutput())
@@ -230,17 +237,20 @@ func TestEveryOpIsDispatched(t *testing.T) {
 func TestOpsFollowTheAvailableTools(t *testing.T) {
 	t.Parallel()
 	tools := &fakeTools{}
+	hostKeys := &fakeTools{}
+	// sftp_host_keys needs no tool: it is always served.
 	tests := []struct {
 		name string
 		cfg  Config
 		want []string
 	}{
-		{"nothing", Config{}, nil},
-		{"local only", Config{Local: &fakeLocal{}}, []string{"list_local"}},
-		{"rclone only", Config{Rclone: tools}, []string{"list_remote", "about"}},
-		{"restic only", Config{Restic: tools}, []string{"restic_snapshots", "restic_ls", "restic_init", "restic_config"}},
+		{"nothing", Config{}, []string{"sftp_host_keys"}},
+		{"local only", Config{Local: &fakeLocal{}}, []string{"list_local", "sftp_host_keys"}},
+		{"rclone only", Config{Rclone: tools}, []string{"list_remote", "about", "sftp_host_keys"}},
+		{"restic only", Config{Restic: tools}, []string{"restic_snapshots", "restic_ls", "restic_init", "restic_config", "sftp_host_keys"}},
 	}
 	for _, tc := range tests {
+		tc.cfg.HostKeys = hostKeys
 		e, err := New(tc.cfg)
 		if err != nil {
 			t.Fatal(err)

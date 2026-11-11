@@ -166,8 +166,9 @@ type Runner interface {
 	// after Run returns. emit is cheap and does not block (the agent merges
 	// snapshots under backlog), so there is no need to throttle it.
 	//
-	// Cancellation: ctx is cancelled when the controller cancels the job or
-	// the worker shuts down. Run must then stop the tool promptly (proc.Run
+	// Cancellation: ctx is cancelled when the controller cancels the job,
+	// the job reaches its time limit (JobSpec.max_runtime) or the worker
+	// shuts down. Run must then stop the tool promptly (proc.Run
 	// does this: graceful stop, kill after the grace period) and return an
 	// error, normally the *proc.CanceledError it got, which wraps
 	// context.Cause(ctx). The agent treats any non-nil error returned after

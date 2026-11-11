@@ -25,6 +25,10 @@ const (
 	maxTailLines      = 4
 	maxTailLineBytes  = 400
 	maxItemErrors     = runner.MaxWarnings - 1 // plus the summary warning
+	// maxErrItems bounds the failing paths a backup or restore remembers to
+	// count each one once; a run over a tree with millions of unreadable
+	// files must not keep all their names.
+	maxErrItems = 1000
 )
 
 // ExitIncomplete is the exit code restic uses for a backup that created a

@@ -384,7 +384,9 @@ func TestDeleteDataRcloneInvocation(t *testing.T) {
 		if _, ok := c.env["RESTIC_PASSWORD"]; ok {
 			t.Error("rclone was given the repository password")
 		}
-		if c.env["TMPDIR"] != c.dir {
+		// The job's directory is the temp directory; the working
+		// directory is the scratch root, which no process can pin.
+		if filepath.Dir(c.env["TMPDIR"]) != c.dir || filepath.Base(c.env["TMPDIR"]) != "restic-job-1" {
 			t.Errorf("TMPDIR = %q, dir = %q", c.env["TMPDIR"], c.dir)
 		}
 		if c.verb == "delete" {

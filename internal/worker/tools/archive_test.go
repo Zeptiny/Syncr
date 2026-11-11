@@ -1,7 +1,9 @@
 package tools
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,7 @@ import (
 func TestExtractBinary(t *testing.T) {
 	t.Parallel()
 	zipArt := Artifact{Format: FormatZip, Entry: fakeEntry}
+	tgzArt := Artifact{Format: FormatTarGz, Entry: "syncr-worker"}
 	bin := fakeBinary(fakeVersion)
 	const limit = 1 << 20
 
@@ -104,6 +107,63 @@ func TestExtractBinary(t *testing.T) {
 			archive: []byte("definitely not bzip2"),
 		},
 		{
+			name: "tar.gz with binary among other files", art: tgzArt, max: limit, want: bin,
+			archive: buildTarGz(t,
+				tarMember{name: "README.md", body: []byte("read me")},
+				tarMember{name: "docs/", typ: tar.TypeDir},
+				tarMember{name: "syncr-worker", body: bin},
+				tarMember{name: "LICENSE-rclone.txt", body: []byte("text")},
+			),
+		},
+		{
+			name: "tar.gz slip alongside the binary", art: tgzArt, max: limit, wantErr: "unsafe path",
+			archive: buildTarGz(t, tarMember{name: "syncr-worker", body: bin}, tarMember{name: "../../etc/evil", body: []byte("x")}),
+		},
+		{
+			name: "tar.gz absolute entry", art: tgzArt, max: limit, wantErr: "unsafe path",
+			archive: buildTarGz(t, tarMember{name: "/usr/local/bin/syncr-worker", body: bin}),
+		},
+		{
+			name: "tar.gz backslash entry", art: tgzArt, max: limit, wantErr: "unsafe path",
+			archive: buildTarGz(t, tarMember{name: `..\syncr-worker`, body: bin}),
+		},
+		{
+			name: "tar.gz binary missing", art: tgzArt, max: limit, wantErr: "does not contain",
+			archive: buildTarGz(t, tarMember{name: "syncr-worker-other", body: bin}, tarMember{name: "bin/syncr-worker", body: bin}),
+		},
+		{
+			name: "tar.gz duplicate entries", art: tgzArt, max: limit, wantErr: "several entries",
+			archive: buildTarGz(t, tarMember{name: "syncr-worker", body: bin}, tarMember{name: "syncr-worker", body: []byte("evil")}),
+		},
+		{
+			name: "tar.gz entry is a symlink", art: tgzArt, max: limit, wantErr: "not a regular file",
+			archive: buildTarGz(t, tarMember{name: "syncr-worker", typ: tar.TypeSymlink, link: "/bin/sh"}),
+		},
+		{
+			name: "tar.gz entry is a hard link", art: tgzArt, max: limit, wantErr: "not a regular file",
+			archive: buildTarGz(t, tarMember{name: "a", body: bin}, tarMember{name: "syncr-worker", typ: tar.TypeLink, link: "a"}),
+		},
+		{
+			name: "tar.gz entry is empty", art: tgzArt, max: limit, wantErr: "empty",
+			archive: buildTarGz(t, tarMember{name: "syncr-worker"}),
+		},
+		{
+			name: "tar.gz entry over the limit", art: tgzArt, max: 1 << 10, wantErr: "limit",
+			archive: buildTarGz(t, tarMember{name: "syncr-worker", body: make([]byte, 1<<20)}),
+		},
+		{
+			name: "tar.gz bomb in another member", art: tgzArt, max: 1 << 10, wantErr: "decompression bomb",
+			archive: buildTarGz(t, tarMember{name: "syncr-worker", body: []byte("small")}, tarMember{name: "padding", body: make([]byte, 1<<20)}),
+		},
+		{
+			name: "not a tar.gz", art: tgzArt, max: limit, wantErr: "tar.gz",
+			archive: []byte("this is not a gzip stream"),
+		},
+		{
+			name: "truncated tar.gz", art: tgzArt, max: limit, wantErr: "tar.gz",
+			archive: buildTarGz(t, tarMember{name: "syncr-worker", body: bytes.Repeat(bin, 100)})[:60],
+		},
+		{
 			name: "unknown format", art: Artifact{Format: "rar"}, max: limit, wantErr: "unknown archive format",
 			archive: []byte("x"),
 		},
@@ -130,6 +190,61 @@ func TestExtractBinary(t *testing.T) {
 				t.Errorf("extracted %q (%d bytes), want %q", out.Bytes(), n, tt.want)
 			}
 		})
+	}
+}
+
+// tarMember is one member of a test tar.gz archive; typ defaults to a
+// regular file.
+type tarMember struct {
+	name string
+	body []byte
+	typ  byte
+	link string
+}
+
+func buildTarGz(t testing.TB, members ...tarMember) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, m := range members {
+		typ := m.typ
+		if typ == 0 {
+			typ = tar.TypeReg
+		}
+		hdr := &tar.Header{Name: m.name, Typeflag: typ, Linkname: m.link, Mode: 0o755}
+		if typ == tar.TypeReg {
+			hdr.Size = int64(len(m.body))
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if typ == tar.TypeReg {
+			if _, err := tw.Write(m.body); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestExtractFileNeedsALimit(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "a.tar.gz")
+	if err := os.WriteFile(path, buildTarGz(t, tarMember{name: "x", body: []byte("x")}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ExtractFile(path, FormatTarGz, "x", &bytes.Buffer{}, 0); err == nil {
+		t.Error("ExtractFile without a size limit succeeded")
+	}
+	if _, err := ExtractFile(path, FormatBzip2, "", &bytes.Buffer{}, 1<<10); err == nil {
+		t.Error("ExtractFile of a bz2 stream (no members) succeeded")
 	}
 }
 

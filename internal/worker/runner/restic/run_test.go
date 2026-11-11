@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -95,10 +96,16 @@ func TestEnvironment(t *testing.T) {
 	if env["RCLONE_CONFIG_BK_TYPE"] != "s3" || env["RCLONE_CONFIG_BK_SECRET_ACCESS_KEY"] != testSecret {
 		t.Errorf("remote environment missing: %v", keys(env))
 	}
+	jobDir := filepath.Join(te.scratch, "restic-job-1")
 	for _, name := range []string{"TMPDIR", "TEMP", "TMP"} {
-		if env[name] == "" || env[name] != te.sup.spec.Dir {
-			t.Errorf("%s = %q, want the job scratch directory %q", name, env[name], te.sup.spec.Dir)
+		if env[name] != jobDir {
+			t.Errorf("%s = %q, want the job scratch directory %q", name, env[name], jobDir)
 		}
+	}
+	// restic (and the rclone it starts) work in the scratch root, so a
+	// process that outlives the job cannot keep the job's directory busy.
+	if te.sup.spec.Dir != te.scratch {
+		t.Errorf("working directory = %q, want the scratch root %q", te.sup.spec.Dir, te.scratch)
 	}
 	// No secret on the command line, in any form.
 	for _, arg := range te.sup.spec.Args {
@@ -182,8 +189,10 @@ func TestScratchDirectoryLifecycle(t *testing.T) {
 	te := newTestEnv(t)
 	var existedDuring bool
 	var mode os.FileMode
+	var jobDir string
 	te.sup.exited(0).onRun = func(spec proc.Spec) {
-		fi, err := os.Stat(spec.Dir)
+		jobDir = spec.Env["TMPDIR"]
+		fi, err := os.Stat(jobDir)
 		existedDuring = err == nil && fi.IsDir()
 		if err == nil {
 			mode = fi.Mode().Perm()
@@ -206,7 +215,10 @@ func TestScratchDirectoryLifecycle(t *testing.T) {
 	if runtime.GOOS != "windows" && mode != 0o700 {
 		t.Errorf("scratch mode = %o, want 700", mode)
 	}
-	if _, err := os.Stat(te.sup.spec.Dir); !errors.Is(err, os.ErrNotExist) {
+	if jobDir != filepath.Join(te.scratch, "restic-job-1") {
+		t.Errorf("job directory = %q", jobDir)
+	}
+	if _, err := os.Stat(jobDir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("scratch directory still exists after the job: %v", err)
 	}
 }

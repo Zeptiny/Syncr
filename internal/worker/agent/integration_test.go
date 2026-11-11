@@ -5,11 +5,16 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/worker/localfs"
@@ -17,10 +22,11 @@ import (
 	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
 	"github.com/Zeptiny/Syncr/internal/worker/runner/rclone"
+	"github.com/Zeptiny/Syncr/internal/worker/runner/restic"
 )
 
-// Integration tests run the real rclone runner (SYNCR_TEST_RCLONE) through
-// the agent.
+// Integration tests run the real rclone runner (SYNCR_TEST_RCLONE) and the
+// real restic runners (SYNCR_TEST_RESTIC) through the agent.
 
 // rcloneAgent builds an agent whose registry holds the real rclone runner,
 // allowed to touch root.
@@ -187,4 +193,203 @@ func TestIntegrationRcloneCancelThroughAgent(t *testing.T) {
 		t.Errorf("result = %v", r)
 	}
 	t.Logf("cancelled after %v", time.Since(start))
+}
+
+// slowUploads adds restic flags to every run, so a small backup lasts long
+// enough to be stopped while it uploads.
+type slowUploads struct {
+	restic.Supervisor
+	flags []string
+}
+
+func (s slowUploads) Run(ctx context.Context, spec proc.Spec) (proc.Result, error) {
+	spec.Args = append(append([]string{}, s.flags...), spec.Args...)
+	return s.Supervisor.Run(ctx, spec)
+}
+
+// localRemote defines every remote as a local-filesystem rclone remote (the
+// worker's builder refuses the local backend; restic's rclone backend over
+// it is what matters here).
+type localRemote struct{}
+
+func (localRemote) Env(remotes []*syncrv1.RemoteDefinition) (map[string]string, error) {
+	env := map[string]string{}
+	for _, r := range remotes {
+		env["RCLONE_CONFIG_"+strings.ToUpper(r.GetAlias())+"_TYPE"] = "local"
+	}
+	return env, nil
+}
+
+// rootPolicy allows every path below root.
+type rootPolicy struct{ root string }
+
+func (p rootPolicy) Resolve(path string) (string, error) {
+	pol, err := localfs.NewPolicy([]string{p.root})
+	if err != nil {
+		return "", err
+	}
+	return pol.Resolve(path)
+}
+
+// liveProcessesWith returns the PIDs of live processes whose command line
+// contains s (Linux).
+func liveProcessesWith(t *testing.T, s string) []int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pids []int
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		cmdline, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+		if err != nil || !bytes.Contains(cmdline, []byte(s)) {
+			continue
+		}
+		stat, err := os.ReadFile(filepath.Join("/proc", e.Name(), "stat"))
+		if i := bytes.LastIndexByte(stat, ')'); err == nil && i > 0 && i+2 < len(stat) && (stat[i+2] == 'Z' || stat[i+2] == 'X') {
+			continue // exited, waiting to be reaped
+		}
+		pids = append(pids, pid)
+	}
+	return pids
+}
+
+// TestIntegrationResticTimeLimitThroughAgent runs a real restic backup to a
+// repository behind restic's rclone backend (restic starts "rclone serve
+// restic") and lets the job's time limit stop it while it uploads. The job
+// fails with TIME_LIMIT and no process of the job is left.
+//
+//   - With the usual grace period restic stops on its own and releases its
+//     repository lock on the way out: the stop request reaches restic
+//     alone, while its rclone still serves it.
+//   - With a grace period too short for that, restic is killed; nothing it
+//     started outlives it either. (The lock restic left is stale; restic's
+//     own rules deal with those.) Here its rclone also ends by itself once
+//     restic's pipes close, so the proc package's tree tests, whose
+//     grandchild ignores everything but SIGKILL, are what proves the kill.
+func TestIntegrationResticTimeLimitThroughAgent(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("looks for leftover processes in /proc")
+	}
+	resticBin, rcloneBin := os.Getenv("SYNCR_TEST_RESTIC"), os.Getenv("SYNCR_TEST_RCLONE")
+	if resticBin == "" || rcloneBin == "" {
+		t.Skip("SYNCR_TEST_RESTIC or SYNCR_TEST_RCLONE not set")
+	}
+	for _, tt := range []struct {
+		name   string
+		grace  time.Duration
+		noLock bool
+	}{
+		{name: "graceful stop", grace: 15 * time.Second, noLock: true},
+		{name: "killed after the grace period", grace: time.Millisecond},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			timeLimitedBackup(t, resticBin, rcloneBin, tt.grace, tt.noLock)
+		})
+	}
+}
+
+func timeLimitedBackup(t *testing.T, resticBin, rcloneBin string, grace time.Duration, wantNoLock bool) {
+	t.Helper()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "roots")
+	// A unique name to find the job's processes by their arguments.
+	repoDir := filepath.Join(base, "repo-time-limit-"+strconv.FormatInt(time.Now().UnixNano(), 36))
+	src := filepath.Join(root, "data")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := make([]byte, 4_000_000) // random, so it does not compress: ~8s at 500 KiB/s
+	_, _ = rand.Read(data)
+	if err := os.WriteFile(filepath.Join(src, "big.bin"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runners, err := restic.New(restic.Config{
+		ResticPath: resticBin, RclonePath: rcloneBin,
+		Supervisor:  slowUploads{Supervisor: proc.New(proc.Options{GracePeriod: grace}), flags: []string{"--limit-upload=500"}},
+		Remotes:     localRemote{},
+		Paths:       rootPolicy{root: root},
+		ScratchRoot: filepath.Join(base, "scratch"),
+		CacheDir:    filepath.Join(base, "cache"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := runner.NewRegistry()
+	if err := reg.Register(runners...); err != nil {
+		t.Fatal(err)
+	}
+	var timers fakeTimers
+	a, err := New(Config{Runners: reg, AfterFunc: timers.afterFunc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := a.Shutdown(ctx); err != nil {
+			t.Errorf("Shutdown: %v", err)
+		}
+	})
+
+	repo := &syncrv1.ResticRepository{Location: &syncrv1.Location{Remote: "repo", Path: repoDir}, Password: "integration-test-password"}
+	remotes := []*syncrv1.RemoteDefinition{{Alias: "repo", BackendType: "local"}}
+	start := func(cmdID, jobID string, spec *syncrv1.JobSpec) {
+		spec.Remotes = remotes
+		a.HandleCommands(t.Context(), []*syncrv1.Command{{Id: cmdID, Command: &syncrv1.Command_StartJob{StartJob: &syncrv1.StartJob{JobId: jobID, Spec: spec}}}})
+	}
+	start("c1", "init-1", &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_ResticInit{ResticInit: &syncrv1.ResticInit{Repository: repo}}})
+	if r := waitResult(t, a, "init-1", 2*time.Minute); r.GetStatus() != syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED {
+		t.Fatalf("init: %v", r)
+	}
+
+	backup := &syncrv1.JobSpec{
+		MaxRuntime: durationpb.New(time.Hour),
+		Operation:  &syncrv1.JobSpec_ResticBackup{ResticBackup: &syncrv1.ResticBackup{Repository: repo, Paths: []string{src}, Host: "syncr-it"}},
+	}
+	start("c2", "backup-1", backup)
+	deadline := time.After(time.Minute)
+	for !strings.Contains(describe(events(a)), "progress(backup-1") {
+		select {
+		case <-a.Outbox().Notify():
+		case <-deadline:
+			t.Fatalf("no progress: %s", describe(events(a)))
+		}
+	}
+	// The backup uploads: restic and the rclone it started both run.
+	if pids := liveProcessesWith(t, repoDir); len(pids) < 2 {
+		t.Fatalf("processes of the job: %v, want restic and its rclone", pids)
+	}
+	timers.fire(timers.only(t)) // the hour has passed
+
+	r := waitResult(t, a, "backup-1", 30*time.Second)
+	if r.GetStatus() != syncrv1.JobResultStatus_JOB_RESULT_STATUS_FAILED ||
+		r.GetError().GetCode() != syncrv1.JobErrorCode_JOB_ERROR_CODE_TIME_LIMIT ||
+		r.GetError().GetMessage() != "stopped after 1h0m0s: the job's time limit was reached" {
+		t.Fatalf("result = %v", r)
+	}
+	if wantNoLock {
+		if locks, err := os.ReadDir(filepath.Join(repoDir, "locks")); err != nil || len(locks) != 0 {
+			t.Errorf("repository locks after the stop: %d entries, %v; want none", len(locks), err)
+		}
+	}
+	// No process of the job left. The kill was sent before the result; the
+	// kernel may take a moment to finish them.
+	gone := time.After(10 * time.Second)
+	for pids := liveProcessesWith(t, repoDir); len(pids) > 0; pids = liveProcessesWith(t, repoDir) {
+		select {
+		case <-gone:
+			t.Fatalf("processes of the job still running: %v", pids)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }

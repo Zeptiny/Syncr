@@ -6,7 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"slices"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -100,5 +104,38 @@ func TestRunPanicKillsChild(t *testing.T) {
 			t.Fatalf("child %d still running after the callback panicked", pid)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestRunOrphanedPipesDoNotHang: a grandchild that left the child's process
+// group (setsid, as a daemon does) is not stopped with the tree, and Run
+// still returns once the grace period has passed instead of waiting for the
+// pipes it holds open.
+func TestRunOrphanedPipesDoNotHang(t *testing.T) {
+	t.Parallel()
+	spec := helperSpec(t, "orphan")
+	spec.GracePeriod = 300 * time.Millisecond
+	spec.Stdout = func(l Line) {
+		if pid, ok := strings.CutPrefix(string(l.Data), "grandchild="); ok {
+			if n, err := strconv.Atoi(pid); err == nil {
+				t.Cleanup(func() {
+					if p, err := os.FindProcess(n); err == nil {
+						_ = p.Kill()
+					}
+				})
+			}
+		}
+	}
+
+	start := time.Now()
+	res, err := New(Options{}).Run(t.Context(), spec)
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("Run took %v; pipes held by the grandchild were not closed", elapsed)
+	}
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Errorf("Run() error = %v, want exec.ErrWaitDelay", err)
+	}
+	if res.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", res.ExitCode)
 	}
 }

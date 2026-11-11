@@ -112,9 +112,13 @@ type session struct {
 	ls *lsFilter
 
 	// error accounting: distinct failing items (restic reports a file once
-	// per phase, e.g. "scan" and "archival").
-	errItems map[string]struct{}
-	errLines int64
+	// per phase, e.g. "scan" and "archival"), at most maxErrItems of them;
+	// reports of further items are counted in errOverflow without telling
+	// them apart, so such an item can count twice. errLines counts reports
+	// that name no item.
+	errItems    map[string]struct{}
+	errOverflow int64
+	errLines    int64
 	// itemErrors are the first maxItemErrors distinct item errors in order
 	// of appearance ("<item>: <message>"), for warnings.
 	itemErrors []string
@@ -225,14 +229,18 @@ func (s *session) itemError(m *message) {
 	if s.kind != kindBackup && s.kind != kindRestore {
 		return
 	}
-	if m.Item == "" {
+	switch _, seen := s.errItems[m.Item]; {
+	case m.Item == "":
 		s.errLines++
 		s.noteItemError("", m)
-	} else if _, seen := s.errItems[m.Item]; !seen {
+	case seen:
+	case len(s.errItems) < maxErrItems:
 		s.errItems[m.Item] = struct{}{}
 		s.noteItemError(m.Item, m)
+	default:
+		s.errOverflow++
 	}
-	s.prog.Errors = max(s.prog.Errors, s.errLines+int64(len(s.errItems)))
+	s.prog.Errors = max(s.prog.Errors, s.unreadable())
 	s.publish()
 }
 
@@ -257,9 +265,10 @@ func (s *session) noteItemError(item string, m *message) {
 	}
 }
 
-// unreadable is the number of distinct items restic could not read.
+// unreadable is the number of distinct items restic could not read (an
+// estimate beyond maxErrItems failing paths, see errOverflow).
 func (s *session) unreadable() int64 {
-	return s.errLines + int64(len(s.errItems))
+	return s.errLines + int64(len(s.errItems)) + s.errOverflow
 }
 
 // setProgress folds a snapshot into the cumulative progress: counters never

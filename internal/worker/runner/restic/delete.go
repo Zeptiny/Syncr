@@ -589,7 +589,7 @@ func (d *deletion) rclone(ctx context.Context, onStdout func(proc.Line), args ..
 	res, err := d.e.cfg.Supervisor.Run(ctx, proc.Spec{
 		Path:   d.e.cfg.RclonePath,
 		Args:   append(deleteFlags(), args...),
-		Dir:    d.scratch,
+		Dir:    d.e.cfg.ScratchRoot,
 		Env:    d.env,
 		Stdout: stdout,
 		Stderr: keep,

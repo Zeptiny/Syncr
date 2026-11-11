@@ -1,6 +1,7 @@
 package restic
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -100,6 +101,31 @@ func TestBackupWarningFixtureCountsEachItemOnce(t *testing.T) {
 	}
 	if s.exit == nil || s.exit.Message == "" {
 		t.Error("exit_error message not captured")
+	}
+}
+
+func TestItemErrorsAreBounded(t *testing.T) {
+	t.Parallel()
+	s := newSession(kindBackup, func(runner.Progress) {}, nil)
+	report := func(item string) {
+		line := fmt.Sprintf(`{"message_type":"error","error":{"message":"permission denied"},"during":"archival","item":%q}`, item)
+		s.line(proc.Line{Data: []byte(line)})
+	}
+	const n = maxErrItems + 500
+	for i := range n {
+		report(fmt.Sprintf("/src/f%d", i))
+	}
+	for i := range 10 {
+		report(fmt.Sprintf("/src/f%d", i)) // seen before: not counted again
+	}
+	if len(s.errItems) != maxErrItems {
+		t.Errorf("remembered %d failing paths, want at most %d", len(s.errItems), maxErrItems)
+	}
+	if got := s.stats().Errors; got != n {
+		t.Errorf("Errors = %d, want %d", got, n)
+	}
+	if len(s.itemErrors) != maxItemErrors {
+		t.Errorf("kept %d messages, want %d", len(s.itemErrors), maxItemErrors)
 	}
 }
 

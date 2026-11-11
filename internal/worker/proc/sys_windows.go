@@ -16,11 +16,12 @@ const createNoWindow = 0x08000000
 
 // configureCmd starts the child in a new process group, so console Ctrl+C
 // events reach only the worker, without a console window, and makes
-// cancellation kill the child immediately: Windows has no portable
-// graceful-stop signal for console programs.
-func configureCmd(cmd *exec.Cmd) {
+// cancellation kill the child immediately, with every process it started
+// (the run's Job Object, see tree): Windows has no portable graceful-stop
+// signal for console programs.
+func configureCmd(cmd *exec.Cmd, t *tree) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | createNoWindow}
-	cmd.Cancel = func() error { return cmd.Process.Kill() }
+	cmd.Cancel = func() error { return t.cancel(cmd) }
 }
 
 // transientRemoveError reports whether a failed removal may succeed if

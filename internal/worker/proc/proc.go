@@ -16,6 +16,15 @@
 //     after the grace period if it is still running. Pipes left open by
 //     orphaned grandchildren are closed after the same grace period, so Run
 //     never hangs.
+//   - Whole process trees. A run is over only when every process the child
+//     started is gone too: once the child has exited (on its own, after the
+//     stop request or killed after the grace period), what is left of its
+//     tree is killed. On Linux that is the child's process group, signaled
+//     while the exited child is not yet reaped, so the group ID cannot have
+//     been reused (see tree_linux.go); on Windows, a Job Object of the run's
+//     own, terminated on cancel and again once the child has exited. Other
+//     Unix systems stop only the child. A process that left the group
+//     (setsid, setpgid) is not stopped.
 //   - Typed errors. Run returns *StartError, *ExitError or *CanceledError,
 //     and always reports the exit code in Result.
 //   - No orphans. A child dies with the worker, even when the worker itself
@@ -27,8 +36,8 @@
 // worker's terminal reaches only the worker, which then stops its children
 // in an orderly way.
 //
-// Allowed dependencies: the standard library, and golang.org/x/sys/windows
-// on Windows.
+// Allowed dependencies: the standard library, golang.org/x/sys/unix on
+// Linux and golang.org/x/sys/windows on Windows.
 package proc
 
 import (
@@ -190,11 +199,12 @@ func (s *Supervisor) Run(ctx context.Context, spec Spec) (Result, error) {
 		grace = spec.GracePeriod
 	}
 
+	t := newTree()
 	cmd := exec.CommandContext(ctx, spec.Path, spec.Args...)
 	cmd.Env = env // never nil: a nil Env would inherit the worker's environment
 	cmd.Dir = spec.Dir
 	cmd.WaitDelay = grace
-	configureCmd(cmd)
+	configureCmd(cmd, t)
 
 	lines := make(chan streamLine, lineBuffer)
 	var stdout, stderr *lineWriter
@@ -208,7 +218,7 @@ func (s *Supervisor) Run(ctx context.Context, spec Spec) (Result, error) {
 	}
 
 	start := time.Now()
-	waitDone, err := s.life.startChild(cmd, s.log)
+	waitDone, err := s.life.startChild(cmd, t, s.log)
 	if err != nil {
 		if ctx.Err() != nil {
 			return res, &CanceledError{Path: spec.Path, ExitCode: -1, Cause: context.Cause(ctx)}
