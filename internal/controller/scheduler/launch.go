@@ -127,7 +127,10 @@ func (s *Scheduler) decide(ctx context.Context, p *pass, sc schedules.Schedule, 
 }
 
 // target picks the run's worker: launch is false while the run waits, or
-// when it was ended here (no such worker, or none that can run it).
+// when it was ended here (no such worker, or none that can run it). A
+// worker is launched on only while it is Reachable (seen within
+// workers.LaunchWithin), not merely online: one that went quiet makes the
+// run wait, and the missed-run policy decides if it never comes back.
 //
 // What the workers reported (job kinds, features, operating system) is
 // their latest Hello, maybe of a previous process: a hint good enough to
@@ -149,7 +152,7 @@ func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, 
 				clip(fmt.Sprintf("%s; the schedule's worker %q runs %s. Choose another worker or change the job, then resume the schedule",
 					req.Explain(), w.Name, w.Info.OS)), true)
 		}
-		return w.ID, s.workers.Status(w) == domain.WorkerOnline, nil
+		return w.ID, s.workers.Reachable(w), nil
 	}
 	label := sc.Target.Label
 	ws, ok := p.labels[label]
@@ -177,7 +180,7 @@ func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, 
 		if !reported || runsKind {
 			known++ // may run the kind (a worker that never reported might)
 		}
-		if runsKind && s.workers.Status(w) == domain.WorkerOnline {
+		if runsKind && s.workers.Reachable(w) {
 			busy, err := s.busy(ctx, p, w.ID)
 			if err != nil {
 				return domain.WorkerID{}, false, err
@@ -377,7 +380,7 @@ func (s *Scheduler) busy(ctx context.Context, p *pass, id domain.WorkerID) (int,
 	return len(js), nil
 }
 
-// candidate is an online worker with the label that runs the kind.
+// candidate is a reachable worker with the label that runs the kind.
 type candidate struct {
 	ID   domain.WorkerID
 	Name string

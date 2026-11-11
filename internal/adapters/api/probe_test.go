@@ -31,6 +31,8 @@ type probeCall struct {
 	path     string
 	dirsOnly bool
 	input    *remotes.Input
+	host     string
+	port     int
 }
 
 func (f *fakeProbes) record(c probeCall) error {
@@ -84,6 +86,16 @@ func (f *fakeProbes) TestRemote(_ context.Context, actor domain.Actor, id domain
 		return nil, err
 	}
 	return &syncrv1.TestRemoteResponse{Ok: true, Entries: 3}, nil
+}
+
+func (f *fakeProbes) GetSftpHostKeys(_ context.Context, actor domain.Actor, host string, port int, workerID domain.WorkerID) (*syncrv1.GetSftpHostKeysResponse, error) {
+	if err := f.record(probeCall{actor: actor, worker: workerID, host: host, port: port}); err != nil {
+		return nil, err
+	}
+	return &syncrv1.GetSftpHostKeysResponse{
+		Keys:   []*syncrv1.SftpHostKey{{Algorithm: "ssh-ed25519", Key: "AAAAC3NzaC1lZDI1NTE5", FingerprintSha256: "SHA256:abc"}},
+		Worker: &syncrv1.ProbeWorkerRef{Id: workerID.String(), Name: "nas"},
+	}, nil
 }
 
 func (e *testEnv) probesFor(a domain.Actor) syncrv1connect.ProbeServiceClient {
@@ -318,4 +330,81 @@ func TestProbeServiceDisabled(t *testing.T) {
 	e := newEnv(t)
 	_, err := e.probesFor(testUser).ListWorkerFiles(context.Background(), connect.NewRequest(&syncrv1.ListWorkerFilesRequest{WorkerId: domain.NewWorkerID().String()}))
 	wantCode(t, err, connect.CodeUnimplemented)
+}
+
+// TestProbeGetSftpHostKeys: any signed-in user may fetch host keys; the
+// request reaches the service as given (the service validates the
+// address), a malformed worker ID does not, and the service's errors keep
+// their class, field and message.
+func TestProbeGetSftpHostKeys(t *testing.T) {
+	t.Parallel()
+	e, f := probeEnv(t)
+	ctx := context.Background()
+	worker := domain.NewWorkerID()
+
+	for _, actor := range []domain.Actor{testUser, testAdmin} {
+		resp, err := e.probesFor(actor).GetSftpHostKeys(ctx, connect.NewRequest(&syncrv1.GetSftpHostKeysRequest{
+			Host: "sftp.example.com", Port: 2222, WorkerId: worker.String(),
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Msg.GetKeys()) != 1 || resp.Msg.GetKeys()[0].GetFingerprintSha256() != "SHA256:abc" || resp.Msg.GetWorker().GetName() != "nas" {
+			t.Errorf("response = %v", resp.Msg)
+		}
+		if c := f.last(t); c.actor.UserID != actor.UserID || c.host != "sftp.example.com" || c.port != 2222 || c.worker != worker {
+			t.Errorf("call = %+v", c)
+		}
+	}
+	cl := e.probesFor(testUser)
+	if _, err := cl.GetSftpHostKeys(ctx, connect.NewRequest(&syncrv1.GetSftpHostKeysRequest{Host: "h", Port: -5})); err != nil {
+		t.Fatal(err)
+	}
+	if c := f.last(t); c.port != -5 || !c.worker.IsZero() {
+		t.Errorf("call = %+v, want the port as given and no worker", c)
+	}
+
+	before := f.count()
+	_, err := cl.GetSftpHostKeys(ctx, connect.NewRequest(&syncrv1.GetSftpHostKeysRequest{Host: "h", WorkerId: "nope"}))
+	wantCode(t, err, connect.CodeInvalidArgument)
+	if violation(err, "worker_id") == "" || f.count() != before {
+		t.Errorf("bad worker: %v", err)
+	}
+	anon := syncrv1connect.NewProbeServiceClient(e.srv.Client(), e.srv.URL)
+	_, err = anon.GetSftpHostKeys(ctx, connect.NewRequest(&syncrv1.GetSftpHostKeysRequest{Host: "h"}))
+	wantCode(t, err, connect.CodeUnauthenticated)
+	if f.count() != before {
+		t.Error("a refused request reached the service")
+	}
+
+	for _, tt := range []struct {
+		name  string
+		err   error
+		code  connect.Code
+		field string
+		msg   string
+	}{
+		{"bad host", &domain.ValidationError{Fields: []domain.FieldError{{Field: "host", Message: "must be a host name or an IP address"}}},
+			connect.CodeInvalidArgument, "host", "must be a host name"},
+		{"bad port", &domain.ValidationError{Fields: []domain.FieldError{{Field: "port", Message: "must be between 1 and 65535 (0 means 22)"}}},
+			connect.CodeInvalidArgument, "port", "between 1 and 65535"},
+		{"unreachable", fmt.Errorf("fetch the server's host keys: %w: cannot connect to h:22: connection refused", domain.ErrFailedPrecondition),
+			connect.CodeFailedPrecondition, "", "cannot connect to h:22"},
+		{"offline worker", fmt.Errorf(`%w: worker "nas" is offline`, domain.ErrUnavailable), connect.CodeUnavailable, "", "is offline"},
+		{"rate limited", fmt.Errorf("%w: too many requests to workers", domain.ErrRateLimited), connect.CodeResourceExhausted, "", ""},
+		{"unknown worker", fmt.Errorf("worker 0190: %w", domain.ErrNotFound), connect.CodeNotFound, "", "worker not found"},
+	} {
+		f.fail(tt.err)
+		_, err := cl.GetSftpHostKeys(ctx, connect.NewRequest(&syncrv1.GetSftpHostKeysRequest{Host: "h"}))
+		if codeOf(t, err) != tt.code {
+			t.Errorf("%s: code = %v, want %v (%v)", tt.name, codeOf(t, err), tt.code, err)
+			continue
+		}
+		if tt.field != "" && violation(err, tt.field) == "" {
+			t.Errorf("%s: no violation on %s: %v", tt.name, tt.field, err)
+		}
+		if !strings.Contains(err.Error(), tt.msg) || strings.Contains(err.Error(), "0190") {
+			t.Errorf("%s: message %q, want %q and no internals", tt.name, err, tt.msg)
+		}
+	}
 }

@@ -38,6 +38,7 @@ func probeProcedure(procedure string) bool {
 	case syncrv1connect.ProbeServiceListWorkerFilesProcedure,
 		syncrv1connect.ProbeServiceListRemoteFilesProcedure,
 		syncrv1connect.ProbeServiceTestRemoteProcedure,
+		syncrv1connect.ProbeServiceGetSftpHostKeysProcedure,
 		syncrv1connect.ResticServiceCreateRepositoryProcedure,
 		syncrv1connect.ResticServiceUpdateRepositoryProcedure,
 		syncrv1connect.ResticServiceListSnapshotsProcedure,

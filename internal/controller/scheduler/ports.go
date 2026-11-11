@@ -44,8 +44,12 @@ type Workers interface {
 	// List returns the workers matching f (removed ones only with
 	// f.IncludeRemoved).
 	List(ctx context.Context, f workers.ListFilter) ([]workers.Worker, error)
-	// Status derives a worker's connection status now.
-	Status(w workers.Worker) domain.WorkerStatus
+	// Reachable reports whether w was in contact recently enough to launch
+	// a run on it now (workers.LaunchWithin, never more than the offline
+	// threshold): a stricter test than its online status, so a run whose
+	// worker just went quiet waits instead of creating a job that would
+	// time out in the queue.
+	Reachable(w workers.Worker) bool
 }
 
 // Owners tells whether a schedule's owner may still run jobs

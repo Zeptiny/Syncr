@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 
 	"connectrpc.com/connect"
 
@@ -13,8 +12,8 @@ import (
 )
 
 // probeHandler implements syncr.v1.ProbeService over the probe use cases:
-// browsing a worker's folders, browsing a remote and testing a remote,
-// each through a worker. Requests may carry secrets (a remote being
+// browsing a worker's folders, browsing a remote, testing a remote and
+// fetching an SFTP server's host keys, each through a worker. Requests may carry secrets (a remote being
 // tested) and are never logged; responses carry none.
 type probeHandler struct {
 	syncrv1connect.UnimplementedProbeServiceHandler
@@ -113,9 +112,19 @@ func (h *probeHandler) TestRemote(ctx context.Context, req *connect.Request[sync
 	return connect.NewResponse(out), nil
 }
 
-// GetSftpHostKeys fetches an SFTP server's host keys through a worker. It
-// is not implemented yet: it answers Unimplemented until the probe use
-// cases can run the sftp_host_keys probe.
-func (h *probeHandler) GetSftpHostKeys(context.Context, *connect.Request[syncrv1.GetSftpHostKeysRequest]) (*connect.Response[syncrv1.GetSftpHostKeysResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fetching SFTP host keys is not implemented yet"))
+// GetSftpHostKeys fetches an SFTP server's host keys through a worker, for
+// an sftp remote's host_keys option. Any signed-in user may call it; the
+// probe use cases validate the host and port and apply the probe rate
+// limit. Nothing is logged about the request beyond what any call logs.
+func (h *probeHandler) GetSftpHostKeys(ctx context.Context, req *connect.Request[syncrv1.GetSftpHostKeysRequest]) (*connect.Response[syncrv1.GetSftpHostKeysResponse], error) {
+	actor, _ := ActorFrom(ctx)
+	workerID, err := optionalWorkerID(req.Msg.GetWorkerId())
+	if err != nil {
+		return nil, err
+	}
+	out, err := h.probes.GetSftpHostKeys(ctx, actor, req.Msg.GetHost(), int(req.Msg.GetPort()), workerID)
+	if err != nil {
+		return nil, h.fail(ctx, syncrv1connect.ProbeServiceGetSftpHostKeysProcedure, "worker", err)
+	}
+	return connect.NewResponse(out), nil
 }

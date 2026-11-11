@@ -28,4 +28,11 @@ type ProbeService interface {
 	// id, the stored remote with the unsaved values in, or (id zero) the
 	// unsaved new remote in. Worker-side failures are in the response.
 	TestRemote(ctx context.Context, actor domain.Actor, id domain.RemoteID, in *remotes.Input, path string, workerID domain.WorkerID) (*syncrv1.TestRemoteResponse, error)
+	// GetSftpHostKeys fetches the host keys of the SSH server at host:port
+	// (port 0 means 22) through workerID or, if zero, a worker the
+	// controller chooses. A malformed host or port is a
+	// *domain.ValidationError on "host" or "port"; a server that cannot be
+	// reached or does not speak SSH is ErrFailedPrecondition with a message
+	// for people.
+	GetSftpHostKeys(ctx context.Context, actor domain.Actor, host string, port int, workerID domain.WorkerID) (*syncrv1.GetSftpHostKeysResponse, error)
 }

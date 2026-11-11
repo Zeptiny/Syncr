@@ -22,11 +22,19 @@ type Config struct {
 	SampleInterval time.Duration
 	// MaxDefinitionBytes bounds an encoded job definition.
 	MaxDefinitionBytes int
+	// SampleRetention is how long the progress samples of a finished job
+	// are kept (jobs.sample_retention): PurgeSamples deletes the samples of
+	// the jobs that finished longer ago. At least MinSampleRetention.
+	SampleRetention time.Duration
+	// KeepSamples turns the purge off: PurgeSamples deletes nothing and
+	// SampleRetention is ignored (jobs.sample_retention: 0). It is a
+	// separate field so that the zero Config keeps the default retention.
+	KeepSamples bool
 }
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
-	return Config{SampleInterval: 5 * time.Second, MaxDefinitionBytes: 1 << 20}
+	return Config{SampleInterval: 5 * time.Second, MaxDefinitionBytes: 1 << 20, SampleRetention: DefaultSampleRetention}
 }
 
 // Deps are the service's collaborators. All are required except Remotes,
@@ -90,8 +98,12 @@ func New(d Deps, cfg Config) (*Service, error) {
 	def := DefaultConfig()
 	cfg.SampleInterval = cmp.Or(cfg.SampleInterval, def.SampleInterval)
 	cfg.MaxDefinitionBytes = cmp.Or(cfg.MaxDefinitionBytes, def.MaxDefinitionBytes)
+	cfg.SampleRetention = cmp.Or(cfg.SampleRetention, def.SampleRetention)
 	if cfg.SampleInterval < 0 || cfg.MaxDefinitionBytes < 0 {
 		return nil, fmt.Errorf("jobs: invalid config %+v", cfg)
+	}
+	if !cfg.KeepSamples && cfg.SampleRetention < MinSampleRetention {
+		return nil, fmt.Errorf("jobs: invalid config: sample retention %v is shorter than %v", cfg.SampleRetention, MinSampleRetention)
 	}
 	log := d.Logger
 	if log == nil {

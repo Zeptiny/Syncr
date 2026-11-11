@@ -474,7 +474,7 @@ func (s *Service) startSpec(ctx context.Context, j jobs.Job, info workers.Info) 
 	case errors.Is(err, errRepositoryUnavailable):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeRepositoryUnavailable, "the repository was deleted or is not available to its owner", err)
 	case errors.Is(err, ErrWorkerOutdated):
-		return nil, s.failUnbuildable(ctx, j, jobs.CodeWorkerOutdated, s.outdatedMessage(ctx, j), err)
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeWorkerOutdated, s.outdatedMessage(ctx, j, errors.Is(err, ErrTimeLimitUnsupported)), err)
 	case errors.Is(err, domain.ErrNotFound):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeRemoteUnavailable, "a remote of the job was deleted or is not available to its owner", err)
 	case errors.Is(err, domain.ErrInvalidArgument):
@@ -486,13 +486,19 @@ func (s *Service) startSpec(ctx context.Context, j jobs.Job, info workers.Info) 
 	}
 }
 
-// outdatedMessage names the job's worker in the worker_outdated failure.
-func (s *Service) outdatedMessage(ctx context.Context, j jobs.Job) string {
+// outdatedMessage names the job's worker in the worker_outdated failure;
+// timeLimit says the worker lacks only the time limit (a job of its kind
+// without one would run).
+func (s *Service) outdatedMessage(ctx context.Context, j jobs.Job, timeLimit bool) string {
+	what := j.Kind + " jobs"
+	if timeLimit {
+		what = "jobs with a time limit"
+	}
 	w, err := s.workers.Get(ctx, j.WorkerID)
 	if err != nil {
-		return fmt.Sprintf("the worker must be upgraded to run %s jobs", j.Kind)
+		return fmt.Sprintf("the worker must be upgraded to run %s", what)
 	}
-	return fmt.Sprintf("worker %q must be upgraded to run %s jobs", w.Name, j.Kind)
+	return fmt.Sprintf("worker %q must be upgraded to run %s", w.Name, what)
 }
 
 // wrongOSMessage says why a job fails on a worker that runs another
