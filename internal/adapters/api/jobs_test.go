@@ -1078,7 +1078,8 @@ func (f fakeLimits) TimeLimit(def *syncrv1.JobDefinition) time.Duration {
 }
 
 // TestJobTimeLimit: Job.time_limit is the effective limit (the
-// definition's, else the default) and the title names the definition's.
+// definition's, else the default). The title never names a limit: the job
+// page shows time_limit by itself.
 func TestJobTimeLimit(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, func(d *Deps) { d.TimeLimits = fakeLimits{def: 2 * time.Hour} })
@@ -1094,7 +1095,7 @@ func TestJobTimeLimit(t *testing.T) {
 	own := testDefinition()
 	own.MaxRuntime = durationpb.New(6 * time.Hour)
 	j := run(own)
-	if j.GetTimeLimit().AsDuration() != 6*time.Hour || !strings.HasSuffix(j.GetTitle(), " · Time limit 6h") {
+	if j.GetTimeLimit().AsDuration() != 6*time.Hour || j.GetTitle() == "" || strings.Contains(j.GetTitle(), "Time limit") {
 		t.Errorf("own limit: time_limit %v, title %q", j.GetTimeLimit(), j.GetTitle())
 	}
 	got, err := e.jobsClient().GetJob(ctx, connect.NewRequest(&syncrv1.GetJobRequest{JobId: j.GetId()}))

@@ -72,7 +72,11 @@ has a download mirror (`workers.download_base_url`), the commands add
 `--from '<mirror>'`.
 
 What `upgrade` does, in this order; nothing on the machine changes before
-step 4:
+step 4. It replaces the binary it runs from, so run the copy the service
+runs: before anything else it reads the program from the installed service
+(the systemd unit's `ExecStart`, the Windows Service's command line, or the
+Scheduled Task's action) and refuses, naming the right binary, if that is
+another file.
 
 1. Downloads `checksums.txt` and this platform's archive
    (`syncr-worker_<os>_<arch>.tar.gz`, `.zip` on Windows), requires the

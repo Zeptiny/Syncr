@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,6 +61,13 @@ func TestIntegrationRealUserTask(t *testing.T) {
 		_ = mgr.Uninstall(ctx, spec)
 		if st, _ := mgr.Status(ctx, spec); st != service.StateNotInstalled {
 			t.Errorf("cleanup: the task is still %v", st)
+		}
+	})
+	// Registered after the uninstall, so it runs before it: on failure, the
+	// task's last run and the worker's log, while both still exist.
+	t.Cleanup(func() {
+		if t.Failed() {
+			userTaskEvidence(t, spec.Name, logFile)
 		}
 	})
 
@@ -137,5 +145,57 @@ func TestIntegrationRealUserTask(t *testing.T) {
 	waitFor(service.StateNotInstalled)
 	if _, err := os.Stat(cfg); err != nil {
 		t.Errorf("uninstall removed the config: %v", err)
+	}
+}
+
+// userTaskEvidence logs what explains a failed task test: Task Scheduler's
+// view of the task (its status, last run time and last result, the
+// command it runs) and the log of the worker it started. With
+// SYNCR_TEST_EVIDENCE_DIR set (CI), it also writes them there, for a later
+// step to print: the test's temporary directory is gone by then.
+func userTaskEvidence(t *testing.T, task, logFile string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	query := func(name string, args ...string) string {
+		out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+		if err != nil {
+			return fmt.Sprintf("%s\n(%s: %v)", out, name, err)
+		}
+		return string(out)
+	}
+	task = strings.ReplaceAll(task, "'", "''")
+	evidence := map[string]string{
+		"user-task-schtasks.txt": query("schtasks.exe", "/Query", "/TN", task, "/V", "/FO", "LIST"),
+		// LastTaskResult as a number: 0 is success, 267009 (0x41301) running,
+		// 267014 (0x41306) ended by the user, 2147946720 (0x800710E0) refused.
+		"user-task-info.txt": query("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+			"Get-ScheduledTaskInfo -TaskName '"+task+"' | Format-List *; (Get-ScheduledTask -TaskName '"+task+"').Settings | Format-List *"),
+	}
+	for _, f := range []string{logFile + ".1", logFile} {
+		if b, err := os.ReadFile(f); err == nil {
+			evidence["user-task-"+filepath.Base(f)] = string(b)
+		} else {
+			evidence["user-task-"+filepath.Base(f)] = err.Error()
+		}
+	}
+	dir := os.Getenv("SYNCR_TEST_EVIDENCE_DIR")
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Logf("evidence directory: %v", err)
+			dir = ""
+		}
+	}
+	for _, name := range []string{"user-task-schtasks.txt", "user-task-info.txt", "user-task-worker.log.1", "user-task-worker.log"} {
+		text, ok := evidence[name]
+		if !ok {
+			continue
+		}
+		t.Logf("==> %s\n%s", name, text)
+		if dir != "" {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+				t.Logf("write %s: %v", name, err)
+			}
+		}
 	}
 }

@@ -150,7 +150,9 @@ func (h *jobHandler) protoJobs(ctx context.Context, js []jobs.Job) ([]*syncrv1.J
 			msg.WaitingForJobId = blocker.String()
 		}
 		if h.kinds != nil && msg.GetDefinition() != nil {
-			msg.Title = h.kinds.Describe(msg.GetDefinition(), names)
+			// The job page shows the effective time limit by itself, so
+			// the title leaves it out (notifications name it).
+			msg.Title = h.kinds.DescribeOperation(msg.GetDefinition(), names)
 			msg.Details = jobDetailsToProto(h.kinds.Summarize(j.Kind, msg.GetDefinition(), j.Output))
 		}
 		if h.limits != nil && msg.GetDefinition() != nil {

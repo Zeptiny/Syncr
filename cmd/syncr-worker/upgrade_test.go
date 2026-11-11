@@ -135,8 +135,10 @@ type upgradeServices struct {
 	state        service.State
 	afterRestart service.State
 	preflight    error
-	specs        []service.Spec
-	calls        []string
+	// exe is the program the installed service runs; "" means the spec's.
+	exe   string
+	specs []service.Spec
+	calls []string
 }
 
 func (s *upgradeServices) rec(call string, spec service.Spec) {
@@ -181,6 +183,17 @@ func (s *upgradeServices) Status(context.Context, service.Spec) (service.State, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state, nil
+}
+func (s *upgradeServices) InstalledExecutable(_ context.Context, spec service.Spec) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == service.StateNotInstalled {
+		return "", service.ErrNotInstalled
+	}
+	if s.exe != "" {
+		return s.exe, nil
+	}
+	return spec.Executable, nil
 }
 func (s *upgradeServices) Info(service.Spec) service.Info {
 	return service.Info{Platform: "fake", LogHint: "journalctl -u syncr-worker"}
@@ -337,6 +350,18 @@ func TestUpgradeCommandOutcomes(t *testing.T) {
 			wantCode: exitError, wantVersion: installedVersion, wantErr: []string{"tools are not available", "rclone: not found", "the worker was not changed"}},
 		{name: "service not installed", setup: func(f *upgradeFixture) { f.services.state = service.StateNotInstalled },
 			wantCode: exitError, wantVersion: installedVersion, wantErr: []string{"the worker service is not installed", "add --no-restart"}},
+		{name: "service runs another copy", setup: func(f *upgradeFixture) {
+			// The upgrade package tests a copy that exists; here the
+			// command's message matters.
+			f.services.exe = filepath.Join(f.dir, "other", filepath.Base(f.exe))
+		}, wantCode: exitError, wantVersion: installedVersion,
+			wantErr: []string{"the service runs another worker binary", "nothing was changed", "Run the upgrade with the service's binary instead",
+				filepath.Join("other", "syncr-worker")}},
+		{name: "no restart ignores the service", setup: func(f *upgradeFixture) {
+			f.services.state = service.StateNotInstalled
+			f.services.exe = filepath.Join(f.dir, "nope")
+		}, args: []string{"--no-restart"}, wantCode: exitOK, wantVersion: offeredVersion,
+			wantOut: []string{"Restart the worker to run " + offeredVersion}},
 		{name: "stopped service is started", setup: func(f *upgradeFixture) { f.services.state = service.StateStopped },
 			wantCode: exitOK, wantVersion: offeredVersion, wantCalls: []string{"restart"},
 			wantOut: []string{"The syncr-worker service is stopped; the upgrade will start it"}},

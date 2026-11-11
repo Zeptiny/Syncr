@@ -343,13 +343,17 @@ jobs:
           SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
         run: go test -v -tags integration -count=1 -timeout 20m -run '^TestIntegrationRealServiceUpgrade$' ./cmd/syncr-worker
       - name: Real Scheduled Task of the current user (setup --user)
+        id: user_task
         # The job runs as runneradmin in the logged-on console session, where
         # the task's logon trigger and on-demand start work. In session 0 the
         # test skips (a warning here, and the case stays on the release
-        # candidate checklist).
+        # candidate checklist). On failure the test logs the task's last run
+        # and the worker's log, and writes them to the evidence directory for
+        # the next step.
         shell: pwsh
         env:
           SYNCR_TEST_USER_TASK: "1"
+          SYNCR_TEST_EVIDENCE_DIR: ${{ runner.temp }}\syncr-evidence
           SYNCR_TEST_WORKER: ${{ runner.temp }}\syncr-worker.exe
           SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
           SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
@@ -363,8 +367,37 @@ jobs:
           }
       - name: Service Event Log entries (on failure)
         if: failure()
+        # Diagnostics only: this step never fails the job. Get-WinEvent
+        # throws ("The parameter is incorrect") when no event source of that
+        # name was ever registered, which -ErrorAction does not catch, and
+        # Actions runs pwsh with $ErrorActionPreference = 'stop'.
+        continue-on-error: true
         shell: pwsh
-        run: Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='syncr-worker'} -MaxEvents 50 -ErrorAction SilentlyContinue | Format-List TimeCreated, LevelDisplayName, Message
+        env:
+          USER_TASK_OUTCOME: ${{ steps.user_task.outcome }}
+          EVIDENCE_DIR: ${{ runner.temp }}\syncr-evidence
+        run: |
+          $ErrorActionPreference = 'Continue'
+          try {
+            Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='syncr-worker'} -MaxEvents 50 -ErrorAction Stop |
+              Format-List TimeCreated, LevelDisplayName, Message
+          } catch {
+            Write-Host "No Event Log entries of syncr-worker: $($_.Exception.Message)"
+          }
+          if ($env:USER_TASK_OUTCOME -eq 'failure') {
+            # Written by TestIntegrationRealUserTask before it removed the
+            # task: the task's last result and the user-task worker's log.
+            if (Test-Path -LiteralPath $env:EVIDENCE_DIR) {
+              Get-ChildItem -LiteralPath $env:EVIDENCE_DIR -File | Sort-Object Name | ForEach-Object {
+                Write-Host "::group::$($_.Name)"
+                Get-Content -LiteralPath $_.FullName | ForEach-Object { Write-Host $_ }
+                Write-Host "::endgroup::"
+              }
+            } else {
+              Write-Host "The Scheduled Task test left no evidence in $env:EVIDENCE_DIR"
+            }
+          }
+          exit 0
 
   web:
     name: web (typecheck, lint, test, build)
@@ -576,10 +609,14 @@ jobs:
       - name: Smoke test syncr-worker
         if: matrix.image == 'syncr-worker'
         # The pinned rclone and restic must be runnable inside the image, and
-        # their licence texts must be there (the image redistributes them).
+        # their licence texts must be there (the image redistributes them),
+        # readable by the image's non-root user. The modes are printed first,
+        # so a failure shows which file or directory is not readable.
         run: |
           docker run --rm --entrypoint /usr/local/bin/syncr-worker syncr-worker:ci version
           docker run --rm --entrypoint /usr/local/bin/rclone syncr-worker:ci version
           docker run --rm --entrypoint /usr/local/bin/restic syncr-worker:ci version
+          docker run --rm --entrypoint /bin/sh syncr-worker:ci -c \
+            'id; ls -ld /usr/share/doc/rclone /usr/share/doc/rclone/COPYING /usr/share/doc/restic /usr/share/doc/restic/LICENSE'
           docker run --rm --entrypoint /bin/sh syncr-worker:ci -c \
             'grep -q "Permission is hereby granted" /usr/share/doc/rclone/COPYING && grep -q "BSD 2-Clause License" /usr/share/doc/restic/LICENSE'

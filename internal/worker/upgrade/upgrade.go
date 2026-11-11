@@ -2,7 +2,11 @@
 // ("syncr-worker upgrade") in a way that cannot leave the worker stopped.
 //
 // Run performs six steps, and nothing on the machine changes before the
-// fourth:
+// fourth. Before the first, unless NoRestart, it checks that the service
+// exists and runs the binary to be replaced (the program its definition
+// names, Services.InstalledExecutable, must be the same directory entry):
+// replacing another copy would restart a service that still runs the old
+// one.
 //
 //  1. Download checksums.txt and this platform's archive
 //     (syncr-worker_<os>_<arch>.tar.gz, or .zip on Windows), require the
@@ -128,6 +132,10 @@ type Services interface {
 	Start(ctx context.Context, spec service.Spec) error
 	Stop(ctx context.Context, spec service.Spec) error
 	Restart(ctx context.Context, spec service.Spec) error
+	// InstalledExecutable returns the program the installed service runs,
+	// read from its definition; ErrUnsupported (wrapped) where it cannot
+	// be read.
+	InstalledExecutable(ctx context.Context, spec service.Spec) (string, error)
 	// Info says, among others, where the service's log is.
 	Info(spec service.Spec) service.Info
 }
@@ -164,7 +172,10 @@ type Config struct {
 	// are ignored. The new version must resolve its pins with them.
 	ToolPaths map[string]string
 	// Service is the installed worker service. Ignored with NoRestart. If
-	// its Executable is set, it must name the same file as Executable.
+	// its Executable is set, it must name the same file as Executable; and
+	// the program the installed service runs (Services.InstalledExecutable)
+	// must be Executable, or the upgrade is refused with ErrOtherBinary
+	// before anything changes.
 	Service service.Spec
 	// NoRestart swaps the binary without touching any service (a worker
 	// set up with --no-service): the operator restarts the process. Old tool
@@ -453,7 +464,28 @@ func (u *upgrader) checkService(ctx context.Context) error {
 	case service.StateStopped:
 		u.say("The %s service is stopped; the upgrade will start it", spec.Name)
 	}
-	return nil
+	return u.checkServiceBinary(ctx)
+}
+
+// checkServiceBinary makes sure the service runs the binary this upgrade
+// replaces. Otherwise the upgrade would replace another copy of the worker
+// and restart a service that still runs the old one, and report success.
+func (u *upgrader) checkServiceBinary(ctx context.Context) error {
+	spec := u.cfg.Service
+	svcExe, err := u.cfg.Services.InstalledExecutable(ctx, spec)
+	switch {
+	case errors.Is(err, service.ErrUnsupported):
+		u.say("Note: which binary the %s service runs cannot be read on this system; make sure it is %s", spec.Name, u.exe)
+		return nil
+	case err != nil:
+		return fmt.Errorf("find the binary the %s service runs: %w; nothing was changed", spec.Name, err)
+	}
+	if sameEntry(svcExe, u.exe) {
+		return nil
+	}
+	return fmt.Errorf("%w: the %s service runs %s, but this command would replace %s, a different file; "+
+		"nothing was changed. Run the upgrade with the service's binary instead: %s upgrade (with the same flags)",
+		ErrOtherBinary, spec.Name, svcExe, u.exe, svcExe)
 }
 
 // restartAndWatch restarts the service and requires it to be running at

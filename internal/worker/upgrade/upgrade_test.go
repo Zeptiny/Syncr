@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -124,6 +125,10 @@ type fakeServices struct {
 	restarted    bool
 	// ran holds the installed binary's content at each Restart and Start.
 	ran []string
+	// program and programErr are what InstalledExecutable returns; an empty
+	// program means exe.
+	program    string
+	programErr error
 }
 
 func (s *fakeServices) call(c string) {
@@ -173,6 +178,16 @@ func (s *fakeServices) Start(context.Context, service.Spec) error {
 	s.call("start")
 	s.runs()
 	return nil
+}
+
+func (s *fakeServices) InstalledExecutable(context.Context, service.Spec) (string, error) {
+	s.call("executable")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.programErr != nil {
+		return "", s.programErr
+	}
+	return cmp.Or(s.program, s.exe), nil
 }
 
 func (s *fakeServices) Info(service.Spec) service.Info { return service.Info{LogHint: logHint} }
@@ -331,7 +346,7 @@ func (f *fixture) assertUnchanged(t *testing.T) {
 		t.Errorf("files next to the binary = %q, want only %s", names, BinaryName)
 	}
 	for _, c := range f.svc.callList() {
-		if c != "preflight" && c != "status" {
+		if c != "preflight" && c != "status" && c != "executable" {
 			t.Errorf("the service was changed: %v", f.svc.callList())
 			break
 		}
@@ -369,7 +384,7 @@ func TestUpgradeSucceeds(t *testing.T) {
 			}
 			// The service restarted on the new binary, then was watched once a
 			// second for the health window.
-			if want := []string{"preflight", "status", "restart"}; !slices.Equal(f.svc.callList()[:3], want) {
+			if want := []string{"preflight", "status", "executable", "restart"}; !slices.Equal(f.svc.callList()[:4], want) {
 				t.Errorf("service calls = %v", f.svc.callList())
 			}
 			if f.svc.polls != 20 || len(*f.sleeps) != 20 || (*f.sleeps)[0] != time.Second {
@@ -825,5 +840,123 @@ func TestNewUpgraderValidates(t *testing.T) {
 	}
 	if len(f.http.requests) != 0 {
 		t.Errorf("requests = %q", f.http.requests)
+	}
+}
+
+// TestUpgradeRefusesAnotherServiceBinary: the service must run the binary
+// the upgrade replaces. Another copy of the worker is refused before
+// anything is downloaded or changed, naming the binary to run instead.
+func TestUpgradeRefusesAnotherServiceBinary(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		// program returns what the service runs, given the fixture.
+		program func(t *testing.T, f *fixture) string
+		refused bool
+	}{
+		{"the same file", func(_ *testing.T, f *fixture) string { return f.exe }, false},
+		{"the same file through another path", func(_ *testing.T, f *fixture) string {
+			return filepath.Join(f.dir, ".", "sub", "..", BinaryName)
+		}, false},
+		{"a symbolic link to it", func(t *testing.T, f *fixture) string {
+			if runtime.GOOS == "windows" {
+				t.Skip("symbolic links need a privilege on Windows")
+			}
+			link := filepath.Join(t.TempDir(), "worker-link")
+			if err := os.Symlink(f.exe, link); err != nil {
+				t.Fatal(err)
+			}
+			return link
+		}, false},
+		{"another copy", func(t *testing.T, _ *fixture) string {
+			other := filepath.Join(t.TempDir(), BinaryName)
+			if err := os.WriteFile(other, binaryFor(oldVersion), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return other
+		}, true},
+		{"a hard link in another directory", func(t *testing.T, f *fixture) string {
+			// The same file, but replacing f.exe would not replace it.
+			other := filepath.Join(f.dir, "elsewhere", BinaryName)
+			if err := os.MkdirAll(filepath.Dir(other), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Link(f.exe, other); err != nil {
+				t.Skipf("no hard links here: %v", err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(other)) })
+			return other
+		}, true},
+		{"a file that is gone", func(t *testing.T, _ *fixture) string { return filepath.Join(t.TempDir(), BinaryName) }, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			if err := os.MkdirAll(filepath.Join(f.dir, "sub"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			f.svc.program = tt.program(t, f)
+			_, err := Run(t.Context(), f.cfg)
+			if !tt.refused {
+				if err != nil {
+					t.Fatalf("Run: %v\n%s", err, f.out)
+				}
+				return
+			}
+			if !errors.Is(err, ErrOtherBinary) {
+				t.Fatalf("err = %v, want ErrOtherBinary", err)
+			}
+			for _, want := range []string{f.svc.program, f.exe, "nothing was changed", f.svc.program + " upgrade"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not mention %q", err, want)
+				}
+			}
+			if len(f.http.requests) != 0 {
+				t.Errorf("downloaded %q before refusing", f.http.requests)
+			}
+			if got := f.svc.callList(); !slices.Equal(got, []string{"preflight", "status", "executable"}) {
+				t.Errorf("service calls = %v", got)
+			}
+			if got := f.installed(t); got != string(binaryFor(oldVersion)) {
+				t.Errorf("installed binary = %q", got)
+			}
+		})
+	}
+}
+
+func TestUpgradeServiceBinaryUnreadable(t *testing.T) {
+	t.Parallel()
+	// Where the service manager's definition cannot be read, the upgrade
+	// goes on and says what it could not check.
+	f := newFixture(t)
+	f.svc.programErr = fmt.Errorf("%w: sysv", service.ErrUnsupported)
+	if _, err := Run(t.Context(), f.cfg); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(f.out.String(), "cannot be read on this system; make sure it is "+f.exe) {
+		t.Errorf("output:\n%s", f.out)
+	}
+
+	// Any other failure to read it refuses the upgrade.
+	f = newFixture(t)
+	f.svc.programErr = errors.New("systemctl show failed")
+	_, err := Run(t.Context(), f.cfg)
+	if err == nil || !strings.Contains(err.Error(), "systemctl show failed") || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.http.requests) != 0 {
+		t.Errorf("downloaded %q", f.http.requests)
+	}
+
+	// Without a restart no service is asked.
+	f = newFixture(t)
+	f.cfg.NoRestart = true
+	f.svc.programErr = errors.New("must not be asked")
+	if _, err := Run(t.Context(), f.cfg); err != nil {
+		t.Fatalf("Run --no-restart: %v", err)
+	}
+	if len(f.svc.callList()) != 0 {
+		t.Errorf("service calls = %v", f.svc.callList())
 	}
 }

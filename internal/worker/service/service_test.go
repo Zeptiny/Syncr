@@ -154,6 +154,8 @@ type harness struct {
 	m      *manager
 	svc    *fakeService
 	runner *fakeRunner
+	// imagePath is the Windows Service's command line; "" means none.
+	imagePath string
 }
 
 func newHarness(goos, platform string, elevated bool) *harness {
@@ -172,6 +174,13 @@ func newHarness(goos, platform string, elevated bool) *harness {
 		runner:   h.runner,
 		taskUser: func() (string, error) { return `PC\alice`, nil },
 		tempDir:  os.TempDir,
+		serviceCommandLine: func(name string) (string, error) {
+			if h.imagePath == "" {
+				return "", fmt.Errorf("%s: %w", name, ErrNotInstalled)
+			}
+			return h.imagePath, nil
+		},
+		sleep: func(context.Context, time.Duration) error { return nil },
 	})
 	return h
 }

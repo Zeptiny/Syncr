@@ -85,8 +85,12 @@ func TestMaxRuntimeDescribe(t *testing.T) {
 		{durationpb.New(0), "echo /src"},
 		{&durationpb.Duration{Seconds: 1, Nanos: -1}, "echo /src"},
 	} {
-		if got := r.Describe(withLimit(transfer("", "/src"), tt.limit), jobkind.Names{}); got != tt.want {
+		def := withLimit(transfer("", "/src"), tt.limit)
+		if got := r.Describe(def, jobkind.Names{}); got != tt.want {
 			t.Errorf("Describe with %v = %q, want %q", tt.limit, got, tt.want)
+		}
+		if got := r.DescribeOperation(def, jobkind.Names{}); got != "echo /src" {
+			t.Errorf("DescribeOperation with %v = %q, want no time limit", tt.limit, got)
 		}
 	}
 }

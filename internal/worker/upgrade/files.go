@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -173,4 +174,36 @@ func removeLeftover(executable string, now time.Time) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// sameEntry reports whether the paths a and b, with symbolic links
+// resolved, name the same directory entry: the same name in the same
+// directory. That decides whether replacing b replaces the program a
+// service started as a runs. Comparing the strings is not enough (a short
+// 8.3 name on Windows, a bind mount), and comparing the files is too much:
+// a hard link in another directory is the same file, but replacing b would
+// leave it with the old binary. Names are compared case-insensitively on
+// Windows. A path that cannot be resolved names no entry.
+func sameEntry(a, b string) bool {
+	ra, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		return false
+	}
+	rb, err := filepath.EvalSymlinks(b)
+	if err != nil {
+		return false
+	}
+	na, nb := filepath.Base(ra), filepath.Base(rb)
+	if na != nb && (runtime.GOOS != "windows" || !strings.EqualFold(na, nb)) {
+		return false
+	}
+	da, err := os.Stat(filepath.Dir(ra))
+	if err != nil {
+		return false
+	}
+	db, err := os.Stat(filepath.Dir(rb))
+	if err != nil {
+		return false
+	}
+	return os.SameFile(da, db)
 }

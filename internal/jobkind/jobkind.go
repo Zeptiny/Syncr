@@ -51,7 +51,8 @@
 //
 // A definition's max_runtime applies to every kind: Registry.Check checks
 // its bounds (MinMaxRuntime to MaxMaxRuntime) and Registry.Describe adds it
-// to the description. Kinds do not see it: the dispatcher computes the
+// to the description (notifications); Registry.DescribeOperation leaves it
+// out (job titles, next to the effective limit). Kinds do not see it: the dispatcher computes the
 // effective limit (with the controller's default) and writes it into the
 // spec.
 //
@@ -370,11 +371,22 @@ func (r *Registry) Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.JobS
 	return k.Build(def, in)
 }
 
-// Describe describes def with its kind (see Kind.Describe), followed by
-// its own time limit, e.g. "Copy Photos → B2 offsite · Time limit 6h" (the
-// controller's default limit is not part of the definition, so it is not
-// described). A definition of no registered kind is described by its kind
-// name ("" if it has none).
+// DescribeOperation describes what def does with its kind (see
+// Kind.Describe), e.g. "Copy Photos → B2 offsite": the title of a job,
+// whose page shows the effective time limit on its own. A definition of no
+// registered kind is described by its kind name ("" if it has none).
+func (r *Registry) DescribeOperation(def *syncrv1.JobDefinition, names Names) string {
+	k, err := r.kindOf(def)
+	if err != nil {
+		return KindOf(def)
+	}
+	return k.Describe(def, names)
+}
+
+// Describe is DescribeOperation followed by def's own time limit, e.g.
+// "Copy Photos → B2 offsite · Time limit 6h", for text that stands alone
+// (notifications). The controller's default limit is not part of the
+// definition, so it is not described.
 func (r *Registry) Describe(def *syncrv1.JobDefinition, names Names) string {
 	k, err := r.kindOf(def)
 	if err != nil {
