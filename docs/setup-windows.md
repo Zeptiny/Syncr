@@ -22,15 +22,36 @@ Expand-Archive -Path $z -DestinationPath $d -Force
 & "$d\syncr-worker.exe" setup --controller 'https://syncr.example.com' --token 'syncr_et_...'
 ```
 
-It downloads the release archive (or the controller's
-`workers.download_base_url` mirror) into `C:\Program Files\Syncr` (the service
-runs exactly that path) and runs setup. If `syncr-worker.exe` is already
-there (release archives are published from Milestone 6 on; until then build
-it with `make build GOOS=windows GOARCH=amd64`), run only the last line:
+It downloads the release archive into `C:\Program Files\Syncr` (the
+service runs exactly that path) and runs setup. The UI's command downloads
+the controller's own release (`.../releases/download/v2.0.0/...` for a
+v2.0.0 controller), so a new worker runs the controller's version; the
+`latest` URL above, which a development build of the controller shows,
+installs the newest release. If the controller sets
+`workers.download_base_url` (empty by default), the command downloads from
+that mirror instead. If `syncr-worker.exe` is already there, run only the
+last line:
 
 ```powershell
 & 'C:\Program Files\Syncr\syncr-worker.exe' setup --controller https://syncr.example.com --token syncr_et_...
 ```
+
+To check the archive against the release's `checksums.txt` before
+installing it by hand (elevated PowerShell):
+
+```powershell
+$base = 'https://github.com/Zeptiny/Syncr/releases/latest/download'   # or releases/download/v2.0.0
+$t = Join-Path $env:TEMP 'syncr-download'; New-Item -ItemType Directory -Force $t | Out-Null
+Invoke-WebRequest -UseBasicParsing -Uri "$base/checksums.txt" -OutFile "$t\checksums.txt"
+Invoke-WebRequest -UseBasicParsing -Uri "$base/syncr-worker_windows_amd64.zip" -OutFile "$t\syncr-worker_windows_amd64.zip"
+$want = (Select-String -Path "$t\checksums.txt" -Pattern ' syncr-worker_windows_amd64.zip$').Line.Split(' ')[0]
+$got = (Get-FileHash "$t\syncr-worker_windows_amd64.zip" -Algorithm SHA256).Hash.ToLower()
+if ($got -ne $want) { throw "checksum mismatch: $got, checksums.txt says $want" }
+Expand-Archive -Path "$t\syncr-worker_windows_amd64.zip" -DestinationPath (Join-Path $env:ProgramFiles 'Syncr') -Force
+```
+
+With the GitHub CLI, `gh attestation verify "$t\syncr-worker_windows_amd64.zip" --owner Zeptiny`
+also checks the archive's build provenance.
 
 Useful flags: `--name`, `--local-root 'D:\Shares'` (repeatable; without one jobs
 cannot touch local files), `--ca-file C:\path\ca.pem`, `--dry-run`, `--force`,
@@ -88,6 +109,25 @@ syncr-worker.exe service uninstall   # keeps the config and data
 Add `--user` for the scheduled task. `status`, `start`, `stop` and `uninstall`
 of the system service need an elevated terminal.
 
+## Upgrading
+
+Upgrade the controller first. An older worker then shows as **Outdated** in
+the web UI, and its page shows the command that upgrades it, for example:
+
+```powershell
+# Windows service, in an elevated PowerShell
+$d = Join-Path $env:ProgramFiles 'Syncr'; & "$d\syncr-worker.exe" upgrade --version 'v2.0.1'
+# --user (Scheduled Task), in a normal PowerShell
+$d = Join-Path $env:LOCALAPPDATA 'Programs\Syncr'; & "$d\syncr-worker.exe" upgrade --user --version 'v2.0.1'
+```
+
+It verifies the download, fetches the new version's rclone and restic,
+replaces `syncr-worker.exe` (the old one is renamed to
+`syncr-worker.exe.old` and removed later), restarts the service or task, and
+puts the old version back if the new one does not stay up. Running jobs are
+interrupted by the restart. Details and the manual steps:
+[upgrading](upgrade.md).
+
 ## Labels and schedules
 
 Schedules run on one worker or on any worker with a label. An admin sets a
@@ -109,8 +149,8 @@ The folders in `local_roots` are also what the web UI can browse on this
 worker, back up with restic and restore into
 ([restic backups](restic.md)). A drive is written `C:\`; a snapshot shows
 `C:\Users\ada\Documents` as `/C/Users/ada/Documents`. Browsing, remote
-tests and restic jobs need a current worker: one that shows as **outdated**
-in the web UI is updated by running `setup` again with the new binary.
+tests and restic jobs need a current worker: one that shows as **Outdated**
+in the web UI is upgraded with `syncr-worker upgrade` ([above](#upgrading)).
 
 ## Uninstall
 

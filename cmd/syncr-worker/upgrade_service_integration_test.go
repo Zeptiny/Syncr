@@ -421,7 +421,13 @@ func TestIntegrationUpgradeNoRestart(t *testing.T) {
 	if got := binaryVersion(t, exe); got != current.version {
 		t.Fatalf("after the upgrade the binary reports %s, want %s", got, current.version)
 	}
-	for _, want := range []string{"Verified syncr-worker_", "Replaced " + exe, "Restart the worker to run " + current.version} {
+	// The upgrade names the binary by its resolved path (on Windows the
+	// long form of a short 8.3 temporary path such as RUNNER~1).
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Verified syncr-worker_", "Replaced " + resolved, "Restart the worker to run " + current.version} {
 		if !strings.Contains(out, want) {
 			t.Errorf("upgrade output lacks %q", want)
 		}

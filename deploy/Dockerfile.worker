@@ -41,6 +41,14 @@ RUN apt-get update \
     && useradd --system --uid 10001 --gid syncr --home-dir /var/lib/syncr --create-home --shell /usr/sbin/nologin syncr
 COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
 COPY --from=restic /usr/bin/restic /usr/local/bin/restic
+# The image redistributes rclone (MIT) and restic (BSD 2-Clause): their
+# licence texts at the pinned versions, verified by SHA-256. A new version
+# needs the new checksums (sha256sum of the files at its tag).
+ARG RCLONE_VERSION RESTIC_VERSION
+ADD --checksum=sha256:8cd2e9e750b90a04b7d82dbbca3930c696ae0309d7c10464f90a44f45754cd04 --chmod=644 \
+    https://raw.githubusercontent.com/rclone/rclone/v${RCLONE_VERSION}/COPYING /usr/share/doc/rclone/COPYING
+ADD --checksum=sha256:6f08a01a9fab5b24e139a09f15cc24a73087c7bc09e3bacf099fdf2d767bf897 --chmod=644 \
+    https://raw.githubusercontent.com/restic/restic/v${RESTIC_VERSION}/LICENSE /usr/share/doc/restic/LICENSE
 COPY --from=build /out/syncr-worker /usr/local/bin/syncr-worker
 USER syncr:syncr
 WORKDIR /var/lib/syncr

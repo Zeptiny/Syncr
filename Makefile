@@ -7,6 +7,11 @@ BUF           ?= buf
 SQLC_VERSION  ?= v1.31.1
 SQLC          ?= $(GO) run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 GOLANGCI_LINT ?= golangci-lint
+# GoReleaser runs via `go run` at the version CI and the release workflow pin
+# (GORELEASER_VERSION in .github/workflows/{ci,release}.yml); it needs Go
+# 1.27.3 or newer. Override GORELEASER to use an installed binary.
+GORELEASER_VERSION ?= v2.20.1
+GORELEASER         ?= $(GO) run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 # Installs web/ dependencies with the npm bundled with Node 26 (web/.nvmrc).
 NPM_CI        ?= npm ci --no-audit --no-fund
 
@@ -108,6 +113,14 @@ build: ## Build both binaries into $(BIN_DIR)/ (GOOS/GOARCH to cross-compile; `m
 			-ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$$bin$(EXE) ./cmd/$$bin || exit 1; \
 	done
 
+# The release build of .goreleaser.yaml without publishing anything: dist/
+# gets the six archives and checksums.txt a release would have, with
+# binaries that report dev-<commit>. It builds the web UI itself.
+.PHONY: release-snapshot
+release-snapshot: ## Build the release archives into dist/ (GoReleaser snapshot; nothing is published)
+	$(GORELEASER) check
+	$(GORELEASER) release --snapshot --clean
+
 .PHONY: tidy
 tidy: ## Tidy go.mod/go.sum
 	$(GO) mod tidy
@@ -132,4 +145,4 @@ dev-down: ## Stop the dev stack and delete its volumes
 
 .PHONY: clean
 clean: ## Remove build output
-	rm -rf $(BIN_DIR)
+	rm -rf $(BIN_DIR) dist
