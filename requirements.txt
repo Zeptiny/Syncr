@@ -1,7 +1,7 @@
 apache-libcloud==3.8.0
 asarPy==1.0.1
 asgiref==3.8.1
-certifi==2025.1.31
+certifi==2026.10.18
 charset-normalizer==3.4.1
 cron-validator==1.0.8
 Django==5.1.7
