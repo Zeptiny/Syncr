@@ -11,21 +11,42 @@ import (
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 )
 
-// DefaultDownloadBaseURL is where install commands download worker
-// releases from unless InstallConfig.DownloadBaseURL is set.
-const DefaultDownloadBaseURL = "https://github.com/Zeptiny/Syncr/releases/latest/download"
+// Where install commands download worker releases from unless
+// InstallConfig.DownloadBaseURL is set: the assets of the controller's own
+// release (ReleaseDownloadBaseURL + "/" + InstallConfig.Version) when the
+// controller is a release build, else those of the latest release
+// (DefaultDownloadBaseURL).
+const (
+	DefaultDownloadBaseURL = "https://github.com/Zeptiny/Syncr/releases/latest/download"
+	ReleaseDownloadBaseURL = "https://github.com/Zeptiny/Syncr/releases/download"
+)
 
-// InstallConfig configures the worker install commands of
-// WorkerAdminService (CreateEnrollmentToken, GetPassiveInstallCommands),
-// rendered by this file.
+// releaseVersion matches the versions of release builds: vX.Y.Z, or a
+// release candidate vX.Y.Z-rc.N.
+var releaseVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`)
+
+// isReleaseVersion reports whether v is the version of a release build (a
+// development build reports "dev" or a Go pseudo-version).
+func isReleaseVersion(v string) bool { return releaseVersion.MatchString(v) }
+
+// InstallConfig configures the worker install and upgrade commands of
+// WorkerAdminService (CreateEnrollmentToken, GetPassiveInstallCommands,
+// GetWorkerUpgradeCommands), rendered by this file.
 type InstallConfig struct {
 	// PublicURL is the controller URL workers use (http.public_url). If
 	// empty, CreateEnrollmentToken uses the request's controller_url (the
 	// browser's origin), which must be https or a loopback http URL.
 	PublicURL string
 	// DownloadBaseURL is the base URL of the release assets
-	// (workers.download_base_url); "" means DefaultDownloadBaseURL.
+	// (workers.download_base_url); "" means GitHub's: the release of
+	// Version, or the latest release.
 	DownloadBaseURL string
+	// Version is the controller's version (version.Info.Version; NewHandler
+	// uses Deps.BuildInfo.Version when it is empty). When it is a release
+	// version (isReleaseVersion), install commands without a
+	// DownloadBaseURL download that release, upgrade commands ask for it
+	// (--version), and Worker.outdated compares workers' versions with it.
+	Version string
 }
 
 // Validate checks the configured URLs, so the composition root can refuse a
@@ -47,10 +68,15 @@ func (c InstallConfig) Validate() error {
 }
 
 // downloadBase returns the validated download base URL, without a trailing
-// slash.
+// slash: DownloadBaseURL, or the GitHub release of a release Version, or
+// GitHub's latest release.
 func (c InstallConfig) downloadBase() (string, error) {
 	raw := c.DownloadBaseURL
-	if raw == "" {
+	switch {
+	case raw != "":
+	case isReleaseVersion(c.Version):
+		raw = ReleaseDownloadBaseURL + "/" + c.Version
+	default:
 		raw = DefaultDownloadBaseURL
 	}
 	u, err := parseSafeURL(raw)
@@ -246,4 +272,81 @@ func passiveCommands(cfg InstallConfig) ([]*syncrv1.InstallCommand, error) {
 		}
 	}
 	return cmds, nil
+}
+
+// releasePlatform reports whether releases have a worker build for goos
+// and goarch (the archive syncr-worker_<os>_<arch>); an empty goarch means
+// unknown, and any of goos's builds may fit.
+func releasePlatform(goos, goarch string) bool {
+	switch goos {
+	case "linux":
+		return goarch == "" || goarch == "amd64" || goarch == "arm64"
+	case "windows":
+		return goarch == "" || goarch == "amd64"
+	}
+	return false
+}
+
+// upgradeCommands renders the commands that upgrade a worker running on
+// goos/goarch in place ("syncr-worker upgrade"): one for the system service
+// and one for the per-user service, each with the binary path the install
+// commands install to. With a release Version they ask for it (--version);
+// with a DownloadBaseURL they download from it (--from). An unknown
+// operating system, or one without a release build for goarch (when
+// known), has none (nil).
+func upgradeCommands(cfg InstallConfig, goos, goarch string) ([]*syncrv1.InstallCommand, error) {
+	if !releasePlatform(goos, goarch) {
+		return nil, nil
+	}
+	var args, note string
+	switch {
+	case isReleaseVersion(cfg.Version):
+		args += " --version " + sq(cfg.Version)
+		note = " Installs " + cfg.Version + ", the controller's version."
+	case cfg.DownloadBaseURL != "":
+		note = " Installs the release the download mirror holds."
+	default:
+		note = " Installs the latest release."
+	}
+	if cfg.DownloadBaseURL != "" {
+		base, err := cfg.downloadBase()
+		if err != nil {
+			return nil, err
+		}
+		args += " --from " + sq(base)
+		if strings.HasPrefix(base, "http:") {
+			note += " The upgrade downloads over plain http only from the worker's own machine (localhost): use an https mirror otherwise."
+		}
+	}
+	const keep = " Running jobs are interrupted by the restart. If the new version does not stay up, the old one is put back."
+	if goos == "linux" {
+		return []*syncrv1.InstallCommand{
+			{
+				Platform: syncrv1.InstallPlatform_INSTALL_PLATFORM_LINUX, Scope: syncrv1.InstallScope_INSTALL_SCOPE_SYSTEM,
+				Shell: "sh", Title: "Linux (system service)",
+				Command: "sudo " + linuxSystemBin + " upgrade" + args,
+				Note:    "Needs sudo. Replaces " + linuxSystemBin + " and restarts the system service." + note + keep,
+			},
+			{
+				Platform: syncrv1.InstallPlatform_INSTALL_PLATFORM_LINUX, Scope: syncrv1.InstallScope_INSTALL_SCOPE_USER,
+				Shell: "sh", Title: "Linux (current user)",
+				Command: linuxUserBin + " upgrade --user" + args,
+				Note:    "Run as the user the worker runs as. Replaces ~/.local/bin/syncr-worker and restarts that user's service." + note + keep,
+			},
+		}, nil
+	}
+	return []*syncrv1.InstallCommand{
+		{
+			Platform: syncrv1.InstallPlatform_INSTALL_PLATFORM_WINDOWS, Scope: syncrv1.InstallScope_INSTALL_SCOPE_SYSTEM,
+			Shell: "powershell", Title: "Windows (system service)",
+			Command: "$d = " + windowsSystem + "\n" + windowsExe + " upgrade" + args,
+			Note:    "Run in an elevated PowerShell (Run as administrator). Replaces the worker in Program Files and restarts the Windows service." + note + keep,
+		},
+		{
+			Platform: syncrv1.InstallPlatform_INSTALL_PLATFORM_WINDOWS, Scope: syncrv1.InstallScope_INSTALL_SCOPE_USER,
+			Shell: "powershell", Title: "Windows (current user)",
+			Command: "$d = " + windowsUser + "\n" + windowsExe + " upgrade --user" + args,
+			Note:    "Run in a normal PowerShell as the user the worker runs as. Replaces the worker in that user's programs folder and restarts its scheduled task." + note + keep,
+		},
+	}, nil
 }

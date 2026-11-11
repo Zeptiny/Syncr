@@ -18,6 +18,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
+	"github.com/Zeptiny/Syncr/internal/link"
 	"github.com/Zeptiny/Syncr/internal/notify"
 )
 
@@ -43,8 +44,10 @@ func TestWorkerToProto(t *testing.T) {
 			Tools:    []*syncrv1.ToolVersion{{Name: "rclone", Version: "v1.75"}, {Name: "restic", Version: "0.19"}},
 			JobKinds: []string{"rclone_transfer"}, MaxConcurrentJobs: 3, LocalRoots: []string{"/data"}, ReportedAt: ts(convT0),
 		},
+		// It reports no link features.
+		Outdated: true,
 	}
-	if got := workerToProto(w, domain.WorkerOnline); !proto.Equal(got, want) {
+	if got := workerToProto(w, domain.WorkerOnline, "v2.1.0"); !proto.Equal(got, want) {
 		t.Errorf("workerToProto =\n%v\nwant\n%v", got, want)
 	}
 }
@@ -54,10 +57,58 @@ func TestWorkerToProtoMinimal(t *testing.T) {
 	// An enrolled worker that never connected: OS and Arch from enrollment
 	// do not make an Info.
 	w := workers.Worker{ID: domain.NewWorkerID(), Name: "n", Mode: domain.WorkerActive, Info: workers.Info{OS: "linux", Arch: "amd64"}}
-	got := workerToProto(w, domain.WorkerPending)
-	if got.GetInfo() != nil || got.GetLastSeen() != nil || got.GetCreatedAt() != nil || got.GetUrl() != "" ||
+	got := workerToProto(w, domain.WorkerPending, "v2.0.0")
+	if got.GetInfo() != nil || got.GetOutdated() || got.GetLastSeen() != nil || got.GetCreatedAt() != nil || got.GetUrl() != "" ||
 		got.GetStatus() != syncrv1.WorkerStatus_WORKER_STATUS_PENDING || got.GetMode() != syncrv1.WorkerMode_WORKER_MODE_ACTIVE {
 		t.Errorf("workerToProto = %v", got)
+	}
+}
+
+func TestWorkerOutdated(t *testing.T) {
+	t.Parallel()
+	all := link.Features()
+	hello := func(version string, features ...string) workers.Info {
+		return workers.Info{Version: version, OS: "linux", Arch: "amd64", Features: features, ReportedAt: convT0}
+	}
+	for _, tt := range []struct {
+		name       string
+		info       workers.Info
+		controller string
+		want       bool
+	}{
+		{"never connected", workers.Info{OS: "linux", Arch: "amd64"}, "v2.0.0", false},
+		{"same release", hello("v2.0.0", all...), "v2.0.0", false},
+		{"same release candidate", hello("v2.0.0-rc.1", all...), "v2.0.0-rc.1", false},
+		{"older release", hello("v2.0.0", all...), "v2.1.0", true},
+		{"newer release", hello("v2.1.0", all...), "v2.0.0", true},
+		{"release candidate of the release", hello("v2.0.0-rc.1", all...), "v2.0.0", true},
+		{"other release candidate", hello("v2.0.0-rc.1", all...), "v2.0.0-rc.2", true},
+		{"development worker", hello("dev", all...), "v2.0.0", false},
+		{"pseudo-version worker", hello("v2.0.1-0.20261110120000-0123456789ab", all...), "v2.0.0", false},
+		{"development controller", hello("v2.0.0", all...), "dev", false},
+		{"unknown controller version", hello("v2.0.0", all...), "", false},
+		{"missing feature", hello("v2.0.0", all[:len(all)-1]...), "v2.0.0", true},
+		{"no features at all", hello("dev"), "dev", true},
+		{"unknown extra feature", hello("v2.0.0", append([]string{"future.feature"}, all...)...), "v2.0.0", false},
+		{"hello without a time", workers.Info{Version: "v2.0.0", Features: all}, "v2.1.0", true},
+	} {
+		if got := workerOutdated(tt.info, tt.controller); got != tt.want {
+			t.Errorf("%s: workerOutdated = %v, want %v", tt.name, got, tt.want)
+		}
+		w := workers.Worker{ID: domain.NewWorkerID(), Info: tt.info}
+		if got := workerToProto(w, domain.WorkerOnline, tt.controller).GetOutdated(); got != tt.want {
+			t.Errorf("%s: Worker.outdated = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestTimeLimitToProto(t *testing.T) {
+	t.Parallel()
+	if timeLimitToProto(0) != nil || timeLimitToProto(-time.Second) != nil {
+		t.Error("no limit is not unset")
+	}
+	if got := timeLimitToProto(6 * time.Hour); got.AsDuration() != 6*time.Hour {
+		t.Errorf("6h = %v", got)
 	}
 }
 
@@ -264,7 +315,7 @@ func TestProgressToProto(t *testing.T) {
 func TestMilestone4Conversions(t *testing.T) {
 	t.Parallel()
 	w := workers.Worker{ID: domain.NewWorkerID(), Name: "nas-01", Labels: []string{"linux", "nas"}}
-	if got := workerToProto(w, domain.WorkerOnline); !slices.Equal(got.GetLabels(), []string{"linux", "nas"}) {
+	if got := workerToProto(w, domain.WorkerOnline, ""); !slices.Equal(got.GetLabels(), []string{"linux", "nas"}) {
 		t.Errorf("labels = %v", got.GetLabels())
 	}
 	sched := domain.NewScheduleID()

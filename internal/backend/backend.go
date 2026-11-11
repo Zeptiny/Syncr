@@ -129,6 +129,11 @@ type Capabilities struct {
 	UnionMember bool
 	// ResticRepository remotes may hold restic repositories.
 	ResticRepository bool
+	// ObjectStore remotes keep objects in buckets (S3, B2): a folder is
+	// only a prefix of object names, so a folder that does not exist lists
+	// as empty instead of failing. Messages about a location that holds
+	// nothing say so. Never set on a local or union type.
+	ObjectStore bool
 }
 
 // Config is a remote's configuration as the user entered it, keyed by field
@@ -212,6 +217,25 @@ type Type interface {
 // Examples should set every field.
 type Exampler interface {
 	Examples() []Config
+}
+
+// InvalidExample is a configuration a type's Validate must reject, for the
+// contract suite (internal/backend/backendtest): it checks that Validate
+// returns a *domain.ValidationError that names Field and contains no value
+// of Config.
+type InvalidExample struct {
+	// Name says what is wrong with the configuration, for test failures.
+	Name   string
+	Config Config
+	// Field is the field path the error must name, e.g.
+	// "options.host_keys".
+	Field string
+}
+
+// InvalidExampler is implemented by types that provide configurations
+// their Validate must reject (see InvalidExample).
+type InvalidExampler interface {
+	InvalidExamples() []InvalidExample
 }
 
 // CheckFields checks cfg against fields (see descriptor.CheckFields): every

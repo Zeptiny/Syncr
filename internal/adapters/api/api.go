@@ -87,9 +87,12 @@ type Deps struct {
 	// Workers serves WorkerAdminService (*workers.Service).
 	Workers WorkerService
 	// Jobs serves JobService (*jobs.Service), with Kinds checking the job
-	// definitions of RunJob (without Kinds, RunJob is Unimplemented).
-	Jobs  JobService
-	Kinds *jobkind.Registry
+	// definitions of RunJob (without Kinds, RunJob is Unimplemented) and
+	// TimeLimits computing Job.time_limit (*dispatch.Specs; without it the
+	// field is unset).
+	Jobs       JobService
+	Kinds      *jobkind.Registry
+	TimeLimits TimeLimits
 	// Remotes serves RemoteService (*remotes.Service).
 	Remotes RemoteService
 	// Backends serves BackendService: the backend type descriptors.
@@ -130,7 +133,8 @@ type Deps struct {
 	// calls, for their rate limits and the session record
 	// (clientip.Resolver.ClientIP). Nil uses the TCP peer's address.
 	ClientIP ClientIPFunc
-	// Install configures the worker install commands.
+	// Install configures the worker install and upgrade commands; an empty
+	// Install.Version is BuildInfo.Version.
 	Install InstallConfig
 
 	// BaseContext ends open WatchJob streams when it is done (the
@@ -190,6 +194,7 @@ func NewHandler(deps Deps) http.Handler {
 // some or all of their procedures, each when its use cases are wired.
 func mountProtected(mux *http.ServeMux, deps Deps, logger *slog.Logger, opts []connect.HandlerOption) {
 	errs := errorMapper{log: logger}
+	deps.Install.Version = cmp.Or(deps.Install.Version, deps.BuildInfo.Version)
 	disabled := func(service string) {
 		logger.Info("api service disabled: its use cases are not wired", "service", service)
 	}
@@ -220,6 +225,7 @@ func mountProtected(mux *http.ServeMux, deps Deps, logger *slog.Logger, opts []c
 		jobsPath, jobsHandler := syncrv1connect.NewJobServiceHandler(&jobHandler{
 			jobs:      deps.Jobs,
 			kinds:     deps.Kinds,
+			limits:    deps.TimeLimits,
 			remotes:   deps.Remotes,
 			schedules: deps.Schedules,
 			repos:     repositoryNames(deps),
@@ -292,7 +298,7 @@ func mountMilestone4(mux *http.ServeMux, deps Deps, errs errorMapper, disabled f
 	if ok && deps.Workers != nil && deps.Schedules != nil {
 		mux.Handle(syncrv1connect.NewDashboardServiceHandler(&dashboardHandler{
 			jobs: deps.Jobs, activity: activity, workers: deps.Workers, schedules: deps.Schedules, remotes: deps.Remotes,
-			kinds: deps.Kinds, repos: repositoryNames(deps), errs: errs,
+			kinds: deps.Kinds, repos: repositoryNames(deps), version: deps.Install.Version, errs: errs,
 		}, opts...))
 	} else {
 		disabled(syncrv1connect.DashboardServiceName)

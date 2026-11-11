@@ -44,7 +44,9 @@ type dashboardHandler struct {
 	// repositories, as JobService does; nil leaves both out.
 	kinds *jobkind.Registry
 	repos RepositoryNames
-	errs  errorMapper
+	// version is the controller's version, for Worker.outdated.
+	version string
+	errs    errorMapper
 	// now is the clock of the range; nil means time.Now.
 	now func() time.Time
 }
@@ -200,7 +202,7 @@ func (h *dashboardHandler) workerHealth(ws []workers.Worker) *syncrv1.WorkerHeal
 		default:
 			out.Pending++
 		}
-		out.Workers = append(out.Workers, workerToProto(w, st))
+		out.Workers = append(out.Workers, workerToProto(w, st, h.version))
 	}
 	return out
 }

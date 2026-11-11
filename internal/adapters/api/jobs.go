@@ -23,6 +23,16 @@ import (
 	"github.com/Zeptiny/Syncr/internal/jobkind"
 )
 
+// TimeLimits computes the effective time limit of a job (Job.time_limit):
+// its definition's max_runtime or else the controller's default
+// (jobs.EffectiveTimeLimit). *dispatch.Specs implements it, so the API
+// shows the limit the dispatcher sends to the worker.
+type TimeLimits interface {
+	// TimeLimit returns the limit of a job of definition def; zero for
+	// none.
+	TimeLimit(def *syncrv1.JobDefinition) time.Duration
+}
+
 // Why a WatchJob stream was ended by the server.
 var (
 	errWatchLimit   = errors.New("watch duration limit reached")
@@ -50,8 +60,10 @@ type jobHandler struct {
 	// workers tells RunJob the worker's operating system (the VSS check);
 	// nil skips the check.
 	workers WorkerNames
-	errs    errorMapper
-	log     *slog.Logger
+	// limits computes Job.time_limit; nil leaves it unset.
+	limits TimeLimits
+	errs   errorMapper
+	log    *slog.Logger
 	// base ends all watch streams when done (server shutdown).
 	base context.Context
 	// watchMax bounds a WatchJob stream; keepalive is the idle time after
@@ -140,6 +152,9 @@ func (h *jobHandler) protoJobs(ctx context.Context, js []jobs.Job) ([]*syncrv1.J
 		if h.kinds != nil && msg.GetDefinition() != nil {
 			msg.Title = h.kinds.Describe(msg.GetDefinition(), names)
 			msg.Details = jobDetailsToProto(h.kinds.Summarize(j.Kind, msg.GetDefinition(), j.Output))
+		}
+		if h.limits != nil && msg.GetDefinition() != nil {
+			msg.TimeLimit = timeLimitToProto(h.limits.TimeLimit(msg.GetDefinition()))
 		}
 		out = append(out, msg)
 	}
@@ -399,18 +414,28 @@ func (h *jobHandler) ListJobs(ctx context.Context, req *connect.Request[syncrv1.
 }
 
 // ListJobSamples returns the stored progress samples of a job, oldest
-// first.
+// first, evenly thinned to max_points (0: 1000; capped at 5000; negative:
+// InvalidArgument), with how many the job has stored.
 func (h *jobHandler) ListJobSamples(ctx context.Context, req *connect.Request[syncrv1.ListJobSamplesRequest]) (*connect.Response[syncrv1.ListJobSamplesResponse], error) {
 	id, err := parseJobID(req.Msg.GetJobId())
 	if err != nil {
 		return nil, err
 	}
+	maxPoints := int(req.Msg.GetMaxPoints())
+	if maxPoints < 0 {
+		return nil, invalidField("max_points", "must not be negative")
+	}
 	actor, _ := ActorFrom(ctx)
-	smps, err := h.jobs.Samples(ctx, actor, id)
+	// The service maps 0 to jobs.DefaultSamplePoints and caps the rest at
+	// jobs.MaxSamplePoints.
+	smps, total, err := h.jobs.ListSamples(ctx, actor, id, maxPoints)
 	if err != nil {
 		return nil, h.fail(ctx, syncrv1connect.JobServiceListJobSamplesProcedure, err)
 	}
-	resp := &syncrv1.ListJobSamplesResponse{Samples: make([]*syncrv1.JobProgress, 0, len(smps))}
+	resp := &syncrv1.ListJobSamplesResponse{
+		Samples: make([]*syncrv1.JobProgress, 0, len(smps)),
+		Total:   int32(min(max(total, 0), 1<<31-1)),
+	}
 	for _, smp := range smps {
 		resp.Samples = append(resp.Samples, progressToProto(smp))
 	}

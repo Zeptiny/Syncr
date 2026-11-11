@@ -127,9 +127,66 @@ func TestSuiteCatchesBrokenTypes(t *testing.T) {
 		}
 	}
 
+	for _, tt := range []struct {
+		name string
+		ex   backend.InvalidExample
+		want string
+	}{
+		{"accepted", backend.InvalidExample{Name: "fine", Config: backend.Config{Options: map[string]string{"host": "h"}}, Field: "options.host"},
+			`invalid example "fine": Validate = <nil>`},
+		{"another field", backend.InvalidExample{Name: "unknown", Config: backend.Config{Options: map[string]string{"host": "h", "zz": "v"}}, Field: "options.host"},
+			"do not name options.host"},
+		{"no field", backend.InvalidExample{Name: "unnamed", Config: backend.Config{}}, "names no field"},
+		{"echoed value", backend.InvalidExample{Name: "echo", Config: backend.Config{Options: map[string]string{"host": "echo-me-please"}}, Field: "options.host"},
+			`contains the value "echo-me-please"`},
+	} {
+		var r recorder
+		backendtest.Check(&r, invalidType{ex: tt.ex})
+		if !slices.ContainsFunc(r.errs, func(e string) bool { return strings.Contains(e, tt.want) }) {
+			t.Errorf("%s: failures %q do not mention %q", tt.name, r.errs, tt.want)
+		}
+	}
+	var ok recorder
+	backendtest.Check(&ok, invalidType{ex: backend.InvalidExample{Name: "missing host", Config: backend.Config{}, Field: "options.host"}})
+	if len(ok.errs) != 0 {
+		t.Errorf("a rejected invalid example fails: %v", ok.errs)
+	}
+	var objectLocal recorder
+	backendtest.Check(&objectLocal, objectStoreType{goodType{local: true}})
+	if !slices.ContainsFunc(objectLocal.errs, func(e string) bool { return strings.Contains(e, "ObjectStore on a local") }) {
+		t.Errorf("an object store that is local passes: %q", objectLocal.errs)
+	}
+
 	var r recorder
 	backendtest.Check(&r, goodType{}, backendtest.WithAccept(func(backend.Rclone) error { return errors.New("rejected") }))
 	if !slices.ContainsFunc(r.errs, func(e string) bool { return strings.Contains(e, "not accepted: rejected") }) {
 		t.Errorf("WithAccept errors are not reported: %q", r.errs)
 	}
+}
+
+// invalidType is goodType with one invalid example; its Validate echoes
+// the host when it is "echo-me-please".
+type invalidType struct {
+	goodType
+	ex backend.InvalidExample
+}
+
+func (i invalidType) InvalidExamples() []backend.InvalidExample {
+	return []backend.InvalidExample{i.ex}
+}
+
+func (i invalidType) Validate(cfg backend.Config) error {
+	if h := cfg.Options["host"]; h == "echo-me-please" {
+		return &domain.ValidationError{Fields: []domain.FieldError{{Field: "options.host", Message: "bad host " + h}}}
+	}
+	return i.goodType.Validate(cfg)
+}
+
+// objectStoreType is goodType claiming to be an object store.
+type objectStoreType struct{ goodType }
+
+func (o objectStoreType) Capabilities() backend.Capabilities {
+	c := o.goodType.Capabilities()
+	c.ObjectStore = true
+	return c
 }

@@ -11,6 +11,8 @@ import (
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/link"
+	"github.com/Zeptiny/Syncr/internal/platform/version"
 )
 
 func TestCreateEnrollmentToken(t *testing.T) {
@@ -475,4 +477,115 @@ func TestWorkerNameTaken(t *testing.T) {
 		Name: "worker", Url: "https://worker.example:7443", CertFingerprint: testFP, PairingSecret: pairingSecret,
 	}))
 	wantCode(t, err, connect.CodeAlreadyExists)
+}
+
+// TestGetWorkerUpgradeCommands: the commands follow the worker's reported
+// operating system and the controller's version (BuildInfo when the
+// install configuration names none); an unknown OS has none, and an
+// unknown or removed worker is NotFound.
+func TestGetWorkerUpgradeCommands(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, func(d *Deps) {
+		d.BuildInfo = version.Info{Version: "v2.0.0"}
+		d.Install = InstallConfig{DownloadBaseURL: "https://mirror.example.com/syncr"}
+	})
+	ctx := t.Context()
+	c := e.workersClient()
+	get := func(id domain.WorkerID) ([]*syncrv1.InstallCommand, error) {
+		resp, err := c.GetWorkerUpgradeCommands(ctx, connect.NewRequest(&syncrv1.GetWorkerUpgradeCommandsRequest{WorkerId: id.String()}))
+		if err != nil {
+			return nil, err
+		}
+		return resp.Msg.GetCommands(), nil
+	}
+
+	// Never connected: the OS is unknown.
+	if cmds, err := get(e.worker); err != nil || len(cmds) != 0 {
+		t.Errorf("unknown OS: %v, %v; want none", cmds, err)
+	}
+	for _, tt := range []struct {
+		os, arch string
+		platform syncrv1.InstallPlatform
+		want     int
+	}{
+		{"linux", "arm64", syncrv1.InstallPlatform_INSTALL_PLATFORM_LINUX, 2},
+		{"windows", "amd64", syncrv1.InstallPlatform_INSTALL_PLATFORM_WINDOWS, 2},
+		{"darwin", "arm64", 0, 0},
+	} {
+		if err := e.store.SetWorkerInfo(ctx, e.worker, "", workers.Info{Version: "v1.9.0", OS: tt.os, Arch: tt.arch, ReportedAt: e.clock.Now()}); err != nil {
+			t.Fatal(err)
+		}
+		cmds, err := get(e.worker)
+		if err != nil || len(cmds) != tt.want {
+			t.Fatalf("%s: %v, %v; want %d commands", tt.os, cmds, err, tt.want)
+		}
+		for _, cmd := range cmds {
+			if cmd.GetPlatform() != tt.platform || !strings.Contains(cmd.GetCommand(), " upgrade") ||
+				!strings.Contains(cmd.GetCommand(), " --version 'v2.0.0' --from 'https://mirror.example.com/syncr'") {
+				t.Errorf("%s: %v", tt.os, cmd)
+			}
+		}
+	}
+
+	_, err := get(domain.NewWorkerID())
+	wantCode(t, err, connect.CodeNotFound)
+	_, err = c.GetWorkerUpgradeCommands(ctx, connect.NewRequest(&syncrv1.GetWorkerUpgradeCommandsRequest{WorkerId: "nope"}))
+	wantCode(t, err, connect.CodeInvalidArgument)
+	if _, err := c.RemoveWorker(ctx, connect.NewRequest(&syncrv1.RemoveWorkerRequest{WorkerId: e.worker.String()})); err != nil {
+		t.Fatal(err)
+	}
+	_, err = get(e.worker)
+	wantCode(t, err, connect.CodeNotFound)
+	_, err = e.workersFor(testUser).GetWorkerUpgradeCommands(ctx, connect.NewRequest(&syncrv1.GetWorkerUpgradeCommandsRequest{WorkerId: e.worker.String()}))
+	wantCode(t, err, connect.CodePermissionDenied)
+
+	bad := newEnv(t, func(d *Deps) { d.Install = InstallConfig{DownloadBaseURL: "ftp://mirror"} })
+	if err := bad.store.SetWorkerInfo(ctx, bad.worker, "", workers.Info{Version: "v2", OS: "linux", ReportedAt: bad.clock.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = bad.workersClient().GetWorkerUpgradeCommands(ctx, connect.NewRequest(&syncrv1.GetWorkerUpgradeCommandsRequest{WorkerId: bad.worker.String()}))
+	wantCode(t, err, connect.CodeInternal)
+}
+
+// TestWorkerOutdatedThroughTheAPI: GetWorker and ListWorkers report
+// Worker.outdated against the controller's version.
+func TestWorkerOutdatedThroughTheAPI(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, func(d *Deps) { d.Install.Version = "v2.1.0" })
+	ctx := t.Context()
+	get := func() *syncrv1.Worker {
+		resp, err := e.workersClient().GetWorker(ctx, connect.NewRequest(&syncrv1.GetWorkerRequest{WorkerId: e.worker.String()}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Msg.GetWorker()
+	}
+	if get().GetOutdated() {
+		t.Error("a worker that never connected is outdated")
+	}
+	for v, want := range map[string]bool{"v2.0.0": true, "v2.1.0": false} {
+		if err := e.store.SetWorkerInfo(ctx, e.worker, "", workers.Info{Version: v, OS: "linux", Features: link.Features(), ReportedAt: e.clock.Now()}); err != nil {
+			t.Fatal(err)
+		}
+		if got := get().GetOutdated(); got != want {
+			t.Errorf("worker %s: outdated = %v, want %v", v, got, want)
+		}
+		list, err := e.workersClient().ListWorkers(ctx, connect.NewRequest(&syncrv1.ListWorkersRequest{}))
+		if err != nil || list.Msg.GetWorkers()[0].GetOutdated() != want {
+			t.Errorf("worker %s: listed %v (%v)", v, list, err)
+		}
+	}
+}
+
+func TestDashboardWorkersOutdated(t *testing.T) {
+	t.Parallel()
+	d := newDashEnv(t)
+	d.h.version = "v2.1.0"
+	if err := d.store.SetWorkerInfo(t.Context(), d.worker, "", workers.Info{Version: "v2.0.0", OS: "linux", Features: link.Features(), ReportedAt: d.clock.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	ws := d.get(t, testUser, &syncrv1.GetDashboardRequest{}).GetWorkers().GetWorkers()
+	if len(ws) != 1 || !ws[0].GetOutdated() {
+		t.Errorf("dashboard workers = %v, want the worker outdated", ws)
+	}
 }

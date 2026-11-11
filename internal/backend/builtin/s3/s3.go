@@ -63,7 +63,7 @@ func (Type) Fields() []backend.Field {
 
 // Capabilities implements backend.Type.
 func (Type) Capabilities() backend.Capabilities {
-	return backend.Capabilities{UnionMember: true, ResticRepository: true}
+	return backend.Capabilities{UnionMember: true, ResticRepository: true, ObjectStore: true}
 }
 
 // Validate implements backend.Type: the field checks, an endpoint for

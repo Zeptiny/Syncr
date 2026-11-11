@@ -87,8 +87,54 @@ case owns them, and the job builder turns them into `union_upstreams`.
   missing required fields without echoing values, and that `ToRclone`
   emits only declared rclone names, keeps secret values out of options and
   `Root`, lists exactly the obscured secrets, uses the ID as the backend
-  (`""` exactly for a local type) and is deterministic. The suite tests
-  itself against deliberately broken types.
+  (`""` exactly for a local type) and is deterministic. A type may also
+  list configurations its `Validate` must reject (`InvalidExampler`,
+  Milestone 6); the suite checks that each is rejected with an error on
+  the named field that echoes no value. The suite tests itself against
+  deliberately broken types.
+
+### SFTP host keys (Milestone 6)
+
+Without a pinned key rclone accepts any SFTP server key ("No host key
+validation"). rclone has three ways to pin one, and only one fits the
+worker: `known_hosts_file` reads a local file (denied, like every
+`*_file` option), and `pin_host_key` writes the key it saw into the
+per-job config file, which starts empty and is removed after the job. So
+the `sftp` type has a `host_keys` field ("Server host keys", multi-line
+text, not a secret), mapped to rclone's `host_keys` option, which
+`rcloneenv` already accepted after its option review.
+
+- **Format.** rclone takes full public keys, not fingerprints: a
+  comma-separated list of `<algorithm> <base64 key>` entries, the second
+  and third fields of a `known_hosts` line, at most 16. The field accepts
+  one entry per line or comma-separated (what a user pastes, or what the
+  UI's "Fetch from server" fills in), and `ToRclone` normalizes it to
+  rclone's form: entries joined by commas, one space inside each. The
+  stored value is what the user entered.
+- **Validation** uses the standard library only: at most 16 entries; each
+  is exactly two fields; the key is padded standard base64; and the key is
+  an SSH wire-format public key whose first length-prefixed string (the
+  key type) equals the entry's algorithm, with key data after it. Whether
+  the key's numbers form a valid point or modulus is left to rclone, which
+  parses the key when it connects. Messages name the entry by position
+  and never echo it.
+- **Optional.** Saving a remote without host keys stays allowed (the user's
+  decision); the UI warns that the server is not verified and offers to
+  fetch the keys through a worker (`ProbeService.GetSftpHostKeys`, ADR
+  0012). Fetching is trust on first use: the UI shows the SHA-256
+  fingerprints and how to compare them on the server.
+- **Key types.** If only some of the server's key types are pinned, rclone
+  may negotiate another type and refuse the server. The fetch collects
+  every type the server offers (ed25519, the ECDSA curves, RSA), and the
+  worker's SFTP integration test pins all of them.
+
+### Bucket storage
+
+`Capabilities.ObjectStore` marks types whose remotes keep objects in
+buckets (`s3`, `b2`). There a folder is only a prefix of object names, so
+a mistyped folder lists as empty instead of failing; messages about a
+location that holds nothing (restic's "no restic repository at this
+location") say so. A local or union type never sets it.
 
 ### Remotes
 
@@ -155,9 +201,10 @@ The `storetest` suite (memory and Postgres) includes that race.
   field makes existing remotes fail validation on their next update.
 - A remote whose type is removed from a build keeps its row, but `Resolve`
   reports it as unavailable and `Update` refuses it.
-- SFTP host keys cannot be pinned yet: rclone reads them from a
-  `known_hosts` file, which the worker refuses. Testing a remote from the UI
-  needs a worker command and is deferred.
+- SFTP host keys are pinned per remote (`host_keys`, above); a remote
+  saved without them connects to any server that answers at its address.
+  When a server's keys change, every job on the remote fails until the
+  keys are fetched or entered again.
 
 ## Alternatives considered
 

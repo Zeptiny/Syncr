@@ -364,7 +364,8 @@ func TestResticCreateErrors(t *testing.T) {
 	err = create(func(in *syncrv1.RepositoryInput) {
 		in.Mode = syncrv1.RepositoryCreateMode_REPOSITORY_CREATE_MODE_CONNECT
 	})
-	if violation(err, "path") != "no restic repository at this location" {
+	// The remote is an S3 bucket, where a missing folder looks empty.
+	if v := violation(err, "path"); !strings.HasPrefix(v, "no restic repository at this location") || !strings.Contains(v, "looks empty") {
 		t.Errorf("connect without a repository: %v", err)
 	}
 	for _, tt := range []struct {

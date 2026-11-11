@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -60,9 +61,11 @@ func workerStatusToProto(s domain.WorkerStatus) syncrv1.WorkerStatus {
 	}
 }
 
-// workerToProto converts w with its derived connection status. Secrets
-// (SecretEnc) and link internals (epochs, ack cursor) are not exposed.
-func workerToProto(w workers.Worker, status domain.WorkerStatus) *syncrv1.Worker {
+// workerToProto converts w with its derived connection status and whether
+// it is outdated against a controller of version controllerVersion (see
+// workerOutdated). Secrets (SecretEnc) and link internals (epochs, ack
+// cursor) are not exposed.
+func workerToProto(w workers.Worker, status domain.WorkerStatus, controllerVersion string) *syncrv1.Worker {
 	return &syncrv1.Worker{
 		Id:              w.ID.String(),
 		Name:            w.Name,
@@ -74,7 +77,26 @@ func workerToProto(w workers.Worker, status domain.WorkerStatus) *syncrv1.Worker
 		CertFingerprint: w.CertFingerprint,
 		Info:            workerInfoToProto(w.Info),
 		Labels:          w.Labels,
+		Outdated:        workerOutdated(w.Info, controllerVersion),
 	}
+}
+
+// workerOutdated reports whether a worker that reported in should be
+// upgraded (Worker.outdated): its Hello lacks a link feature this
+// controller knows (link.Features), or the worker and the controller
+// (controllerVersion) are both release builds (vX.Y.Z, optionally
+// -rc.N) of different versions. A worker that never reported (no Hello
+// stored, as workerInfoToProto tells) is not outdated.
+func workerOutdated(in workers.Info, controllerVersion string) bool {
+	if in.ReportedAt.IsZero() && in.Version == "" {
+		return false
+	}
+	for _, f := range link.Features() {
+		if !slices.Contains(in.Features, f) {
+			return true
+		}
+	}
+	return isReleaseVersion(in.Version) && isReleaseVersion(controllerVersion) && in.Version != controllerVersion
 }
 
 // workerInfoToProto converts what a worker reported in its Hello. It returns
@@ -228,6 +250,15 @@ func jobToProto(j jobs.Job, stats *jobs.Stats, refs map[domain.RemoteID]remotes.
 		}
 	}
 	return out, errors.Join(errs...)
+}
+
+// timeLimitToProto converts a job's effective time limit; zero (none) is
+// unset.
+func timeLimitToProto(d time.Duration) *durationpb.Duration {
+	if d <= 0 {
+		return nil
+	}
+	return durationpb.New(d)
 }
 
 // pickStats chooses the counters to report for j, and whether the latest

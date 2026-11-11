@@ -38,7 +38,7 @@ func (h *workerAdminHandler) fail(ctx context.Context, procedure string, err err
 }
 
 func (h *workerAdminHandler) worker(w workers.Worker) *syncrv1.Worker {
-	return workerToProto(w, h.workers.Status(w))
+	return workerToProto(w, h.workers.Status(w), h.install.Version)
 }
 
 // CreateEnrollmentToken returns a new token with the commands that
@@ -186,10 +186,25 @@ func (h *workerAdminHandler) RemoveWorker(ctx context.Context, req *connect.Requ
 }
 
 // GetWorkerUpgradeCommands returns the commands that upgrade a worker in
-// place (admins only, by the policy table). It is not implemented yet: it
-// answers Unimplemented until the upgrade commands are rendered.
-func (h *workerAdminHandler) GetWorkerUpgradeCommands(context.Context, *connect.Request[syncrv1.GetWorkerUpgradeCommandsRequest]) (*connect.Response[syncrv1.GetWorkerUpgradeCommandsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("worker upgrade commands are not implemented yet"))
+// place to the controller's release (admins only, by the policy table): for
+// the operating system it reported, one for a system service and one for a
+// per-user service. None when its operating system is unknown or has no
+// release build; NotFound for an unknown or removed worker.
+func (h *workerAdminHandler) GetWorkerUpgradeCommands(ctx context.Context, req *connect.Request[syncrv1.GetWorkerUpgradeCommandsRequest]) (*connect.Response[syncrv1.GetWorkerUpgradeCommandsResponse], error) {
+	const procedure = syncrv1connect.WorkerAdminServiceGetWorkerUpgradeCommandsProcedure
+	id, err := parseWorkerID(req.Msg.GetWorkerId())
+	if err != nil {
+		return nil, err
+	}
+	w, err := h.workers.Get(ctx, id)
+	if err != nil {
+		return nil, h.fail(ctx, procedure, err)
+	}
+	cmds, err := upgradeCommands(h.install, w.Info.OS, w.Info.Arch)
+	if err != nil {
+		return nil, h.fail(ctx, procedure, fmt.Errorf("render upgrade commands: %w", err))
+	}
+	return connect.NewResponse(&syncrv1.GetWorkerUpgradeCommandsResponse{Commands: cmds}), nil
 }
 
 // parseWorkerID parses a request's worker ID into an InvalidArgument error
