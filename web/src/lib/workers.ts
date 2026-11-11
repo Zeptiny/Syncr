@@ -30,11 +30,27 @@ export function isOnline(w: Worker | undefined): boolean {
 }
 
 /**
- * isOutdated reports whether a worker that has connected is too old for
+ * lacksProbes reports whether a worker that has connected is too old for
  * restic repositories and file browsing. A worker that never connected
- * (pending) has reported nothing yet and is not called outdated.
+ * (pending) has reported nothing yet and is not counted.
  */
-export function isOutdated(w: Worker): boolean {
+export function lacksProbes(w: Worker): boolean {
   if (!w.info || w.status === WorkerStatus.PENDING) return false;
   return !hasFeature(w, FEATURE_PROBE) || !hasFeature(w, FEATURE_RESTIC);
+}
+
+/**
+ * isOutdated reports whether a worker should be upgraded: the controller
+ * says so (Worker.outdated: it lacks a link feature this controller knows,
+ * or runs another release), or it is too old for probes and restic.
+ */
+export function isOutdated(w: Worker): boolean {
+  return w.outdated || lacksProbes(w);
+}
+
+/** outdatedHelp explains an outdated worker's badge. */
+export function outdatedHelp(w: Worker): string {
+  return lacksProbes(w)
+    ? "This worker's version cannot browse files or work with restic repositories. Upgrade it."
+    : "This worker runs another release than the controller, or lacks a feature the controller uses. Upgrade it.";
 }

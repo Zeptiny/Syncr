@@ -18,7 +18,14 @@ import {
 import { createQueryClient } from "@/lib/query-client";
 import { mockTransport, testQueryClient } from "@/test/render";
 
-import { appendSamples, backoffDelay, reconnectable, useWatchJob } from "./use-watch-job";
+import {
+  appendSamples,
+  backoffDelay,
+  HISTORY_POINTS,
+  reconnectable,
+  thinSamples,
+  useWatchJob,
+} from "./use-watch-job";
 
 type WatchJobResponseInit = MessageInitShape<typeof WatchJobResponseSchema>;
 
@@ -33,11 +40,16 @@ const progress = (sec: number, bytes: number) =>
 function setup(
   watch: (call: number) => AsyncIterable<unknown>,
   queryClient: QueryClient = testQueryClient(),
+  total = 2,
 ) {
   let calls = 0;
+  const sampleRequests: number[] = [];
   const transport = mockTransport(({ service }) => {
     service(JobService, {
-      listJobSamples: () => ({ samples: [progress(0, 0), progress(5, 500)] }),
+      listJobSamples: (req) => {
+        sampleRequests.push(req.maxPoints);
+        return { samples: [progress(0, 0), progress(5, 500)], total };
+      },
       watchJob: () => watch(++calls) as AsyncIterable<WatchJobResponseInit>,
     });
   });
@@ -49,7 +61,7 @@ function setup(
   const hook = renderHook(() => useWatchJob("j1", { minBackoffMs: 5, maxBackoffMs: 20 }), {
     wrapper,
   });
-  return { hook, calls: () => calls, queryClient };
+  return { hook, calls: () => calls, queryClient, sampleRequests };
 }
 
 describe("backoffDelay", () => {
@@ -66,13 +78,36 @@ describe("backoffDelay", () => {
     expect(reconnectable(new ConnectError("x", Code.NotFound))).toBe(false);
   });
 
-  it("appends only newer samples and caps the history", () => {
-    const a = [{ t: 1, bytes: 1, files: 0, errors: 0 }];
-    const next = appendSamples(a, [a[0], { t: 2, bytes: 2, files: 0, errors: 0 }], 10);
+  it("appends only newer samples and thins past the cap, keeping the start", () => {
+    const at = (t: number) => ({ t, bytes: t, files: 0, errors: 0 });
+    const a = [at(1)];
+    const next = appendSamples(a, [a[0], at(2)], 10);
     expect(next.map((s) => s.t)).toEqual([1, 2]);
-    expect(
-      appendSamples(next, [{ t: 3, bytes: 3, files: 0, errors: 0 }], 2).map((s) => s.t),
-    ).toEqual([2, 3]);
+    // Past the cap the history is thinned, never cut at its start.
+    expect(appendSamples(next, [at(3)], 2).map((s) => s.t)).toEqual([1, 3]);
+    const long = Array.from({ length: 5000 }, (_, i) => at(i));
+    const thinned = appendSamples(long, [at(5000)], 5000);
+    expect(thinned).toHaveLength(2500);
+    expect(thinned[0].t).toBe(0);
+    expect(thinned.at(-1)?.t).toBe(5000);
+  });
+
+  it("thins like the controller: evenly, first and last kept, exactly m", () => {
+    const xs = Array.from({ length: 10 }, (_, i) => i);
+    expect(thinSamples(xs, 4)).toEqual([0, 3, 6, 9]);
+    expect(thinSamples(xs, 2)).toEqual([0, 9]);
+    expect(thinSamples(xs, 10)).toBe(xs);
+    expect(thinSamples(xs, 0)).toBe(xs);
+    for (const m of [2, 3, 7, 999]) {
+      const n = 1000 + m;
+      const got = thinSamples(
+        Array.from({ length: n }, (_, i) => i),
+        m,
+      );
+      expect(got).toHaveLength(m);
+      expect(got[0]).toBe(0);
+      expect(got.at(-1)).toBe(n - 1);
+    }
   });
 });
 
@@ -116,6 +151,24 @@ describe("useWatchJob", () => {
     // Nothing reconnects after the end.
     await new Promise((r) => setTimeout(r, 60));
     expect(calls()).toBe(3);
+  });
+
+  it("asks for a bounded history and says when the controller thinned it", async () => {
+    const ended = () =>
+      (async function* () {
+        await Promise.resolve();
+        yield { update: { case: "job", value: job(JobStatus.SUCCEEDED) } };
+      })();
+    const full = setup(ended);
+    await waitFor(() => expect(full.hook.result.current.history).toBe("loaded"));
+    expect(full.sampleRequests).toEqual([HISTORY_POINTS]);
+    expect(full.hook.result.current.total).toBe(2);
+    expect(full.hook.result.current.thinned).toBe(false);
+
+    const thinned = setup(ended, testQueryClient(), 7200);
+    await waitFor(() => expect(thinned.hook.result.current.history).toBe("loaded"));
+    expect(thinned.hook.result.current.total).toBe(7200);
+    expect(thinned.hook.result.current.thinned).toBe(true);
   });
 
   it("gives up on a permanent error", async () => {

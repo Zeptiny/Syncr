@@ -90,6 +90,27 @@ export function formatDuration(seconds: number): string {
   return `${d}d ${h % 24}h`;
 }
 
+/**
+ * formatLimit renders a configured duration exactly, largest unit first:
+ * "6h", "1h 30m", "2d 12h", "90s".
+ */
+export function formatLimit(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "–";
+  let rest = Math.round(seconds);
+  const parts: string[] = [];
+  for (const [size, unit] of [
+    [86_400, "d"],
+    [3600, "h"],
+    [60, "m"],
+    [1, "s"],
+  ] as const) {
+    const n = Math.floor(rest / size);
+    if (n > 0) parts.push(`${n}${unit}`);
+    rest -= n * size;
+  }
+  return parts.join(" ");
+}
+
 /** formatEta estimates the remaining time; "–" when it can't be known. */
 export function formatEta(remainingBytes: number, bytesPerSecond: number): string {
   const rate = clampRate(bytesPerSecond);

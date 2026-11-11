@@ -31,10 +31,15 @@ import {
   bytesToQuantity,
   durationToQuantity,
   isDecimal,
+  MAX_TIME_LIMIT_NANOS,
+  MIN_TIME_LIMIT_NANOS,
+  quantityNanos,
   quantityToBytes,
   quantityToDuration,
+  timeLimitUnits,
   type ByteUnit,
   type DurationUnit,
+  type Quantity,
 } from "./units";
 
 /** Compare is how a transfer decides that a file changed. */
@@ -73,7 +78,7 @@ export interface TransferState {
 /**
  * DefinitionErrors are the definition's problems, by form section. The
  * first four belong to transfers; repository, paths, excludes, policy and
- * readData to the restic kinds; options to every kind.
+ * readData to the restic kinds; options and timeLimit to every kind.
  */
 export type DefinitionErrors = Partial<
   Record<
@@ -86,7 +91,8 @@ export type DefinitionErrors = Partial<
     | "paths"
     | "excludes"
     | "policy"
-    | "readData",
+    | "readData"
+    | "timeLimit",
     string
   >
 >;
@@ -239,6 +245,10 @@ export function toTransferDefinition(
  */
 export function definitionError(v: FieldViolation, errors: DefinitionErrors): boolean {
   const f = v.field;
+  if (f === "max_runtime" || f.endsWith("definition.max_runtime")) {
+    errors.timeLimit = v.message;
+    return true;
+  }
   if (f.includes(".restic_")) {
     if (f.endsWith("repository_id")) errors.repository = v.message;
     else if (f.includes(".paths")) errors.paths = v.message;
@@ -263,12 +273,44 @@ export function definitionError(v: FieldViolation, errors: DefinitionErrors): bo
  * snapshot (the restore sheet); nor is restic_delete_data, which only
  * deleting a repository starts.
  */
-export type JobDefinitionState =
+export type JobDefinitionState = (
   | { kind: "rclone_transfer"; transfer: TransferState }
   | { kind: "restic_backup"; backup: BackupState }
   | { kind: "restic_forget"; retention: RetentionState }
   | { kind: "restic_check"; check: CheckState }
-  | { kind: "restic_prune"; prune: PruneState };
+  | { kind: "restic_prune"; prune: PruneState }
+) & {
+  /**
+   * timeLimit is JobDefinition.max_runtime as typed: the job is stopped and
+   * fails once it has run this long. Empty means none (the controller's
+   * default, if one is configured, then applies).
+   */
+  timeLimit: Quantity<DurationUnit>;
+};
+
+/** emptyTimeLimit is an unset time limit, in hours. */
+export function emptyTimeLimit(): Quantity<DurationUnit> {
+  return { text: "", unit: "h" };
+}
+
+/** timeLimitState shows a stored max_runtime in minutes, hours or days. */
+export function timeLimitState(def: JobDefinition | undefined): Quantity<DurationUnit> {
+  if (!def?.maxRuntime) return emptyTimeLimit();
+  return durationToQuantity(def.maxRuntime, "h", timeLimitUnits);
+}
+
+/**
+ * validateTimeLimit checks a typed time limit: empty, or 1 minute to 366
+ * days (jobkind's bounds).
+ */
+export function validateTimeLimit(q: Quantity<DurationUnit>): string | undefined {
+  if (q.text === "") return undefined;
+  const n = quantityNanos(q);
+  if (n === undefined) return "Enter a number, such as 6 hours, or leave it empty.";
+  if (n < MIN_TIME_LIMIT_NANOS) return "A time limit must be at least 1 minute.";
+  if (n > MAX_TIME_LIMIT_NANOS) return "A time limit can be at most 366 days.";
+  return undefined;
+}
 
 /** EditableKind is a job kind the definition editor can edit. */
 export type EditableKind = JobDefinitionState["kind"];
@@ -295,17 +337,18 @@ export function emptyDefinition(
   kind: EditableKind = "rclone_transfer",
   repositoryId = "",
 ): JobDefinitionState {
+  const timeLimit = emptyTimeLimit();
   switch (kind) {
     case "restic_backup":
-      return { kind, backup: { ...emptyBackup(), repositoryId } };
+      return { kind, backup: { ...emptyBackup(), repositoryId }, timeLimit };
     case "restic_forget":
-      return { kind, retention: { ...emptyRetentionJob(), repositoryId } };
+      return { kind, retention: { ...emptyRetentionJob(), repositoryId }, timeLimit };
     case "restic_check":
-      return { kind, check: { ...emptyCheck(), repositoryId } };
+      return { kind, check: { ...emptyCheck(), repositoryId }, timeLimit };
     case "restic_prune":
-      return { kind, prune: { ...emptyPrune(), repositoryId } };
+      return { kind, prune: { ...emptyPrune(), repositoryId }, timeLimit };
     default:
-      return { kind: "rclone_transfer", transfer: emptyTransfer() };
+      return { kind: "rclone_transfer", transfer: emptyTransfer(), timeLimit };
   }
 }
 
@@ -325,9 +368,10 @@ export function definitionRepositoryId(s: JobDefinitionState): string {
   }
 }
 
-/** withKind switches the form to another kind, keeping the chosen repository. */
+/** withKind switches the form to another kind, keeping the repository and the time limit. */
 export function withKind(s: JobDefinitionState, kind: EditableKind): JobDefinitionState {
-  return s.kind === kind ? s : emptyDefinition(kind, definitionRepositoryId(s));
+  if (s.kind === kind) return s;
+  return { ...emptyDefinition(kind, definitionRepositoryId(s)), timeLimit: s.timeLimit };
 }
 
 /**
@@ -336,22 +380,29 @@ export function withKind(s: JobDefinitionState, kind: EditableKind): JobDefiniti
  */
 export function definitionState(def: JobDefinition | undefined): JobDefinitionState {
   const op = def?.operation;
+  const timeLimit = timeLimitState(def);
   switch (op?.case) {
     case "resticBackup":
-      return { kind: "restic_backup", backup: backupState(op.value) };
+      return { kind: "restic_backup", backup: backupState(op.value), timeLimit };
     case "resticForget":
-      return { kind: "restic_forget", retention: retentionState(op.value) };
+      return { kind: "restic_forget", retention: retentionState(op.value), timeLimit };
     case "resticCheck":
-      return { kind: "restic_check", check: checkState(op.value) };
+      return { kind: "restic_check", check: checkState(op.value), timeLimit };
     case "resticPrune":
-      return { kind: "restic_prune", prune: pruneState(op.value) };
+      return { kind: "restic_prune", prune: pruneState(op.value), timeLimit };
     default:
-      return { kind: "rclone_transfer", transfer: transferState(def) };
+      return { kind: "rclone_transfer", transfer: transferState(def), timeLimit };
   }
 }
 
 /** validateDefinition checks what the browser can check before sending. */
 export function validateDefinition(s: JobDefinitionState): DefinitionErrors {
+  const e = validateKind(s);
+  const limit = validateTimeLimit(s.timeLimit);
+  return limit ? { ...e, timeLimit: limit } : e;
+}
+
+function validateKind(s: JobDefinitionState): DefinitionErrors {
   switch (s.kind) {
     case "restic_backup":
       return validateBackup(s.backup);
@@ -368,6 +419,12 @@ export function validateDefinition(s: JobDefinitionState): DefinitionErrors {
 
 /** toDefinition builds the JobDefinition the API takes. */
 export function toDefinition(s: JobDefinitionState): MessageInitShape<typeof JobDefinitionSchema> {
+  const maxRuntime = quantityToDuration(s.timeLimit);
+  const def = kindDefinition(s);
+  return maxRuntime ? { ...def, maxRuntime } : def;
+}
+
+function kindDefinition(s: JobDefinitionState): MessageInitShape<typeof JobDefinitionSchema> {
   switch (s.kind) {
     case "restic_backup":
       return { operation: { case: "resticBackup", value: toBackup(s.backup) } };
@@ -405,7 +462,5 @@ export function isDryRun(s: JobDefinitionState): boolean {
  */
 export function forWorkerOS(s: JobDefinitionState, os: string | undefined): JobDefinitionState {
   if (s.kind !== "restic_backup" || !os || os.toLowerCase() === "windows") return s;
-  return s.backup.useFsSnapshot
-    ? { kind: s.kind, backup: { ...s.backup, useFsSnapshot: false } }
-    : s;
+  return s.backup.useFsSnapshot ? { ...s, backup: { ...s.backup, useFsSnapshot: false } } : s;
 }

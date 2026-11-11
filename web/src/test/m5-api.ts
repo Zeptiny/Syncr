@@ -21,6 +21,7 @@ import { ContactService } from "@/gen/syncr/v1/notify_pb";
 import { ScheduleSchema, ScheduleService } from "@/gen/syncr/v1/schedules_pb";
 import { csrfHeader } from "@/lib/transport";
 import * as m5 from "@/mock/m5";
+import * as m6 from "@/mock/m6";
 
 import { signedIn } from "./app-api";
 import * as fx from "./fixtures";
@@ -44,13 +45,15 @@ export interface M5Api {
 }
 
 /**
- * m5Api serves the milestone 5 mock (repositories, probes) with the
- * services its pages also need, answers at once and never starts timers,
- * and records every request.
+ * m5Api serves the milestone 5 mock (repositories, probes) and the
+ * milestone 6 methods (host keys, upgrade commands) with the services its
+ * pages also need, answers at once and never starts timers, and records
+ * every request. Its workers are m5's, with m6's outdated flags.
  */
 export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
   const data = m5.data(now);
   const workers = m5.workers(now);
+  m6.applyWorkers(workers);
   const jobs = [...data.jobs];
   const schedules = [...data.schedules];
   const remotes = fx.remotes(now);
@@ -154,6 +157,14 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
           await Promise.resolve();
           yield { update: { case: "job" as const, value: job(req.jobId) } };
         },
+      });
+      // Milestone 6: host keys and upgrade commands (after WorkerAdminService).
+      m6.registerM6(router, {
+        me: () => me,
+        workers,
+        invalid,
+        sleep: () => Promise.resolve(),
+        probeDelay: 0,
       });
     },
     { transport: { interceptors: [csrfHeader, record] } },

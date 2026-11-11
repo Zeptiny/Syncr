@@ -167,6 +167,7 @@ const errorCodes: Partial<Record<JobErrorCode, string>> = {
   [JobErrorCode.REPOSITORY_MISMATCH]: "Another repository is there",
   [JobErrorCode.REPOSITORY_UNAVAILABLE]: "Repository unavailable",
   [JobErrorCode.WORKER_OUTDATED]: "Worker outdated",
+  [JobErrorCode.TIME_LIMIT]: "Time limit reached",
 };
 
 /** errorCodeLabel names a job error code. */

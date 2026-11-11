@@ -27,6 +27,8 @@ export interface CopyCommandProps {
    * again (e.g. an enrollment token).
    */
   shownOnce?: React.ReactNode;
+  /** scopeLabel names the scope switch (default "Install for"). */
+  scopeLabel?: string;
   className?: string;
 }
 
@@ -36,11 +38,20 @@ function unique<T>(xs: T[]): T[] {
 
 /**
  * CopyCommand presents install commands by platform and scope, with a copy
- * button and, for one-time secrets, a warning.
+ * button and, for one-time secrets, a warning. The platform tabs show only
+ * when there is more than one platform.
  */
-export function CopyCommand({ commands, shownOnce, className }: CopyCommandProps) {
+export function CopyCommand({
+  commands,
+  shownOnce,
+  scopeLabel: scopeGroupLabel = "Install for",
+  className,
+}: CopyCommandProps) {
   const platforms = unique(commands.map((c) => c.platform));
-  const [platform, setPlatform] = useState<InstallPlatform>(platforms[0] ?? InstallPlatform.LINUX);
+  const [platformPref, setPlatform] = useState<InstallPlatform>(
+    platforms[0] ?? InstallPlatform.LINUX,
+  );
+  const platform = platforms.includes(platformPref) ? platformPref : platforms[0];
   const forPlatform = commands.filter((c) => c.platform === platform);
   const scopes = unique(forPlatform.map((c) => c.scope));
   const [scopePref, setScope] = useState<InstallScope>(scopes[0] ?? InstallScope.SYSTEM);
@@ -61,19 +72,21 @@ export function CopyCommand({ commands, shownOnce, className }: CopyCommandProps
         </div>
       )}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Tabs value={String(platform)} onValueChange={(v) => setPlatform(Number(v))}>
-          <TabsList aria-label="Platform">
-            {platforms.map((p) => (
-              <TabsTrigger key={p} value={String(p)} className="px-3">
-                {platformLabel[p]}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
+        {platforms.length > 1 && (
+          <Tabs value={String(platform)} onValueChange={(v) => setPlatform(Number(v))}>
+            <TabsList aria-label="Platform">
+              {platforms.map((p) => (
+                <TabsTrigger key={p} value={String(p)} className="px-3">
+                  {platformLabel[p]}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        )}
         {scopes.length > 1 && (
           <div
             role="radiogroup"
-            aria-label="Install for"
+            aria-label={scopeGroupLabel}
             className="inline-flex rounded-lg bg-muted p-[3px]"
           >
             {scopes.map((s) => (

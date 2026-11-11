@@ -323,7 +323,9 @@ describe("mock transport, milestone 5", { timeout: 20_000 }, () => {
     const workers = await createClient(WorkerAdminService, t).listWorkers({});
     const nas = workers.workers.find((w) => w.id === fx.ids.nas)!;
     expect(nas.info?.features).toEqual(["probe", "restic.v2", "restic.delete"]);
-    expect(nas.info?.probeOps).toHaveLength(7);
+    // Milestone 6 adds sftp_host_keys to the seven probe operations of m5.
+    expect(nas.info?.probeOps).toHaveLength(8);
+    expect(nas.info?.probeOps.at(-1)).toBe("sftp_host_keys");
     expect(workers.workers.find((w) => w.id === m5.ids.oldNas)?.info?.features).toEqual([]);
 
     const waiting = (await jobs.getJob({ jobId: m5.ids.waitingBackup })).job!;

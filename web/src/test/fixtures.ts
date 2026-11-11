@@ -176,6 +176,10 @@ export const backends: Backend[] = [
         placeholder: "-----BEGIN OPENSSH PRIVATE KEY-----",
         help: "PEM-encoded private key.",
       }),
+      f("host_keys", "Server host keys", FieldKind.TEXT, {
+        placeholder: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...",
+        help: 'The server\'s public host keys, one per line: "<algorithm> <base64 key>", as in a known_hosts line without the host name. A server that offers another key is refused. Without them, the server is not verified.',
+      }),
       f("path", "Path", FieldKind.STRING, { help: "Optional folder every location starts in." }),
       f("key_file_pass", "Key passphrase", FieldKind.STRING, { secret: true, advanced: true }),
       f("shell_type", "Remote shell", FieldKind.ENUM, {

@@ -36,6 +36,10 @@ export interface ProgressChartProps {
   height?: number;
   /** live marks a running job; the empty state then says it's waiting. */
   live?: boolean;
+  /** empty replaces the text shown when there is nothing to plot. */
+  empty?: React.ReactNode;
+  /** note is shown under the chart, e.g. that the history is thinned. */
+  note?: React.ReactNode;
   className?: string;
 }
 
@@ -44,7 +48,14 @@ export interface ProgressChartProps {
  * (line, right axis). New samples are appended in place; the chart follows
  * the theme.
  */
-export function ProgressChart({ samples, height = 260, live, className }: ProgressChartProps) {
+export function ProgressChart({
+  samples,
+  height = 260,
+  live,
+  empty: emptyText,
+  note,
+  className,
+}: ProgressChartProps) {
   const box = useRef<HTMLDivElement>(null);
   const plot = useRef<uPlot | null>(null);
   const { resolved } = useTheme();
@@ -157,7 +168,8 @@ export function ProgressChart({ samples, height = 260, live, className }: Progre
           className,
         )}
       >
-        {live ? "Waiting for progress from the worker…" : "No progress samples were recorded."}
+        {emptyText ??
+          (live ? "Waiting for progress from the worker…" : "No progress samples were recorded.")}
       </div>
     );
   }
@@ -190,6 +202,7 @@ export function ProgressChart({ samples, height = 260, live, className }: Progre
           aria-label="Throughput and bytes transferred over time"
         />
       </div>
+      {note && <p className="text-xs text-muted-foreground">{note}</p>}
     </div>
   );
 }

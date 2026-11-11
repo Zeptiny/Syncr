@@ -30,7 +30,12 @@ export function FilterBar({
   );
 }
 
-/** SearchInput is a search box that reports its value after a short pause. */
+/**
+ * SearchInput is a search box that reports its value after a short pause.
+ * When value comes back as what it reported, what was typed since stays:
+ * only a change from elsewhere (clearing the filters, the back button)
+ * replaces the text.
+ */
 export function SearchInput({
   value,
   onChange,
@@ -46,15 +51,21 @@ export function SearchInput({
 }) {
   const [draft, setDraft] = useState(value);
   const [synced, setSynced] = useState(value);
+  // sent is the last value reported, until value catches up with it.
+  const [sent, setSent] = useState<string | undefined>(undefined);
   if (value !== synced) {
     setSynced(value);
-    setDraft(value);
+    setSent(undefined);
+    if (value !== sent) setDraft(value);
   }
   useEffect(() => {
-    if (draft === value) return;
-    const id = window.setTimeout(() => onChange(draft), delayMs);
+    if (draft === value || draft === sent) return;
+    const id = window.setTimeout(() => {
+      setSent(draft);
+      onChange(draft);
+    }, delayMs);
     return () => window.clearTimeout(id);
-  }, [draft, value, onChange, delayMs]);
+  }, [draft, value, sent, onChange, delayMs]);
   return (
     <div className={cn("relative w-full sm:w-64", className)}>
       <Search

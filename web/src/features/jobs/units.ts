@@ -21,16 +21,28 @@ export const byteUnits: { id: ByteUnit; size: bigint }[] = [
 ];
 
 /** DurationUnit is a time unit of the form. */
-export type DurationUnit = "s" | "min" | "h";
+export type DurationUnit = "s" | "min" | "h" | "d";
 
 const NANOS = 1_000_000_000n;
 
-/** durationUnits lists the units smallest first, with their size in nanoseconds. */
-export const durationUnits: { id: DurationUnit; label: string; size: bigint }[] = [
+/** UnitList lists duration units, smallest first, with their size in nanoseconds. */
+export type UnitList = { id: DurationUnit; label: string; size: bigint }[];
+
+const allDurationUnits: UnitList = [
   { id: "s", label: "sec", size: NANOS },
   { id: "min", label: "min", size: 60n * NANOS },
   { id: "h", label: "hours", size: 3600n * NANOS },
+  { id: "d", label: "days", size: 86_400n * NANOS },
 ];
+
+/**
+ * durationUnits lists the units of rclone's durations, smallest first, with
+ * their size in nanoseconds.
+ */
+export const durationUnits: UnitList = allDurationUnits.slice(0, 3);
+
+/** timeLimitUnits are the units of a job's time limit (1 minute to 366 days). */
+export const timeLimitUnits: UnitList = allDurationUnits.slice(1);
 
 /** Quantity is a number as typed, in a unit. */
 export interface Quantity<U extends string> {
@@ -103,24 +115,36 @@ const totalNanos = (d: Duration) => d.seconds * NANOS + BigInt(d.nanos);
 /**
  * durationToQuantity shows a stored duration in the largest unit that holds
  * it as a whole number; one that is not a whole number of seconds is a
- * decimal number of seconds. An unset duration is empty, in defaultUnit.
+ * decimal number of its smallest unit. An unset duration is empty, in
+ * defaultUnit. units are the units to choose from (rclone's by default).
  */
 export function durationToQuantity(
   d: Duration | undefined,
   defaultUnit: DurationUnit,
+  units: UnitList = durationUnits,
 ): Quantity<DurationUnit> {
   if (!d) return { text: "", unit: defaultUnit };
   const n = totalNanos(d);
   if (n <= 0n) return { text: String(n), unit: defaultUnit };
-  let best = durationUnits[0];
-  for (const u of durationUnits) if (n % u.size === 0n) best = u;
+  let best = units[0];
+  for (const u of units) if (n % u.size === 0n) best = u;
   return { text: scaledToDecimal(n, best.size), unit: best.id };
+}
+
+/** quantityNanos is a quantity in nanoseconds: undefined for empty (or invalid) text. */
+export function quantityNanos(q: Quantity<DurationUnit>): bigint | undefined {
+  if (q.text === "" || !isDecimal(q.text)) return undefined;
+  const size = allDurationUnits.find((u) => u.id === q.unit)?.size ?? NANOS;
+  return decimalToScaled(q.text, size);
 }
 
 /** quantityToDuration is the inverse: undefined for empty (or invalid) text. */
 export function quantityToDuration(q: Quantity<DurationUnit>): Duration | undefined {
-  if (q.text === "" || !isDecimal(q.text)) return undefined;
-  const size = durationUnits.find((u) => u.id === q.unit)?.size ?? NANOS;
-  const n = decimalToScaled(q.text, size);
+  const n = quantityNanos(q);
+  if (n === undefined) return undefined;
   return create(DurationSchema, { seconds: n / NANOS, nanos: Number(n % NANOS) });
 }
+
+/** The bounds of a job's time limit (jobkind.MinMaxRuntime and MaxMaxRuntime). */
+export const MIN_TIME_LIMIT_NANOS = 60n * NANOS;
+export const MAX_TIME_LIMIT_NANOS = 366n * 86_400n * NANOS;

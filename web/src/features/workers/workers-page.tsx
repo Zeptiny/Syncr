@@ -10,8 +10,8 @@ import { FilterBar } from "@/components/app/filter-bar";
 import { LabelChips } from "@/components/app/label-editor";
 import { PageHeader } from "@/components/app/page-header";
 import { RelativeTime } from "@/components/app/relative-time";
-import { StatusBadge } from "@/components/app/status-badge";
-import { sortWorkers } from "@/lib/workers";
+import { StatusBadge, StatusPill } from "@/components/app/status-badge";
+import { isOutdated, outdatedHelp, sortWorkers } from "@/lib/workers";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -69,7 +69,14 @@ export function WorkersPage({ label }: { label?: string }) {
       }),
       col.accessor("status", {
         header: "Status",
-        cell: (c) => <StatusBadge worker={c.getValue()} />,
+        cell: ({ row: { original: w } }) => (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <StatusBadge worker={w.status} />
+            {isOutdated(w) && (
+              <StatusPill meta={{ label: "Outdated", tone: "warning" }} title={outdatedHelp(w)} />
+            )}
+          </div>
+        ),
       }),
       col.accessor("mode", {
         header: "Mode",

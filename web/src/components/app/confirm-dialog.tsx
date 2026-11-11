@@ -23,6 +23,8 @@ export interface ConfirmDialogProps {
   destructive?: boolean;
   /** onConfirm may return a promise; the dialog stays open until it settles. */
   onConfirm: () => Promise<unknown> | void;
+  /** confirmDisabled disables the confirm button, e.g. while something blocks the action. */
+  confirmDisabled?: boolean;
   children?: React.ReactNode;
 }
 
@@ -35,6 +37,7 @@ export function ConfirmDialog({
   confirmLabel,
   destructive,
   onConfirm,
+  confirmDisabled,
   children,
 }: ConfirmDialogProps) {
   const [pending, setPending] = useState(false);
@@ -78,7 +81,7 @@ export function ConfirmDialog({
           <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
           <Button
             variant={destructive ? "destructive" : "default"}
-            disabled={pending}
+            disabled={pending || confirmDisabled}
             onClick={() => void confirm()}
           >
             {pending ? "Working…" : confirmLabel}

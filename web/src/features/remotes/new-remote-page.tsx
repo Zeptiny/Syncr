@@ -17,6 +17,7 @@ import { invalidateService } from "@/lib/invalidate";
 import { cn } from "@/lib/utils";
 
 import { BackendIcon } from "./backend-icon";
+import { HOST_KEYS_FIELD, HostKeysField } from "./host-keys";
 
 /** NewRemotePage picks a backend type, then shows its form. */
 export function NewRemotePage({ type }: { type?: string }) {
@@ -87,6 +88,11 @@ export function NewRemotePage({ type }: { type?: string }) {
           remotes={remotes.data?.remotes ?? []}
           backends={backends}
           onCancel={() => void navigate({ to: "/remotes" })}
+          renderField={(f, idPrefix) =>
+            f.name === HOST_KEYS_FIELD ? (
+              <HostKeysField field={f} idPrefix={idPrefix} workers={workers.data?.workers ?? []} />
+            ) : undefined
+          }
           extra={(input) => (
             <TestRemoteButton
               input={input}

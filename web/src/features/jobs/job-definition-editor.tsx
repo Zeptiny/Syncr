@@ -15,7 +15,8 @@ import {
 } from "./definition";
 import { PruneEditor } from "./prune-editor";
 import { RetentionEditor } from "./retention-editor";
-import { TransferEditor } from "./transfer-editor";
+import { QuantityInput, TransferEditor } from "./transfer-editor";
+import { timeLimitUnits } from "./units";
 
 /** JobDefinitionEditorProps configures JobDefinitionEditor. */
 export interface JobDefinitionEditorProps {
@@ -83,7 +84,7 @@ export function JobDefinitionEditor({
       {s.kind === "rclone_transfer" ? (
         <TransferEditor
           value={s.transfer}
-          onChange={(transfer) => onChange({ kind: s.kind, transfer })}
+          onChange={(transfer) => onChange({ ...s, transfer })}
           errors={errors}
           remotes={remotes}
           backends={backends}
@@ -102,7 +103,7 @@ export function JobDefinitionEditor({
             <BackupEditor
               {...restic}
               value={s.backup}
-              onChange={(backup) => onChange({ kind: s.kind, backup })}
+              onChange={(backup) => onChange({ ...s, backup })}
               worker={worker ?? browseWorker}
               workerNote={worker ? undefined : browseNote}
             />
@@ -111,25 +112,53 @@ export function JobDefinitionEditor({
             <RetentionEditor
               {...restic}
               value={s.retention}
-              onChange={(retention) => onChange({ kind: s.kind, retention })}
+              onChange={(retention) => onChange({ ...s, retention })}
             />
           )}
           {s.kind === "restic_check" && (
             <CheckEditor
               {...restic}
               value={s.check}
-              onChange={(check) => onChange({ kind: s.kind, check })}
+              onChange={(check) => onChange({ ...s, check })}
             />
           )}
           {s.kind === "restic_prune" && (
             <PruneEditor
               {...restic}
               value={s.prune}
-              onChange={(prune) => onChange({ kind: s.kind, prune })}
+              onChange={(prune) => onChange({ ...s, prune })}
             />
           )}
         </>
       )}
+      <Panel title="Time limit">
+        <div className="max-w-md">
+          <QuantityInput
+            id={`${idPrefix}-time-limit`}
+            label="Stop the job after"
+            value={s.timeLimit.text}
+            unit={s.timeLimit.unit}
+            units={timeLimitUnits}
+            onChange={(text, unit) => onChange({ ...s, timeLimit: { text, unit } })}
+            placeholder="No limit"
+            optional
+            error={errors.timeLimit}
+            help={timeLimitHelp(s.kind)}
+          />
+        </div>
+      </Panel>
     </>
   );
+}
+
+/**
+ * timeLimitHelp says what the time limit does, and for transfers how it
+ * differs from rclone's max duration ("Stop starting after").
+ */
+export function timeLimitHelp(kind: EditableKind): string {
+  const base =
+    "A hard stop: once the job has run this long, the worker stops it and the job fails. From 1 minute to 366 days; empty means no limit unless the controller sets a default.";
+  return kind === "rclone_transfer"
+    ? `${base} Unlike "Stop starting after" (rclone's max duration), which only stops new transfers from starting, it ends the job.`
+    : base;
 }
