@@ -8,7 +8,7 @@
 //                           01-setup (default: skipped unless SYNCR_UI_MOCK=1)
 //   SYNCR_UI_USER           sign-in user (default admin)
 //   SYNCR_UI_PASSWORD       sign-in password (default syncr-demo-admin)
-//   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4 or m3: which milestone's shot list
+//   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3 or readme: which shot list
 //   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/<set>)
 //   SYNCR_SCREENSHOT_ONLY   comma-separated shot names to take (default all)
 //   SYNCR_SCREENSHOT_MOBILE 1 to also take 390px-wide shots
@@ -32,7 +32,7 @@ const mock = process.env.SYNCR_UI_MOCK === "1";
 const setupUrl = (process.env.SYNCR_SETUP_URL ?? (mock ? base : "")).replace(/\/$/, "");
 const user = process.env.SYNCR_UI_USER ?? "admin";
 const password = process.env.SYNCR_UI_PASSWORD ?? "syncr-demo-admin";
-const set = ["m3", "m4", "m5"].includes(process.env.SYNCR_SCREENSHOT_SET)
+const set = ["m3", "m4", "m5", "readme"].includes(process.env.SYNCR_SCREENSHOT_SET)
   ? process.env.SYNCR_SCREENSHOT_SET
   : "m6";
 const outDir = resolve(
@@ -558,10 +558,55 @@ async function m6(browser) {
   }
 }
 
+// The README shots: one page per feature from the same seeded controller,
+// each in light and dark so the README can follow the reader's theme.
+const readmeShots = [
+  ["dashboard", async (p) => (await p.goto(`${base}/?range=7d`), settle(p, 900))],
+  [
+    "job-live",
+    async (p) => {
+      await openRow(p, "/jobs", "Running");
+      await p.waitForTimeout(4000);
+    },
+  ],
+  [
+    "snapshot-browser",
+    async (p) => {
+      await openSnapshot(p, "Photos vault", ["srv", "photos", "2026"]);
+      for (const n of ["01", "02", "03"])
+        await p.getByRole("checkbox", { name: `Select ${n}` }).click();
+      await settle(p, 300);
+    },
+  ],
+  ["schedule", async (p) => openRow(p, "/schedules", "Nightly photos")],
+  ["workers", async (p) => (await p.goto(`${base}/workers`), settle(p))],
+];
+
+// readme takes every README shot at 1440×900, light then dark.
+async function readme(browser) {
+  for (const v of [
+    { suffix: "", dark: false },
+    { suffix: "-dark", dark: true },
+  ]) {
+    const p = await newPage(browser, { dark: v.dark });
+    await signIn(p);
+    for (const [name, go] of readmeShots) {
+      if (!wanted(name)) continue;
+      await go(p);
+      await shot(p, name + v.suffix);
+    }
+    await p.context().close();
+  }
+}
+
 async function main() {
   await mkdir(outDir, { recursive: true });
   const browser = await chromium.launch({ executablePath, args: ["--no-sandbox"] });
   try {
+    if (set === "readme") {
+      await readme(browser);
+      return;
+    }
     if (set === "m6") {
       await m6(browser);
       return;

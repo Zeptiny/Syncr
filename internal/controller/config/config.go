@@ -1,7 +1,7 @@
 // Package config defines the controller's configuration file and
 // environment variables.
 //
-// The file is YAML (see README.md for an example); every setting
+// The file is YAML (see docs/configuration.md for an example); every setting
 // can be overridden by the SYNCR_* variable named in its env tag. Loading
 // mechanics live in internal/platform/config.
 //
