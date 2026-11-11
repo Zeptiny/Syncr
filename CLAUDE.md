@@ -21,7 +21,7 @@ make dev-up              # Postgres, MinIO and SFTP for local runs
 ```
 
 - Integration tests use the `//go:build integration` tag. They need `SYNCR_TEST_RCLONE` and `SYNCR_TEST_RESTIC` set to binaries of the pinned versions (tests that need a tool skip without them). Postgres, MinIO and SFTP tests start containers with testcontainers. `internal/e2e/system` builds and runs the real binaries (restic against MinIO end to end in `restic_test.go`).
-- PR screenshots: `node web/scripts/screenshots.mjs` against a freshly started seeded controller built with `-tags webui` (`SYNCR_UI_URL`, `CHROMIUM_PATH`; the set defaults to the newest milestone). Run it once per controller start: repeated sign-ins hit the login rate limit.
+- PR screenshots: `node web/scripts/screenshots.mjs` against a freshly started seeded controller built with `-tags webui` (`SYNCR_UI_URL`, `CHROMIUM_PATH`; the set defaults to the newest milestone). `SYNCR_SCREENSHOT_SET=readme` retakes the README shots in `docs/screenshots/readme/` (light and dark). Run it once per controller start: repeated sign-ins hit the login rate limit.
 - CI also lints with `GOOS=windows` (Windows-only files use build tags) and runs tests on Windows.
 - A plain `go build` of the controller serves a placeholder page. It embeds the UI only with `-tags webui` after `make web`.
 
@@ -63,4 +63,4 @@ Never hand-edit these files: change the source, then regenerate.
 
 **Web UI** (`web/`): React, Vite, TanStack Router/Query/Table, Connect-Query over the generated TS clients, and shadcn-style primitives in `src/components/ui`. Feature code lives in `src/features/<area>`; routes in `src/routes` stay thin.
 
-Design rationale lives in `docs/adr/0001`–`0013`. Read the ADR for a subsystem before changing how it behaves. Configuration (YAML plus `SYNCR_*` env overrides; unknown keys are rejected) is documented in README.md and `docs/worker-config.md`; restic behavior for users is in `docs/restic.md`.
+Design rationale lives in `docs/adr/0001`–`0016`. Read the ADR for a subsystem before changing how it behaves. Configuration (YAML plus `SYNCR_*` env overrides; unknown keys are rejected) is documented in `docs/configuration.md` and `docs/worker-config.md`; restic behavior for users is in `docs/restic.md`.
