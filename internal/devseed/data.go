@@ -1,6 +1,8 @@
 package devseed
 
 import (
+	"slices"
+	"strings"
 	"time"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
@@ -51,9 +53,12 @@ func tools() []workers.Tool {
 	return []workers.Tool{{Name: "rclone", Version: "v1.75.2"}, {Name: "restic", Version: "0.19.1"}}
 }
 
-// demoWorkers are the workers. All but old-nas run the current build: they
-// report every link feature and probe operation. old-nas reported none
-// before it was removed.
+// demoWorkers are the workers. All but old-nas and attic-nas run the
+// current build: they report every link feature and probe operation.
+// old-nas reported none before it was removed; attic-nas is online but
+// runs a build from before Milestone 6 (no link.FeatureJobTimeLimit, no
+// sftp_host_keys probe), so the UI shows it outdated with the command that
+// upgrades it.
 func demoWorkers() []demoWorker {
 	features, ops := link.Features(), link.ProbeOps()
 	return []demoWorker{
@@ -97,11 +102,25 @@ func demoWorkers() []demoWorker {
 			},
 			labels: []string{"nas", "linux"}, removedAgo: oldNASRemoved,
 		},
+		{
+			name: wAtticNAS, mode: domain.WorkerActive, status: domain.WorkerOnline,
+			info: workers.Info{
+				Version: "2.0.0-dev", OS: "linux", Arch: "amd64", Hostname: "attic-nas", Tools: tools(), JobKinds: link.Kinds(),
+				MaxConcurrentJobs: 1, LocalRoots: []string{"/volume1"},
+				// Built before Milestone 6: no time limits, no host-key probe.
+				Features: slices.DeleteFunc(slices.Clone(features), func(f string) bool { return f == link.FeatureJobTimeLimit }),
+				ProbeOps: slices.DeleteFunc(slices.Clone(ops), func(op string) bool { return op == "sftp_host_keys" }),
+			},
+			labels: []string{"archive"},
+		},
 	}
 }
 
 // wOldNAS is the demo worker that was removed (its schedule is paused).
 const wOldNAS = "old-nas"
+
+// wAtticNAS is the online demo worker that needs an upgrade.
+const wAtticNAS = "attic-nas"
 
 // oldNASRemoved is how long before the seed old-nas was removed.
 const oldNASRemoved = 6*24*time.Hour + 9*time.Hour
@@ -125,7 +144,22 @@ const (
 	rPool      = "Pooled disks"
 	rAliceDocs = "Alice's documents"
 	rAliceB2   = "Alice's B2"
+	rOffsite   = "Offsite SSH"
 )
+
+// demoHostKeys are the SSH host keys of the demo SSH servers: an Ed25519
+// and an ECDSA P-256 public key ("<algorithm> <base64 key>"), the samples
+// of the sftp backend's descriptor. The Offsite SSH remote pins them in its
+// host_keys option, and the canned sftp_host_keys probe answers them for
+// any server (Probes). Their fingerprints are
+// SHA256:dkA939jgBPkIxhIk1YrFbVK6S3sjJRKuDnTe/EF7P54 and
+// SHA256:Lu0iomEI1gJTzrNNAEPx/kPI7GZriuysj84Pproxz/I.
+func demoHostKeys() []string {
+	return []string{
+		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMUiJpUbcNynH9rHhq4iK4jdXA7Qg/xNVqitUwiNweax",
+		"ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBH9xAeBCuXqzBfh9cf86Gd6fiPvC0DUhn7/y6t//sQHCSwUg+aU5NxZuU/ADvvNXRTI5S3AoUmxGN7kbZLiU6XQ=",
+	}
+}
 
 // demoRemotes are the remotes, in creation order (union members first).
 // The credentials are demo values for hosts that do not exist.
@@ -155,6 +189,12 @@ func demoRemotes() []demoRemote {
 		{owner: ownerAlice, input: remotes.Input{Name: rAliceB2, Type: "b2",
 			Options: map[string]string{"account": "0012a3b4c5d6e7f0000000002", "bucket": "alice-backup"},
 			Secrets: map[string]string{"key": "K001syncrDemoAliceKey"}}},
+		// The SFTP server whose host keys are pinned (Storage box has none,
+		// so the UI says it is not verified).
+		{owner: ownerAdmin, input: remotes.Input{Name: rOffsite, Type: "sftp",
+			Options: map[string]string{"host": "backup.example.net", "user": "syncr", "path": "/srv/backup",
+				"host_keys": strings.Join(demoHostKeys(), "\n")},
+			Secrets: map[string]string{"pass": "syncr-demo-offsite-password"}}},
 	}
 }
 
@@ -181,6 +221,12 @@ type demoJob struct {
 	// static: a running job that is shown running but is not the one job
 	// Animate moves.
 	static bool
+	// rate is the average speed of a running job's stored samples (default
+	// runningRate).
+	rate int64
+	// maxRuntime is the definition's time limit (max_runtime); zero sets
+	// none.
+	maxRuntime time.Duration
 
 	status  domain.JobStatus
 	created time.Duration
@@ -217,6 +263,10 @@ func ptrOptions(transfers int32, checksum bool) *syncrv1.RcloneTransferOptions {
 func done(bytes, files, checks int64) jobs.Stats {
 	return jobs.Stats{Bytes: bytes, TotalBytes: bytes, Files: files, TotalFiles: files, Checks: checks}
 }
+
+// timeLimitRun is the time limit of the demo job its limit stopped, and
+// how long it ran.
+const timeLimitRun = 6 * time.Hour
 
 // Ages of the manual jobs whose notifications the seed leaves retrying
 // (the email) or dead (the webhook), and sending (the email).
@@ -273,6 +323,13 @@ func demoJobs() []demoJob {
 			status: domain.JobSucceeded, created: 1*d + 11*h, queue: 2 * s, run: 3*m + 40*s,
 			stats: done(9*gib+40*mib, 1302, 1302), exitCode: 0,
 			options: &syncrv1.RcloneTransferOptions{DryRun: true}},
+		// Stopped by its time limit after 6 hours, with a sample every 5 s
+		// (more than a chart shows: the API thins them).
+		{owner: ownerAdmin, worker: "nas-01", mode: copyMode, src: loc{rPhotos, "raw"}, dst: loc{rB2, "photos-raw"},
+			status: domain.JobFailed, created: 1*d + 10*h, queue: 2 * s, run: timeLimitRun, maxRuntime: timeLimitRun,
+			stats: jobs.Stats{Bytes: 431 * gib, TotalBytes: 820 * gib, Files: 18420, TotalFiles: 35112, Checks: 18420},
+			err:   jobs.JobError{Code: jobs.CodeTimeLimit, Message: "stopped after 6h0m0s: the job's time limit was reached"}, exitCode: -1,
+			options: ptrOptions(4, true), samples: int(timeLimitRun / (5 * s))},
 		{owner: ownerAdmin, worker: "office-pc", mode: syncMode, src: loc{"", `D:\Backups`}, dst: loc{rStorage, "office-pc"},
 			status: domain.JobInterrupted, created: 1*d + 2*h, queue: 6 * s, run: 31*m + 3*s,
 			stats: jobs.Stats{Bytes: 12 * gib, TotalBytes: 30 * gib, Files: 1980, TotalFiles: 4800, Checks: 4800},

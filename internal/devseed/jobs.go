@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
@@ -97,7 +98,7 @@ func (s *Seed) seedJob(ctx context.Context, svc *jobs.Service, clk *stepClock, n
 		// Samples every 5 s up to now, as the worker would have sent them
 		// (a job without a known total reports none).
 		for at := start.Add(5 * time.Second); at.Before(now) && dj.stats.TotalBytes > 0; at = at.Add(5 * time.Second) {
-			if err := s.sample(ctx, svc, clk, workerID, id, epoch, at, runningStats(dj.stats, at.Sub(start))); err != nil {
+			if err := s.sample(ctx, svc, clk, workerID, id, epoch, at, runningStats(dj.stats, at.Sub(start), cmp.Or(dj.rate, runningRate))); err != nil {
 				return id, err
 			}
 		}
@@ -149,8 +150,20 @@ func (s *Seed) sample(ctx context.Context, svc *jobs.Service, clk *stepClock, w 
 }
 
 // definition is the job definition of dj, over the seeded remotes and
-// repositories.
+// repositories, with its time limit.
 func (s *Seed) definition(dj demoJob) (*syncrv1.JobDefinition, error) {
+	def, err := s.operation(dj)
+	if err != nil {
+		return nil, err
+	}
+	if dj.maxRuntime > 0 {
+		def.MaxRuntime = durationpb.New(dj.maxRuntime)
+	}
+	return def, nil
+}
+
+// operation is the definition of dj without its time limit.
+func (s *Seed) operation(dj demoJob) (*syncrv1.JobDefinition, error) {
 	if dj.def != nil {
 		return dj.def(s)
 	}
@@ -203,13 +216,14 @@ func partialStats(f jobs.Stats, elapsed, run time.Duration) jobs.Stats {
 	}
 }
 
-// runningRate is the average speed of the running job.
+// runningRate is the average speed of the running job Animate moves, and
+// the default of the other running jobs' stored samples (demoJob.rate).
 const runningRate = 42 * mib
 
-// runningStats are the counters of the running job (totals t) after
-// elapsed: about runningRate, never reaching the total.
-func runningStats(t jobs.Stats, elapsed time.Duration) jobs.Stats {
-	bytes := min(int64(curve(elapsed.Seconds())*float64(runningRate)), t.TotalBytes-1)
+// runningStats are the counters of a running job (totals t) after elapsed
+// at about rate bytes a second, never reaching the total.
+func runningStats(t jobs.Stats, elapsed time.Duration, rate int64) jobs.Stats {
+	bytes := min(int64(curve(elapsed.Seconds())*float64(rate)), t.TotalBytes-1)
 	files := int64(float64(bytes) / float64(t.TotalBytes) * float64(t.TotalFiles))
 	return jobs.Stats{
 		Bytes: bytes, TotalBytes: t.TotalBytes, Files: files, TotalFiles: t.TotalFiles,
@@ -257,7 +271,7 @@ func (s *Seed) Step(ctx context.Context) error {
 		}
 	}
 	if at.After(s.runningStart) {
-		smp := jobs.Sample{Time: at, Stats: runningStats(totals, at.Sub(s.runningStart))}
+		smp := jobs.Sample{Time: at, Stats: runningStats(totals, at.Sub(s.runningStart), runningRate)}
 		// false once the job is no longer running (someone cancelled it).
 		_, err := s.d.Jobs.RecordProgress(ctx, s.runningWorker, s.Running, s.runningEpoch, smp)
 		errs = append(errs, err)

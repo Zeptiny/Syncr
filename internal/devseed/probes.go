@@ -3,6 +3,7 @@ package devseed
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	pathpkg "path"
@@ -121,6 +122,11 @@ func (p *Probes) Probe(ctx context.Context, workerID domain.WorkerID, run *syncr
 		var l *syncrv1.ProbeListing
 		if l, err = p.resticLs(spec.GetRemotes(), op.ResticLs); err == nil {
 			res.Output = &syncrv1.ProbeResult_Listing{Listing: l}
+		}
+	case *syncrv1.ProbeSpec_SftpHostKeys:
+		var k *syncrv1.SftpHostKeys
+		if k, err = hostKeys(op.SftpHostKeys); err == nil {
+			res.Output = &syncrv1.ProbeResult_SftpHostKeys{SftpHostKeys: k}
 		}
 	default:
 		err = failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSUPPORTED_KIND, "the demo does not answer this probe")
@@ -407,6 +413,28 @@ func about(remotes []*syncrv1.RemoteDefinition) (*syncrv1.ProbeUsage, error) {
 		return nil, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "connect: connection refused")
 	}
 	return &syncrv1.ProbeUsage{Unsupported: true}, nil
+}
+
+// hostKeys answers an sftp_host_keys probe as a worker would: every demo
+// SSH server offers the demo host keys (demoHostKeys), with their SHA-256
+// fingerprints. The controller checks them as it checks a worker's answer.
+func hostKeys(op *syncrv1.ProbeSftpHostKeys) (*syncrv1.SftpHostKeys, error) {
+	if op.GetHost() == "" || op.GetPort() < 0 || op.GetPort() > 65535 {
+		return nil, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, "invalid host or port")
+	}
+	out := &syncrv1.SftpHostKeys{}
+	for _, line := range demoHostKeys() {
+		algorithm, key, _ := strings.Cut(line, " ")
+		blob, err := base64.StdEncoding.DecodeString(key)
+		if err != nil {
+			return nil, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "demo host key %s: %v", algorithm, err)
+		}
+		sum := sha256.Sum256(blob)
+		out.Keys = append(out.Keys, &syncrv1.SftpHostKey{
+			Algorithm: algorithm, Key: key, FingerprintSha256: "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:]),
+		})
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------

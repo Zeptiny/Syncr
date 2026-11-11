@@ -172,6 +172,7 @@ func TestSeed(t *testing.T) {
 	// Workers in every connection state.
 	want := map[string]domain.WorkerStatus{
 		"nas-01": domain.WorkerOnline, "office-pc": domain.WorkerOffline, "backup-host": domain.WorkerOnline, "laptop": domain.WorkerPending,
+		"attic-nas": domain.WorkerOnline,
 	}
 	ws, err := e.deps.Workers.List(ctx, workers.ListFilter{})
 	if err != nil || len(ws) != len(want) {
@@ -284,7 +285,7 @@ func TestSeed(t *testing.T) {
 
 	// The demo remotes' secrets are stored encrypted, never logged (the
 	// demo passwords are public and logged on purpose).
-	for _, secret := range []string{"syncr-demo-minio-secret", "syncr-demo-sftp-password", "syncr-demo-webdav-password", "K001syncrDemo"} {
+	for _, secret := range []string{"syncr-demo-minio-secret", "syncr-demo-sftp-password", "syncr-demo-webdav-password", "K001syncrDemo", "syncr-demo-offsite-password"} {
 		if strings.Contains(e.logs.String(), secret) {
 			t.Errorf("the log contains %q", secret)
 		}

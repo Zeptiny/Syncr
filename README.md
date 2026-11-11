@@ -405,7 +405,7 @@ auth:
   session_max_age: 720h      # SYNCR_AUTH_SESSION_MAX_AGE: a session ends this long after the login
   setup_code: ""             # SYNCR_SETUP_CODE: preset first-run setup code (16+ chars); default: random, logged
 workers:
-  download_base_url: https://github.com/Zeptiny/Syncr/releases/latest/download  # SYNCR_WORKERS_DOWNLOAD_BASE_URL (install commands)
+  download_base_url: ""      # SYNCR_WORKERS_DOWNLOAD_BASE_URL: a mirror for the install and upgrade commands; empty: GitHub, the controller's own release
   lost_after: 1h             # SYNCR_WORKERS_LOST_AFTER: end the active jobs of a worker out of contact this long (at least 5m)
 log:
   level: info                # SYNCR_LOG_LEVEL: debug, info, warn, error
@@ -420,6 +420,9 @@ database:
   connect_timeout: 10s       # SYNCR_DATABASE_CONNECT_TIMEOUT
 schedules:
   tick: 10s                  # SYNCR_SCHEDULES_TICK: scheduler pass interval (1s to 5m; saves and finished jobs wake it earlier)
+jobs:
+  default_max_runtime: 0     # SYNCR_JOBS_DEFAULT_MAX_RUNTIME: time limit of jobs that set none (0: none; else 1m to 8784h, 366 days)
+  sample_retention: 720h     # SYNCR_JOBS_SAMPLE_RETENTION: keep a finished job's progress chart this long (at least 1h; 0: forever)
 notify:
   network_policy: private    # SYNCR_NOTIFY_NETWORK_POLICY: private (no loopback, link-local, metadata), public (no private networks either), any
   allowed_networks: []       # SYNCR_NOTIFY_ALLOWED_NETWORKS: CIDRs/IPs allowed anyway (comma-separated), e.g. 127.0.0.1 for a local relay
@@ -462,6 +465,17 @@ does not count. If the worker comes back later, it is told to stop those
 jobs and its late results are ignored. Raise the value for machines that
 sleep through long jobs (e.g. laptops); queued jobs still fail after the
 15 minute dispatch timeout.
+
+A job's time limit (the "Time limit" of its definition) is enforced by its
+worker: once the job has run that long, its processes are stopped and it
+ends `failed` (`time_limit`), notified like any failure, so the next job on
+its restic repository can start. `jobs.default_max_runtime` gives a limit to
+every job whose definition sets none; jobs the controller starts itself (a
+repository's data deletion) never get it. A worker built before 2.0 cannot
+enforce a limit and fails such jobs as `worker_outdated`. Once an hour the
+controller deletes the progress samples (the chart) of jobs that finished
+more than `jobs.sample_retention` ago; the jobs and their final counters
+are kept.
 
 `api.admin_token` (`SYNCR_ADMIN_TOKEN`) of Milestone 2 is gone: it is ignored
 with a warning. Create a personal API token in the UI instead.

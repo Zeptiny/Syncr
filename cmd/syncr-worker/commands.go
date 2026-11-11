@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,7 +13,10 @@ import (
 	"github.com/Zeptiny/Syncr/internal/platform/config"
 	"github.com/Zeptiny/Syncr/internal/platform/logging"
 	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
+	"github.com/Zeptiny/Syncr/internal/worker/datadir"
+	"github.com/Zeptiny/Syncr/internal/worker/paths"
 	"github.com/Zeptiny/Syncr/internal/worker/service"
+	"github.com/Zeptiny/Syncr/internal/worker/upgrade"
 )
 
 // runCmd runs the worker: it assembles it (tools, local_roots policy,
@@ -81,8 +85,17 @@ func openLogFile(path string) (*os.File, error) {
 	return f, nil
 }
 
-// runWorker loads the configuration, builds the worker, starts the link and
-// waits for ctx.
+// runWorker loads the configuration, takes the data directory, builds the
+// worker, starts the link and waits for ctx.
+//
+// Before anything else uses the data directory it takes its lock
+// (datadir.Lock: a second worker on the same directory is refused, as two
+// would remove each other's job files), released once the worker stopped.
+// Holding it, it removes what jobs of an earlier process left in the
+// scratch directories (that process is gone, so nothing uses them), and
+// the old binary an upgrade left next to the executable. Neither cleanup
+// is fatal. run never prunes tool versions: a worker rolled back by an
+// upgrade still needs its own.
 func runWorker(ctx context.Context, e *env, configPath string, logOut io.Writer) error {
 	cfg := workerconfig.Default()
 	if err := config.Load(configPath, e.lookupEnv, &cfg); err != nil {
@@ -95,6 +108,20 @@ func runWorker(ctx context.Context, e *env, configPath string, logOut io.Writer)
 
 	logger.Info("worker starting",
 		"version", e.info.Version, "commit", e.info.Commit, "os", runtime.GOOS, "arch", runtime.GOARCH)
+	dataDir, err := resolveDataDir(cfg, e.pathsEnv())
+	if err != nil {
+		return err
+	}
+	release, err := datadir.Lock(dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := release(); err != nil {
+			logger.Warn("releasing the data directory lock failed", "error", err.Error())
+		}
+	}()
+	cleanStart(dataDir, logger)
 	w, err := buildWorker(ctx, cfg, workerDeps{
 		paths:      e.pathsEnv(),
 		bundledDir: executableDir(),
@@ -113,6 +140,25 @@ func runWorker(ctx context.Context, e *env, configPath string, logOut io.Writer)
 	stop()
 	logger.Info("worker stopped")
 	return nil
+}
+
+// cleanStart removes the files that jobs of an earlier worker process left
+// in the scratch directories of dataDir, and the leftovers of an earlier
+// upgrade next to the executable. Failures are logged; the worker starts
+// anyway.
+func cleanStart(dataDir string, log *slog.Logger) {
+	scratch := paths.ScratchDir(dataDir)
+	if err := datadir.RemoveContents(filepath.Join(scratch, "rclone"), filepath.Join(scratch, "restic")); err != nil {
+		log.Warn("could not remove all files earlier jobs left in the scratch directory; they stay until the next start",
+			"scratch_dir", scratch, "error", err.Error())
+	}
+	exe, err := executablePath()
+	if err != nil {
+		return
+	}
+	if err := upgrade.RemoveLeftover(exe); err != nil {
+		log.Info("the old binary of an earlier upgrade could not be removed yet; the next start tries again", "error", err.Error())
+	}
 }
 
 // versionCmd prints build information.

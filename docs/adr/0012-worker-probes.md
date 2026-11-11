@@ -55,6 +55,29 @@ that a worker runs outside its job slots and answers with one
 Restic probes read with `--no-lock` and take no concurrency keys
 (ADR 0013), so browsing never waits for, or blocks, a backup.
 
+**`sftp_host_keys` (Milestone 6).** A probe that fetches an SSH server's
+host keys for an sftp remote's `host_keys` option
+(`ProbeService.GetSftpHostKeys{host, port, worker_id}`, any signed-in user).
+The worker answers it itself with `golang.org/x/crypto/ssh`, not with
+rclone: one handshake per key algorithm (Ed25519, the ECDSA curves, RSA;
+not DSA) whose host-key callback records the key and aborts, so no
+credentials are ever sent, each with a 10 s dial timeout inside the probe's
+own. It needs no remote, so the remote's proxy options do not apply. The
+controller validates the address before the rate limit (a host name or an
+IP address, never starting with `-`; port 0 means 22), re-checks every key
+(its algorithm must be the type its wire format names; the SHA-256
+fingerprint is computed again rather than taken from the worker), drops
+duplicates and keeps at most 16. Worker outcomes map as follows: the server
+cannot be reached or is not SSH (TEMPORARY, EXECUTION_FAILED) or does not
+answer in time (TIMEOUT) are failed preconditions with the worker's
+message, which names only the address; a refused address (INVALID_SPEC) is
+a field error on `host` or `port`. The RPC has no `NO_SIDE_EFFECTS`
+option: with it Connect would accept GET, and a cross-site GET could make a
+worker connect to any host and port. Fetching keys is trust on first use;
+the UI shows the fingerprints and how to compare them on the server. A new
+operation needs no new link feature: workers list it in
+`Hello.probe_ops`, and one that does not is refused as outdated.
+
 ### A broker in the dispatcher
 
 `dispatch.ProbeBroker` is the only thing that knows both modes. Its `Probe`
@@ -217,7 +240,11 @@ returned. Results hold file names, sizes and usage only.
 - Two controllers would each keep their own table: a result delivered to
   the controller that did not send the probe is ignored and the caller
   times out. Probes therefore need sticky routing of a worker's link to one
-  controller, which a single controller gives for free.
+  controller, which a single controller gives for free; since Milestone 6
+  the single-controller guard (ADR 0015) enforces it.
+- `GetSftpHostKeys` makes a worker open a TCP connection to a host and port
+  a user names. `TestRemote` with draft values already allowed that; the
+  same per-user rate limit applies.
 
 ## Alternatives considered
 

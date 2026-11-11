@@ -51,6 +51,45 @@ Each job runs as one child process of a pinned, version-checked `rclone` or
   rclone) are in the job too. os/exec cannot start a child suspended, so a
   child is outside the job for a moment after it starts. Other Unix systems
   have neither mechanism.
+- **A job is over only when its whole process tree is gone** (Milestone 6).
+  A tool's own children (restic's `rclone serve restic`, or anything a
+  backend starts) must not outlive a cancelled, timed-out or finished job:
+  they would keep a repository lock or a file open while the next job on it
+  starts.
+  - **Linux:** a cancel still sends SIGINT to the direct child only, so
+    restic can release its repository lock. Once the child has exited (by
+    itself, on the SIGINT, or killed after the grace period), the rest of its
+    process group gets SIGKILL, and only then is the child reaped. The
+    worker waits with `waitid(P_PID, pid, WEXITED|WNOWAIT)`, which returns
+    once the child exited but leaves it an unreaped zombie. A zombie keeps
+    its PID, so when `kill(-pid, SIGKILL)` runs the group ID cannot have been
+    recycled for an unrelated process: the only members are the child and
+    its descendants (a process can only join a group of its own session, and
+    a new group takes its leader's PID). The child is reaped by `cmd.Wait`
+    on the same goroutine, after the signal, and nothing else in the worker
+    reaps children. If `waitid` fails, no group signal is sent at all.
+  - **Windows:** each run also gets a Job Object of its own, nested in the
+    worker-wide one (Windows 8 and later), with kill-on-close.
+    `TerminateJobObject` runs on cancel and again after the child exited,
+    then the handle is closed. If the job cannot be created or assigned (the
+    worker itself may run in a job that forbids nesting), the run continues
+    as before, with a warning. A grandchild started between the child's start
+    and its assignment escapes the job (os/exec cannot start a child
+    suspended).
+  - **Other Unix systems:** only the direct child is stopped.
+  - restic runs with the scratch root as its working directory and the
+    per-job directory as its TMP, so a lingering process cannot hold the
+    job's directory open.
+- **Time limits** (ADR 0014). A job with a time limit runs under a context
+  that ends when the limit is reached, with its own cause; the supervisor
+  then stops the tree exactly as for a cancel, and the job is reported
+  `FAILED` with `TIME_LIMIT`.
+- **One worker per data directory, a clean start.** `syncr-worker run`
+  takes an exclusive OS lock on `<data_dir>/worker.lock` before it builds
+  anything (a second worker on the same directory exits and says why), then
+  removes everything under `scratch/rclone` and `scratch/restic`: the job
+  directories of a process that died. The OS releases the lock when the
+  process dies, so a crash never leaves a stale lock.
 - **Typed outcomes.** The supervisor returns the exit code with
   `*StartError`, `*ExitError` or `*CanceledError`; runners map them to job
   error codes.
@@ -66,4 +105,9 @@ Each job runs as one child process of a pinned, version-checked `rclone` or
   stop can be added behind the same API.
 - On Linux the parent death signal reaches only the direct child: a process
   it starts is not killed with the worker (restic's rclone exits once restic
-  closes its pipes).
+  closes its pipes). While the worker runs, the group kill above stops such
+  processes at the end of every job.
+- The tree kill is covered by tests whose helper starts a grandchild that
+  ignores SIGINT: it is gone after a normal exit, a cancel, a time limit and
+  a kill after the grace period. The Windows variant is proven only by the
+  Windows CI.

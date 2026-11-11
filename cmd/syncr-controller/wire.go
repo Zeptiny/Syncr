@@ -72,12 +72,28 @@ type store interface {
 	restic.Repository
 }
 
-// openStore opens and migrates the configured store. close releases it.
-func openStore(ctx context.Context, cfg controllerconfig.Config, log *slog.Logger) (st store, closeStore func(), err error) {
+// errLockLost ends a controller whose single-controller guard was lost:
+// another controller took the database over while this one's lock
+// connection was broken (docs/adr/0015-single-controller-guard.md). The
+// controller shuts down in the usual order and exits non-zero, so its
+// service manager restarts it, and it then waits for the lock.
+var errLockLost = errors.New("another controller took over the database while the controller lock's connection was broken; " +
+	"stopped so that only one controller serves it (a restart waits for the lock)")
+
+// openStore opens the configured store, takes the single-controller guard
+// and migrates it, in this order: the guard is held before the schema is
+// changed and before anything is served, so a second controller (perhaps
+// a newer version) waits without touching a running one's database
+// (docs/adr/0015-single-controller-guard.md). closeStore closes the store
+// and then releases the guard, so a waiting controller starts only once
+// this one stopped writing. lost is closed when the guard is lost to
+// another controller; it is nil for the in-memory store, which needs no
+// guard.
+func openStore(ctx context.Context, cfg controllerconfig.Config, log *slog.Logger) (st store, closeStore func(), lost <-chan struct{}, err error) {
 	if cfg.Dev.MemoryStore {
 		log.Warn("DEVELOPMENT MODE: dev.memory_store is on; users, remotes, workers and jobs live in memory and are LOST when the controller stops. " +
 			"Never use this in production: set database.url (SYNCR_DATABASE_URL) instead")
-		return memstore.New(), func() {}, nil
+		return memstore.New(), func() {}, nil, nil
 	}
 	pcfg := postgres.DefaultConfig()
 	pcfg.URL = cfg.Database.URL
@@ -86,14 +102,35 @@ func openStore(ctx context.Context, cfg controllerconfig.Config, log *slog.Logge
 	log.Info("connecting to the database")
 	pg, err := postgres.Open(ctx, pcfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open the database: %w", err)
+		return nil, nil, nil, fmt.Errorf("open the database: %w", err)
+	}
+	lock, err := pg.AcquireControllerLock(ctx, postgres.ControllerLockOptions{Logger: log.With("component", "store")})
+	if err != nil {
+		pg.Close()
+		return nil, nil, nil, fmt.Errorf("open the database: %w", err)
 	}
 	if err := pg.Migrate(ctx); err != nil {
 		pg.Close()
-		return nil, nil, fmt.Errorf("migrate the database: %w", err)
+		lock.Release()
+		return nil, nil, nil, fmt.Errorf("migrate the database: %w", err)
 	}
 	log.Info("database ready (schema migrated)")
-	return pg, pg.Close, nil
+	closeStore = func() {
+		pg.Close()
+		lock.Release()
+	}
+	return pg, closeStore, lock.Lost(), nil
+}
+
+// watchLock cancels ctx with errLockLost when lost is closed (nil: never),
+// and returns once ctx ended either way.
+func watchLock(ctx context.Context, stop context.CancelCauseFunc, lost <-chan struct{}, log *slog.Logger) {
+	select {
+	case <-lost:
+		log.Error("controller lock lost: another controller took over the database; shutting down")
+		stop(errLockLost)
+	case <-ctx.Done():
+	}
 }
 
 // newKeyring builds the secrets cipher from secrets.key, secrets.key_id and
@@ -127,6 +164,9 @@ type services struct {
 	jobs     *jobs.Service
 	workers  *workers.Service
 	disp     *dispatch.Service
+	// specs builds the workers' job specs; the API shows the time limit
+	// they send (Job.time_limit) through it.
+	specs *dispatch.Specs
 	// adminWorkers is the workers service as the API and the enrollment
 	// handler see it: it wakes the passive supervisor after changes.
 	adminWorkers *wakingWorkers
@@ -305,7 +345,7 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 		Jobs: st, Samples: st, Activity: st, Clock: clk, IDs: ids,
 		Broker: broker.New(), Notifier: jobFinished{ns, sig, repos}, Waker: hub, Remotes: rs, Repositories: repos,
 		Logger: log.With("component", "jobs"),
-	}, jobs.Config{})
+	}, jobs.Config{SampleRetention: cfg.Jobs.SampleRetention, KeepSamples: cfg.Jobs.KeepSamples()})
 	if err != nil {
 		return nil, fmt.Errorf("jobs service: %w", err)
 	}
@@ -356,9 +396,9 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 		return nil, fmt.Errorf("restic service: %w", err)
 	}
 	repos.set(resticSvc)
-	specs, err := dispatch.NewSpecs(rs, resticSvc, kinds)
+	specs, err := dispatch.NewSpecs(rs, resticSvc, kinds, dispatch.SpecsConfig{DefaultMaxRuntime: cfg.Jobs.DefaultMaxRuntime})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("jobs.default_max_runtime: %w", err)
 	}
 	dcfg := dispatch.DefaultConfig()
 	dcfg.LostAfter = cfg.Workers.LostAfter
@@ -390,7 +430,7 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	wake := make(chan struct{}, 1)
 	return &services{
 		users: us, remotes: rs, backends: backends, kinds: kinds, describer: describer,
-		jobs: js, workers: ws, disp: disp, wake: wake,
+		jobs: js, workers: ws, disp: disp, specs: specs, wake: wake,
 		adminWorkers: &wakingWorkers{Service: ws, wake: wake},
 		channels:     channels, contacts: cs, notifications: ns, schedules: ss, scheduler: sched,
 		restic: resticSvc, probes: probe.NewService(runner), seedProbes: seedProbes,
@@ -679,6 +719,32 @@ func purgeSessions(ctx context.Context, us *users.Service, interval time.Duratio
 	}
 }
 
+// samplePurgeInterval is how often the progress samples of jobs that
+// finished longer than jobs.sample_retention ago are deleted.
+const samplePurgeInterval = time.Hour
+
+// purgeSamples deletes the progress samples of the jobs that finished
+// longer than jobs.sample_retention ago (jobs.Service.PurgeSamples; nothing
+// with jobs.sample_retention: 0) now and every interval until ctx ends.
+func purgeSamples(ctx context.Context, js *jobs.Service, interval time.Duration, log *slog.Logger) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		n, err := js.PurgeSamples(ctx)
+		if n > 0 {
+			log.Info("progress samples of old jobs purged", "count", n)
+		}
+		if err != nil && ctx.Err() == nil {
+			log.Error("job sample purge failed", "error", err.Error())
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
 // apiConfig is the configuration of the API adapter derived from cfg.
 type apiConfig struct {
 	cookies  api.CookieConfig
@@ -726,6 +792,7 @@ func newHandler(lifetime context.Context, cfg controllerconfig.Config, ac apiCon
 		Users:            svc.users,
 		Workers:          svc.adminWorkers,
 		Jobs:             svc.jobs,
+		TimeLimits:       svc.specs,
 		Kinds:            svc.kinds,
 		Remotes:          svc.remotes,
 		Backends:         svc.backends,
@@ -803,8 +870,16 @@ func newServer(cfg controllerconfig.HTTP, h http.Handler, log *slog.Logger) *htt
 //     dispatch-timeout sweeper, the passive supervisor, the scheduler,
 //     the notification outbox (it records the outcome of the sends in
 //     flight first), the restic service's completion of data deletions,
-//     the session and token purge (and the dev seed's animation);
-//  4. the store is closed.
+//     the session, token and job sample purges (and the dev seed's
+//     animation);
+//  4. the store is closed, and then the single-controller guard is
+//     released (Postgres only).
+//
+// On Postgres the guard is taken before the schema is migrated and before
+// anything listens (openStore): a second controller waits there. If the
+// guard is lost to another controller, the controller shuts down in the
+// same order and serve returns errLockLost. A stop requested while it
+// still waits for the guard is not an error.
 //
 // If ready is non-nil it receives the listen address once the server
 // accepts connections.
@@ -827,13 +902,30 @@ func serve(ctx context.Context, cfg controllerconfig.Config, info version.Info, 
 		}
 	}
 
-	st, closeStore, err := openStore(ctx, cfg, log)
+	// A lost guard ends the controller as a stop request does, with
+	// errLockLost as the cause.
+	parent := ctx
+	ctx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
+	st, closeStore, lost, err := openStore(ctx, cfg, log)
 	if err != nil {
+		if parent.Err() != nil {
+			log.Info("stopped before the database was ready", "reason", err.Error())
+			return nil
+		}
 		return err
 	}
 	defer func() {
 		closeStore()
 		log.Info("shutdown: store closed")
+	}()
+	if lost != nil {
+		go watchLock(ctx, stop, lost, log)
+	}
+	defer func() {
+		if err == nil && errors.Is(context.Cause(ctx), errLockLost) {
+			err = errLockLost
+		}
 	}()
 
 	svc, err := newServices(cfg, st, cipher, log)
@@ -894,6 +986,7 @@ func serve(ctx context.Context, cfg controllerconfig.Config, info version.Info, 
 	background.Go(func() { _ = svc.notifications.Run(bgCtx) })
 	background.Go(func() { _ = svc.restic.Run(bgCtx) })
 	background.Go(func() { purgeSessions(bgCtx, svc.users, sessionPurgeInterval, log.With("component", "users")) })
+	background.Go(func() { purgeSamples(bgCtx, svc.jobs, samplePurgeInterval, log.With("component", "jobs")) })
 	if seed != nil {
 		background.Go(func() { seed.Animate(bgCtx) })
 	}
