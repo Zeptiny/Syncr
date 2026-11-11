@@ -42,11 +42,13 @@ in a way that cannot leave the worker stopped:
   5. restart the service and require it to stay running for 20 seconds
   6. on failure, put the old binary back and start it again; on success,
      remove the tool versions no longer used
-Nothing on the machine changes before step 4. Running jobs are interrupted by
-the restart, as with any restart of the worker. Run it as the user that
-installed the worker: root (sudo) or an elevated terminal for the system
-service, yourself with --user. A worker in a container is upgraded by pulling
-the new image instead.
+Nothing on the machine changes before step 4, and only one upgrade of a worker
+runs at a time. Running jobs are interrupted by the restart, as with any
+restart of the worker. Run it as the user that installed the worker: root
+(sudo) or an elevated terminal for the system service, yourself with --user.
+It keeps running if the terminal goes away (an SSH connection that drops);
+inside tmux or screen you can reconnect to see how it ended. A worker in a
+container is upgraded by pulling the new image instead.
 
 Flags:
 `
@@ -78,6 +80,7 @@ func upgradeCmd(ctx context.Context, e *env, args []string) error {
 	if helped, err := parseFlags(fs, args); helped || err != nil {
 		return err
 	}
+	ignoreHangup()
 
 	scope, pathsMode := service.ScopeSystem, paths.ModeSystem
 	if *user {

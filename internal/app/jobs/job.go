@@ -63,6 +63,13 @@ type Job struct {
 	// Requeues counts returns to the queue after a worker restart.
 	Requeues int
 
+	// TimeLimit is the time limit the worker was sent when it accepted the
+	// job (MarkDispatched, from Deps.TimeLimits): the definition's
+	// max_runtime, else the controller's default of that moment; zero means
+	// none. It is meaningful once DispatchedAt is set, and cleared when the
+	// job is requeued.
+	TimeLimit time.Duration
+
 	// Outcome, set when the job reaches a terminal status.
 	Stats    Stats
 	Error    JobError

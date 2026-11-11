@@ -18,9 +18,12 @@ Syncr is installed in three ways, and each one names release files:
 The controller compares versions too. A version that matches
 `vX.Y.Z` or `vX.Y.Z-rc.N` is a *release version*: install commands then
 download that release instead of the latest one, upgrade commands ask for
-it, and a worker of another release version shows as outdated. Every other
-version (`dev`, a Go pseudo-version, a snapshot's `dev-<commit>`) is a
-development build.
+it, and a worker of an older release version shows as outdated. Release
+versions are ordered as semantic versions, a release candidate before its
+release (`v2.0.0-rc.1` < `v2.0.0-rc.2` < `v2.0.0` < `v2.0.1`); a worker
+newer than the controller is not outdated, as its upgrade command would
+downgrade it. Every other version (`dev`, a Go pseudo-version, a
+snapshot's `dev-<commit>`) is a development build.
 
 Before this, there were no releases, no published images and no `v*` tag.
 
@@ -78,6 +81,17 @@ released worker's `upgrade`, so it would need a new name *in addition*.
 - The first release is `v2.0.0`, preceded by `v2.0.0-rc.1`. The Django
   version's last tag, `django-final`, is not a version of this project;
   GoReleaser ignores it.
+- **No backports.** Releases are made from the newest line only: a fix
+  goes into the next version, never into a patch release of an older
+  minor or major version. So every final tag is the highest version
+  released so far, and the workflow can mark each final release "latest"
+  (GitHub's `make_latest`, which `releases/latest/download` follows) and
+  move the image tags `X.Y`, `X` and `latest` without comparing versions.
+  A release of an older line would move them backwards and make every new
+  install, `docker compose pull` and `syncr-worker upgrade` without
+  `--version` downgrade. Before anyone tags one, the workflow must first
+  learn to compare the tag with the highest released version
+  (`make_latest: false` and no `latest` image tag when it is lower).
 
 ### Images
 
@@ -124,6 +138,38 @@ From `v2.0.0` on:
 - **Asset names and archive layout** (above), and the `syncr-worker upgrade`
   flags the UI renders.
 - **Image names and the tag scheme.**
+- **The command-line surface a released upgrader relies on in later
+  binaries.** `syncr-worker upgrade` of one release runs the binary of the
+  *next* release before installing it, and that release's worker then
+  starts next to the files the upgrader keeps. So every later
+  `syncr-worker` keeps:
+  - **`version`:** prints a line whose first two whitespace-separated
+    fields are `syncr-worker` and the version exactly as tagged
+    (`syncr-worker v2.1.0 (commit ..., built ..., go...) linux/amd64`);
+    the upgrader compares that version with `--version` and the installed
+    one.
+  - **`tools fetch --dir <dir>`:** installs the pinned tools into `<dir>`,
+    exits 0 once they are all there, and prints one line per tool with the
+    whitespace-separated columns `<tool> <version> <os>/<arch>
+    <installed|up-to-date> <path>`, the path last. The upgrader reads the
+    first, second and fourth columns to know which tool versions to keep
+    when it prunes (and prunes nothing if it cannot read them).
+  - **`tools status --dir <dir>`:** exits 0 if and only if every pinned
+    tool resolves, and takes the configured binaries from
+    `SYNCR_<TOOL>_PATH` (`SYNCR_RCLONE_PATH`, `SYNCR_RESTIC_PATH`), which
+    the upgrader sets from the worker's `tools.rclone_path` and
+    `tools.restic_path`.
+  - **The files next to the installed binary,** and what a starting worker
+    may delete: `<binary>.old` (the previous version, kept until the
+    upgrade succeeded and put back by a rollback), the temporary files
+    `.syncr-worker-download-*` and `.syncr-worker-new-*`, and
+    `.syncr-worker-upgrade.lock`, which an upgrade holds from its start to
+    its end. A starting worker deletes nothing while another process holds
+    that lock. Otherwise it may delete the temporary files once they are a
+    day old and, on Windows only, `<binary>.old` (a successful upgrade
+    cannot delete it there, as it runs from that file). On every other
+    system it never deletes `<binary>.old`: the upgrade does, once it
+    succeeded.
 
 ### The release flow
 

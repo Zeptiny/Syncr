@@ -13,10 +13,12 @@ import (
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
-// purgeCall is one PurgeJobSamples call the countingSamples saw.
+// purgeCall is one PurgeJobSamples call the countingSamples saw, with the
+// cursor it returned.
 type purgeCall struct {
-	before  time.Time
-	maxJobs int
+	before      time.Time
+	after, next jobs.PurgeCursor
+	maxJobs     int
 }
 
 // countingSamples records the purge calls before passing them to the
@@ -28,15 +30,23 @@ type countingSamples struct {
 	err   error
 }
 
-func (c *countingSamples) PurgeJobSamples(ctx context.Context, before time.Time, maxJobs int) (int, error) {
+func (c *countingSamples) PurgeJobSamples(ctx context.Context, before time.Time, after jobs.PurgeCursor, maxJobs int) (int, jobs.PurgeCursor, error) {
 	c.mu.Lock()
-	c.calls = append(c.calls, purgeCall{before, maxJobs})
 	err := c.err
 	c.mu.Unlock()
 	if err != nil {
-		return 0, err
+		c.record(purgeCall{before: before, after: after, maxJobs: maxJobs})
+		return 0, after, err
 	}
-	return c.SampleRepository.PurgeJobSamples(ctx, before, maxJobs)
+	n, next, err := c.SampleRepository.PurgeJobSamples(ctx, before, after, maxJobs)
+	c.record(purgeCall{before: before, after: after, next: next, maxJobs: maxJobs})
+	return n, next, err
+}
+
+func (c *countingSamples) record(p purgeCall) {
+	c.mu.Lock()
+	c.calls = append(c.calls, p)
+	c.mu.Unlock()
 }
 
 func (c *countingSamples) purges() []purgeCall {
@@ -123,10 +133,18 @@ func TestPurgeSamples(t *testing.T) {
 	if len(calls) != 3 { // a full batch, the rest, then nothing left
 		t.Errorf("store calls = %+v, want 3", calls)
 	}
-	for _, c := range calls {
+	for i, c := range calls {
 		if !c.before.Equal(now.Add(-2*time.Hour)) || c.maxJobs != jobs.PurgeBatchJobs {
 			t.Errorf("store call %+v, want cutoff %s and %d jobs", c, now.Add(-2*time.Hour), jobs.PurgeBatchJobs)
 		}
+		// Each batch continues where the one before ended, so the jobs
+		// already purged are not looked at again.
+		if i == 0 && c.after != (jobs.PurgeCursor{}) || i > 0 && c.after != calls[i-1].next {
+			t.Errorf("store call %d starts after %+v, want after %+v", i+1, c.after, calls[max(i-1, 0)].next)
+		}
+	}
+	if last := old[len(old)-1]; len(calls) == 3 && calls[1].next != (jobs.PurgeCursor{FinishedAt: last.FinishedAt, ID: last.ID}) {
+		t.Errorf("the second batch ended at %+v, want the last old job", calls[1].next)
 	}
 	for _, j := range old {
 		if got := e.sampleTotal(t, j.ID); got != 0 {
@@ -154,6 +172,50 @@ func TestPurgeSamples(t *testing.T) {
 	e.clock.Advance(90 * time.Minute)
 	if n, err := svc.PurgeSamples(ctx); err != nil || n != 5+1 {
 		t.Errorf("purge 90 minutes later = (%d, %v), want the recent and the edge jobs' 6", n, err)
+	}
+}
+
+// TestPurgeSamplesGoesOnFromTheLastRun: an hourly run starts where the run
+// before ended, so the purged history is not walked again; a job whose end
+// was reported after the purge passed its (worker clock) end keeps its
+// samples until the daily run from the oldest job.
+func TestPurgeSamplesGoesOnFromTheLastRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	svc, cs := e.withSamples(t, jobs.Config{SampleRetention: 2 * time.Hour})
+	now := e.clock.Now()
+	first := e.finishedAt(t, now.Add(-4*time.Hour), 1)
+	if n, err := svc.PurgeSamples(ctx); err != nil || n != 2 {
+		t.Fatalf("first run = (%d, %v), want the 2 samples of the old job", n, err)
+	}
+	end := cs.purges()[len(cs.purges())-1].next
+	if end.ID != first.ID {
+		t.Fatalf("the first run ended at %+v, want the old job", end)
+	}
+
+	// An hour later: the run goes on from there.
+	e.clock.Advance(time.Hour)
+	late := e.finishedAt(t, now.Add(-5*time.Hour), 2) // reported late, with its worker's end time
+	before := len(cs.purges())
+	if n, err := svc.PurgeSamples(ctx); err != nil || n != 0 {
+		t.Errorf("hourly run = (%d, %v), want nothing: the late job lies before where the last run ended", n, err)
+	}
+	if calls := cs.purges()[before:]; len(calls) != 1 || calls[0].after != end {
+		t.Errorf("hourly run calls = %+v, want one from %+v", calls, end)
+	}
+	if got := e.sampleTotal(t, late.ID); got != 3 {
+		t.Errorf("the late job has %d samples, want its 3 until the daily run", got)
+	}
+
+	// A day after the first run: from the oldest job again.
+	e.clock.Advance(jobs.FullPurgeEvery - time.Hour)
+	before = len(cs.purges())
+	if n, err := svc.PurgeSamples(ctx); err != nil || n != 3 {
+		t.Errorf("daily run = (%d, %v), want the late job's 3 samples", n, err)
+	}
+	if calls := cs.purges()[before:]; len(calls) == 0 || calls[0].after != (jobs.PurgeCursor{}) {
+		t.Errorf("daily run calls = %+v, want the first from the start", calls)
 	}
 }
 

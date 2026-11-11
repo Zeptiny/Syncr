@@ -296,3 +296,26 @@ func TestParseTrustedProxies(t *testing.T) {
 		}
 	}
 }
+
+// TestEffectiveDownloadBaseURL: the old default, the latest release, counts
+// as unset (and is reported as ignored); a mirror and the empty default are
+// used as they are.
+func TestEffectiveDownloadBaseURL(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		value, want string
+		ignored     bool
+	}{
+		{"", "", false},
+		{"https://mirror.example.com/syncr", "https://mirror.example.com/syncr", false},
+		{"https://github.com/Zeptiny/Syncr/releases/download/v2.0.0", "https://github.com/Zeptiny/Syncr/releases/download/v2.0.0", false},
+		{DefaultDownloadBaseURL, "", true},
+		{DefaultDownloadBaseURL + "/", "", true},
+		{"https://github.com/zeptiny/syncr/releases/latest/download", "", true},
+	} {
+		got, ignored := Workers{DownloadBaseURL: tt.value}.EffectiveDownloadBaseURL()
+		if got != tt.want || ignored != tt.ignored {
+			t.Errorf("EffectiveDownloadBaseURL(%q) = %q, %v; want %q, %v", tt.value, got, ignored, tt.want, tt.ignored)
+		}
+	}
+}

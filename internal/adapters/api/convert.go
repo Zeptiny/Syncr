@@ -85,8 +85,10 @@ func workerToProto(w workers.Worker, status domain.WorkerStatus, controllerVersi
 // upgraded (Worker.outdated): its Hello lacks a link feature this
 // controller knows (link.Features), or the worker and the controller
 // (controllerVersion) are both release builds (vX.Y.Z, optionally
-// -rc.N) of different versions. A worker that never reported (no Hello
-// stored, as workerInfoToProto tells) is not outdated.
+// -rc.N) and the worker's is older (compareReleaseVersions). A worker
+// newer than the controller is not outdated: the upgrade commands would
+// install the controller's version, a downgrade. A worker that never
+// reported (no Hello stored, as workerInfoToProto tells) is not outdated.
 func workerOutdated(in workers.Info, controllerVersion string) bool {
 	if in.ReportedAt.IsZero() && in.Version == "" {
 		return false
@@ -96,7 +98,8 @@ func workerOutdated(in workers.Info, controllerVersion string) bool {
 			return true
 		}
 	}
-	return isReleaseVersion(in.Version) && isReleaseVersion(controllerVersion) && in.Version != controllerVersion
+	return isReleaseVersion(in.Version) && isReleaseVersion(controllerVersion) &&
+		compareReleaseVersions(in.Version, controllerVersion) < 0
 }
 
 // workerInfoToProto converts what a worker reported in its Hello. It returns

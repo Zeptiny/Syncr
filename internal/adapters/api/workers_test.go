@@ -548,7 +548,7 @@ func TestGetWorkerUpgradeCommands(t *testing.T) {
 }
 
 // TestWorkerOutdatedThroughTheAPI: GetWorker and ListWorkers report
-// Worker.outdated against the controller's version.
+// Worker.outdated against the controller's version: older workers only.
 func TestWorkerOutdatedThroughTheAPI(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, func(d *Deps) { d.Install.Version = "v2.1.0" })
@@ -563,7 +563,7 @@ func TestWorkerOutdatedThroughTheAPI(t *testing.T) {
 	if get().GetOutdated() {
 		t.Error("a worker that never connected is outdated")
 	}
-	for v, want := range map[string]bool{"v2.0.0": true, "v2.1.0": false} {
+	for v, want := range map[string]bool{"v2.0.0": true, "v2.1.0": false, "v2.2.0": false} {
 		if err := e.store.SetWorkerInfo(ctx, e.worker, "", workers.Info{Version: v, OS: "linux", Features: link.Features(), ReportedAt: e.clock.Now()}); err != nil {
 			t.Fatal(err)
 		}

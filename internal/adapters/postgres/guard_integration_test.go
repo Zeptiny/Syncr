@@ -49,6 +49,41 @@ func (g *guardEnv) acquireOn(ctx context.Context, s *Store) <-chan acquired {
 	return out
 }
 
+// TestControllerLockSessionKeepalives: the lock session asks the server for
+// TCP keepalives, so a controller whose host crashed loses its lock after
+// about a minute instead of the operating system's two hours, and has no
+// statement or lock timeout.
+func TestControllerLockSessionKeepalives(t *testing.T) {
+	name := createDB(t, true)
+	s := openStore(t, name)
+	sess, err := pgLockDialer(s.connConfig)(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.close()
+	pg, ok := sess.(*pgLockSession)
+	if !ok {
+		t.Fatalf("the dialer returned a %T", sess)
+	}
+	conn := pg.conn
+	for setting, want := range map[string]string{
+		"tcp_keepalives_idle":     strconv.Itoa(lockKeepaliveIdle),
+		"tcp_keepalives_interval": strconv.Itoa(lockKeepaliveInterval),
+		"tcp_keepalives_count":    strconv.Itoa(lockKeepaliveCount),
+		"tcp_user_timeout":        strconv.Itoa(lockUserTimeoutMillis),
+		"statement_timeout":       "0",
+		"lock_timeout":            "0",
+	} {
+		var got string
+		if err := conn.QueryRow(t.Context(), "SELECT current_setting($1)", setting).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("%s = %q on the lock session, want %q (a TCP connection)", setting, got, want)
+		}
+	}
+}
+
 // TestControllerLockOnPostgres: two controllers on one database. The
 // second waits (and says so every 30 seconds) until the first releases the
 // lock; a lock connection killed on the server is taken again; one killed

@@ -10,12 +10,25 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/Zeptiny/Syncr/internal/worker/filelock"
 )
 
-// BackupSuffix is appended to the installed binary's path for the copy of
-// the previous version an upgrade keeps until it succeeded (e.g.
-// syncr-worker.exe.old).
-const BackupSuffix = ".old"
+// Files next to the installed binary. Released workers rely on these names
+// (docs/adr/0016-releases-versioning.md, what is frozen at a tag): a later
+// version's start must not remove a backup or a temporary file that an
+// upgrade run by an earlier version still needs.
+const (
+	// BackupSuffix is appended to the installed binary's path for the copy
+	// of the previous version an upgrade keeps until it succeeded (e.g.
+	// syncr-worker.exe.old).
+	BackupSuffix = ".old"
+	// LockFileName is the file in the installed binary's directory that an
+	// upgrade holds locked (internal/worker/filelock) from its start to its
+	// end, so two upgrades never run at once and a starting worker knows
+	// that one runs. It stays in place, unlocked, afterwards.
+	LockFileName = ".syncr-worker-upgrade.lock"
+)
 
 // Swapper replaces the installed binary and puts it back. OSSwapper is the
 // implementation; tests may use a fake.
@@ -44,10 +57,35 @@ type OSSwapper struct {
 	// running OS. Both strategies work everywhere, so either can be tested
 	// on any OS.
 	Windows bool
+	// Original, if set, is a file whose content is the binary Swap
+	// replaced: on Linux "/proc/self/exe" when the upgrade runs from that
+	// binary (the process keeps its file even after the swap and the loss
+	// of backup). When backup is missing, Restore installs a copy of it
+	// instead, so a rollback works even if something removed the backup.
+	Original string
 }
 
 // NewOSSwapper returns the OSSwapper for the running OS.
 func NewOSSwapper() OSSwapper { return OSSwapper{Windows: runtime.GOOS == "windows"} }
+
+// procSelfExe is the running process's executable on Linux: it opens the
+// program's file even after that was renamed or removed.
+const procSelfExe = "/proc/self/exe"
+
+// runningOriginal returns procSelfExe when it is the file at exe, the
+// binary an upgrade is about to replace, and "" otherwise (another OS, or
+// an upgrade not run from the installed binary, as in tests).
+func runningOriginal(exe string) string {
+	self, err := os.Stat(procSelfExe)
+	if err != nil {
+		return ""
+	}
+	installed, err := os.Stat(exe)
+	if err != nil || !os.SameFile(self, installed) {
+		return ""
+	}
+	return procSelfExe
+}
 
 // Swap implements Swapper.
 func (s OSSwapper) Swap(path, newPath, backup string) error {
@@ -77,9 +115,16 @@ func (s OSSwapper) Swap(path, newPath, backup string) error {
 	return nil
 }
 
-// Restore implements Swapper.
+// Restore implements Swapper. When backup is missing and s.Original is
+// set, it installs a copy of s.Original at path instead.
 func (s OSSwapper) Restore(path, backup string) error {
 	err := os.Rename(backup, path)
+	if errors.Is(err, fs.ErrNotExist) && s.Original != "" {
+		if err := installCopy(s.Original, path); err != nil {
+			return fmt.Errorf("the backup %s is missing, and copying the running %s to %s failed: %w", backup, s.Original, path, err)
+		}
+		return nil
+	}
 	if s.Windows {
 		// The stopped service's process may hold the file a moment longer.
 		for delay := 50 * time.Millisecond; err != nil && delay <= 3200*time.Millisecond; delay *= 2 {
@@ -89,6 +134,47 @@ func (s OSSwapper) Restore(path, backup string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("move %s back to %s: %w", backup, path, err)
+	}
+	syncDir(filepath.Dir(path))
+	return nil
+}
+
+// installCopy copies src, with its permission bits, to a temporary file
+// next to path and renames that over path.
+func installCopy(src, path string) (err error) {
+	in, err := os.Open(src) //nolint:gosec // the running worker binary
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	out, err := os.CreateTemp(filepath.Dir(path), tempBinary)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = out.Close()
+			_ = os.Remove(out.Name())
+		}
+	}()
+	if _, err = io.Copy(out, in); err != nil {
+		return err
+	}
+	if err = out.Sync(); err != nil {
+		return err
+	}
+	if err = out.Close(); err != nil {
+		return err
+	}
+	if err = os.Chmod(out.Name(), info.Mode().Perm()); err != nil {
+		return err
+	}
+	if err = os.Rename(out.Name(), path); err != nil {
+		return err
 	}
 	syncDir(filepath.Dir(path))
 	return nil
@@ -141,36 +227,63 @@ func syncDir(dir string) {
 // taken to be a leftover of one that was killed, not of one in progress.
 const staleAfter = 24 * time.Hour
 
-// RemoveLeftover removes the backup an earlier upgrade kept next to
-// executable (executable + BackupSuffix), if there is one, and the
-// temporary files of an upgrade that was killed (older than a day, so an
-// upgrade in progress keeps its own). Call it when the worker starts: on
-// Windows the backup of a successful upgrade often cannot be removed at
-// once, because the upgrade command itself ran from it. Removing it while
-// that command still runs fails, which is harmless: the next start or
-// upgrade tries again. A missing backup is not an error.
+// RemoveLeftover removes, when the worker starts, what earlier upgrades
+// left next to executable and no upgrade can still need. Nothing is removed
+// while an upgrade holds LockFileName: the starting worker may be the new
+// version that upgrade is watching, and the upgrade's files are what it
+// rolls back with.
+//
+//   - The temporary files of an upgrade that was killed, once they are
+//     older than a day.
+//   - On Windows only, the backup (executable + BackupSuffix). A
+//     successful upgrade cannot remove it there, because the upgrade
+//     command runs from that file; so the next start does. While the
+//     command runs, its lock is held and Windows refuses to delete the
+//     file it runs from, so a start never removes the backup of an
+//     upgrade in progress.
+//
+// On other systems the backup is never removed at start: a successful
+// upgrade removes its own, and one an interrupted upgrade left behind
+// stays as the copy to roll back to by hand, until the next upgrade
+// replaces it. A missing file is not an error.
 func RemoveLeftover(executable string) error {
-	return removeLeftover(executable, time.Now())
+	return removeLeftover(executable, runtime.GOOS == "windows", time.Now())
 }
 
-func removeLeftover(executable string, now time.Time) error {
+func removeLeftover(executable string, windows bool, now time.Time) error {
 	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
 		executable = resolved
 	}
-	var errs []error
-	if err := os.Remove(executable + BackupSuffix); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		errs = append(errs, err)
-	}
 	dir := filepath.Dir(executable)
+	var leftovers []string
+	if windows {
+		if info, err := os.Lstat(executable + BackupSuffix); err == nil && info.Mode().IsRegular() {
+			leftovers = append(leftovers, executable+BackupSuffix)
+		}
+	}
 	for _, pattern := range []string{tempDownload, tempBinary} {
 		matches, _ := filepath.Glob(filepath.Join(dir, pattern))
 		for _, m := range matches {
-			if info, err := os.Lstat(m); err != nil || !info.Mode().IsRegular() || now.Sub(info.ModTime()) < staleAfter {
-				continue
+			if info, err := os.Lstat(m); err == nil && info.Mode().IsRegular() && now.Sub(info.ModTime()) >= staleAfter {
+				leftovers = append(leftovers, m)
 			}
-			if err := os.Remove(m); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				errs = append(errs, err)
-			}
+		}
+	}
+	if len(leftovers) == 0 {
+		return nil
+	}
+	release, free, err := filelock.TryLock(filepath.Join(dir, LockFileName))
+	if err != nil {
+		return fmt.Errorf("check for an upgrade in progress: %w", err)
+	}
+	if !free {
+		return nil // an upgrade runs; it removes its own files
+	}
+	defer func() { _ = release() }()
+	var errs []error
+	for _, path := range leftovers {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)

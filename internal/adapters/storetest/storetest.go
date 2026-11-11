@@ -588,6 +588,7 @@ func testJobCreateGet(t *testing.T, s Store) {
 	mustCreateWorker(t, s, w)
 	j := newJob(t, 1, w.ID)
 	j.SearchText = "rclone_transfer\ncopy\n/data"
+	j.TimeLimit = time.Minute // stored as given, as every field
 	mustCreateJob(t, s, j)
 	wantErr(t, "duplicate CreateJob", s.CreateJob(ctx, j), domain.ErrAlreadyExists)
 	wantErr(t, "CreateJob(unknown worker)", s.CreateJob(ctx, newJob(t, 2, workerID(t, 9))), domain.ErrNotFound)
@@ -600,7 +601,7 @@ func testJobCreateGet(t *testing.T, s Store) {
 	got, err := s.GetJob(ctx, j.ID)
 	if err != nil || got.Status != domain.JobQueued || got.Version != 1 || got.OwnerID != ownerID(t) ||
 		!sameJSON(got.Definition, []byte(testDefinition)) || got.ExitCode != -1 || !got.QueuedAt.Equal(t0()) ||
-		got.SearchText != j.SearchText || len(got.RemoteIDs) != 0 {
+		got.SearchText != j.SearchText || len(got.RemoteIDs) != 0 || got.TimeLimit != time.Minute {
 		t.Errorf("GetJob = (%+v, %v)", got, err)
 	}
 	_, err = s.GetJob(ctx, jobID(t, 99))
@@ -620,6 +621,7 @@ func testJobUpdateVersioned(t *testing.T, s Store) {
 	next.Error = jobs.JobError{Code: "c", Message: "m"}
 	next.Warnings, next.Output, next.ExitCode, next.Requeues = []string{"w"}, []byte{1}, 3, 2
 	next.CancelRequestedAt = t0().Add(2 * time.Second)
+	next.TimeLimit = 6*time.Hour + time.Nanosecond
 	// Immutable fields are never written.
 	next.Kind, next.Definition, next.CreatedAt = "other", []byte(`{"other": true}`), t0().Add(time.Hour)
 	next.OwnerID, next.SearchText, next.RemoteIDs = userID(t, 99), "other", []domain.RemoteID{remoteID(t, 99)}
@@ -628,8 +630,18 @@ func testJobUpdateVersioned(t *testing.T, s Store) {
 		t.Fatal(err)
 	}
 	if stored.Version != 2 || stored.Status != domain.JobDispatched || stored.Epoch != "e" || stored.Stats.Bytes != 1<<40 ||
-		stored.Error.Code != "c" || stored.Requeues != 2 || stored.ExitCode != 3 || !stored.CancelRequestedAt.Equal(t0().Add(2*time.Second)) {
+		stored.Error.Code != "c" || stored.Requeues != 2 || stored.ExitCode != 3 || !stored.CancelRequestedAt.Equal(t0().Add(2*time.Second)) ||
+		stored.TimeLimit != 6*time.Hour+time.Nanosecond {
 		t.Errorf("UpdateJob returned %+v", stored)
+	}
+	if got, err := s.GetJob(ctx, j.ID); err != nil || got.TimeLimit != 6*time.Hour+time.Nanosecond {
+		t.Errorf("GetJob after UpdateJob: time limit %v, %v", got.TimeLimit, err)
+	}
+	// The time limit is cleared like any other mutable field.
+	cleared := stored
+	cleared.TimeLimit = 0
+	if stored, err = s.UpdateJob(ctx, cleared); err != nil || stored.TimeLimit != 0 || stored.Version != 3 {
+		t.Fatalf("UpdateJob(no time limit) = %v, %v", stored.TimeLimit, err)
 	}
 	if stored.Kind != "rclone_transfer" || !sameJSON(stored.Definition, []byte(testDefinition)) || stored.OwnerID != ownerID(t) || !stored.CreatedAt.Equal(t0()) ||
 		stored.SearchText != "" || len(stored.RemoteIDs) != 0 {
@@ -640,7 +652,7 @@ func testJobUpdateVersioned(t *testing.T, s Store) {
 	stale.Status = domain.JobCancelled
 	_, err = s.UpdateJob(ctx, stale)
 	wantErr(t, "UpdateJob(stale version)", err, domain.ErrConflict)
-	if got, _ := s.GetJob(ctx, j.ID); got.Status != domain.JobDispatched || got.Version != 2 {
+	if got, _ := s.GetJob(ctx, j.ID); got.Status != domain.JobDispatched || got.Version != 3 {
 		t.Errorf("after a stale update: %s v%d", got.Status, got.Version)
 	}
 	missing := newJob(t, 9, w.ID)

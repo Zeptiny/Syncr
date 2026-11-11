@@ -30,7 +30,8 @@ type Repository interface {
 	// UpdateJob is an optimistic, version-checked update: if the stored
 	// job's Version equals j.Version, it writes every mutable field of j
 	// (Status, Epoch, CancelRequestedAt, QueuedAt, DispatchedAt, StartedAt,
-	// FinishedAt, Requeues, Stats, Error, Warnings, ExitCode, Output), sets
+	// FinishedAt, Requeues, TimeLimit, Stats, Error, Warnings, ExitCode,
+	// Output), sets
 	// Version = j.Version + 1 and returns the stored job. The immutable
 	// fields (ID, WorkerID, OwnerID, Kind, Definition, CreatedAt,
 	// ScheduleID, RepositoryID, ConcurrencyKeys) are never written, nor are
@@ -105,14 +106,27 @@ type SampleRepository interface {
 	ListJobSamples(ctx context.Context, id domain.JobID, maxPoints int) (samples []Sample, total int, err error)
 
 	// PurgeJobSamples deletes every sample of at most maxJobs jobs whose
-	// FinishedAt is before finishedBefore and that still have samples,
-	// those that finished first first, and returns the number of samples
-	// it deleted: 0 means no such job is left, so callers repeat it until
-	// it returns 0. Unfinished jobs (zero FinishedAt) are never touched;
-	// nor are the jobs themselves (their final Stats stay). maxJobs must
-	// be positive. SQL: jobs_finished_idx for the jobs and the samples'
-	// primary key, one statement.
-	PurgeJobSamples(ctx context.Context, finishedBefore time.Time, maxJobs int) (int, error)
+	// FinishedAt is before finishedBefore, that come after the cursor
+	// after in (FinishedAt, ID) order and that still have samples, taken
+	// in that order. It returns the number of samples it deleted and the
+	// cursor of the last of those jobs (after itself when it deleted
+	// nothing): 0 means no such job is left, so callers repeat it with the
+	// returned cursor until it returns 0, and each run looks at every
+	// finished job once rather than once per call. Unfinished jobs (zero
+	// FinishedAt) are never touched; nor are the jobs themselves (their
+	// final Stats stay). maxJobs must be positive. SQL: jobs_finished_idx
+	// for the jobs from the cursor on and the samples' primary key, one
+	// statement.
+	PurgeJobSamples(ctx context.Context, finishedBefore time.Time, after PurgeCursor, maxJobs int) (deleted int, next PurgeCursor, err error)
+}
+
+// PurgeCursor is where SampleRepository.PurgeJobSamples continues: after
+// the job that finished at FinishedAt with ID, in (FinishedAt, ID) order
+// (IDs compare as Postgres orders UUIDs, byte by byte). The zero cursor
+// starts before every job.
+type PurgeCursor struct {
+	FinishedAt time.Time
+	ID         domain.JobID
 }
 
 // ActivityRepository aggregates finished jobs for the dashboard. Same rules
@@ -152,6 +166,14 @@ type ActivityRow struct {
 	Status domain.JobStatus
 	// Jobs counts the group's jobs; Bytes and Files sum their stats.
 	Jobs, Bytes, Files int64
+}
+
+// TimeLimits computes the effective time limit of a job, the one its
+// worker is sent (*dispatch.Specs): its definition's max_runtime, else the
+// controller's default (EffectiveTimeLimit).
+type TimeLimits interface {
+	// TimeLimitOf returns j's limit; zero for none.
+	TimeLimitOf(j Job) time.Duration
 }
 
 // RemoteChecker checks the remotes a new job uses (*remotes.Service).

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"slices"
 	"strings"
 	"testing"
@@ -80,9 +81,16 @@ func TestWorkerOutdated(t *testing.T) {
 		{"same release", hello("v2.0.0", all...), "v2.0.0", false},
 		{"same release candidate", hello("v2.0.0-rc.1", all...), "v2.0.0-rc.1", false},
 		{"older release", hello("v2.0.0", all...), "v2.1.0", true},
-		{"newer release", hello("v2.1.0", all...), "v2.0.0", true},
+		{"older patch release", hello("v2.0.9", all...), "v2.0.10", true},
+		{"older major release", hello("v2.9.9", all...), "v10.0.0", true},
+		{"newer release", hello("v2.1.0", all...), "v2.0.0", false},
+		{"newer patch release", hello("v2.0.10", all...), "v2.0.9", false},
 		{"release candidate of the release", hello("v2.0.0-rc.1", all...), "v2.0.0", true},
-		{"other release candidate", hello("v2.0.0-rc.1", all...), "v2.0.0-rc.2", true},
+		{"earlier release candidate", hello("v2.0.0-rc.1", all...), "v2.0.0-rc.2", true},
+		{"later release candidate", hello("v2.0.0-rc.10", all...), "v2.0.0-rc.9", false},
+		{"release, controller on its candidate", hello("v2.0.0", all...), "v2.0.0-rc.2", false},
+		{"candidate of the next release", hello("v2.1.0-rc.1", all...), "v2.0.0", false},
+		{"newer release without a feature", hello("v2.1.0", all[:len(all)-1]...), "v2.0.0", true},
 		{"development worker", hello("dev", all...), "v2.0.0", false},
 		{"pseudo-version worker", hello("v2.0.1-0.20261110120000-0123456789ab", all...), "v2.0.0", false},
 		{"development controller", hello("v2.0.0", all...), "dev", false},
@@ -99,6 +107,25 @@ func TestWorkerOutdated(t *testing.T) {
 		if got := workerToProto(w, domain.WorkerOnline, tt.controller).GetOutdated(); got != tt.want {
 			t.Errorf("%s: Worker.outdated = %v, want %v", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestCompareReleaseVersions(t *testing.T) {
+	t.Parallel()
+	// In ascending order.
+	ordered := []string{"v1.9.9", "v2.0.0-rc.1", "v2.0.0-rc.2", "v2.0.0-rc.10", "v2.0.0", "v2.0.1", "v2.0.10", "v2.1.0-rc.1", "v2.1.0", "v10.0.0"}
+	for i, a := range ordered {
+		for j, b := range ordered {
+			if got, want := compareReleaseVersions(a, b), cmp.Compare(i, j); got != want {
+				t.Errorf("compareReleaseVersions(%s, %s) = %d, want %d", a, b, got, want)
+			}
+		}
+	}
+	if compareReleaseVersions("dev", "v2.0.0") >= 0 || compareReleaseVersions("v2.0.0", "dev") <= 0 || compareReleaseVersions("dev", "dev") != 0 {
+		t.Error("a development version does not sort first")
+	}
+	if compareReleaseVersions("v99999999999999999999.0.0", "v1.0.0") >= 0 {
+		t.Error("an unparsable number is a release version")
 	}
 }
 

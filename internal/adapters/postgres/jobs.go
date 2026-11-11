@@ -77,6 +77,7 @@ func createJobParams(j jobs.Job) db.CreateJobParams {
 		ScheduleID:        pgOptID(j.ScheduleID),
 		RepositoryID:      pgOptID(j.RepositoryID),
 		ConcurrencyKeys:   textArray(j.ConcurrencyKeys),
+		TimeLimitNs:       int64(j.TimeLimit),
 	}
 }
 
@@ -156,6 +157,7 @@ func (s *Store) UpdateJob(ctx context.Context, j jobs.Job) (jobs.Job, error) {
 		Warnings:          textArray(cleanTexts(j.Warnings)),
 		ExitCode:          int32(j.ExitCode), //nolint:gosec // G115: a process exit code
 		Output:            j.Output,
+		TimeLimitNs:       int64(j.TimeLimit),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		exists, qerr := s.q.JobExists(ctx, pgID(j.ID))

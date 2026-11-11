@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,10 +107,11 @@ func testSamplesThinned(t *testing.T, s Store) {
 }
 
 // testSamplesPurge: PurgeJobSamples deletes the samples of at most maxJobs
-// jobs that finished before the cutoff and still have samples, those that
-// finished first first, and returns how many samples it deleted; it never
-// touches unfinished jobs, jobs that finished at or after the cutoff, or the
-// jobs themselves.
+// jobs that finished before the cutoff, come after the cursor and still
+// have samples, in (FinishedAt, ID) order, and returns how many samples it
+// deleted and the cursor of the last of those jobs; it never touches
+// unfinished jobs, jobs that finished at or after the cutoff, jobs before
+// the cursor, or the jobs themselves.
 func testSamplesPurge(t *testing.T, s Store) {
 	ctx := context.Background()
 	w := newWorker(t, 1)
@@ -129,30 +131,41 @@ func testSamplesPurge(t *testing.T, s Store) {
 		{time.Time{}, 2},                 // 7: running for days
 	}
 	ids := make([]domain.JobID, len(specs))
-	for i, sp := range specs {
-		j := newJob(t, i+1, w.ID)
+	finish := func(n int, finished time.Time, samples int) domain.JobID {
+		j := newJob(t, n, w.ID)
 		j.CreatedAt, j.QueuedAt = cutoff.Add(-100*time.Hour), cutoff.Add(-100*time.Hour)
 		j.StartedAt = cutoff.Add(-99 * time.Hour)
 		j.Status = domain.JobRunning
-		if !sp.finished.IsZero() {
-			j.Status, j.FinishedAt, j.Stats = domain.JobSucceeded, sp.finished, jobs.Stats{Bytes: int64(1000 + i)}
+		if !finished.IsZero() {
+			j.Status, j.FinishedAt, j.Stats = domain.JobSucceeded, finished, jobs.Stats{Bytes: int64(1000 + n - 1)}
 		}
 		mustCreateJob(t, s, j)
-		appendSamples(t, s, j.ID, sp.samples)
-		ids[i] = j.ID
+		appendSamples(t, s, j.ID, samples)
+		return j.ID
 	}
+	for i, sp := range specs {
+		ids[i] = finish(i+1, sp.finished, sp.samples)
+	}
+	cursorOf := func(i int) jobs.PurgeCursor { return jobs.PurgeCursor{FinishedAt: specs[i].finished, ID: ids[i]} }
+	sameCursor := func(a, b jobs.PurgeCursor) bool { return a.FinishedAt.Equal(b.FinishedAt) && a.ID == b.ID }
 
 	for _, bad := range []int{0, -1} {
-		_, err := s.PurgeJobSamples(ctx, cutoff, bad)
+		_, _, err := s.PurgeJobSamples(ctx, cutoff, jobs.PurgeCursor{}, bad)
 		wantErr(t, fmt.Sprintf("PurgeJobSamples(max jobs %d)", bad), err, domain.ErrInvalidArgument)
 	}
 	// One job per call: job 1 has no samples to delete, so job 2 goes
-	// first; then jobs 3 and 4 in one call; then nothing is left.
-	for i, tt := range []struct{ maxJobs, want int }{{1, 3}, {5, 6}, {5, 0}} {
-		n, err := s.PurgeJobSamples(ctx, cutoff, tt.maxJobs)
-		if err != nil || n != tt.want {
-			t.Fatalf("purge %d (max jobs %d) = (%d, %v), want %d samples", i+1, tt.maxJobs, n, err, tt.want)
+	// first; then jobs 3 and 4 in one call; then nothing is left. Each call
+	// goes on from the cursor of the one before.
+	var after jobs.PurgeCursor
+	for i, tt := range []struct {
+		maxJobs, want int
+		next          jobs.PurgeCursor
+	}{{1, 3, cursorOf(1)}, {5, 6, cursorOf(3)}, {5, 0, cursorOf(3)}} {
+		n, next, err := s.PurgeJobSamples(ctx, cutoff, after, tt.maxJobs)
+		if err != nil || n != tt.want || !sameCursor(next, tt.next) {
+			t.Fatalf("purge %d (max jobs %d) = (%d, %+v, %v), want %d samples and the cursor %+v", i+1, tt.maxJobs, n, next, err, tt.want, tt.next)
 		}
+		after = next
 	}
 	for i, want := range []int{0, 0, 0, 0, 2, 1, 2} {
 		if _, total, err := s.ListJobSamples(ctx, ids[i], 0); err != nil || total != want {
@@ -164,6 +177,29 @@ func testSamplesPurge(t *testing.T, s Store) {
 		j, err := s.GetJob(ctx, ids[i])
 		if err != nil || j.Stats.Bytes != int64(1000+i) || !j.FinishedAt.Equal(specs[i].finished) {
 			t.Errorf("job %d after the purge = (%+v, %v)", i+1, j, err)
+		}
+	}
+
+	// A job before the cursor is not looked at, even with samples; from the
+	// start, jobs that finished at the same instant come one by one, by ID.
+	appendSamples(t, s, ids[1], 2)
+	tie := cutoff.Add(-30 * time.Hour)
+	tied := []domain.JobID{finish(21, tie, 1), finish(22, tie, 1)}
+	slices.SortFunc(tied, func(a, b domain.JobID) int { return strings.Compare(a.String(), b.String()) })
+	if n, next, err := s.PurgeJobSamples(ctx, cutoff, after, 5); err != nil || n != 0 || !sameCursor(next, after) {
+		t.Errorf("purge after job 4 = (%d, %+v, %v), want nothing and the same cursor", n, next, err)
+	}
+	after = jobs.PurgeCursor{}
+	for i, want := range []jobs.PurgeCursor{{FinishedAt: tie, ID: tied[0]}, {FinishedAt: tie, ID: tied[1]}, cursorOf(1)} {
+		n, next, err := s.PurgeJobSamples(ctx, cutoff, after, 1)
+		if err != nil || n == 0 || !sameCursor(next, want) {
+			t.Fatalf("purge %d from the start = (%d, %+v, %v), want the cursor %+v", i+1, n, next, err, want)
+		}
+		after = next
+	}
+	for _, id := range append(tied, ids[1]) {
+		if _, total, err := s.ListJobSamples(ctx, id, 0); err != nil || total != 0 {
+			t.Errorf("job %s keeps %d samples (%v)", id, total, err)
 		}
 	}
 }

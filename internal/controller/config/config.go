@@ -259,6 +259,21 @@ const MinLostAfter = 5 * time.Minute
 // its own release instead.
 const DefaultDownloadBaseURL = "https://github.com/Zeptiny/Syncr/releases/latest/download"
 
+// EffectiveDownloadBaseURL returns workers.download_base_url as the install
+// and upgrade commands use it, and whether the configured value is
+// ignored. A value equal to DefaultDownloadBaseURL (also with a trailing
+// slash, in any case) counts as unset: it was the setting's default before
+// v2.0.0 and may still be in configurations, and as a mirror it would make
+// a release build's commands install the latest release instead of the
+// controller's own (and give every upgrade command --from). The controller
+// warns at start that it should be removed.
+func (w Workers) EffectiveDownloadBaseURL() (base string, ignored bool) {
+	if w.DownloadBaseURL != "" && strings.EqualFold(strings.TrimRight(w.DownloadBaseURL, "/"), DefaultDownloadBaseURL) {
+		return "", true
+	}
+	return w.DownloadBaseURL, false
+}
+
 func (w Workers) validate() error {
 	var errs []error
 	if w.DownloadBaseURL != "" {

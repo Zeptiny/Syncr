@@ -35,8 +35,10 @@ func (s *Service) QueuedBefore(ctx context.Context, before time.Time, limit int)
 	return js, nil
 }
 
-// MarkDispatched records that epoch accepted the job: queued -> dispatched.
-// No-op unless the job is queued.
+// MarkDispatched records that epoch accepted the job: queued -> dispatched,
+// with the time limit its worker was sent (Job.TimeLimit, from
+// Deps.TimeLimits: the same computation as the spec's). No-op unless the
+// job is queued.
 func (s *Service) MarkDispatched(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string) (Job, bool, error) {
 	now := s.clock.Now()
 	j, changed, err := s.change(ctx, id, workerID, func(j *Job) (bool, error) {
@@ -48,6 +50,10 @@ func (s *Service) MarkDispatched(ctx context.Context, workerID domain.WorkerID, 
 		}
 		j.Epoch = epoch
 		j.DispatchedAt = now
+		j.TimeLimit = 0
+		if s.limits != nil {
+			j.TimeLimit = max(s.limits.TimeLimitOf(*j), 0)
+		}
 		return true, nil
 	})
 	if err != nil {
@@ -331,6 +337,7 @@ func requeue(j *Job, now time.Time) error {
 	j.Epoch = ""
 	j.QueuedAt = now
 	j.DispatchedAt = time.Time{}
+	j.TimeLimit = 0
 	j.Requeues++
 	return nil
 }

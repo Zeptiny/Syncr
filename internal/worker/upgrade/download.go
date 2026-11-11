@@ -32,8 +32,7 @@ const (
 )
 
 // HTTPDoer sends HTTP requests; *http.Client implements it. The default is
-// the tools download client (internal/worker/tools.NewHTTPClient): proxy
-// from the environment, and no redirect from https to plain http.
+// newHTTPClient: proxy from the environment, and redirects to https only.
 type HTTPDoer interface {
 	Do(req *http.Request) (*http.Response, error)
 }
@@ -206,10 +205,48 @@ func (u *upgrader) tempFile(pattern string) (*os.File, error) {
 	f, err := os.CreateTemp(u.dir, pattern)
 	if err != nil {
 		if errors.Is(err, os.ErrPermission) {
-			return nil, fmt.Errorf("%w: cannot write to %s, where the worker binary is: run the upgrade as the user that installed the worker "+
-				"(root, or an Administrator); a worker in a container is upgraded by pulling the new image instead", ErrNotWritable, u.dir)
+			return nil, notWritable(u.dir)
 		}
 		return nil, fmt.Errorf("create a file next to %s: %w", u.exe, err)
 	}
 	return f, nil
+}
+
+// notWritable is ErrNotWritable for the binary's directory dir, with what
+// to do.
+func notWritable(dir string) error {
+	return fmt.Errorf("%w: cannot write to %s, where the worker binary is: run the upgrade as the user that installed the worker "+
+		"(root, or an Administrator); a worker in a container is upgraded by pulling the new image instead", ErrNotWritable, dir)
+}
+
+// maxRedirects is how many redirects a download follows.
+const maxRedirects = 10
+
+// newHTTPClient returns the client the upgrade downloads with: the tools
+// download client (internal/worker/tools.NewHTTPClient: proxy from the
+// environment, timeouts) with the redirect rule of checkRedirect.
+func newHTTPClient() *http.Client {
+	c := tools.NewHTTPClient()
+	c.CheckRedirect = checkRedirect
+	return c
+}
+
+// checkRedirect is an http.Client redirect policy: it follows at most
+// maxRedirects redirects, each to an https URL, or to plain http on this
+// machine (localhost or a loopback address) when the download started
+// there, as --from may (the tests serve releases so). Any other redirect
+// to plain http is refused with ErrInsecureRedirect: a release host or a
+// mirror cannot send the upgrade where --from could not point it.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	switch {
+	case req.URL.Scheme == "https":
+		return nil
+	case req.URL.Scheme == "http" && isLoopback(req.URL.Hostname()) && len(via) > 0 && via[0].URL.Scheme == "http":
+		return nil
+	}
+	return fmt.Errorf("%w: %s (release files are downloaded over https, and over plain http only from and to this machine)",
+		ErrInsecureRedirect, req.URL.Redacted())
 }

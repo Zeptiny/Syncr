@@ -108,6 +108,24 @@ func TestIntegrationRealUserTask(t *testing.T) {
 			time.Sleep(250 * time.Millisecond)
 		}
 	}
+	// readyCount waits until the worker's log says "worker ready" n times:
+	// the task's state is Running while its worker still waits for the data
+	// directory (its predecessor may still be exiting), so only the log
+	// shows that the worker really started.
+	readyCount := func(n int) {
+		t.Helper()
+		deadline := time.Now().Add(90 * time.Second)
+		for {
+			b, _ := os.ReadFile(logFile)
+			if strings.Count(string(b), `msg="worker ready"`) >= n {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the task's worker did not get ready %d times (state %v)", n, state())
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
 	scope := []string{"--user", "--config", cfg, "--data-dir", data}
 
 	port := freePort(t)
@@ -128,9 +146,14 @@ func TestIntegrationRealUserTask(t *testing.T) {
 		t.Errorf("the task's worker wrote no log to %s: %v", logFile, err)
 	}
 
+	readyCount(1)
+
 	mustRun(append([]string{"service", "status"}, scope...)...)
+	// The new instance may start while the ended one still exits and holds
+	// the data directory: it waits for it and then starts.
 	mustRun(append([]string{"service", "restart"}, scope...)...)
 	waitFor(service.StateRunning)
+	readyCount(2)
 
 	mustRun(append([]string{"service", "stop"}, scope...)...)
 	waitFor(service.StateStopped)
@@ -140,6 +163,14 @@ func TestIntegrationRealUserTask(t *testing.T) {
 
 	mustRun(append([]string{"service", "start"}, scope...)...)
 	waitFor(service.StateRunning)
+	readyCount(3)
+	// Restarting a stopped task runs it (no /End of a task that does not
+	// run, whose error message is in the display language).
+	mustRun(append([]string{"service", "stop"}, scope...)...)
+	waitFor(service.StateStopped)
+	mustRun(append([]string{"service", "restart"}, scope...)...)
+	waitFor(service.StateRunning)
+	readyCount(4)
 
 	mustRun(append([]string{"service", "uninstall"}, scope...)...)
 	waitFor(service.StateNotInstalled)

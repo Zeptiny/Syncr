@@ -27,7 +27,10 @@ release (`.../releases/download/v2.0.0/...` for a v2.0.0 controller), so a
 new worker runs the controller's version; the `latest` URL above, which a
 development build of the controller shows, installs the newest release. If
 the controller sets `workers.download_base_url` (empty by default), the
-command downloads from that mirror instead. The controller URL is its `http.public_url`, or the
+command downloads from that mirror instead (a value of
+`https://github.com/Zeptiny/Syncr/releases/latest/download`, the default of
+builds before v2.0.0, counts as unset; the controller warns at start that it
+should be removed). The controller URL is its `http.public_url`, or the
 address your browser uses when that is unset. If `syncr-worker` is already
 installed, run only the last line:
 
@@ -189,7 +192,9 @@ sudo /usr/local/bin/syncr-worker upgrade --version 'v2.0.1'
 It verifies the download, fetches the new version's rclone and restic,
 replaces the binary, restarts the service, and puts the old version back if
 the new one does not stay up. Running jobs are interrupted by the restart.
-Details, the manual steps and containers: [upgrading](upgrade.md).
+It keeps running if your SSH connection drops; run it inside `tmux` or
+`screen` (or with `nohup`) to see how it ended after reconnecting. Details,
+the manual steps and containers: [upgrading](upgrade.md).
 
 ## Labels and schedules
 
@@ -231,6 +236,11 @@ Then remove the worker in the controller UI (**Workers**, the worker,
 | Config | `/etc/syncr/worker.yaml` (0600) | `~/.config/syncr/worker.yaml` |
 | Data, tools, certificate | `/var/lib/syncr` | `~/.local/share/syncr` |
 | Logs | `journalctl -u syncr-worker -f` | `journalctl --user -u syncr-worker -f` |
+
+The tools directory (`<data dir>/tools`, or `tools.dir`) belongs to this
+worker alone: setup and upgrades delete the rclone and restic versions in it
+that the worker no longer pins. Do not point `tools.dir` at a directory
+that other programs, or a worker of another version, use.
 
 ## Troubleshooting
 

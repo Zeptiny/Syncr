@@ -41,6 +41,18 @@ func TestDownloadBaseURLDefaultsAgree(t *testing.T) {
 	if err != nil || ac.install.DownloadBaseURL != "" {
 		t.Errorf("default install config = %+v (%v), want no download base URL", ac.install, err)
 	}
+	// The old default, still in a configuration, counts as unset; a mirror
+	// is kept.
+	for value, want := range map[string]string{
+		controllerconfig.DefaultDownloadBaseURL + "/": "",
+		"https://mirror.example.com/syncr":            "https://mirror.example.com/syncr",
+	} {
+		cfg := controllerconfig.Default()
+		cfg.Workers.DownloadBaseURL = value
+		if ac, err := newAPIConfig(cfg); err != nil || ac.install.DownloadBaseURL != want {
+			t.Errorf("download_base_url %q: install config = %+v (%v), want %q", value, ac.install, err, want)
+		}
+	}
 }
 
 // logLine is the part of a JSON log line the tests read.

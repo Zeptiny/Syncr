@@ -342,6 +342,31 @@ func TestTaskStatus(t *testing.T) {
 	}
 }
 
+// TestManagerRestartsAStoppedTaskByRunningIt: a restart of a task that does
+// not run only runs it; its /End would fail with a message in the display
+// language.
+func TestManagerRestartsAStoppedTaskByRunningIt(t *testing.T) {
+	t.Parallel()
+	h := newHarness("windows", "windows-service", false)
+	h.runner.reply = func(name string, args []string) (string, int, error) {
+		switch {
+		case name == "powershell.exe":
+			return "Ready", 0, nil
+		case slices.Contains(args, "/End"):
+			return "ERROR: There are no running instances of the task.", 1, nil
+		}
+		return "", 0, nil
+	}
+	if err := h.m.Restart(t.Context(), windowsUserSpec()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.runner.calls[len(h.runner.calls)-1]; got != "schtasks.exe /Run /TN syncr-worker" || slices.ContainsFunc(h.runner.calls, func(c string) bool {
+		return strings.Contains(c, "/End")
+	}) {
+		t.Errorf("calls = %q, want a /Run and no /End", h.runner.calls)
+	}
+}
+
 func TestManagerRoutesWindowsUserToTasks(t *testing.T) {
 	t.Parallel()
 	h := newHarness("windows", "windows-service", false)

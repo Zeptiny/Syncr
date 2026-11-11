@@ -108,7 +108,10 @@ jobs:
 
   images:
     name: image (${{ matrix.image }})
-    needs: prepare
+    # After the binaries: a release whose GoReleaser run failed must not
+    # push images (and move 2.0, 2 and latest) for a version that has no
+    # release.
+    needs: [prepare, binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

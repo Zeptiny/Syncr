@@ -38,7 +38,7 @@ func DefaultConfig() Config {
 }
 
 // Deps are the service's collaborators. All are required except Remotes,
-// Repositories, Activity and Logger.
+// Repositories, Activity, TimeLimits and Logger.
 type Deps struct {
 	Jobs     Repository
 	Samples  SampleRepository
@@ -58,6 +58,9 @@ type Deps struct {
 	// Activity aggregates finished jobs for the dashboard (Activity,
 	// CountUnfinished); optional, those use cases fail without it.
 	Activity ActivityRepository
+	// TimeLimits computes the time limit MarkDispatched records in
+	// Job.TimeLimit; without it, jobs are recorded without one.
+	TimeLimits TimeLimits
 	// Logger defaults to discarding.
 	Logger *slog.Logger
 }
@@ -75,8 +78,12 @@ type Service struct {
 	remotes  RemoteChecker
 	repos    RepositoryChecker
 	activity ActivityRepository
+	limits   TimeLimits
 	log      *slog.Logger
 	cfg      Config
+
+	// purge is where the sample purge goes on from (PurgeSamples).
+	purge purgeState
 
 	mu sync.Mutex
 	// lastStored is the last stored sample per running job, for the rate
@@ -112,7 +119,7 @@ func New(d Deps, cfg Config) (*Service, error) {
 	return &Service{
 		repo: d.Jobs, samples: d.Samples, clock: d.Clock, ids: d.IDs,
 		broker: d.Broker, notifier: d.Notifier, waker: d.Waker, remotes: d.Remotes, repos: d.Repositories, activity: d.Activity,
-		log: log, cfg: cfg,
+		limits: d.TimeLimits, log: log, cfg: cfg,
 		lastStored: make(map[domain.JobID]lastSample), lastPrune: d.Clock.Now(),
 	}, nil
 }

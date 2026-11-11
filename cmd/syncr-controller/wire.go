@@ -217,8 +217,9 @@ func passiveClientConfig(p controllerconfig.Probe) passive.ClientConfig {
 
 // lazyRestic is the restic service as the services built before it use it:
 // the jobs service (the repository of a new job), the job describer (the
-// repositories' names) and the jobFinished notifier (Wake). The restic
-// service needs the probe runner, which needs the jobs and workers
+// repositories' names), the jobFinished notifier (Wake) and the
+// dispatcher's spec builder (a job's repository with its password). The
+// restic service needs the probe runner, which needs the jobs and workers
 // services, which need these; set breaks that cycle. Nothing calls it
 // before newServices has set it.
 type lazyRestic struct {
@@ -228,6 +229,7 @@ type lazyRestic struct {
 var (
 	_ jobs.RepositoryChecker = (*lazyRestic)(nil)
 	_ repositoryNames        = (*lazyRestic)(nil)
+	_ dispatch.Repos         = (*lazyRestic)(nil)
 )
 
 func (l *lazyRestic) set(s *restic.Service) { l.svc.Store(s) }
@@ -249,6 +251,16 @@ func (l *lazyRestic) Names(ctx context.Context, ids []domain.ResticRepoID) (map[
 		return nil, fmt.Errorf("repositories are not available yet: %w", domain.ErrUnavailable)
 	}
 	return s.Names(ctx, ids)
+}
+
+// Resolve implements dispatch.Repos. Before set the repository is
+// unavailable, as a spec built then is retried.
+func (l *lazyRestic) Resolve(ctx context.Context, owner domain.UserID, id domain.ResticRepoID) (restic.Resolved, error) {
+	s := l.svc.Load()
+	if s == nil {
+		return restic.Resolved{}, fmt.Errorf("repositories are not available yet: %w", domain.ErrUnavailable)
+	}
+	return s.Resolve(ctx, owner, id)
 }
 
 // Wake asks the restic service to complete data deletions soon.
@@ -292,7 +304,9 @@ func sendTestLimit() ratelimit.Config {
 // schedules, and resolves repositories with their passwords when the
 // dispatcher builds a spec. A finished restic_delete_data job wakes it
 // (jobFinished) to complete the deletion. lazyRestic breaks the cycle
-// restic -> probe runner -> jobs -> restic.
+// restic -> probe runner -> jobs -> restic. The dispatcher's spec builder
+// is built before the jobs service, which records the time limit it
+// computes when a worker accepts a job (Job.time_limit).
 func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring, log *slog.Logger) (*services, error) {
 	hub := dispatch.NewHub()
 	clk := clock.System{}
@@ -315,6 +329,10 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	}
 	repos := &lazyRestic{}
 	describer := jobDescriber{kinds: kinds, remotes: rs, repos: repos}
+	specs, err := dispatch.NewSpecs(rs, repos, kinds, dispatch.SpecsConfig{DefaultMaxRuntime: cfg.Jobs.DefaultMaxRuntime})
+	if err != nil {
+		return nil, fmt.Errorf("jobs.default_max_runtime: %w", err)
+	}
 	channels, err := newChannels(cfg, log)
 	if err != nil {
 		return nil, err
@@ -344,7 +362,7 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	js, err := jobs.New(jobs.Deps{
 		Jobs: st, Samples: st, Activity: st, Clock: clk, IDs: ids,
 		Broker: broker.New(), Notifier: jobFinished{ns, sig, repos}, Waker: hub, Remotes: rs, Repositories: repos,
-		Logger: log.With("component", "jobs"),
+		TimeLimits: specs, Logger: log.With("component", "jobs"),
 	}, jobs.Config{SampleRetention: cfg.Jobs.SampleRetention, KeepSamples: cfg.Jobs.KeepSamples()})
 	if err != nil {
 		return nil, fmt.Errorf("jobs service: %w", err)
@@ -396,10 +414,6 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 		return nil, fmt.Errorf("restic service: %w", err)
 	}
 	repos.set(resticSvc)
-	specs, err := dispatch.NewSpecs(rs, resticSvc, kinds, dispatch.SpecsConfig{DefaultMaxRuntime: cfg.Jobs.DefaultMaxRuntime})
-	if err != nil {
-		return nil, fmt.Errorf("jobs.default_max_runtime: %w", err)
-	}
 	dcfg := dispatch.DefaultConfig()
 	dcfg.LostAfter = cfg.Workers.LostAfter
 	disp, err := dispatch.New(dispatch.Deps{
@@ -680,7 +694,7 @@ func armSetup(ctx context.Context, cfg controllerconfig.Auth, us *users.Service,
 // workers' folders.
 func seedDemo(ctx context.Context, st store, svc *services, cipher *secrets.Keyring, log *slog.Logger) (*devseed.Seed, error) {
 	seed, err := devseed.Run(ctx, devseed.Deps{
-		Users: svc.users, Remotes: svc.remotes, Workers: svc.workers, Jobs: svc.jobs, Kinds: svc.kinds,
+		Users: svc.users, Remotes: svc.remotes, Workers: svc.workers, Jobs: svc.jobs, Kinds: svc.kinds, TimeLimits: svc.specs,
 		Contacts: svc.contacts, Channels: svc.channels, Describer: svc.describer,
 		Cipher: cipher, Probes: svc.seedProbes,
 		Store: st, Clock: clock.System{}, Logger: log.With("component", "devseed"),
@@ -752,6 +766,11 @@ type apiConfig struct {
 	clientIP *clientip.Resolver
 }
 
+// downloadBaseURLIgnored is logged at start when workers.download_base_url
+// is the old default (controllerconfig.Workers.EffectiveDownloadBaseURL).
+const downloadBaseURLIgnored = "configuration: workers.download_base_url is set to the latest release, the default of builds before v2.0.0, " +
+	"and is ignored: remove it, so that install and upgrade commands download this controller's own release"
+
 // newAPIConfig checks and derives the API adapter's settings: the session
 // cookie, the worker install commands (http.public_url,
 // workers.download_base_url) and the client IP of login and setup attempts
@@ -761,9 +780,10 @@ func newAPIConfig(cfg controllerconfig.Config) (apiConfig, error) {
 	if err != nil {
 		return apiConfig{}, err
 	}
+	downloadBase, _ := cfg.Workers.EffectiveDownloadBaseURL()
 	c := apiConfig{
 		cookies:  api.CookieConfig{Secure: api.CookieSecure(cfg.Auth.CookieSecure), PublicURL: cfg.HTTP.PublicURL},
-		install:  api.InstallConfig{PublicURL: cfg.HTTP.PublicURL, DownloadBaseURL: cfg.Workers.DownloadBaseURL},
+		install:  api.InstallConfig{PublicURL: cfg.HTTP.PublicURL, DownloadBaseURL: downloadBase},
 		clientIP: clientip.New(cfg.HTTP.ClientIPHeader, trusted),
 	}
 	if err := c.cookies.Validate(); err != nil {
@@ -886,6 +906,10 @@ func newServer(cfg controllerconfig.HTTP, h http.Handler, log *slog.Logger) *htt
 func serve(ctx context.Context, cfg controllerconfig.Config, info version.Info, log *slog.Logger, ready chan<- net.Addr) (err error) {
 	for _, r := range cfg.RemovedSettings() {
 		log.Warn("configuration: a removed setting is set and ignored", "setting", r.Key, "env", r.Env, "instead", r.Instead)
+	}
+	if _, ignored := cfg.Workers.EffectiveDownloadBaseURL(); ignored {
+		log.Warn(downloadBaseURLIgnored, "setting", "workers.download_base_url", "env", "SYNCR_WORKERS_DOWNLOAD_BASE_URL",
+			"value", cfg.Workers.DownloadBaseURL)
 	}
 	cipher, err := newKeyring(cfg.Secrets)
 	if err != nil {

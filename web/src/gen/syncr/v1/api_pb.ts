@@ -197,9 +197,10 @@ export type Worker = Message<"syncr.v1.Worker"> & {
   /**
    * The worker should be upgraded (GetWorkerUpgradeCommands): its latest
    * Hello lacks a link feature this controller knows, or the worker and the
-   * controller are both release builds of different versions. Computed by
-   * the controller, never stored; false until the worker has connected
-   * once.
+   * controller are both release builds and the worker's version is older
+   * (by semantic versioning: v2.0.0-rc.1 < v2.0.0 < v2.0.1). A worker newer
+   * than the controller is not outdated. Computed by the controller, never
+   * stored; false until the worker has connected once.
    *
    * @generated from field: bool outdated = 11;
    */
@@ -958,8 +959,10 @@ export type Job = Message<"syncr.v1.Job"> & {
    * The job's effective time limit: its definition's max_runtime or, when
    * that is unset, the controller's jobs.default_max_runtime (jobs only the
    * system starts, such as restic_delete_data, never get the default).
-   * Unset when the job has none. A job stopped by it fails with
-   * TIME_LIMIT.
+   * Once a worker accepted the job, the limit it was sent then, which a
+   * later change of the default does not change; for a queued job, the
+   * limit it will be sent. Unset when the job has none, or ended before a
+   * worker accepted it. A job stopped by it fails with TIME_LIMIT.
    *
    * @generated from field: google.protobuf.Duration time_limit = 25;
    */

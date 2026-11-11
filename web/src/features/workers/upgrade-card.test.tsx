@@ -9,7 +9,7 @@ import * as m6 from "@/mock/m6";
 import * as fx from "@/test/fixtures";
 import { m5Api } from "@/test/m5-api";
 import { renderApp } from "@/test/render";
-import { isOutdated } from "@/lib/workers";
+import { isOutdated, outdatedHelp } from "@/lib/workers";
 
 const now = Date.now();
 
@@ -21,6 +21,16 @@ describe("outdated workers", () => {
     expect(isOutdated(create(WorkerSchema, { ...base, info: { features: [] } }))).toBe(true);
     // A worker that never connected has reported nothing.
     expect(isOutdated(create(WorkerSchema, { status: WorkerStatus.PENDING }))).toBe(false);
+    // A worker newer than the controller is not flagged by it: its upgrade
+    // command would install the controller's older version.
+    const newer = create(WorkerSchema, {
+      ...base,
+      info: { ...base.info, workerVersion: "v2.1.0" },
+    });
+    expect(isOutdated(newer)).toBe(false);
+    expect(outdatedHelp(create(WorkerSchema, { ...base, outdated: true }))).toContain(
+      "an older release than the controller",
+    );
   });
 
   it("renders the controller's commands per OS, none for a platform without a build", () => {

@@ -24,7 +24,9 @@ database did not fail; it misbehaved quietly:
 The Postgres store takes `pg_advisory_lock` on a key of its own
 (`0x53594e435243`, not the migration lock's) on a **dedicated connection**,
 outside the pool, with `statement_timeout` and `lock_timeout` switched off
-for that session. The controller holds it from start to exit
+for that session and **server-side TCP keepalives** switched on
+(`tcp_keepalives_idle` 30 s, `tcp_keepalives_interval` 10 s,
+`tcp_keepalives_count` 3, and `tcp_user_timeout` 60 s). The controller holds it from start to exit
 (`postgres.Store.AcquireControllerLock`, `ControllerLock.Release`). Advisory
 locks belong to a database, so two Syncr databases on one server do not
 interfere.
@@ -39,8 +41,29 @@ until it holds the lock.
 It waits in `pg_advisory_lock`, so Postgres wakes it as soon as the lock
 is free. It logs "another controller is running against this database" at
 once and every 30 seconds, with the holder's backend PID, client address
-and session start. When the first controller stops, the second takes over
-without a restart.
+and session start, and a hint: if no controller runs there any more,
+`SELECT pg_terminate_backend(<pid>)` ends that session at once. When the
+first controller stops, the second takes over without a restart.
+
+### A crashed holder loses the lock within about a minute
+
+Postgres releases a session lock when the session ends. That is at once
+when the controller exits or closes its connection, and also when its
+process is killed, because the operating system closes the connection.
+When the controller's *host* crashes or drops off the network, nothing
+closes the connection: the server keeps the session, and the lock, until
+it notices the peer is gone. With the operating system's default
+keepalives that takes about two hours, and a controller restarted on
+another host (or the same host after a reboot) would wait that long. The
+lock session's keepalives make the server probe it after 30 idle seconds
+and end it after three unanswered probes 10 seconds apart, so the waiting
+controller gets the lock about a minute after the crash. Keepalives are
+not sent while the server waits for an acknowledgement (a crash right
+after it answered one of the lock's checks); `tcp_user_timeout` bounds
+that case to the same minute. A rebooted host
+answers the first probe with a reset, which ends the session at once. A
+session over a Unix socket ignores the settings; its peer runs on the
+database's own host.
 
 ### A lost connection is taken again, or the controller stops
 
@@ -84,6 +107,9 @@ It lives in one process.
   plus the reconnection. In that window the store's statements stay
   race-safe, and the old controller stops at the end of it.
 - A waiting controller holds one database connection.
+- After a crash of the holder's host, a standby controller waits about a
+  minute, or less if an operator ends the old session with the
+  `pg_terminate_backend` call the log suggests.
 - Session-level advisory locks need a real session. A pooler in
   transaction mode (PgBouncer's `pool_mode = transaction`) would hand the
   lock's statements to different server sessions. The controller must
@@ -93,8 +119,10 @@ It lives in one process.
 ## Alternatives considered
 
 - **A lease row with heartbeats.** It needs expiry times, so it compares
-  clocks, and it needs a takeover protocol. A session lock is released by
-  Postgres itself when its holder dies.
+  clocks, and it needs a takeover protocol. Postgres releases a session
+  lock itself when the holder's session ends: when its process exits, or,
+  after a crash of its host, once the server's keepalives find the
+  connection dead (about a minute, see above).
 - **Refusing to start while another controller runs.** Waiting makes a
   standby controller and a restart-based failover work without scripts.
 - **Only a sentence in the README.** The misbehaviour is quiet enough that

@@ -88,7 +88,7 @@ func (s *Seed) seedHistory(ctx context.Context, now time.Time) error {
 	if h.jobs, err = jobs.New(jobs.Deps{
 		Jobs: s.d.Store, Samples: s.d.Store, Clock: clk, IDs: ids,
 		Broker: nopBroker{}, Notifier: jobs.NopNotifier{}, Waker: nopWaker{}, Remotes: s.d.Remotes,
-		Repositories: storeRepos{s.d.Store},
+		Repositories: storeRepos{s.d.Store}, TimeLimits: s.d.TimeLimits,
 	}, jobs.Config{}); err != nil {
 		return err
 	}

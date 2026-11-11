@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Zeptiny/Syncr/internal/worker/filelock"
 	"github.com/Zeptiny/Syncr/internal/worker/service"
 	"github.com/Zeptiny/Syncr/internal/worker/tools"
 )
@@ -120,9 +122,12 @@ type fakeServices struct {
 	installed    service.State
 	afterRestart func(poll int) (service.State, error)
 	restartErr   error
-	onRestart    func()
-	polls        int
-	restarted    bool
+	startErr     error
+	// onRestart runs at each Restart and Start, before the service runs
+	// the installed binary (a new worker's start).
+	onRestart func()
+	polls     int
+	restarted bool
 	// ran holds the installed binary's content at each Restart and Start.
 	ran []string
 	// program and programErr are what InstalledExecutable returns; an empty
@@ -176,8 +181,14 @@ func (s *fakeServices) Stop(context.Context, service.Spec) error { s.call("stop"
 
 func (s *fakeServices) Start(context.Context, service.Spec) error {
 	s.call("start")
+	if s.onRestart != nil {
+		s.onRestart()
+	}
 	s.runs()
-	return nil
+	s.mu.Lock()
+	s.restarted = true
+	s.mu.Unlock()
+	return s.startErr
 }
 
 func (s *fakeServices) InstalledExecutable(context.Context, service.Spec) (string, error) {
@@ -334,16 +345,8 @@ func (f *fixture) assertUnchanged(t *testing.T) {
 	if got := f.installed(t); got != string(binaryFor(oldVersion)) {
 		t.Errorf("installed binary = %q, want the old one", got)
 	}
-	entries, err := os.ReadDir(f.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].Name() != BinaryName {
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			names = append(names, e.Name())
-		}
-		t.Errorf("files next to the binary = %q, want only %s", names, BinaryName)
+	if names := entryNames(t, f.dir); !slices.Equal(names, []string{LockFileName, BinaryName}) && !slices.Equal(names, []string{BinaryName}) {
+		t.Errorf("files next to the binary = %q, want only %s (and the upgrade's lock)", names, BinaryName)
 	}
 	for _, c := range f.svc.callList() {
 		if c != "preflight" && c != "status" && c != "executable" {
@@ -354,6 +357,20 @@ func (f *fixture) assertUnchanged(t *testing.T) {
 	if len(f.pruner.keep) != 0 {
 		t.Error("tools were pruned")
 	}
+}
+
+// entryNames lists the names in dir, sorted.
+func entryNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
 }
 
 func TestUpgradeSucceeds(t *testing.T) {
@@ -378,13 +395,15 @@ func TestUpgradeSucceeds(t *testing.T) {
 					t.Errorf("mode = %o, want 755", fi.Mode().Perm())
 				}
 			}
-			// Nothing left behind: no backup, no temporary file.
-			if entries, _ := os.ReadDir(f.dir); len(entries) != 1 {
-				t.Errorf("directory holds %d entries, want only the binary", len(entries))
+			// Nothing left behind: no backup, no temporary file; only the
+			// upgrade's lock, released.
+			if names := entryNames(t, f.dir); !slices.Equal(names, []string{LockFileName, BinaryName}) {
+				t.Errorf("directory holds %q, want only the binary and the lock", names)
 			}
+			assertLockFree(t, f.dir)
 			// The service restarted on the new binary, then was watched once a
 			// second for the health window.
-			if want := []string{"preflight", "status", "executable", "restart"}; !slices.Equal(f.svc.callList()[:4], want) {
+			if want := []string{"preflight", "status", "executable", "status", "restart"}; !slices.Equal(f.svc.callList()[:5], want) {
 				t.Errorf("service calls = %v", f.svc.callList())
 			}
 			if f.svc.polls != 20 || len(*f.sleeps) != 20 || (*f.sleeps)[0] != time.Second {
@@ -589,9 +608,10 @@ func TestUpgradeRollsBack(t *testing.T) {
 				if got := f.installed(t); got != string(binaryFor(oldVersion)) {
 					t.Errorf("installed binary = %q", got)
 				}
-				if entries, _ := os.ReadDir(f.dir); len(entries) != 1 {
-					t.Errorf("directory holds %d entries after the rollback, want only the binary", len(entries))
+				if names := entryNames(t, f.dir); !slices.Equal(names, []string{LockFileName, BinaryName}) {
+					t.Errorf("directory holds %q after the rollback, want only the binary and the lock", names)
 				}
+				assertLockFree(t, f.dir)
 			})
 		}
 	}
@@ -604,21 +624,232 @@ func (brokenRestore) Restore(string, string) error { return errors.New("disk ful
 
 func TestUpgradeRollbackFailureSaysWhatToDo(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t)
-	f.cfg.Swapper = brokenRestore{}
-	f.svc.afterRestart = func(int) (service.State, error) { return service.StateFailing, nil }
-	_, err := Run(t.Context(), f.cfg)
-	if !errors.Is(err, ErrRollbackFailed) {
-		t.Fatalf("err = %v, want ErrRollbackFailed", err)
+	for _, startFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("start fails %v", startFails), func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			f.cfg.Swapper = brokenRestore{}
+			f.svc.afterRestart = func(int) (service.State, error) { return service.StateFailing, nil }
+			if startFails {
+				f.svc.startErr = errors.New("start refused")
+			}
+			res, err := Run(t.Context(), f.cfg)
+			if !errors.Is(err, ErrRollbackFailed) {
+				t.Fatalf("err = %v, want ErrRollbackFailed", err)
+			}
+			wants := []string{f.exe + BackupSuffix, f.exe, "disk full", logHint, oldVersion}
+			if startFails {
+				wants = append(wants, "start refused", "did not start either")
+			} else {
+				wants = append(wants, "the service was started again with "+newVersion)
+			}
+			for _, want := range wants {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not mention %q", err, want)
+				}
+			}
+			// The service is started again even though the old binary could not
+			// be put back: running the new version beats a stopped worker.
+			if calls := f.svc.callList(); calls[len(calls)-1] != "start" {
+				t.Errorf("service calls = %v, want a start at the end", calls)
+			}
+			if !res.Swapped {
+				t.Error("result says the binary was swapped back")
+			}
+			// The old binary is still there to be moved back by hand.
+			if raw, err := os.ReadFile(f.exe + BackupSuffix); err != nil || string(raw) != string(binaryFor(oldVersion)) {
+				t.Errorf("backup = %q, %v", raw, err)
+			}
+		})
 	}
-	for _, want := range []string{f.exe + BackupSuffix, f.exe, "disk full", logHint} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %q", err, want)
+}
+
+// TestUpgradeRollsBackAfterTheNewWorkerStarted is the case of review
+// finding 1: the new version starts, runs its start-up cleanup
+// (RemoveLeftover) and only then fails. The cleanup must leave the backup
+// alone on every OS, so the rollback still finds the old binary.
+func TestUpgradeRollsBackAfterTheNewWorkerStarted(t *testing.T) {
+	t.Parallel()
+	for _, windows := range []bool{false, true} {
+		t.Run(fmt.Sprintf("windows %v", windows), func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			f.cfg.Swapper = OSSwapper{Windows: windows}
+			f.svc.onRestart = func() {
+				// The new worker's start, with the old worker's file a day old.
+				if err := removeLeftover(f.exe, windows, time.Now().Add(48*time.Hour)); err != nil {
+					t.Errorf("start-up cleanup: %v", err)
+				}
+			}
+			f.svc.afterRestart = func(poll int) (service.State, error) {
+				if poll >= 5 {
+					return service.StateFailing, nil
+				}
+				return service.StateRunning, nil
+			}
+			_, err := Run(t.Context(), f.cfg)
+			if !errors.Is(err, ErrRolledBack) {
+				t.Fatalf("err = %v, want ErrRolledBack\n%s", err, f.out)
+			}
+			if got := f.installed(t); got != string(binaryFor(oldVersion)) {
+				t.Errorf("installed binary = %q, want the old one back", got)
+			}
+			if strings.Contains(f.out.String(), "is missing") {
+				t.Errorf("the backup went missing:\n%s", f.out)
+			}
+		})
+	}
+}
+
+// TestUpgradeRollsBackWithoutItsBackup: if the backup is gone all the same,
+// the rollback installs the copy of the old binary the swapper knows (on
+// Linux the upgrade command's own /proc/self/exe) and says so.
+func TestUpgradeRollsBackWithoutItsBackup(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	original := filepath.Join(t.TempDir(), "running")
+	if err := os.WriteFile(original, binaryFor(oldVersion), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.cfg.Swapper = OSSwapper{Original: original}
+	f.svc.onRestart = func() { _ = os.Remove(f.exe + BackupSuffix) }
+	f.svc.afterRestart = func(int) (service.State, error) { return service.StateStopped, nil }
+	_, err := Run(t.Context(), f.cfg)
+	if !errors.Is(err, ErrRolledBack) {
+		t.Fatalf("err = %v, want ErrRolledBack\n%s", err, f.out)
+	}
+	if got := f.installed(t); got != string(binaryFor(oldVersion)) {
+		t.Errorf("installed binary = %q, want the old one back", got)
+	}
+	if !strings.Contains(f.out.String(), "is missing; "+oldVersion+" is put back from "+original) {
+		t.Errorf("output does not say where the old binary came from:\n%s", f.out)
+	}
+}
+
+// TestUpgradeRefusesAConcurrentUpgrade: while another upgrade holds the
+// lock next to the binary, an upgrade waits briefly, then refuses before it
+// changes or downloads anything.
+func TestUpgradeRefusesAConcurrentUpgrade(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	release, ok, err := filelock.TryLock(filepath.Join(f.dir, LockFileName))
+	if err != nil || !ok {
+		t.Fatalf("TryLock = %v, %v", ok, err)
+	}
+	defer func() { _ = release() }()
+	u, err := newUpgrader(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.lockWait = 10 * time.Millisecond
+	_, err = u.run(t.Context())
+	if !errors.Is(err, ErrUpgradeRunning) || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("err = %v, want ErrUpgradeRunning", err)
+	}
+	// Only the rights were checked (read-only) before the lock.
+	if len(f.http.requests) != 0 || !slices.Equal(f.svc.callList(), []string{"preflight"}) || len(f.bin.callList()) != 0 {
+		t.Errorf("it went on: requests %q, service %v, binary %v", f.http.requests, f.svc.callList(), f.bin.callList())
+	}
+	f.assertUnchanged(t)
+
+	// A dry run changes nothing and takes no lock.
+	f.cfg.DryRun = true
+	if _, err := Run(t.Context(), f.cfg); err != nil {
+		t.Errorf("dry run during an upgrade: %v", err)
+	}
+}
+
+// assertLockFree checks that no upgrade holds the lock in dir any more.
+func assertLockFree(t *testing.T, dir string) {
+	t.Helper()
+	release, ok, err := filelock.TryLock(filepath.Join(dir, LockFileName))
+	if err != nil || !ok {
+		t.Errorf("the upgrade lock is still held: %v, %v", ok, err)
+		return
+	}
+	_ = release()
+}
+
+// TestCheckRedirect: downloads follow redirects to https, and to plain http
+// only on this machine when they started there; any other plain http
+// target is refused.
+func TestCheckRedirect(t *testing.T) {
+	t.Parallel()
+	req := func(raw string) *http.Request {
+		r, err := http.NewRequestWithContext(t.Context(), http.MethodGet, raw, http.NoBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	via := func(urls ...string) []*http.Request {
+		var out []*http.Request
+		for _, u := range urls {
+			out = append(out, req(u))
+		}
+		return out
+	}
+	for _, tt := range []struct {
+		to   string
+		via  []string
+		want error
+	}{
+		{"https://objects.example/asset", []string{"https://github.com/x"}, nil},
+		{"https://cdn.example/asset", []string{"http://127.0.0.1:8000/x"}, nil},
+		{"http://127.0.0.1:8001/asset", []string{"http://127.0.0.1:8000/x"}, nil},
+		{"http://localhost/asset", []string{"http://[::1]:8000/x"}, nil},
+		{"http://objects.example/asset", []string{"https://github.com/x"}, ErrInsecureRedirect},
+		{"http://10.0.0.1/asset", []string{"http://127.0.0.1:8000/x"}, ErrInsecureRedirect},
+		{"http://127.0.0.1/asset", []string{"https://mirror.example/x"}, ErrInsecureRedirect},
+		{"ftp://127.0.0.1/asset", []string{"http://127.0.0.1:8000/x"}, ErrInsecureRedirect},
+	} {
+		err := checkRedirect(req(tt.to), via(tt.via...))
+		if (tt.want == nil) != (err == nil) || (tt.want != nil && !errors.Is(err, tt.want)) {
+			t.Errorf("redirect from %s to %s: %v, want %v", tt.via[0], tt.to, err, tt.want)
 		}
 	}
-	// The old binary is still there to be moved back by hand.
-	if raw, err := os.ReadFile(f.exe + BackupSuffix); err != nil || string(raw) != string(binaryFor(oldVersion)) {
-		t.Errorf("backup = %q, %v", raw, err)
+	many := make([]string, maxRedirects)
+	for i := range many {
+		many[i] = "https://github.com/x"
+	}
+	if err := checkRedirect(req("https://github.com/y"), via(many...)); err == nil {
+		t.Error("an endless redirect chain was followed")
+	}
+}
+
+// TestDefaultClientRefusesARedirectToRemoteHTTP: the default client of an
+// upgrade from a loopback --from does not follow a redirect to another
+// machine over plain http.
+func TestDefaultClientRefusesARedirectToRemoteHTTP(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/local":
+			http.Redirect(w, r, "/ok", http.StatusFound)
+		case "/remote":
+			http.Redirect(w, r, "http://192.0.2.1/checksums.txt", http.StatusFound) // TEST-NET-1, never dialed
+		default:
+			_, _ = io.WriteString(w, "ok")
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := newHTTPClient()
+	get := func(path string) error {
+		r, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, http.NoBody)
+		if err != nil {
+			return err
+		}
+		resp, err := c.Do(r)
+		if err != nil {
+			return err
+		}
+		return resp.Body.Close()
+	}
+	if err := get("/local"); err != nil {
+		t.Errorf("a redirect on this machine: %v", err)
+	}
+	if err := get("/remote"); !errors.Is(err, ErrInsecureRedirect) {
+		t.Errorf("a redirect to plain http elsewhere: %v, want ErrInsecureRedirect", err)
 	}
 }
 
@@ -804,15 +1035,29 @@ func TestUpgradeAsksTheInstalledBinaryItsVersion(t *testing.T) {
 	}
 }
 
+// TestUpgradeStartsAStoppedService: a stopped service is started, not
+// restarted (restarting a stopped Windows Service fails, which would roll
+// every such upgrade back).
 func TestUpgradeStartsAStoppedService(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	f.svc.installed = service.StateStopped
-	if _, err := Run(t.Context(), f.cfg); err != nil {
-		t.Fatal(err)
+	res, err := Run(t.Context(), f.cfg)
+	if err != nil {
+		t.Fatalf("Run: %v\n%s", err, f.out)
 	}
-	if !strings.Contains(f.out.String(), "is stopped; the upgrade will start it") {
+	if !res.Restarted {
+		t.Errorf("result = %+v", res)
+	}
+	if !strings.Contains(f.out.String(), "is stopped; the upgrade will start it") || !strings.Contains(f.out.String(), "Starting the syncr-worker service") {
 		t.Errorf("output:\n%s", f.out)
+	}
+	calls := f.svc.callList()
+	if slices.Contains(calls, "restart") || !slices.Contains(calls, "start") {
+		t.Errorf("service calls = %v, want a start and no restart", calls)
+	}
+	if len(f.svc.ran) != 1 || f.svc.ran[0] != string(binaryFor(newVersion)) {
+		t.Errorf("the service started on %q", f.svc.ran)
 	}
 }
 

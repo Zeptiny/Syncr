@@ -218,8 +218,10 @@ containers: [upgrading](docs/upgrade.md).
 
 **One controller per database.** A second controller started against the
 same database waits, logging "another controller is running against this
-database", and takes over when the first one stops
-([ADR 0015](docs/adr/0015-single-controller-guard.md)). Run one controller;
+database", and takes over when the first one stops, or about a minute after
+the first one's host crashed (the log names the old session and how to end
+it at once, `SELECT pg_terminate_backend(<pid>)`;
+[ADR 0015](docs/adr/0015-single-controller-guard.md)). Run one controller;
 a standby is fine.
 
 ### Supported platforms

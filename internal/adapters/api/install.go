@@ -1,11 +1,13 @@
 package api
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net/netip"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
@@ -22,12 +24,69 @@ const (
 )
 
 // releaseVersion matches the versions of release builds: vX.Y.Z, or a
-// release candidate vX.Y.Z-rc.N.
-var releaseVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`)
+// release candidate vX.Y.Z-rc.N. Its groups are the four numbers (the last
+// empty for a final release).
+var releaseVersion = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.([0-9]+))?$`)
 
 // isReleaseVersion reports whether v is the version of a release build (a
 // development build reports "dev" or a Go pseudo-version).
 func isReleaseVersion(v string) bool { return releaseVersion.MatchString(v) }
+
+// compareReleaseVersions orders two release versions (isReleaseVersion) by
+// semantic versioning: by major, minor and patch number, and a release
+// candidate before the release of its version, release candidates by
+// number (v2.0.0-rc.1 < v2.0.0-rc.2 < v2.0.0 < v2.0.1). It returns -1, 0
+// or +1; a version that is not a release version sorts first.
+func compareReleaseVersions(a, b string) int {
+	pa, okA := releaseParts(a)
+	pb, okB := releaseParts(b)
+	if !okA || !okB {
+		return cmp.Compare(boolInt(okA), boolInt(okB))
+	}
+	for i := range 3 {
+		if c := cmp.Compare(pa[i], pb[i]); c != 0 {
+			return c
+		}
+	}
+	// A final release (no candidate number) after its candidates.
+	switch {
+	case pa[3] == pb[3]:
+		return 0
+	case pa[3] < 0:
+		return 1
+	case pb[3] < 0:
+		return -1
+	}
+	return cmp.Compare(pa[3], pb[3])
+}
+
+// releaseParts returns the major, minor and patch numbers of a release
+// version and its release candidate number, -1 for a final release.
+func releaseParts(v string) ([4]int64, bool) {
+	m := releaseVersion.FindStringSubmatch(v)
+	if m == nil {
+		return [4]int64{}, false
+	}
+	parts := [4]int64{0, 0, 0, -1}
+	for i, s := range m[1:] {
+		if s == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return [4]int64{}, false // too many digits
+		}
+		parts[i] = n
+	}
+	return parts, true
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
 
 // InstallConfig configures the worker install and upgrade commands of
 // WorkerAdminService (CreateEnrollmentToken, GetPassiveInstallCommands,

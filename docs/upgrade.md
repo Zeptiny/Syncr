@@ -2,7 +2,8 @@
 
 Upgrade the **controller first**, then each worker. A worker that is older
 than the controller keeps working and is marked **Outdated** until it is
-upgraded; a worker newer than its controller is not a supported state.
+upgraded; a worker newer than its controller is not a supported state (it
+is not marked, and the UI offers no command that would downgrade it).
 
 Every release has its notes in [docs/releases/](releases/); read the ones of
 each version you skip. Syncr 2 does not read the data of the old Django
@@ -76,7 +77,9 @@ step 4. It replaces the binary it runs from, so run the copy the service
 runs: before anything else it reads the program from the installed service
 (the systemd unit's `ExecStart`, the Windows Service's command line, or the
 Scheduled Task's action) and refuses, naming the right binary, if that is
-another file.
+another file. Only one upgrade of a worker runs at a time: it holds the
+lock file `.syncr-worker-upgrade.lock` next to the binary, and a second
+upgrade started meanwhile refuses and changes nothing.
 
 1. Downloads `checksums.txt` and this platform's archive
    (`syncr-worker_<os>_<arch>.tar.gz`, `.zip` on Windows), requires the
@@ -87,13 +90,16 @@ another file.
 3. Fetches the rclone and restic the new version pins (old versions stay)
    and checks that the new version finds them with this worker's
    configuration.
-4. Swaps the binary (on Windows, the old one is renamed to
-   `syncr-worker.exe.old`).
-5. Restarts the service and watches it for about 20 seconds.
+4. Swaps the binary. The old one is kept as `syncr-worker.old`
+   (`syncr-worker.exe.old` on Windows) until the upgrade succeeded.
+5. Restarts the service (or starts it, if it was stopped) and watches it
+   for about 20 seconds.
 6. If the new version does not stay up, it stops the service, puts the old
-   binary back, starts it again and exits with an error that says where
-   the service's log is. Otherwise it removes the old tool versions and
-   prints the old and the new version.
+   binary back, starts the service again and exits with an error that says
+   where the service's log is. Otherwise it removes the old tool versions
+   and the `.old` binary, and prints the old and the new version. On
+   Windows the `.old` file cannot be removed while the command still runs
+   from it; the worker removes it at its next start.
 
 | Flag | Meaning |
 |---|---|
@@ -117,6 +123,22 @@ Good to know:
   reached the controller. Check that it is online on the **Workers** page.
 - Run the command as the account that installed the worker (root or an
   Administrator for the system service, the user for `--user`).
+- **Over SSH**, the command keeps running if the connection drops (it
+  ignores the hangup), so the upgrade still ends with a running worker. To
+  see how it ended, start it inside `tmux` or `screen`, or with
+  `nohup ... > upgrade.log 2>&1 &` and read the file. On Windows, keep the
+  PowerShell window open until the command has finished: closing it ends
+  the command.
+- **An interrupted upgrade** (the machine lost power, the process was
+  killed) may leave the old binary next to the new one as
+  `syncr-worker.old`. On Linux it stays there until the next upgrade, as
+  the copy to put back by hand if the new version does not run (stop the
+  service, `mv syncr-worker.old syncr-worker`, start it). On Windows the
+  worker's next start removes `syncr-worker.exe.old`.
+- The tools directory (`tools.dir`, by default `<data dir>/tools`) must be
+  this worker's own: the upgrade deletes the tool versions in it that the
+  new version no longer pins
+  ([worker-config](worker-config.md#tools)).
 - The checksum catches a damaged download, not a compromised release: the
   trust is the same as for the install command (HTTPS to GitHub, or your
   mirror). The release files also carry GitHub build provenance:
@@ -188,8 +210,10 @@ guides).
 
 - **The Outdated badge** on the Workers page and the worker's page. A
   worker is outdated when it lacks a feature this controller uses, or when
-  both run release versions and they differ. A development build (`dev`)
-  is compared by features only.
+  both run release versions and the worker's is older (`v2.0.0-rc.1` is
+  older than `v2.0.0`, which is older than `v2.0.1`). A worker newer than
+  the controller is not marked. A development build (`dev`) is compared by
+  features only.
 - **`worker_outdated` jobs.** A job or a probe (browsing, a remote test,
   restic snapshots) that needs a feature the worker lacks fails at once
   with the error code `worker_outdated` and a message naming the missing

@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/Zeptiny/Syncr/internal/platform/config"
 	"github.com/Zeptiny/Syncr/internal/platform/version"
@@ -63,6 +64,9 @@ type env struct {
 	// upgrade replaces the downloads and file changes of `upgrade`; the zero
 	// value means the real ones.
 	upgrade upgradeOverrides
+	// lockWait is how long `run` waits for a data directory lock that
+	// another process holds; zero means dataDirLockWait.
+	lockWait time.Duration
 }
 
 func (e *env) serviceHost() service.Host {

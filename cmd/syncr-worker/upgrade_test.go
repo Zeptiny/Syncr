@@ -363,7 +363,7 @@ func TestUpgradeCommandOutcomes(t *testing.T) {
 		}, args: []string{"--no-restart"}, wantCode: exitOK, wantVersion: offeredVersion,
 			wantOut: []string{"Restart the worker to run " + offeredVersion}},
 		{name: "stopped service is started", setup: func(f *upgradeFixture) { f.services.state = service.StateStopped },
-			wantCode: exitOK, wantVersion: offeredVersion, wantCalls: []string{"restart"},
+			wantCode: exitOK, wantVersion: offeredVersion, wantCalls: []string{"start"},
 			wantOut: []string{"The syncr-worker service is stopped; the upgrade will start it"}},
 		{name: "no rights", setup: func(f *upgradeFixture) {
 			f.services.preflight = &service.PermissionError{Scope: service.ScopeSystem, Hint: "run it as root (for example with sudo)"}

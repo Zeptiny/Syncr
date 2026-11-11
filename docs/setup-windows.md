@@ -29,7 +29,10 @@ v2.0.0 controller), so a new worker runs the controller's version; the
 `latest` URL above, which a development build of the controller shows,
 installs the newest release. If the controller sets
 `workers.download_base_url` (empty by default), the command downloads from
-that mirror instead. If `syncr-worker.exe` is already there, run only the
+that mirror instead (a value of
+`https://github.com/Zeptiny/Syncr/releases/latest/download`, the default of
+builds before v2.0.0, counts as unset; the controller warns at start that it
+should be removed). If `syncr-worker.exe` is already there, run only the
 last line:
 
 ```powershell
@@ -123,10 +126,11 @@ $d = Join-Path $env:LOCALAPPDATA 'Programs\Syncr'; & "$d\syncr-worker.exe" upgra
 
 It verifies the download, fetches the new version's rclone and restic,
 replaces `syncr-worker.exe` (the old one is renamed to
-`syncr-worker.exe.old` and removed later), restarts the service or task, and
-puts the old version back if the new one does not stay up. Running jobs are
-interrupted by the restart. Details and the manual steps:
-[upgrading](upgrade.md).
+`syncr-worker.exe.old` and removed at the worker's next start), restarts the
+service or task, and puts the old version back if the new one does not stay
+up. Running jobs are interrupted by the restart. Keep the PowerShell window
+open until it has finished: closing it ends the command. Details and the
+manual steps: [upgrading](upgrade.md).
 
 ## Labels and schedules
 
@@ -169,6 +173,11 @@ Then remove the worker in the controller UI (**Workers**, the worker,
 | Config | `%ProgramData%\Syncr\worker.yaml` | `%LocalAppData%\Syncr\worker.yaml` |
 | Data, tools, certificate | `%ProgramData%\Syncr` | `%LocalAppData%\Syncr` |
 | Logs | Event Viewer, Windows Logs, Application, source `syncr-worker`; or `Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='syncr-worker'} -MaxEvents 30` | `%LocalAppData%\Syncr\logs\worker.log` (rotated at 10 MB to `worker.log.1`) |
+
+The tools directory (`<data dir>\tools`, or `tools.dir`) belongs to this
+worker alone: setup and upgrades delete the rclone and restic versions in it
+that the worker no longer pins. Do not point `tools.dir` at a directory
+that other programs, or a worker of another version, use.
 
 The config file holds secrets: setup restricts it to `SYSTEM` and
 `Administrators` (plus you, for `--user`). This is best effort and setup warns if
@@ -213,4 +222,12 @@ and who can change it before using it; see
   Move it to `C:\Program Files\Syncr` and run setup (or `service install`)
   again from there.
 - **The task does not start after logon**: check it in Task Scheduler
-  (`syncr-worker`, "Last Run Result") and read `worker.log`.
+  (`syncr-worker`, "Last Run Result") and read `worker.log`: a worker that
+  stops writes why there (`the worker stopped with an error`), as its
+  console is hidden.
+- **`waiting for it to exit` in the log after a restart**: the new worker
+  started while the ended one was still exiting, and waits up to 20
+  seconds for its data directory. If the log then says `another worker is
+  already running with this data directory`, a second worker (another task,
+  service or `run`) uses the same data directory: stop it, or give each its
+  own `--data-dir`.

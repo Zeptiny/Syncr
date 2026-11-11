@@ -1077,7 +1077,7 @@ func (f fakeLimits) TimeLimit(def *syncrv1.JobDefinition) time.Duration {
 	return jobs.EffectiveTimeLimit(def.GetMaxRuntime().AsDuration(), f.def, false)
 }
 
-// TestJobTimeLimit: Job.time_limit is the effective limit (the
+// TestJobTimeLimit: Job.time_limit of a queued job is the effective limit (the
 // definition's, else the default). The title never names a limit: the job
 // page shows time_limit by itself.
 func TestJobTimeLimit(t *testing.T) {
@@ -1110,6 +1110,50 @@ func TestJobTimeLimit(t *testing.T) {
 	_, err = e.jobsClient().RunJob(ctx, connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: e.worker.String(), Definition: bad}))
 	if codeOf(t, err) != connect.CodeInvalidArgument || violation(err, "definition.max_runtime") == "" {
 		t.Errorf("a 30s limit: %v", err)
+	}
+
+	// A job a worker accepted shows the limit it was sent then (stored at
+	// dispatch), not today's default of 2h, also once it finished.
+	limitOf := func(id string) *durationpb.Duration {
+		t.Helper()
+		resp, err := e.jobsClient().GetJob(ctx, connect.NewRequest(&syncrv1.GetJobRequest{JobId: id}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Msg.GetJob().GetTimeLimit()
+	}
+	for _, sent := range []time.Duration{30 * time.Minute, 0} {
+		j := run(testDefinition())
+		id, err := domain.ParseJobID(j.GetId())
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored, err := e.store.GetJob(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored.Status, stored.Epoch, stored.DispatchedAt, stored.TimeLimit = domain.JobDispatched, "e", e.clock.Now(), sent
+		if stored, err = e.store.UpdateJob(ctx, stored); err != nil {
+			t.Fatal(err)
+		}
+		if got := limitOf(j.GetId()); got.AsDuration() != sent || (sent == 0) != (got == nil) {
+			t.Errorf("dispatched with %v: time_limit %v", sent, got)
+		}
+		stored.Status, stored.FinishedAt = domain.JobSucceeded, e.clock.Now()
+		if _, err := e.store.UpdateJob(ctx, stored); err != nil {
+			t.Fatal(err)
+		}
+		if got := limitOf(j.GetId()); got.AsDuration() != sent || (sent == 0) != (got == nil) {
+			t.Errorf("finished after a dispatch with %v: time_limit %v", sent, got)
+		}
+	}
+	// A job that ended before any worker accepted it ran under no limit.
+	queued := run(testDefinition())
+	if _, err := e.jobsClient().CancelJob(ctx, connect.NewRequest(&syncrv1.CancelJobRequest{JobId: queued.GetId()})); err != nil {
+		t.Fatal(err)
+	}
+	if got := limitOf(queued.GetId()); got != nil {
+		t.Errorf("cancelled while queued: time_limit %v, want none", got)
 	}
 
 	// Without the dependency the field is unset.

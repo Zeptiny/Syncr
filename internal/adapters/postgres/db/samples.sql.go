@@ -205,32 +205,59 @@ func (q *Queries) ListJobSamples(ctx context.Context, arg ListJobSamplesParams) 
 	return items, nil
 }
 
-const purgeJobSamples = `-- name: PurgeJobSamples :execrows
-DELETE FROM job_samples
-WHERE job_id IN (
-    SELECT j.id
+const purgeJobSamples = `-- name: PurgeJobSamples :one
+WITH due AS (
+    SELECT j.id, j.finished_at
     FROM jobs j
     WHERE j.finished_at < $1::timestamptz
+      AND j.finished_at >= $2::timestamptz
+      AND (j.finished_at, j.id) > ($2::timestamptz, $3::uuid)
       AND EXISTS (SELECT 1 FROM job_samples s WHERE s.job_id = j.id)
-    ORDER BY j.finished_at
-    LIMIT $2::bigint
+    ORDER BY j.finished_at, j.id
+    LIMIT $4::bigint
+), deleted AS (
+    DELETE FROM job_samples WHERE job_id IN (SELECT id FROM due)
+    RETURNING 1
+), last AS (
+    SELECT id, finished_at FROM due ORDER BY finished_at DESC, id DESC LIMIT 1
 )
+SELECT
+    (SELECT count(*) FROM deleted)::bigint AS deleted,
+    (SELECT finished_at FROM last)::timestamptz AS last_finished_at,
+    (SELECT id FROM last)::uuid AS last_id
 `
 
 type PurgeJobSamplesParams struct {
-	FinishedBefore pgtype.Timestamptz
-	MaxJobs        int64
+	FinishedBefore  pgtype.Timestamptz
+	AfterFinishedAt pgtype.Timestamptz
+	AfterID         pgtype.UUID
+	MaxJobs         int64
+}
+
+type PurgeJobSamplesRow struct {
+	Deleted        int64
+	LastFinishedAt pgtype.Timestamptz
+	LastID         pgtype.UUID
 }
 
 // Deletes the samples of at most max_jobs jobs that finished before
-// finished_before and still have samples, those that finished first first.
-// jobs_finished_idx walks the finished jobs in order; the EXISTS probe and
-// the delete use the samples' primary key. Unfinished jobs have no
-// finished_at and are never matched.
-func (q *Queries) PurgeJobSamples(ctx context.Context, arg PurgeJobSamplesParams) (int64, error) {
-	result, err := q.db.Exec(ctx, purgeJobSamples, arg.FinishedBefore, arg.MaxJobs)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+// finished_before, come after the cursor (after_finished_at, after_id) in
+// (finished_at, id) order and still have samples, taken in that order, and
+// returns how many samples it deleted and the cursor of the last of those
+// jobs (NULL when there was none). jobs_finished_idx walks the finished
+// jobs from the cursor's finished_at on (the plain range condition is its
+// index bound; the row comparison then skips the cursor's own ties), so a
+// purge that goes on from the cursor never walks the jobs it purged
+// before. The EXISTS probe and the delete use the samples' primary key.
+// Unfinished jobs have no finished_at and are never matched.
+func (q *Queries) PurgeJobSamples(ctx context.Context, arg PurgeJobSamplesParams) (PurgeJobSamplesRow, error) {
+	row := q.db.QueryRow(ctx, purgeJobSamples,
+		arg.FinishedBefore,
+		arg.AfterFinishedAt,
+		arg.AfterID,
+		arg.MaxJobs,
+	)
+	var i PurgeJobSamplesRow
+	err := row.Scan(&i.Deleted, &i.LastFinishedAt, &i.LastID)
+	return i, err
 }

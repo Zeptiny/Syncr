@@ -48,6 +48,9 @@ func TestSeedMilestone6(t *testing.T) {
 	if run := limited.FinishedAt.Sub(limited.StartedAt); run != 6*time.Hour {
 		t.Errorf("it ran %v, want its 6h limit", run)
 	}
+	if limited.TimeLimit != 6*time.Hour {
+		t.Errorf("it is recorded as dispatched with the limit %v, want 6h", limited.TimeLimit)
+	}
 	def, err := jobkind.Unmarshal(limited.Definition)
 	if err != nil || def.GetMaxRuntime().AsDuration() != 6*time.Hour {
 		t.Fatalf("its definition = %v (%v), want max_runtime 6h", def, err)

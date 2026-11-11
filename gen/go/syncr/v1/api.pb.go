@@ -486,9 +486,10 @@ type Worker struct {
 	Labels []string `protobuf:"bytes,10,rep,name=labels,proto3" json:"labels,omitempty"`
 	// The worker should be upgraded (GetWorkerUpgradeCommands): its latest
 	// Hello lacks a link feature this controller knows, or the worker and the
-	// controller are both release builds of different versions. Computed by
-	// the controller, never stored; false until the worker has connected
-	// once.
+	// controller are both release builds and the worker's version is older
+	// (by semantic versioning: v2.0.0-rc.1 < v2.0.0 < v2.0.1). A worker newer
+	// than the controller is not outdated. Computed by the controller, never
+	// stored; false until the worker has connected once.
 	Outdated      bool `protobuf:"varint,11,opt,name=outdated,proto3" json:"outdated,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1775,8 +1776,10 @@ type Job struct {
 	// The job's effective time limit: its definition's max_runtime or, when
 	// that is unset, the controller's jobs.default_max_runtime (jobs only the
 	// system starts, such as restic_delete_data, never get the default).
-	// Unset when the job has none. A job stopped by it fails with
-	// TIME_LIMIT.
+	// Once a worker accepted the job, the limit it was sent then, which a
+	// later change of the default does not change; for a queued job, the
+	// limit it will be sent. Unset when the job has none, or ended before a
+	// worker accepted it. A job stopped by it fails with TIME_LIMIT.
 	TimeLimit     *durationpb.Duration `protobuf:"bytes,25,opt,name=time_limit,json=timeLimit,proto3" json:"time_limit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

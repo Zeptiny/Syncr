@@ -88,8 +88,9 @@ type Deps struct {
 	Workers WorkerService
 	// Jobs serves JobService (*jobs.Service), with Kinds checking the job
 	// definitions of RunJob (without Kinds, RunJob is Unimplemented) and
-	// TimeLimits computing Job.time_limit (*dispatch.Specs; without it the
-	// field is unset).
+	// TimeLimits computing Job.time_limit of queued jobs (*dispatch.Specs;
+	// without it the field is unset for them; a dispatched job shows the
+	// limit stored when its worker accepted it).
 	Jobs       JobService
 	Kinds      *jobkind.Registry
 	TimeLimits TimeLimits

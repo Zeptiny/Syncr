@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,7 +23,7 @@ import (
 func TestRunRefusesASecondWorkerOnItsDataDir(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	release, err := datadir.Lock(f.cfg.DataDir)
+	release, err := datadir.Lock(t.Context(), f.cfg.DataDir, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,10 +32,15 @@ func TestRunRefusesASecondWorkerOnItsDataDir(t *testing.T) {
 	writeFile(t, leftover)
 
 	e, stderr := f.runEnv(nil)
+	e.lockWait = 50 * time.Millisecond // the other worker never lets go
 	if code := run(t.Context(), []string{"run"}, e); code != exitError {
 		t.Fatalf("exit code %d, want %d", code, exitError)
 	}
-	for _, want := range []string{"syncr-worker run:", "another worker is already running with this data directory", f.cfg.DataDir, "SYNCR_DATA_DIR"} {
+	for _, want := range []string{
+		"another process holds the data directory's lock; waiting for it to exit",
+		"syncr-worker run:", "another worker is already running with this data directory", "still did after 50ms",
+		f.cfg.DataDir, "SYNCR_DATA_DIR",
+	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("stderr lacks %q:\n%s", want, stderr)
 		}
@@ -44,6 +51,120 @@ func TestRunRefusesASecondWorkerOnItsDataDir(t *testing.T) {
 	if _, err := os.Stat(leftover); err != nil {
 		t.Errorf("the refused worker touched the scratch directory of the running one: %v", err)
 	}
+}
+
+// signalWriter is a log output, safe for concurrent use, that calls on
+// once when a write contains match.
+type signalWriter struct {
+	mu    sync.Mutex
+	buf   bytes.Buffer
+	match string
+	on    func()
+	once  sync.Once
+}
+
+func (w *signalWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	n, err := w.buf.Write(p)
+	w.mu.Unlock()
+	if bytes.Contains(p, []byte(w.match)) {
+		w.once.Do(w.on)
+	}
+	return n, err
+}
+
+func (w *signalWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+// TestRunWaitsForTheWorkerItReplaces: a worker that starts while the one it
+// replaces still holds the data directory (a service manager reported that
+// one stopped before its process exited) waits, says so, and starts once
+// the lock is free.
+func TestRunWaitsForTheWorkerItReplaces(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	previous, err := datadir.Lock(t.Context(), f.cfg.DataDir, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _ := f.runEnv(nil)
+	e.lockWait = time.Hour
+	// The previous worker exits once the new one logged that it waits.
+	logs := &signalWriter{match: "waiting for it to exit", on: func() { _ = previous() }}
+	e.stderr = logs
+	ready := notifyReady(e)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, []string{"run"}, e) }()
+	awaitReady(t, ready, done, logs)
+	cancel()
+	if code := <-done; code != exitOK {
+		t.Fatalf("exit code %d:\n%s", code, logs)
+	}
+}
+
+// TestRunLogsWhyItStopsToItsLogFile: a worker started with --log-file (the
+// Windows user task, whose console is hidden) writes the error it stops
+// with to that file, also when it fails before its configured logger
+// exists.
+func TestRunLogsWhyItStopsToItsLogFile(t *testing.T) {
+	t.Parallel()
+	t.Run("data directory in use", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t)
+		release, err := datadir.Lock(t.Context(), f.cfg.DataDir, 0, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = release() }()
+		e, stderr := f.runEnv(nil)
+		e.lockWait = time.Millisecond
+		logFile := filepath.Join(f.base, "logs", "worker.log")
+		if code := run(t.Context(), []string{"run", "--log-file", logFile}, e); code != exitError {
+			t.Fatalf("exit code %d, want %d", code, exitError)
+		}
+		raw, err := os.ReadFile(logFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{`"msg":"worker starting"`, `"msg":"the worker stopped with an error"`, "another worker is already running with this data directory"} {
+			if !strings.Contains(string(raw), want) {
+				t.Errorf("log file lacks %q:\n%s", want, raw)
+			}
+		}
+		if !strings.Contains(stderr.String(), "another worker is already running") {
+			t.Errorf("stderr lacks the error:\n%s", stderr)
+		}
+	})
+	t.Run("invalid configuration", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t)
+		e, _ := f.runEnv(map[string]string{"SYNCR_MAX_CONCURRENT_JOBS": "0"})
+		logFile := filepath.Join(f.base, "worker.log")
+		if code := run(t.Context(), []string{"run", "--log-file", logFile}, e); code != exitError {
+			t.Fatalf("exit code %d, want %d", code, exitError)
+		}
+		raw, err := os.ReadFile(logFile)
+		if err != nil || !strings.Contains(string(raw), "the worker stopped with an error") || !strings.Contains(string(raw), "max_concurrent_jobs") {
+			t.Errorf("log file = %q, %v; want the configuration error", raw, err)
+		}
+	})
+	t.Run("not without a log file", func(t *testing.T) {
+		t.Parallel()
+		// On stderr run prints the error itself, once.
+		f := newFixture(t)
+		e, stderr := f.runEnv(map[string]string{"SYNCR_MAX_CONCURRENT_JOBS": "0"})
+		if code := run(t.Context(), []string{"run"}, e); code != exitError {
+			t.Fatalf("exit code %d, want %d", code, exitError)
+		}
+		if strings.Contains(stderr.String(), "the worker stopped with an error") || !strings.Contains(stderr.String(), "max_concurrent_jobs") {
+			t.Errorf("stderr:\n%s", stderr)
+		}
+	})
 }
 
 // TestRunCleansItsScratchAndHoldsTheLock: a starting worker removes what
@@ -81,7 +202,7 @@ func TestRunCleansItsScratchAndHoldsTheLock(t *testing.T) {
 			t.Errorf("%s is gone: %v", dir, err)
 		}
 	}
-	if _, err := datadir.Lock(f.cfg.DataDir); err == nil {
+	if _, err := datadir.Lock(t.Context(), f.cfg.DataDir, 0, nil); err == nil {
 		t.Error("the data directory is not locked while the worker runs")
 	}
 
@@ -94,7 +215,7 @@ func TestRunCleansItsScratchAndHoldsTheLock(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("run did not stop")
 	}
-	release, err := datadir.Lock(f.cfg.DataDir)
+	release, err := datadir.Lock(t.Context(), f.cfg.DataDir, 0, nil)
 	if err != nil {
 		t.Fatalf("the lock is still held after the worker stopped: %v", err)
 	}

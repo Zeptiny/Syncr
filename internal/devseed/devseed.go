@@ -98,6 +98,10 @@ type Deps struct {
 	// job's progress through it, so its watchers (WatchJob) see it.
 	Jobs  *jobs.Service
 	Kinds *jobkind.Registry
+	// TimeLimits computes the time limit the history's jobs are recorded
+	// as dispatched with (Job.TimeLimit): the controller's spec builder, so
+	// they show what that controller would have sent. Nil records none.
+	TimeLimits jobs.TimeLimits
 	// Contacts creates the demo contacts; the history's schedules and
 	// outbox check and resolve them through it.
 	Contacts *contacts.Service

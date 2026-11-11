@@ -260,13 +260,16 @@ jobs:
           sudo -E "$RUNNER_TEMP/worker.test" -test.run '^TestIntegrationRealService$' -test.v -test.count=1 -test.timeout 10m
       - name: Build the workers for the upgrade test
         # Before sudo, which has no go on its PATH: two releases that differ
-        # only in their version, and one whose `run` exits at once.
+        # only in their version, and a real worker built with
+        # syncr_broken_release, whose `run` fails only after its whole start
+        # (start-up cleanup included). The same three as the test builds
+        # itself on Windows (upgradeBinaries).
         run: |
           pkg=github.com/Zeptiny/Syncr/internal/platform/version.version
           dir="$RUNNER_TEMP/upgrade"
           go build -ldflags "-X $pkg=v2.0.0-test.1" -o "$dir/old/syncr-worker" ./cmd/syncr-worker
           go build -ldflags "-X $pkg=v2.0.0-test.2" -o "$dir/new/syncr-worker" ./cmd/syncr-worker
-          go build -o "$dir/broken/syncr-worker" ./cmd/syncr-worker/testdata/exitworker
+          go build -tags syncr_broken_release -ldflags "-X $pkg=v2.0.0-test.3" -o "$dir/broken/syncr-worker" ./cmd/syncr-worker
       - name: Real systemd service upgrade (old to new, then a rollback)
         # After the service test, never next to it: both install the unit
         # syncr-worker. `syncr-worker upgrade --from` a release server on

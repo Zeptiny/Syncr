@@ -42,11 +42,13 @@ const versionVar = "github.com/Zeptiny/Syncr/internal/platform/version.version"
 type upgradeBin struct{ path, version string }
 
 // upgradeBinaries returns the three workers of the upgrade test: old (the
-// installed one), new (a working release), and broken (a release whose
-// "run" exits at once, testdata/exitworker). SYNCR_TEST_UPGRADE_BIN names a
-// directory holding them as old/, new/ and broken/syncr-worker[.exe];
-// otherwise they are built here with the go command (SYNCR_TEST_GO, or go
-// on PATH).
+// installed one), new (a working release), and broken (a real worker built
+// with -tags syncr_broken_release, whose "run" goes through the whole
+// start, the start-up cleanup included, and then fails; brokenrelease.go).
+// SYNCR_TEST_UPGRADE_BIN names a directory holding them as old/, new/ and
+// broken/syncr-worker[.exe]; otherwise they are built here with the go
+// command (SYNCR_TEST_GO, or go on PATH). The CI recipe builds the same
+// three.
 func upgradeBinaries(t *testing.T) (old, current, broken upgradeBin) {
 	t.Helper()
 	exe := "syncr-worker"
@@ -63,13 +65,13 @@ func upgradeBinaries(t *testing.T) (old, current, broken upgradeBin) {
 				t.Fatalf("the upgrade test builds workers: set SYNCR_TEST_GO or SYNCR_TEST_UPGRADE_BIN (%v)", err)
 			}
 		}
-		for _, b := range []struct{ name, pkg, ldflags string }{
-			{"old", ".", "-X " + versionVar + "=v2.0.0-test.1"},
-			{"new", ".", "-X " + versionVar + "=v2.0.0-test.2"},
-			{"broken", "./testdata/exitworker", ""},
+		for _, b := range []struct{ name, tags, ldflags string }{
+			{"old", "", "-X " + versionVar + "=v2.0.0-test.1"},
+			{"new", "", "-X " + versionVar + "=v2.0.0-test.2"},
+			{"broken", "syncr_broken_release", "-X " + versionVar + "=v2.0.0-test.3"},
 		} {
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
-			cmd := exec.CommandContext(ctx, goBin, "build", "-ldflags", b.ldflags, "-o", filepath.Join(dir, b.name, exe), b.pkg)
+			cmd := exec.CommandContext(ctx, goBin, "build", "-tags", b.tags, "-ldflags", b.ldflags, "-o", filepath.Join(dir, b.name, exe), ".")
 			out, err := cmd.CombinedOutput()
 			cancel()
 			if err != nil {
@@ -226,8 +228,10 @@ func helloVersion(ctx context.Context, addr, fingerprint, secret string) (string
 //
 //  1. the installed worker (old) is upgraded to a working release (new):
 //     the command succeeds, and the service runs new;
-//  2. then to a release that exits at once (broken): the command fails,
-//     the old binary is put back, and the service runs new again.
+//  2. then to a release that fails after its whole start (broken): the
+//     command fails, the old binary is put back from the backup the
+//     upgrade kept (the broken worker's start-up cleanup must not have
+//     removed it), and the service runs new again.
 //
 // The service's version is the one its own Hello reports over the passive
 // link. It changes the machine, so it runs only with SYNCR_TEST_SERVICE=1,
@@ -349,7 +353,26 @@ func TestIntegrationRealServiceUpgrade(t *testing.T) {
 			t.Errorf("upgrade output lacks %q", want)
 		}
 	}
+	// Put back from the backup itself: the broken worker started, ran its
+	// start-up cleanup and the backup survived it.
+	if strings.Contains(out, "is missing") {
+		t.Errorf("the backup was gone before the rollback (removed by the new worker's start?)")
+	}
 	serving(current.version)
+	// Nothing is left next to the binary but the upgrade's lock (on Windows
+	// the old binary of the first upgrade may still wait for a start).
+	entries, err := os.ReadDir(filepath.Dir(exe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		switch name := e.Name(); {
+		case name == filepath.Base(exe), name == ".syncr-worker-upgrade.lock":
+		case runtime.GOOS == "windows" && name == filepath.Base(exe)+".old":
+		default:
+			t.Errorf("left next to the binary: %s", name)
+		}
+	}
 	if got := binaryVersion(t, exe); got != current.version {
 		t.Errorf("after the rollback the installed binary reports %s, want %s", got, current.version)
 	}

@@ -34,7 +34,9 @@ tools:
   # Explicit binaries, tried first. They must report the pinned version.
   rclone_path: ""            # SYNCR_RCLONE_PATH
   restic_path: ""            # SYNCR_RESTIC_PATH
-  # Managed tools directory; default <data_dir>/tools.
+  # Managed tools directory; default <data_dir>/tools. It must be this
+  # worker's own: setup and upgrades delete the tool versions in it that
+  # the worker no longer pins.
   dir: ""                    # SYNCR_TOOLS_DIR
   # Let the worker download missing pinned tools at startup
   # (checksum-verified). Off by default.
@@ -192,6 +194,14 @@ and `tools.rclone_path` / `tools.restic_path` for binaries given with
 `SYNCR_RCLONE_PATH` / `SYNCR_RESTIC_PATH`. Its self-check fails if a managed
 tool is not where the service will look, and warns about a tool found only on
 the setup shell's `PATH` (the service may run with another one).
+
+**The tools directory must be this worker's own.** `setup` and
+`syncr-worker upgrade` (once the upgraded worker stayed up) delete the
+managed rclone and restic versions in it that this worker no longer pins
+(`<dir>/rclone/<version>`, `<dir>/restic/<version>`). Two workers of
+different versions sharing one tools directory would delete each other's
+tools, and so would any other program that keeps an `rclone` or `restic`
+directory there. Configured, bundled and `PATH` binaries are never touched.
 
 ## Child process limits
 

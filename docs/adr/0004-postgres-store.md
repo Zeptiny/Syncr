@@ -113,8 +113,8 @@ the wait with the context.
   `jobs.sample_retention` ago (default 30 days; 0 keeps them).
   `PurgeJobSamples` is one `DELETE` per batch of at most 50 jobs, oldest
   finished first, through `jobs_finished_idx` and the `(job_id, t)` primary
-  key, repeated until a batch deletes nothing; unfinished jobs are never
-  touched. Job rows and their final counters stay, and so do schedule runs:
+  key, each batch going on from a `(finished_at, id)` cursor, repeated
+  until a batch deletes nothing; unfinished jobs are never touched. Job rows and their final counters stay, and so do schedule runs:
   purging jobs would corrupt the restic snapshot cache's change mark (ADR
   0014). `ListJobSamples` thins a long chart at read time to at most
   `max_points` samples (default 1000, at most 5000), always with the first

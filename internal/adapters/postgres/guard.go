@@ -191,14 +191,17 @@ func (l *ControllerLock) connect(ctx context.Context) (lockSession, error) {
 }
 
 // wait blocks in Postgres until sess gets the lock, logging
-// OtherControllerMessage now and every WaitLogEvery. It returns nil once
-// the lock is held, or the error that ended the wait (ctx's, or a broken
-// connection).
+// OtherControllerMessage now and every WaitLogEvery, with the holder's
+// session and how to end it if that controller is gone. It returns nil
+// once the lock is held, or the error that ended the wait (ctx's, or a
+// broken connection).
 func (l *ControllerLock) wait(ctx context.Context, sess lockSession, start time.Time) error {
 	attrs := []any{}
 	hctx, cancel := context.WithTimeout(ctx, l.opts.CheckTimeout)
 	if h, ok, err := sess.holder(hctx); err == nil && ok {
-		attrs = append(attrs, "holder_pid", h.PID, "holder_address", h.Addr, "holder_since", h.Started.UTC().Format(time.RFC3339))
+		attrs = append(attrs, "holder_pid", h.PID, "holder_address", h.Addr, "holder_since", h.Started.UTC().Format(time.RFC3339),
+			"hint", fmt.Sprintf("if no controller runs there any more (its host crashed), Postgres ends that session within "+
+				"about a minute; to end it at once, run as the controller's database user (or a superuser): SELECT pg_terminate_backend(%d)", h.PID))
 	}
 	cancel()
 	l.log.Warn(OtherControllerMessage, append(attrs,
@@ -384,16 +387,41 @@ type lockSession interface {
 // lockDialer opens a lock session.
 type lockDialer func(ctx context.Context) (lockSession, error)
 
-// pgLockDialer opens lock sessions with cfg, without the statement and
-// lock timeouts a database URL may set (a wait for the lock is meant to
-// last).
+// The server's TCP keepalives on a lock session. A controller whose host
+// crashes or drops off the network never closes its connection, so Postgres
+// keeps its session, and the lock, until it notices the connection is dead:
+// with the operating system's defaults that takes about two hours, during
+// which a restarted controller waits. With these, the server probes an
+// idle lock session after 30 seconds and ends it after three unanswered
+// probes 10 seconds apart: about a minute. Keepalives are only sent while
+// nothing is waiting for an acknowledgement; tcp_user_timeout (60 seconds,
+// in milliseconds) bounds the other case, a crash right after the server
+// answered one of the lock's checks. (A Unix-socket session ignores them
+// all; its peer is on the same host.)
+const (
+	lockKeepaliveIdle     = 30
+	lockKeepaliveInterval = 10
+	lockKeepaliveCount    = 3
+	lockUserTimeoutMillis = 60000
+)
+
+// lockSessionSetup is run on every new lock session: no statement or lock
+// timeout that a database URL may set (a wait for the lock is meant to
+// last), and the keepalives above.
+func lockSessionSetup() string {
+	return fmt.Sprintf("SET statement_timeout = 0; SET lock_timeout = 0; "+
+		"SET tcp_keepalives_idle = %d; SET tcp_keepalives_interval = %d; SET tcp_keepalives_count = %d; SET tcp_user_timeout = %d",
+		lockKeepaliveIdle, lockKeepaliveInterval, lockKeepaliveCount, lockUserTimeoutMillis)
+}
+
+// pgLockDialer opens lock sessions with cfg, set up by lockSessionSetup.
 func pgLockDialer(cfg *pgx.ConnConfig) lockDialer {
 	return func(ctx context.Context) (lockSession, error) {
 		conn, err := pgx.ConnectConfig(ctx, cfg.Copy())
 		if err != nil {
 			return nil, fmt.Errorf("connect: %w", err)
 		}
-		if _, err := conn.Exec(ctx, "SET statement_timeout = 0; SET lock_timeout = 0"); err != nil {
+		if _, err := conn.Exec(ctx, lockSessionSetup()); err != nil {
 			closeConn(conn)
 			return nil, fmt.Errorf("set up the session: %w", err)
 		}

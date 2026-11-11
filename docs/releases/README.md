@@ -6,10 +6,23 @@ release's text. How releases are built, named and tagged:
 [ADR 0016](../adr/0016-releases-versioning.md). How to upgrade:
 [upgrading](../upgrade.md).
 
+## Only the newest line gets releases
+
+There are no backports: a fix goes into the next version of the newest
+line, never into a patch release of an older minor or major version. Every
+final tag is therefore the highest version released so far, which the
+workflow relies on: it marks each final release as GitHub's latest release
+(what `releases/latest/download` and `syncr-worker upgrade` without
+`--version` install) and moves the image tags `X.Y`, `X` and `latest` to
+it, without comparing versions. Tagging an older line (say `v2.0.5` after
+`v2.1.0`) would move all of them backwards. If that is ever needed, first
+change the workflow and `.goreleaser.yaml` to compare the tag with the
+highest released version (ADR 0016).
+
 ## Making a release
 
 Tags are pushed by a maintainer, by hand; everything else is
-`.github/workflows/release.yml`.
+`.github/workflows/release.yml`. Tag only on the newest line (above).
 
 1. Write `docs/releases/vX.Y.Z.md` and merge it. A release candidate uses
    the notes of its version unless `docs/releases/vX.Y.Z-rc.N.md` exists.

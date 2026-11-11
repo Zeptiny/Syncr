@@ -42,7 +42,8 @@ export function lacksProbes(w: Worker): boolean {
 /**
  * isOutdated reports whether a worker should be upgraded: the controller
  * says so (Worker.outdated: it lacks a link feature this controller knows,
- * or runs another release), or it is too old for probes and restic.
+ * or runs an older release; a newer one is not outdated), or it is too old
+ * for probes and restic.
  */
 export function isOutdated(w: Worker): boolean {
   return w.outdated || lacksProbes(w);
@@ -52,5 +53,5 @@ export function isOutdated(w: Worker): boolean {
 export function outdatedHelp(w: Worker): string {
   return lacksProbes(w)
     ? "This worker's version cannot browse files or work with restic repositories. Upgrade it."
-    : "This worker runs another release than the controller, or lacks a feature the controller uses. Upgrade it.";
+    : "This worker runs an older release than the controller, or lacks a feature the controller uses. Upgrade it.";
 }

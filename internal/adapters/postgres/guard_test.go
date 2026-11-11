@@ -368,6 +368,9 @@ func TestControllerLockWaitsForTheHolder(t *testing.T) {
 	if holder["holder_address"] != "10.0.0.9" || holder["holder_pid"] == "" {
 		t.Errorf("the message does not name the holder: %v", holder)
 	}
+	if !strings.Contains(holder["hint"], "SELECT pg_terminate_backend("+holder["holder_pid"]+")") {
+		t.Errorf("the message does not say how to end the holder's session: %q", holder["hint"])
+	}
 	for range 3 {
 		b.timers.fire(t, DefaultLockWaitLogEvery)
 		b.logs.expect(t, OtherControllerMessage)

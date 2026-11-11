@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
@@ -23,10 +24,11 @@ import (
 	"github.com/Zeptiny/Syncr/internal/jobkind"
 )
 
-// TimeLimits computes the effective time limit of a job (Job.time_limit):
-// its definition's max_runtime or else the controller's default
-// (jobs.EffectiveTimeLimit). *dispatch.Specs implements it, so the API
-// shows the limit the dispatcher sends to the worker.
+// TimeLimits computes the effective time limit of a job: its definition's
+// max_runtime or else the controller's default (jobs.EffectiveTimeLimit).
+// *dispatch.Specs implements it, so the API shows the limit the dispatcher
+// will send to the worker of a queued job (Job.time_limit; a dispatched job
+// shows the limit stored when its worker accepted it).
 type TimeLimits interface {
 	// TimeLimit returns the limit of a job of definition def; zero for
 	// none.
@@ -60,7 +62,8 @@ type jobHandler struct {
 	// workers tells RunJob the worker's operating system (the VSS check);
 	// nil skips the check.
 	workers WorkerNames
-	// limits computes Job.time_limit; nil leaves it unset.
+	// limits computes Job.time_limit of queued jobs; nil leaves it unset
+	// for them.
 	limits TimeLimits
 	errs   errorMapper
 	log    *slog.Logger
@@ -155,12 +158,26 @@ func (h *jobHandler) protoJobs(ctx context.Context, js []jobs.Job) ([]*syncrv1.J
 			msg.Title = h.kinds.DescribeOperation(msg.GetDefinition(), names)
 			msg.Details = jobDetailsToProto(h.kinds.Summarize(j.Kind, msg.GetDefinition(), j.Output))
 		}
-		if h.limits != nil && msg.GetDefinition() != nil {
-			msg.TimeLimit = timeLimitToProto(h.limits.TimeLimit(msg.GetDefinition()))
-		}
+		msg.TimeLimit = h.timeLimit(j, msg.GetDefinition())
 		out = append(out, msg)
 	}
 	return out, nil
+}
+
+// timeLimit is Job.time_limit of j (of definition def). A job a worker
+// accepted shows the limit that worker was sent, stored then
+// (jobs.Job.TimeLimit), so a finished job keeps the limit it ran with when
+// the controller's default changes later. A queued job shows the limit it
+// will be sent, by today's definition and default (h.limits). A job that
+// ended before any worker accepted it ran under no limit.
+func (h *jobHandler) timeLimit(j jobs.Job, def *syncrv1.JobDefinition) *durationpb.Duration {
+	switch {
+	case !j.DispatchedAt.IsZero():
+		return timeLimitToProto(j.TimeLimit)
+	case j.Status == domain.JobQueued && h.limits != nil && def != nil:
+		return timeLimitToProto(h.limits.TimeLimit(def))
+	}
+	return nil
 }
 
 // remoteRefs looks up the remotes of js.

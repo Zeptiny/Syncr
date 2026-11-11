@@ -259,6 +259,17 @@ func (m *manager) control(ctx context.Context, spec Spec, action string) error {
 	if st == StateNotInstalled {
 		return fmt.Errorf("%s: %w", spec.Name, ErrNotInstalled)
 	}
+	// A stopped service is not stopped again, and restarting it starts it.
+	// The Windows Service Control Manager refuses to stop a service that is
+	// not running, so a stop would fail and kardianos' Restart (stop, then
+	// start) too; ending a task that does not run fails with a message in
+	// the display language. systemd's restart starts a stopped unit anyway.
+	switch {
+	case action == "stop" && st == StateStopped:
+		return nil
+	case action == "restart" && st == StateStopped:
+		action = "start"
+	}
 	if m.useTask(spec) {
 		return m.tasks.control(ctx, spec, action)
 	}

@@ -38,8 +38,13 @@ definitions. A limit meant for user jobs could stop the deletion of a large
 repository halfway.
 
 `dispatch.Specs.Build` writes the effective limit into
-`JobSpec.max_runtime`. The API shows the same value as `Job.time_limit`,
-through `dispatch.Specs.TimeLimit`.
+`JobSpec.max_runtime`. When the worker accepts the job, the jobs service
+stores the same value on the job (`jobs.time_limit_ns`, computed by
+`dispatch.Specs.TimeLimitOf`), and the API shows it as `Job.time_limit`. A
+finished job therefore keeps the limit it ran with when
+`jobs.default_max_runtime` changes later. A queued job shows the limit it
+would be sent now (`dispatch.Specs.TimeLimit`), and a job that ended before
+a worker accepted it shows none.
 
 The worker counts the limit from the start of the job's process, on its
 monotonic clock. Waiting in the queue or behind a concurrency key does not
@@ -72,9 +77,13 @@ ones finish. The two are documented side by side.
 `jobs.sample_retention` defaults to 720h (30 days), with a minimum of 1h;
 0 keeps everything. `jobs.Service.PurgeSamples`, called hourly by the
 controller, deletes the samples of the jobs that finished before
-`now - retention`. It works in batches of 50 jobs per statement and repeats
-until a batch deletes nothing, oldest finished first. Unfinished jobs are
-never touched. A job's final counters live on the job row, so its totals
+`now - retention`. It works in batches of 50 jobs per statement, oldest
+finished first, and repeats until a batch deletes nothing. Each batch goes
+on after the last job of the one before (a cursor on `(finished_at, id)`),
+and each run after the last job of the run before, so the jobs already
+purged are not walked again. Once a day a run starts from the oldest job
+again: a worker may report a job's end late, with its own clock, after the
+purge has passed that time. Unfinished jobs are never touched. A job's final counters live on the job row, so its totals
 stay after its chart is gone; the UI says so for a finished job without
 samples.
 
@@ -111,10 +120,16 @@ adds about 8,800 job rows a year, and PR #7 measured the hot queries at
 - `job_samples` stays bounded by the runtime of the last 30 days of jobs.
 - The purge uses the worker's `FinishedAt`. A worker whose clock is far
   behind loses its jobs' charts that much earlier.
-- Each hourly purge walks the finished jobs from the oldest one
+- The daily run walks the finished jobs from the oldest one
   (`jobs_finished_idx`), with one primary-key check per job for remaining
-  samples. Its cost grows with the number of jobs kept. That is fine at the
-  sizes above; a stored "purged up to" mark would remove it.
+  samples, so its cost grows with the number of jobs kept. Measured on
+  Postgres 17 with 400,000 finished jobs (one every 157 seconds over two
+  years, the last 30 days' 16,500 with 20 samples each): that walk takes
+  about 0.7 seconds; a batch that goes on from a cursor takes 3
+  milliseconds. Before the cursor, every batch of a run walked from the
+  oldest job again, about 0.7 seconds each. The hourly runs in between
+  start from the last cursor and cost milliseconds. The cursor is kept in
+  memory, so a restart costs one walk.
 
 ## Alternatives considered
 

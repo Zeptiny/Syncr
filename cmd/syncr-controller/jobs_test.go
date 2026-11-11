@@ -51,10 +51,14 @@ func seededJob(t *testing.T, jc syncrv1connect.JobServiceClient, req *syncrv1.Li
 // The seeded Milestone 6 objects are served too: the job its limit
 // stopped with its thinned samples, the pinned host keys, the canned host
 // key probe, the outdated worker with its upgrade commands, and a running
-// backup whose size fits its repository.
+// backup whose size fits its repository. The old default of
+// workers.download_base_url, set here, is ignored with a warning.
 func TestRunSeededTimeLimits(t *testing.T) {
 	t.Parallel()
-	s := startSeededWith(t, map[string]string{"SYNCR_JOBS_DEFAULT_MAX_RUNTIME": "2h"})
+	s := startSeededWith(t, map[string]string{
+		"SYNCR_JOBS_DEFAULT_MAX_RUNTIME":  "2h",
+		"SYNCR_WORKERS_DOWNLOAD_BASE_URL": controllerconfig.DefaultDownloadBaseURL,
+	})
 	ctx := t.Context()
 	admin := cookieClient(http.DefaultTransport, s.login(devseed.AdminUsername, devseed.AdminPassword), true)
 	jc := syncrv1connect.NewJobServiceClient(admin, s.base)
@@ -125,8 +129,12 @@ func TestRunSeededTimeLimits(t *testing.T) {
 	if err != nil || len(cmds.Msg.GetCommands()) != 2 {
 		t.Fatalf("GetWorkerUpgradeCommands = %v (%v)", cmds, err)
 	}
-	// A development build without a mirror: the latest release, which the
-	// command picks itself (no --version, no --from).
+	// A development build without a mirror (the old default is no mirror):
+	// the latest release, which the command picks itself (no --version, no
+	// --from).
+	if !strings.Contains(s.logs.String(), downloadBaseURLIgnored) {
+		t.Error("no warning about the old default of workers.download_base_url")
+	}
 	for _, c := range cmds.Msg.GetCommands() {
 		if cmd := c.GetCommand(); !strings.Contains(cmd, " upgrade") || strings.Contains(cmd, "--version") || strings.Contains(cmd, "--from") {
 			t.Errorf("upgrade command of a dev controller = %q", cmd)

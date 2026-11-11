@@ -239,29 +239,37 @@ func keepSample(r, n, maxPoints int) bool {
 }
 
 // PurgeJobSamples implements jobs.SampleRepository.
-func (s *Store) PurgeJobSamples(_ context.Context, finishedBefore time.Time, maxJobs int) (int, error) {
+func (s *Store) PurgeJobSamples(_ context.Context, finishedBefore time.Time, after jobs.PurgeCursor, maxJobs int) (int, jobs.PurgeCursor, error) {
 	if maxJobs <= 0 {
-		return 0, fmt.Errorf("purge job samples: %w: max jobs %d is not positive", domain.ErrInvalidArgument, maxJobs)
+		return 0, after, fmt.Errorf("purge job samples: %w: max jobs %d is not positive", domain.ErrInvalidArgument, maxJobs)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var due []jobs.Job
+	order := func(a, b jobs.PurgeCursor) int {
+		return cmp.Or(a.FinishedAt.Compare(b.FinishedAt), compareIDs(a.ID, b.ID))
+	}
+	var due []jobs.PurgeCursor
 	for jid, list := range s.samples {
-		if j, ok := s.jobs[jid]; ok && len(list) > 0 && !j.FinishedAt.IsZero() && j.FinishedAt.Before(finishedBefore) {
-			due = append(due, j)
+		j, ok := s.jobs[jid]
+		if !ok || len(list) == 0 || j.FinishedAt.IsZero() || !j.FinishedAt.Before(finishedBefore) {
+			continue
+		}
+		if c := (jobs.PurgeCursor{FinishedAt: j.FinishedAt, ID: j.ID}); order(c, after) > 0 {
+			due = append(due, c)
 		}
 	}
-	// Those that finished first first, as the index orders them; the port
-	// leaves the order of ties open, the ID breaks them here.
-	slices.SortFunc(due, func(a, b jobs.Job) int {
-		return cmp.Or(a.FinishedAt.Compare(b.FinishedAt), compareIDs(a.ID, b.ID))
-	})
+	// In (FinishedAt, ID) order, as Postgres walks them.
+	slices.SortFunc(due, order)
+	due = due[:min(len(due), maxJobs)]
 	deleted := 0
-	for _, j := range due[:min(len(due), maxJobs)] {
-		deleted += len(s.samples[j.ID])
-		delete(s.samples, j.ID)
+	for _, c := range due {
+		deleted += len(s.samples[c.ID])
+		delete(s.samples, c.ID)
 	}
-	return deleted, nil
+	if len(due) == 0 {
+		return 0, after, nil
+	}
+	return deleted, due[len(due)-1], nil
 }
 
 // olderJob orders jobs by (CreatedAt, ID), the order of the concurrency

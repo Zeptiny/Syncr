@@ -134,11 +134,24 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	e.deps = devseed.Deps{
-		Users: us, Remotes: rs, Workers: ws, Jobs: js, Kinds: kinds, Contacts: cs, Channels: channels,
+		Users: us, Remotes: rs, Workers: ws, Jobs: js, Kinds: kinds, TimeLimits: definitionLimits{}, Contacts: cs, Channels: channels,
 		Cipher: ring, Probes: devseed.NewProbes(e.clock),
 		Store: e.store, Clock: e.clock, Logger: log,
 	}
 	return e
+}
+
+// definitionLimits is the seed's jobs.TimeLimits in these tests: a job's
+// definition's max_runtime (the controller's spec builder adds its
+// default, which the tests have none of).
+type definitionLimits struct{}
+
+func (definitionLimits) TimeLimitOf(j jobs.Job) time.Duration {
+	def, err := jobkind.Unmarshal(j.Definition)
+	if err != nil {
+		return 0
+	}
+	return def.GetMaxRuntime().AsDuration()
 }
 
 func (e *env) seed(t *testing.T) *devseed.Seed {

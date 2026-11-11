@@ -2,17 +2,22 @@
 // ("syncr-worker upgrade") in a way that cannot leave the worker stopped.
 //
 // Run performs six steps, and nothing on the machine changes before the
-// fourth. Before the first, unless NoRestart, it checks that the service
-// exists and runs the binary to be replaced (the program its definition
-// names, Services.InstalledExecutable, must be the same directory entry):
-// replacing another copy would restart a service that still runs the old
-// one.
+// fourth, apart from the lock. It first takes LockFileName in the
+// installed binary's directory (not for a dry run) and holds it to the
+// end, so a second upgrade of the same worker is refused
+// (ErrUpgradeRunning) and a starting worker leaves the upgrade's files
+// alone (RemoveLeftover). Then, unless NoRestart, it checks that the
+// service exists and runs the binary to be replaced (the program its
+// definition names, Services.InstalledExecutable, must be the same
+// directory entry): replacing another copy would restart a service that
+// still runs the old one.
 //
 //  1. Download checksums.txt and this platform's archive
 //     (syncr-worker_<os>_<arch>.tar.gz, or .zip on Windows), require the
 //     archive's SHA-256 to equal its line in checksums.txt (nothing skips
 //     this), and extract only the syncr-worker binary, under a size cap,
-//     to a private temporary file next to the installed one.
+//     to a private temporary file next to the installed one. Redirects go
+//     to https only (to plain http only from and to this machine).
 //  2. Run the new binary's "version": with Config.Version it must report
 //     exactly that version; if it reports the installed version there is
 //     nothing to do.
@@ -22,17 +27,19 @@
 //  4. Swap the binaries (see OSSwapper): an atomic rename on Unix; on
 //     Windows the installed file is renamed to <name>.old and the new one
 //     moved into place.
-//  5. Restart the service and require it to stay running for
-//     Config.HealthWindow (about 20 seconds).
-//  6. On failure: stop the service, put the old binary back, start it and
-//     return an error that says where the service's log is. On success:
-//     prune the old tool versions (tools.Installer.Prune), remove the old
-//     binary where the OS allows it (RemoveLeftover removes it at the next
-//     start otherwise) and report both versions.
+//  5. Restart the service (start it, if it was stopped) and require it to
+//     stay running for Config.HealthWindow (about 20 seconds).
+//  6. On failure: stop the service, put the old binary back, start the
+//     service again in any case and return an error that says where the
+//     service's log is. On success: prune the old tool versions
+//     (tools.Installer.Prune), remove the old binary where the OS allows it
+//     (on Windows the next start removes it, see RemoveLeftover) and report
+//     both versions.
 //
 // Once step 4 began, the remaining steps run to the end even if the
 // caller's context is cancelled, so an interrupted upgrade still ends with
-// a running worker.
+// a running worker. (The caller keeps the process alive: the command
+// ignores the terminal's hangup.)
 //
 // The checksum file comes from the same release as the archive: it catches
 // a corrupted or truncated download, not a compromised release. The trust
@@ -41,8 +48,8 @@
 // The steps' effects go through ports (HTTPDoer, Services, Binary, Swapper,
 // Pruner) so that every path, rollback included, is tested with fakes.
 //
-// Allowed dependencies: the standard library and internal/worker/{proc,
-// service,tools}.
+// Allowed dependencies: the standard library and internal/worker/{filelock,
+// proc,service,tools}.
 package upgrade
 
 import (
@@ -51,12 +58,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"time"
 
+	"github.com/Zeptiny/Syncr/internal/worker/filelock"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/service"
 	"github.com/Zeptiny/Syncr/internal/worker/tools"
@@ -79,6 +88,10 @@ const (
 	healthPoll = time.Second
 	// rollbackTimeout bounds the rollback's service calls.
 	rollbackTimeout = 2 * time.Minute
+	// lockWait is how long an upgrade waits for LockFileName: a starting
+	// worker holds it for a moment while it removes leftovers, another
+	// upgrade for minutes.
+	lockWait = 5 * time.Second
 )
 
 // Temporary files next to the installed binary.
@@ -117,6 +130,12 @@ var (
 	// ErrRollbackFailed: the rollback itself failed; the error says how to
 	// finish it by hand.
 	ErrRollbackFailed = errors.New("the rollback failed")
+	// ErrUpgradeRunning: another upgrade of the same worker binary holds
+	// LockFileName.
+	ErrUpgradeRunning = errors.New("another upgrade of this worker is running")
+	// ErrInsecureRedirect: the release host redirected a download to
+	// plain http.
+	ErrInsecureRedirect = errors.New("refusing a redirect to plain http")
 )
 
 // versionPattern matches a release version: v<major>.<minor>.<patch> with
@@ -191,14 +210,17 @@ type Config struct {
 	// Out receives progress messages for the operator; nil discards them.
 	Out io.Writer
 
-	// HTTP downloads the release assets; nil means tools.NewHTTPClient().
+	// HTTP downloads the release assets; nil means newHTTPClient(): redirects
+	// go to https only (plain http only from and to this machine).
 	HTTP HTTPDoer
 	// Services controls the service; required unless NoRestart or DryRun.
 	Services Services
 	// Binary runs the new binary; nil means an ExecBinary over a
 	// proc.Supervisor.
 	Binary Binary
-	// Swapper replaces the installed binary; nil means NewOSSwapper().
+	// Swapper replaces the installed binary; nil means NewOSSwapper(),
+	// with OSSwapper.Original set on Linux when this process runs the
+	// installed binary (as the upgrade command does).
 	Swapper Swapper
 	// Pruner removes old tool versions; nil means a tools.Installer for
 	// ToolsDir.
@@ -242,7 +264,12 @@ type upgrader struct {
 	base, asset, member string
 	format              tools.Format
 	goos                string
-	res                 Result
+	// original is OSSwapper.Original of the swapper (an OSSwapper): where
+	// a rollback finds the old binary when its backup is missing.
+	original string
+	// lockWait is how long run waits for LockFileName (lockWait).
+	lockWait time.Duration
+	res      Result
 }
 
 // Run upgrades the worker as Config describes and returns what it did. A
@@ -265,13 +292,10 @@ func newUpgrader(cfg Config) (*upgrader, error) {
 		cfg.Out = io.Discard
 	}
 	if cfg.HTTP == nil {
-		cfg.HTTP = tools.NewHTTPClient()
+		cfg.HTTP = newHTTPClient()
 	}
 	if cfg.Binary == nil {
 		cfg.Binary = NewExecBinary(proc.New(proc.Options{}))
-	}
-	if cfg.Swapper == nil {
-		cfg.Swapper = NewOSSwapper()
 	}
 	if cfg.Sleep == nil {
 		cfg.Sleep = sleep
@@ -293,7 +317,7 @@ func newUpgrader(cfg Config) (*upgrader, error) {
 		cfg.Pruner = inst
 	}
 
-	u := &upgrader{cfg: cfg, goos: cfg.OS}
+	u := &upgrader{cfg: cfg, goos: cfg.OS, lockWait: lockWait}
 	if !filepath.IsAbs(cfg.Executable) {
 		return nil, fmt.Errorf("upgrade: the worker binary %q is not an absolute path", cfg.Executable)
 	}
@@ -310,6 +334,14 @@ func newUpgrader(cfg Config) (*upgrader, error) {
 	}
 	u.exe, u.dir, u.backup = exe, filepath.Dir(exe), exe+BackupSuffix
 	u.mode = info.Mode().Perm() | 0o100 // stays executable by its owner
+	if u.cfg.Swapper == nil {
+		// Checked before anything changes: once swapped, the installed file
+		// is the new binary.
+		u.cfg.Swapper = OSSwapper{Windows: runtime.GOOS == "windows", Original: runningOriginal(exe)}
+	}
+	if s, ok := u.cfg.Swapper.(OSSwapper); ok {
+		u.original = s.Original
+	}
 	if svc := cfg.Service.Executable; !cfg.NoRestart && svc != "" {
 		resolved, err := filepath.EvalSymlinks(svc)
 		if err != nil || resolved != exe {
@@ -348,6 +380,21 @@ func (u *upgrader) warn(format string, args ...any) {
 
 func (u *upgrader) run(ctx context.Context) (Result, error) {
 	cfg := &u.cfg
+	checkService := !cfg.NoRestart && cfg.Services != nil // read-only, so a dry run checks it too
+	if checkService {
+		// The rights first: without them the lock next to the binary cannot
+		// be taken either, and this error says what to do.
+		if err := cfg.Services.Preflight(cfg.Service); err != nil {
+			return u.res, err
+		}
+	}
+	if !cfg.DryRun {
+		release, err := u.lock(ctx)
+		if err != nil {
+			return u.res, err
+		}
+		defer release()
+	}
 	if cfg.Current == "" {
 		v, err := cfg.Binary.Version(ctx, u.exe)
 		if err != nil {
@@ -356,7 +403,7 @@ func (u *upgrader) run(ctx context.Context) (Result, error) {
 		cfg.Current = v
 	}
 	u.res.Old = cfg.Current
-	if !cfg.NoRestart && cfg.Services != nil { // read-only, so a dry run checks it too
+	if checkService {
 		if err := u.checkService(ctx); err != nil {
 			return u.res, err
 		}
@@ -447,13 +494,33 @@ func (u *upgrader) run(ctx context.Context) (Result, error) {
 	return u.res, nil
 }
 
+// lock takes LockFileName in the installed binary's directory, waiting up
+// to u.lockWait while another process holds it, and returns its release.
+func (u *upgrader) lock(ctx context.Context) (func(), error) {
+	path := filepath.Join(u.dir, LockFileName)
+	wctx, cancel := context.WithTimeout(ctx, u.lockWait)
+	defer cancel()
+	release, err := filelock.Acquire(wctx, path)
+	switch {
+	case err == nil:
+		return func() { _ = release() }, nil
+	case ctx.Err() != nil:
+		return nil, fmt.Errorf("wait for %s: %w; nothing was changed", path, context.Cause(ctx))
+	case wctx.Err() != nil:
+		return nil, fmt.Errorf("%w (%s holds %s): let it finish, then run this command again if it is still needed; nothing was changed",
+			ErrUpgradeRunning, path, u.exe)
+	case errors.Is(err, fs.ErrPermission):
+		return nil, notWritable(u.dir)
+	default:
+		return nil, fmt.Errorf("%w; nothing was changed", err)
+	}
+}
+
 // checkService makes sure, before anything changes, that the service can
-// be restarted: the rights are there and the service exists.
+// be restarted: it exists and runs the binary to replace. (The rights were
+// checked before, Services.Preflight.)
 func (u *upgrader) checkService(ctx context.Context) error {
 	spec := u.cfg.Service
-	if err := u.cfg.Services.Preflight(spec); err != nil {
-		return err
-	}
 	st, err := u.cfg.Services.Status(ctx, spec)
 	if err != nil {
 		return fmt.Errorf("check the worker service: %w", err)
@@ -488,13 +555,21 @@ func (u *upgrader) checkServiceBinary(ctx context.Context) error {
 		ErrOtherBinary, spec.Name, svcExe, u.exe, svcExe)
 }
 
-// restartAndWatch restarts the service and requires it to be running at
-// every poll of the health window.
+// restartAndWatch restarts the service, or starts it if it is stopped (a
+// Windows Service cannot be restarted then), and requires it to be running
+// at every poll of the health window.
 func (u *upgrader) restartAndWatch(ctx context.Context) error {
 	spec := u.cfg.Service
-	u.say("Restarting the %s service", spec.Name)
-	if err := u.cfg.Services.Restart(ctx, spec); err != nil {
-		return fmt.Errorf("restart the service: %w", err)
+	if st, err := u.cfg.Services.Status(ctx, spec); err == nil && st == service.StateStopped {
+		u.say("Starting the %s service", spec.Name)
+		if err := u.cfg.Services.Start(ctx, spec); err != nil {
+			return fmt.Errorf("start the service: %w", err)
+		}
+	} else {
+		u.say("Restarting the %s service", spec.Name)
+		if err := u.cfg.Services.Restart(ctx, spec); err != nil {
+			return fmt.Errorf("restart the service: %w", err)
+		}
 	}
 	u.say("Checking that it stays running for %s", u.cfg.HealthWindow)
 	for waited := time.Duration(0); waited < u.cfg.HealthWindow; {
@@ -514,7 +589,10 @@ func (u *upgrader) restartAndWatch(ctx context.Context) error {
 	return nil
 }
 
-// rollback puts the old binary back after cause and starts it again.
+// rollback puts the old binary back after cause and starts the service
+// again. It starts it even when the old binary could not be put back: a
+// worker that runs the new version is better than a stopped one, and the
+// error says how to finish by hand.
 func (u *upgrader) rollback(ctx context.Context, cause error) error {
 	spec := u.cfg.Service
 	ctx, cancel := context.WithTimeout(ctx, rollbackTimeout)
@@ -523,14 +601,26 @@ func (u *upgrader) rollback(ctx context.Context, cause error) error {
 	u.say("The new version did not stay running (%v); rolling back to %s", cause, u.cfg.Current)
 
 	stopErr := u.cfg.Services.Stop(ctx, spec)
-	if err := u.cfg.Swapper.Restore(u.exe, u.backup); err != nil {
-		return fmt.Errorf("%w: %w; to finish by hand, stop the %s service, move %s to %s and start the service; its log: %s",
-			ErrRollbackFailed, errors.Join(err, stopErr), spec.Name, u.backup, u.exe, logHint)
+	if _, err := os.Lstat(u.backup); errors.Is(err, fs.ErrNotExist) && u.original != "" {
+		u.warn("the backup %s is missing; %s is put back from %s, the binary this command runs from", u.backup, u.cfg.Current, u.original)
 	}
-	u.res.Swapped = false
-	if err := u.cfg.Services.Start(ctx, spec); err != nil {
+	restoreErr := u.cfg.Swapper.Restore(u.exe, u.backup)
+	if restoreErr == nil {
+		u.res.Swapped = false
+	}
+	startErr := u.cfg.Services.Start(ctx, spec)
+	switch {
+	case restoreErr != nil && startErr != nil:
+		return fmt.Errorf("%w: %w; the service did not start either (%w). To finish by hand, stop the %s service, "+
+			"put %s (the backup %s, if it is still there) back at %s and start the service; its log: %s",
+			ErrRollbackFailed, errors.Join(restoreErr, stopErr), startErr, spec.Name, u.cfg.Current, u.backup, u.exe, logHint)
+	case restoreErr != nil:
+		return fmt.Errorf("%w: %w; the service was started again with %s, which did not stay running (%w). To finish by hand, "+
+			"stop the %s service, put %s (the backup %s, if it is still there) back at %s and start the service; its log: %s",
+			ErrRollbackFailed, errors.Join(restoreErr, stopErr), u.res.New, cause, spec.Name, u.cfg.Current, u.backup, u.exe, logHint)
+	case startErr != nil:
 		return fmt.Errorf("%w: %s is back in place, but the service did not start: %w; start it by hand; its log: %s",
-			ErrRollbackFailed, u.cfg.Current, err, logHint)
+			ErrRollbackFailed, u.cfg.Current, startErr, logHint)
 	}
 	return fmt.Errorf("%w: %s did not stay running (%w); %s was put back and started. See the service's log: %s",
 		ErrRolledBack, u.res.New, cause, u.cfg.Current, logHint)
@@ -538,7 +628,7 @@ func (u *upgrader) rollback(ctx context.Context, cause error) error {
 
 // removeBackup removes the old binary's backup where the OS allows it. On
 // Windows it usually cannot: this command runs from that file. The worker
-// removes it at a later start (RemoveLeftover), or the next upgrade does.
+// removes it at its next start (RemoveLeftover), or the next upgrade does.
 func (u *upgrader) removeBackup() {
 	err := os.Remove(u.backup)
 	switch {
