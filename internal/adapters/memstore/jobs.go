@@ -207,11 +207,61 @@ func (s *Store) LatestJobSamples(_ context.Context, ids []domain.JobID) (map[dom
 	return out, nil
 }
 
-// ListJobSamples implements jobs.SampleRepository.
-func (s *Store) ListJobSamples(_ context.Context, id domain.JobID) ([]jobs.Sample, error) {
+// ListJobSamples implements jobs.SampleRepository, with the port's exact
+// thinning rule.
+func (s *Store) ListJobSamples(_ context.Context, id domain.JobID, maxPoints int) ([]jobs.Sample, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return slices.Clone(s.samples[id]), nil
+	list := s.samples[id]
+	n := len(list)
+	if maxPoints <= 0 || n <= maxPoints {
+		return slices.Clone(list), n, nil
+	}
+	out := make([]jobs.Sample, 0, maxPoints)
+	for r, smp := range list {
+		if keepSample(r, n, maxPoints) {
+			out = append(out, smp)
+		}
+	}
+	return out, n, nil
+}
+
+// keepSample reports whether ListJobSamples keeps the sample at rank r of
+// n when thinning them to maxPoints (n > maxPoints >= 1): the first one,
+// and then the first of each of maxPoints equal spans of ranks. The
+// Postgres query computes the same with integer division (r >= 1, so both
+// truncate like floor).
+func keepSample(r, n, maxPoints int) bool {
+	if r == 0 {
+		return true
+	}
+	return r*(maxPoints-1)/(n-1) > (r-1)*(maxPoints-1)/(n-1)
+}
+
+// PurgeJobSamples implements jobs.SampleRepository.
+func (s *Store) PurgeJobSamples(_ context.Context, finishedBefore time.Time, maxJobs int) (int, error) {
+	if maxJobs <= 0 {
+		return 0, fmt.Errorf("purge job samples: %w: max jobs %d is not positive", domain.ErrInvalidArgument, maxJobs)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var due []jobs.Job
+	for jid, list := range s.samples {
+		if j, ok := s.jobs[jid]; ok && len(list) > 0 && !j.FinishedAt.IsZero() && j.FinishedAt.Before(finishedBefore) {
+			due = append(due, j)
+		}
+	}
+	// Those that finished first first, as the index orders them; the port
+	// leaves the order of ties open, the ID breaks them here.
+	slices.SortFunc(due, func(a, b jobs.Job) int {
+		return cmp.Or(a.FinishedAt.Compare(b.FinishedAt), compareIDs(a.ID, b.ID))
+	})
+	deleted := 0
+	for _, j := range due[:min(len(due), maxJobs)] {
+		deleted += len(s.samples[j.ID])
+		delete(s.samples, j.ID)
+	}
+	return deleted, nil
 }
 
 // olderJob orders jobs by (CreatedAt, ID), the order of the concurrency

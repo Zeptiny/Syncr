@@ -163,6 +163,10 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 		{"RepoListShowsDeleting", testRepoListShowsDeleting},
 		{"RepoNoAliasing", testRepoNoAliasing},
 		{"JobAndScheduleRepository", testJobAndScheduleRepository},
+
+		// Milestone 6: sample retention and chart size (samples.go).
+		{"SamplesThinned", testSamplesThinned},
+		{"SamplesPurge", testSamplesPurge},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -989,9 +993,9 @@ func testSamples(t *testing.T, s Store) {
 			t.Fatalf("AppendJobSample: %v", err)
 		}
 	}
-	list, err := s.ListJobSamples(ctx, j.ID)
-	if err != nil || len(list) != 3 {
-		t.Fatalf("ListJobSamples = (%d samples, %v), want 3 (duplicate ignored)", len(list), err)
+	list, total, err := s.ListJobSamples(ctx, j.ID, 0)
+	if err != nil || len(list) != 3 || total != 3 {
+		t.Fatalf("ListJobSamples = (%d samples, total %d, %v), want 3 (duplicate ignored)", len(list), total, err)
 	}
 	for i, smp := range list {
 		if want := t0().Add(time.Duration(i+1) * time.Second); !smp.Time.Equal(want) || smp.Stats.Bytes != int64(i+1)<<32 {
@@ -1003,6 +1007,9 @@ func testSamples(t *testing.T, s Store) {
 		t.Errorf("LatestJobSample = (%+v, %v, %v)", latest, ok, err)
 	}
 	wantErr(t, "AppendJobSample(missing job)", s.AppendJobSample(ctx, jobs.Sample{JobID: jobID(t, 9), Time: t0()}), domain.ErrNotFound)
+	if none, total, err := s.ListJobSamples(ctx, jobID(t, 9), 0); err != nil || len(none) != 0 || total != 0 {
+		t.Errorf("ListJobSamples(missing job) = (%v, %d, %v), want none", none, total, err)
+	}
 }
 
 // testLatestSamples: LatestJobSamples agrees with LatestJobSample for

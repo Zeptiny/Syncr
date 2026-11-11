@@ -9,9 +9,10 @@ import (
 // Link features a worker reports in Hello.features (Milestone 5). The
 // controller sends a worker only what its features allow: probes to a worker
 // with FeatureProbe, restic jobs to one with FeatureResticV2 (and, for
-// restic_delete_data, FeatureResticDelete). A worker that reports no
-// features is a Milestone 4 worker: it ignores the Milestone 5 restic spec
-// fields and acks probe commands without running them.
+// restic_delete_data, FeatureResticDelete), a job with a time limit to one
+// with FeatureJobTimeLimit. A worker that reports no features is a
+// Milestone 4 worker: it ignores the Milestone 5 restic spec fields and acks
+// probe commands without running them.
 const (
 	// FeatureProbe: the worker runs probes (Command.run_probe in active
 	// mode, WorkerLinkService.Probe in passive mode).
@@ -22,12 +23,18 @@ const (
 	FeatureResticV2 = "restic.v2"
 	// FeatureResticDelete: the worker runs the restic_delete_data job kind.
 	FeatureResticDelete = "restic.delete"
+	// FeatureJobTimeLimit (Milestone 6): the worker enforces
+	// JobSpec.max_runtime, stopping a job at its time limit with
+	// JOB_ERROR_CODE_TIME_LIMIT. A worker without it would ignore the field
+	// and let the job run on, so the controller does not send it a job with
+	// a limit.
+	FeatureJobTimeLimit = "job.time_limit"
 )
 
 // Features returns every link feature this build defines, in a fixed order.
 // An up-to-date worker reports all of them.
 func Features() []string {
-	return []string{FeatureProbe, FeatureResticV2, FeatureResticDelete}
+	return []string{FeatureProbe, FeatureResticV2, FeatureResticDelete, FeatureJobTimeLimit}
 }
 
 // probeOneof is the ProbeSpec oneof whose set field names the probe op.

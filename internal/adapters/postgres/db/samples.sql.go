@@ -122,18 +122,65 @@ func (q *Queries) LatestJobSamples(ctx context.Context, jobIds []pgtype.UUID) ([
 }
 
 const listJobSamples = `-- name: ListJobSamples :many
-SELECT job_id, t, bytes, total_bytes, files, total_files, checks, deletes, renames, errors, elapsed_ns FROM job_samples WHERE job_id = $1 ORDER BY t
+WITH counted AS (
+    SELECT count(*) AS total FROM job_samples cs WHERE cs.job_id = $2::uuid
+),
+ranked AS (
+    SELECT js.job_id, js.t, js.bytes, js.total_bytes, js.files, js.total_files, js.checks,
+           js.deletes, js.renames, js.errors, js.elapsed_ns,
+           row_number() OVER (ORDER BY js.t) - 1 AS rank
+    FROM job_samples js
+    WHERE js.job_id = $2::uuid
+)
+SELECT r.job_id, r.t, r.bytes, r.total_bytes, r.files, r.total_files, r.checks,
+       r.deletes, r.renames, r.errors, r.elapsed_ns, c.total
+FROM ranked r CROSS JOIN counted c
+WHERE CASE
+    WHEN $1::bigint <= 0 OR c.total <= $1::bigint THEN true
+    WHEN r.rank = 0 THEN true
+    ELSE r.rank * ($1::bigint - 1) / (c.total - 1)
+        > (r.rank - 1) * ($1::bigint - 1) / (c.total - 1)
+END
+ORDER BY r.t
 `
 
-func (q *Queries) ListJobSamples(ctx context.Context, jobID pgtype.UUID) ([]JobSample, error) {
-	rows, err := q.db.Query(ctx, listJobSamples, jobID)
+type ListJobSamplesParams struct {
+	MaxPoints int64
+	JobID     pgtype.UUID
+}
+
+type ListJobSamplesRow struct {
+	JobID      pgtype.UUID
+	T          pgtype.Timestamptz
+	Bytes      int64
+	TotalBytes int64
+	Files      int64
+	TotalFiles int64
+	Checks     int64
+	Deletes    int64
+	Renames    int64
+	Errors     int64
+	ElapsedNs  int64
+	Total      int64
+}
+
+// The job's samples, oldest first, evenly thinned to max_points when it has
+// more (jobs.SampleRepository.ListJobSamples has the rule; max_points <= 0
+// keeps every sample), each with the job's sample count. The count is a
+// CTE of the same statement (one snapshot), so it agrees with the rows;
+// both read the primary key (job_id, t) and nothing else. The CASE keeps
+// the division from running when total - 1 may be 0 (OR does not promise
+// an evaluation order); ranks from 1 are positive, so integer division is
+// floor.
+func (q *Queries) ListJobSamples(ctx context.Context, arg ListJobSamplesParams) ([]ListJobSamplesRow, error) {
+	rows, err := q.db.Query(ctx, listJobSamples, arg.MaxPoints, arg.JobID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []JobSample{}
+	items := []ListJobSamplesRow{}
 	for rows.Next() {
-		var i JobSample
+		var i ListJobSamplesRow
 		if err := rows.Scan(
 			&i.JobID,
 			&i.T,
@@ -146,6 +193,7 @@ func (q *Queries) ListJobSamples(ctx context.Context, jobID pgtype.UUID) ([]JobS
 			&i.Renames,
 			&i.Errors,
 			&i.ElapsedNs,
+			&i.Total,
 		); err != nil {
 			return nil, err
 		}
@@ -155,4 +203,34 @@ func (q *Queries) ListJobSamples(ctx context.Context, jobID pgtype.UUID) ([]JobS
 		return nil, err
 	}
 	return items, nil
+}
+
+const purgeJobSamples = `-- name: PurgeJobSamples :execrows
+DELETE FROM job_samples
+WHERE job_id IN (
+    SELECT j.id
+    FROM jobs j
+    WHERE j.finished_at < $1::timestamptz
+      AND EXISTS (SELECT 1 FROM job_samples s WHERE s.job_id = j.id)
+    ORDER BY j.finished_at
+    LIMIT $2::bigint
+)
+`
+
+type PurgeJobSamplesParams struct {
+	FinishedBefore pgtype.Timestamptz
+	MaxJobs        int64
+}
+
+// Deletes the samples of at most max_jobs jobs that finished before
+// finished_before and still have samples, those that finished first first.
+// jobs_finished_idx walks the finished jobs in order; the EXISTS probe and
+// the delete use the samples' primary key. Unfinished jobs have no
+// finished_at and are never matched.
+func (q *Queries) PurgeJobSamples(ctx context.Context, arg PurgeJobSamplesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeJobSamples, arg.FinishedBefore, arg.MaxJobs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

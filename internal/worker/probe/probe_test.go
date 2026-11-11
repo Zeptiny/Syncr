@@ -163,8 +163,17 @@ func specOf(op string, limit int32) *syncrv1.ProbeSpec {
 		s.Op = &syncrv1.ProbeSpec_ResticInit{ResticInit: &syncrv1.ProbeResticInit{Repository: repo}}
 	case "restic_config":
 		s.Op = &syncrv1.ProbeSpec_ResticConfig{ResticConfig: &syncrv1.ProbeResticConfig{Repository: repo}}
+	case "sftp_host_keys":
+		s.Op = &syncrv1.ProbeSpec_SftpHostKeys{SftpHostKeys: &syncrv1.ProbeSftpHostKeys{Host: "sftp.example.com", Port: 22}}
 	}
 	return s
+}
+
+// servedOps are the ops of the contract this executor can run once every
+// prober is configured: all but sftp_host_keys, whose prober does not exist
+// yet (remove the exclusion with it).
+func servedOps() []string {
+	return slices.DeleteFunc(link.ProbeOps(), func(op string) bool { return op == "sftp_host_keys" })
 }
 
 func probeOf(op string, limit int32) *syncrv1.RunProbe {
@@ -183,10 +192,10 @@ func TestEveryOpIsDispatched(t *testing.T) {
 	tools := &fakeTools{entries: 2, snapshots: 2}
 	local := &fakeLocal{listing: localfs.Listing{Entries: []localfs.Entry{{Name: "a", Path: "/srv/a", Dir: true}}}}
 	e := newExecutor(t, tools, local)
-	if !slices.Equal(e.Ops(), link.ProbeOps()) {
-		t.Errorf("Ops() = %v, want every op of the contract %v", e.Ops(), link.ProbeOps())
+	if !slices.Equal(e.Ops(), servedOps()) {
+		t.Errorf("Ops() = %v, want every op of the contract %v", e.Ops(), servedOps())
 	}
-	for _, op := range link.ProbeOps() {
+	for _, op := range servedOps() {
 		res := e.Probe(t.Context(), probeOf(op, 0))
 		if res.GetStatus() != syncrv1.ProbeStatus_PROBE_STATUS_OK || res.GetProbeId() != "p-"+op || res.GetError() != nil || res.GetElapsed() == nil {
 			t.Errorf("%s: result = %v", op, res)

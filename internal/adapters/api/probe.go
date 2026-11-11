@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 
 	"connectrpc.com/connect"
 
@@ -110,4 +111,11 @@ func (h *probeHandler) TestRemote(ctx context.Context, req *connect.Request[sync
 		return nil, h.fail(ctx, syncrv1connect.ProbeServiceTestRemoteProcedure, "remote or worker", err)
 	}
 	return connect.NewResponse(out), nil
+}
+
+// GetSftpHostKeys fetches an SFTP server's host keys through a worker. It
+// is not implemented yet: it answers Unimplemented until the probe use
+// cases can run the sftp_host_keys probe.
+func (h *probeHandler) GetSftpHostKeys(context.Context, *connect.Request[syncrv1.GetSftpHostKeysRequest]) (*connect.Response[syncrv1.GetSftpHostKeysResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fetching SFTP host keys is not implemented yet"))
 }

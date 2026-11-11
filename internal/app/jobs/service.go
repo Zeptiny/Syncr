@@ -338,16 +338,33 @@ func (s *Service) LatestSamples(ctx context.Context, ids []domain.JobID) (map[do
 }
 
 // Samples returns the stored progress samples of a job the actor may see,
-// oldest first.
+// oldest first: ListSamples with DefaultSamplePoints, without the total.
 func (s *Service) Samples(ctx context.Context, actor domain.Actor, id domain.JobID) ([]Sample, error) {
+	out, _, err := s.ListSamples(ctx, actor, id, DefaultSamplePoints)
+	return out, err
+}
+
+// ListSamples returns the stored progress samples of a job the actor may
+// see, oldest first, evenly thinned to at most maxPoints (always with the
+// first and the last; see SampleRepository.ListJobSamples), and how many
+// the job has stored. maxPoints 0 means DefaultSamplePoints; more than
+// MaxSamplePoints is capped; a negative one is ErrInvalidArgument.
+func (s *Service) ListSamples(ctx context.Context, actor domain.Actor, id domain.JobID, maxPoints int) (samples []Sample, total int, err error) {
+	switch {
+	case maxPoints < 0:
+		return nil, 0, fmt.Errorf("samples of job %s: %w: max points %d is negative", id, domain.ErrInvalidArgument, maxPoints)
+	case maxPoints == 0:
+		maxPoints = DefaultSamplePoints
+	}
+	maxPoints = min(maxPoints, MaxSamplePoints)
 	if _, err := s.Get(ctx, actor, id); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	out, err := s.samples.ListJobSamples(ctx, id)
+	out, total, err := s.samples.ListJobSamples(ctx, id, maxPoints)
 	if err != nil {
-		return nil, fmt.Errorf("samples of job %s: %w", id, err)
+		return nil, 0, fmt.Errorf("samples of job %s: %w", id, err)
 	}
-	return out, nil
+	return out, total, nil
 }
 
 // List returns a page of jobs matching f, newest first: the actor's own

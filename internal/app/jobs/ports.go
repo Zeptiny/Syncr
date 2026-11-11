@@ -92,8 +92,27 @@ type SampleRepository interface {
 	// are absent. Repeated IDs are allowed.
 	LatestJobSamples(ctx context.Context, ids []domain.JobID) (map[domain.JobID]Sample, error)
 
-	// ListJobSamples returns all samples of the job by Time ascending.
-	ListJobSamples(ctx context.Context, id domain.JobID) ([]Sample, error)
+	// ListJobSamples returns samples of the job by Time ascending, and
+	// total, the number of samples it has; one consistent read (SQL: one
+	// statement). With maxPoints <= 0, or at most maxPoints samples, it
+	// returns every sample. Otherwise it returns exactly maxPoints of the n
+	// samples, evenly thinned: the one at rank (0-based, by Time) r is kept
+	// if r == 0 or floor(r*(maxPoints-1)/(n-1)) > floor((r-1)*(maxPoints-1)/(n-1)),
+	// which keeps the first and (for maxPoints >= 2) the last sample and
+	// the first one of each of maxPoints equal spans of ranks. Both stores
+	// apply this exact rule, so they return the same samples. An unknown
+	// job has none (total 0, no error).
+	ListJobSamples(ctx context.Context, id domain.JobID, maxPoints int) (samples []Sample, total int, err error)
+
+	// PurgeJobSamples deletes every sample of at most maxJobs jobs whose
+	// FinishedAt is before finishedBefore and that still have samples,
+	// those that finished first first, and returns the number of samples
+	// it deleted: 0 means no such job is left, so callers repeat it until
+	// it returns 0. Unfinished jobs (zero FinishedAt) are never touched;
+	// nor are the jobs themselves (their final Stats stay). maxJobs must
+	// be positive. SQL: jobs_finished_idx for the jobs and the samples'
+	// primary key, one statement.
+	PurgeJobSamples(ctx context.Context, finishedBefore time.Time, maxJobs int) (int, error)
 }
 
 // ActivityRepository aggregates finished jobs for the dashboard. Same rules

@@ -176,7 +176,7 @@ func TestRunActiveLink(t *testing.T) {
 		t.Errorf("hello job kinds = %v", hello.GetJobKinds())
 	}
 	// An up-to-date worker reports every link feature and probe operation.
-	if !slices.Equal(hello.GetFeatures(), link.Features()) || !slices.Equal(hello.GetProbeOps(), link.ProbeOps()) {
+	if !slices.Equal(hello.GetFeatures(), link.Features()) || !slices.Equal(hello.GetProbeOps(), servedProbeOps()) {
 		t.Errorf("hello features = %v, probe ops = %v", hello.GetFeatures(), hello.GetProbeOps())
 	}
 	want := link.ActiveAuthorization(cmdWorkerID, cmdSecret)

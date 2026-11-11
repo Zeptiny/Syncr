@@ -336,7 +336,8 @@ message Hello {
 
   // Link features this worker implements, e.g. "probe" (it answers
   // RunProbe and Probe), "restic.v2" (it honours the Milestone 5 restic spec
-  // fields) and "restic.delete" (it runs restic_delete_data). The controller
+  // fields), "restic.delete" (it runs restic_delete_data) and
+  // "job.time_limit" (it enforces JobSpec.max_runtime). The controller
   // sends a worker only what its features allow; a worker that reports none
   // is treated as a Milestone 4 worker.
   repeated string features = 9;
@@ -542,7 +543,7 @@ enum JobErrorCode {
   // expected one (its config ID differs); nothing was deleted.
   JOB_ERROR_CODE_REPOSITORY_MISMATCH = 18;
 
-  // Codes 20 and up are set by the controller, never by workers.
+  // Codes 20 to 26 are set by the controller, never by workers.
 
   // The worker did not accept the job within the controller's dispatch
   // timeout (it was offline or unreachable). Status FAILED.
@@ -566,6 +567,11 @@ enum JobErrorCode {
   // The worker lacks a link feature the job's kind requires (it must be
   // upgraded), checked when the job would be dispatched. Status FAILED.
   JOB_ERROR_CODE_WORKER_OUTDATED = 26;
+
+  // Set by workers (Milestone 6): the job's time limit
+  // (JobSpec.max_runtime) was reached, so the worker stopped it the way it
+  // stops a cancelled job. Status FAILED; the work done so far is kept.
+  JOB_ERROR_CODE_TIME_LIMIT = 27;
 }
 
 // WorkerState is a snapshot (not an event) of the jobs a worker holds,
@@ -692,7 +698,15 @@ message JobSpec {
   // variables.
   repeated RemoteDefinition remotes = 1;
 
-  reserved 2 to 9;
+  // Hard time limit: this long after the worker started the job's process
+  // (measured on its monotonic clock, not from queueing), it stops the
+  // process as it stops a cancelled job (interrupt, grace period, kill, and
+  // the rest of the process tree) and reports FAILED with TIME_LIMIT. Unset
+  // or zero means none. Sent only to workers whose Hello lists the
+  // "job.time_limit" feature.
+  google.protobuf.Duration max_runtime = 2;
+
+  reserved 3 to 9;
 
   // The operation to run. The name of the set field is the job kind (e.g.
   // "rclone_transfer", "restic_backup") that selects the worker runner.
@@ -1340,6 +1354,9 @@ message ProbeSpec {
     ProbeResticLs restic_ls = 14;
     ProbeResticInit restic_init = 15;
     ProbeResticConfig restic_config = 16;
+    // Milestone 6: an SFTP server's host keys, fetched by the worker itself
+    // (no tool, no remote).
+    ProbeSftpHostKeys sftp_host_keys = 17;
   }
 }
 
@@ -1429,6 +1446,23 @@ message ProbeResticConfig {
   reserved 2 to 9;
 }
 
+// ProbeSftpHostKeys asks an SSH (SFTP) server for its host keys, so they
+// can be pinned in a remote's host_keys option. The worker connects
+// directly (proxy options of a remote are not honoured), once per host key
+// algorithm so that it finds every key type the server offers, and aborts
+// each handshake once it has the key: no credentials are sent and nothing
+// is changed. Each connection attempt has a 10s dial timeout within the
+// probe's timeout.
+message ProbeSftpHostKeys {
+  // Host name or IP address of the server.
+  string host = 1;
+
+  // TCP port, 1 to 65535; 0 means 22.
+  int32 port = 2;
+
+  reserved 3 to 9;
+}
+
 // ProbeStatus is how a probe ended.
 enum ProbeStatus {
   PROBE_STATUS_UNSPECIFIED = 0;
@@ -1467,6 +1501,8 @@ message ProbeResult {
     ResticSnapshotsOutput snapshots = 12;
     // restic_init, restic_config.
     ResticRepositoryConfig repository_config = 13;
+    // sftp_host_keys.
+    SftpHostKeys sftp_host_keys = 14;
   }
 }
 
@@ -1547,4 +1583,32 @@ message ResticRepositoryConfig {
   int32 version = 2;
 
   reserved 3 to 9;
+}
+
+// SftpHostKeys are the host keys an SSH server offered (sftp_host_keys).
+message SftpHostKeys {
+  // One entry per key type the server offers; never empty for an OK
+  // result.
+  repeated SftpHostKey keys = 1;
+
+  reserved 2 to 9;
+}
+
+// SftpHostKey is one public host key of an SSH server. Its algorithm and
+// key are the second and third fields of a known_hosts line, which is the
+// form rclone's sftp host_keys option takes ("<algorithm> <key>").
+message SftpHostKey {
+  // The key type, as known_hosts and the key itself name it, e.g.
+  // "ssh-ed25519", "ecdsa-sha2-nistp256" or "ssh-rsa".
+  string algorithm = 1;
+
+  // The public key in the SSH wire format, standard base64 with padding.
+  string key = 2;
+
+  // The key's SHA-256 fingerprint as `ssh-keygen -l` prints it:
+  // "SHA256:" and the unpadded standard base64 of the digest of the wire
+  // format.
+  string fingerprint_sha256 = 3;
+
+  reserved 4 to 9;
 }

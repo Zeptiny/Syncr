@@ -7,11 +7,12 @@ import "syncr/v1/link.proto";
 import "syncr/v1/remotes.proto";
 
 // Browsing worker folders and remotes, and testing remotes, through a worker
-// (Milestone 5). Each call runs a probe on a worker (see link.proto) and
-// waits for its result, up to the controller's probe timeout.
+// (Milestone 5), and fetching an SFTP server's host keys (Milestone 6). Each
+// call runs a probe on a worker (see link.proto) and waits for its result,
+// up to the controller's probe timeout.
 
-// ProbeService browses workers and remotes and tests remotes, through a
-// worker.
+// ProbeService browses workers and remotes, tests remotes and fetches SFTP
+// host keys, through a worker.
 //
 // Remotes are the caller's (NOT_FOUND otherwise, admins included); any user
 // may browse any worker's local roots (workers are shared). Worker-side
@@ -38,6 +39,18 @@ service ProbeService {
   // Worker-side failures are reported in the response (ok=false), not as
   // errors.
   rpc TestRemote(TestRemoteRequest) returns (TestRemoteResponse) {}
+
+  // GetSftpHostKeys asks an SFTP (SSH) server for its host keys, through a
+  // worker, so they can be pinned in an sftp remote's host_keys option
+  // (Milestone 6). It sends no credentials and changes nothing, but it
+  // makes the worker connect to the host and port the caller names, so it
+  // is rate limited like the other probes and accepts no GET requests.
+  // Trust on first use: the caller should compare the fingerprints with the
+  // server's own (e.g. `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`).
+  // A malformed host or port is INVALID_ARGUMENT on "host" or "port"; a
+  // server the worker cannot reach, or one that does not speak SSH, is
+  // FAILED_PRECONDITION with the worker's message.
+  rpc GetSftpHostKeys(GetSftpHostKeysRequest) returns (GetSftpHostKeysResponse) {}
 }
 
 // ProbeWorkerRef names the worker that ran a probe.
@@ -172,4 +185,32 @@ message TestRemoteResponse {
   ProbeUsage usage = 9;
 
   reserved 10 to 19;
+}
+
+// GetSftpHostKeysRequest names the SSH server whose host keys to fetch.
+message GetSftpHostKeysRequest {
+  // Host name or IP address, as an sftp remote's host option takes it
+  // (required).
+  string host = 1;
+
+  // TCP port, 1 to 65535; 0 means 22.
+  int32 port = 2;
+
+  // The worker to connect from; empty lets the controller choose (any
+  // online worker that can run the probe).
+  string worker_id = 3;
+
+  reserved 4 to 9;
+}
+
+// GetSftpHostKeysResponse lists the server's host keys.
+message GetSftpHostKeysResponse {
+  // One entry per key type the server offers. Joined as "<algorithm>
+  // <key>" lines they are the value of the remote's host_keys option.
+  repeated SftpHostKey keys = 1;
+
+  // The worker that connected to the server.
+  ProbeWorkerRef worker = 2;
+
+  reserved 3 to 9;
 }

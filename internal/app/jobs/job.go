@@ -134,9 +134,17 @@ const (
 	// or is no longer usable by its owner when the job was dispatched.
 	CodeRepositoryUnavailable = "repository_unavailable"
 	// CodeWorkerOutdated: the job's worker lacks a link feature the kind
-	// requires (jobkind Registry.RequiredFeatures).
+	// requires (jobkind Registry.RequiredFeatures), or the job has a time
+	// limit and the worker cannot enforce one.
 	CodeWorkerOutdated = "worker_outdated"
 )
+
+// CodeTimeLimit is the error code of a job its worker stopped because its
+// time limit (the definition's max_runtime, or the controller's default)
+// was reached: the job ends failed, so it notifies and counts as a failed
+// schedule run like any other failure. Workers report it; the controller
+// only reads it (notifications, the UI).
+const CodeTimeLimit = "time_limit"
 
 // Outcome is a worker-reported terminal result (Finish).
 type Outcome struct {
@@ -247,6 +255,16 @@ const (
 	// bounds one Blockers call.
 	MaxConcurrencyKeys = 8
 	MaxBlockerIDs      = 1000
+)
+
+// Limits of ListSamples: a job's chart gets at most this many samples,
+// evenly thinned (SampleRepository.ListJobSamples).
+const (
+	// DefaultSamplePoints applies when the caller asks for 0 points, and
+	// always to Samples.
+	DefaultSamplePoints = 1000
+	// MaxSamplePoints caps what a caller may ask for.
+	MaxSamplePoints = 5000
 )
 
 // Page is one page of List.

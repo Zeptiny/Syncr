@@ -115,9 +115,10 @@ linters:
 
         # Use cases depend only on the domain, the pure libraries below
         # (backend registry core API, form descriptors, notification channel
-        # core, cron expressions) and on ports they declare. Allow entries are
-        # prefix matches: "$" admits the package itself but not its
-        # subpackages (built-in descriptors, the contract suites).
+        # core, cron expressions, the secret redaction leaf) and on ports they
+        # declare. Allow entries are prefix matches: "$" admits the package
+        # itself but not its subpackages (built-in descriptors, the contract
+        # suites).
         app:
           list-mode: strict
           files: ["**/internal/app/**", "!$test"]
@@ -128,6 +129,9 @@ linters:
             - github.com/Zeptiny/Syncr/internal/descriptor$
             - github.com/Zeptiny/Syncr/internal/notify$
             - github.com/Zeptiny/Syncr/internal/cronexpr$
+            # Secret, Scrub: a pure leaf (standard library only), so use
+            # cases scrub tool messages with the same code as the adapters.
+            - github.com/Zeptiny/Syncr/internal/platform/redact$
         # Use-case tests (external test packages) wire the services with the
         # in-memory adapters, the built-in backends and fakes; nothing else.
         app-tests:
@@ -142,6 +146,7 @@ linters:
             - github.com/Zeptiny/Syncr/internal/notify$
             - github.com/Zeptiny/Syncr/internal/notify/notifytest
             - github.com/Zeptiny/Syncr/internal/cronexpr$
+            - github.com/Zeptiny/Syncr/internal/platform/redact$
             - github.com/Zeptiny/Syncr/internal/app
             - github.com/Zeptiny/Syncr/internal/adapters/memstore
             - github.com/Zeptiny/Syncr/internal/adapters/broker
@@ -441,7 +446,9 @@ linters:
 
         # The probe executor dispatches to the probers behind interfaces: it
         # knows the wire types, the local path policy and the runner
-        # contract's error codes, never a concrete runner or a process.
+        # contract's error codes, never a concrete runner or a process. The
+        # SFTP host-key prober speaks SSH itself (handshakes only, no
+        # authentication), with the ssh package and none of its subpackages.
         worker-probe:
           list-mode: strict
           files: ["**/internal/worker/probe/**", "!$test"]
@@ -452,6 +459,7 @@ linters:
             - github.com/Zeptiny/Syncr/internal/link$
             - github.com/Zeptiny/Syncr/internal/worker/localfs
             - github.com/Zeptiny/Syncr/internal/worker/runner$
+            - golang.org/x/crypto/ssh$
 
         # The worker transports move linkcore envelopes over HTTP; they know
         # nothing of runners, the agent's internals or the controller.

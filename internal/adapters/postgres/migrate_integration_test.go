@@ -66,7 +66,7 @@ var milestone4Tables = []string{"contacts", "schedules", "schedule_remotes", "sc
 var milestone5Tables = []string{"restic_repositories", "restic_snapshots"}
 
 // allVersions are the versions of the embedded migrations.
-var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8}
+var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9}
 
 func columnExists(t *testing.T, s *Store, table, column string) bool {
 	t.Helper()
@@ -499,6 +499,49 @@ func TestMigrateWorkerInfoEpoch(t *testing.T) {
 	var tagged int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM workers WHERE info ? 'epoch'`).Scan(&tagged); err != nil || tagged != 0 {
 		t.Errorf("tagged infos after down = %d (%v), want 0", tagged, err)
+	}
+}
+
+// TestMigrateRelease checks migration 00009: it adds the partial index on
+// deliveries.schedule_id that deleting a schedule uses, down removes it and
+// up restores it.
+func TestMigrateRelease(t *testing.T) {
+	s := openStore(t, createDB(t, true))
+	ctx := t.Context()
+	indexDef := func() string {
+		t.Helper()
+		var def string
+		err := s.pool.QueryRow(ctx, "SELECT coalesce((SELECT indexdef FROM pg_indexes WHERE indexname = 'deliveries_schedule_idx'), '')").Scan(&def)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return def
+	}
+	if def := indexDef(); !strings.Contains(def, "(schedule_id)") || !strings.Contains(def, "WHERE (schedule_id IS NOT NULL)") {
+		t.Errorf("deliveries_schedule_idx = %q, want a partial index on schedule_id", def)
+	}
+	p, closeDB, err := s.migrationProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	if _, err := p.DownTo(ctx, 8); err != nil {
+		t.Fatalf("down to 8: %v", err)
+	}
+	if def := indexDef(); def != "" {
+		t.Errorf("deliveries_schedule_idx survived the down migration: %q", def)
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions[:8]) {
+		t.Errorf("applied versions = %v, want %v", got, allVersions[:8])
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if indexDef() == "" {
+		t.Error("deliveries_schedule_idx is missing after up")
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) {
+		t.Errorf("applied versions = %v, want %v", got, allVersions)
 	}
 }
 

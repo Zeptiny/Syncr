@@ -185,6 +185,13 @@ func (h *workerAdminHandler) RemoveWorker(ctx context.Context, req *connect.Requ
 	return connect.NewResponse(&syncrv1.RemoveWorkerResponse{}), nil
 }
 
+// GetWorkerUpgradeCommands returns the commands that upgrade a worker in
+// place (admins only, by the policy table). It is not implemented yet: it
+// answers Unimplemented until the upgrade commands are rendered.
+func (h *workerAdminHandler) GetWorkerUpgradeCommands(context.Context, *connect.Request[syncrv1.GetWorkerUpgradeCommandsRequest]) (*connect.Response[syncrv1.GetWorkerUpgradeCommandsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("worker upgrade commands are not implemented yet"))
+}
+
 // parseWorkerID parses a request's worker ID into an InvalidArgument error
 // naming the field.
 func parseWorkerID(s string) (domain.WorkerID, error) {

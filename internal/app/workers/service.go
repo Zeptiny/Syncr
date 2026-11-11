@@ -94,6 +94,25 @@ func (s *Service) Status(w Worker) domain.WorkerStatus {
 	return domain.DeriveWorkerStatus(w.Link.LastSeen, s.clock.Now(), s.cfg.OfflineAfter)
 }
 
+// LaunchWithin is how recently a worker must have been in contact for
+// Reachable: twice the 15s heartbeat of active workers (and the pull
+// interval of passive ones), so one missed beat is tolerated. It is a
+// constant, not configuration; Reachable never uses more than
+// Config.OfflineAfter.
+const LaunchWithin = 30 * time.Second
+
+// Reachable reports whether w was in contact within LaunchWithin (or
+// Config.OfflineAfter if that is shorter), as of now: the scheduler starts
+// a run on a worker only then, so a worker that just went to sleep makes
+// the run wait as for an offline worker instead of creating a job that
+// would fail with dispatch_timeout. A worker that never connected is not
+// reachable; a LastSeen in the future (clock adjustments) is, as for
+// Status. The online status shown to users keeps using OfflineAfter.
+func (s *Service) Reachable(w Worker) bool {
+	last := w.Link.LastSeen
+	return !last.IsZero() && s.clock.Now().Sub(last) < min(LaunchWithin, s.cfg.OfflineAfter)
+}
+
 // Get returns a worker that has not been removed. ErrNotFound otherwise.
 func (s *Service) Get(ctx context.Context, id domain.WorkerID) (Worker, error) {
 	if id.IsZero() {
