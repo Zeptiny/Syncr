@@ -21,7 +21,7 @@
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright-core";
@@ -79,7 +79,8 @@ async function settle(page, ms = 600) {
 async function shot(page, name) {
   const file = join(outDir, `${name}.png`);
   await page.screenshot({ path: file, fullPage });
-  console.log(`saved ${file}`);
+  // Relative, so the log carries no home directory.
+  console.log(`saved ${relative(process.cwd(), file)}`);
 }
 
 async function signIn(page) {
@@ -550,7 +551,8 @@ async function m6(browser) {
     await signIn(p);
     await sftpForm(p);
     await fetchKeys(p);
-    await scrollTo(p, p.getByRole("button", { name: "Use these keys" }), 520);
+    // Below the 56 px header: the panel's title, then its keys and button.
+    await scrollTo(p, p.getByText(/The server offered/), 72);
     await shot(p, "09-sftp-keys-mobile");
     await p.context().close();
   }
