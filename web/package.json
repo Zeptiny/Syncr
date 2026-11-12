@@ -68,7 +68,7 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.60.0",
     "vite": "8.0.14",
-    "vitest": "4.1.7"
+    "vitest": "4.1.12"
   },
   "overrides": {
     "@connectrpc/connect-query-core": "2.2.0",
