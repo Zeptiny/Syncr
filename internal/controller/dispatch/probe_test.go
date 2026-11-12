@@ -537,6 +537,32 @@ func TestProbePassive(t *testing.T) {
 			t.Fatalf("hung probe = %v", a.err)
 		}
 
+		// A worker whose handler ends the hung probe at its own copy of the
+		// deadline, a millisecond early (Connect-Timeout-Ms truncates), and
+		// answers CANCELLED before the call gives up: the call ran out.
+		cancelled := &syncrv1.ProbeResult{Status: syncrv1.ProbeStatus_PROBE_STATUS_CANCELLED,
+			Error: &syncrv1.JobError{Code: syncrv1.JobErrorCode_JOB_ERROR_CODE_CANCELLED, Message: "the probe was cancelled"}}
+		c.do(func(*fakeWorker) {
+			c.probe = func(ctx context.Context, _ *syncrv1.ProbeRequest) (*syncrv1.ProbeResponse, error) {
+				d, _ := ctx.Deadline()
+				time.Sleep(time.Until(d) - time.Millisecond)
+				return &syncrv1.ProbeResponse{Result: cancelled}, nil
+			}
+		})
+		if _, err := e.probes.Probe(t.Context(), wid, runProbe("at-deadline")); !errors.Is(err, domain.ErrUnavailable) || !strings.Contains(err.Error(), "did not answer in time") {
+			t.Fatalf("cancelled at the deadline: %v", err)
+		}
+		// One that stops the probe well before (a worker shutting down)
+		// keeps its answer.
+		c.do(func(*fakeWorker) {
+			c.probe = func(context.Context, *syncrv1.ProbeRequest) (*syncrv1.ProbeResponse, error) {
+				return &syncrv1.ProbeResponse{Result: cancelled}, nil
+			}
+		})
+		if res, err := e.probes.Probe(t.Context(), wid, runProbe("stopped")); err != nil || res.GetStatus() != syncrv1.ProbeStatus_PROBE_STATUS_CANCELLED {
+			t.Fatalf("cancelled early = %v, %v", res, err)
+		}
+
 		// A transport failure: no address in the message.
 		c.do(func(*fakeWorker) {
 			c.probe = func(context.Context, *syncrv1.ProbeRequest) (*syncrv1.ProbeResponse, error) {
