@@ -42,7 +42,7 @@ function isOptional(field: BackendField): boolean {
 }
 
 function errorAt(errors: FieldErrors<FieldValues>, path: string): string | undefined {
-  return (get(errors, path) as FieldError | undefined)?.message;
+  return get<FieldErrors<FieldValues>, FieldError | undefined>(errors, path)?.message;
 }
 
 /** FieldShell lays out a label, the control, help and the error. */

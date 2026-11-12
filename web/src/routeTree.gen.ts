@@ -9,36 +9,35 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from "./routes/__root";
-import { Route as SetupRouteImport } from "./routes/setup";
-import { Route as LoginRouteImport } from "./routes/login";
 import { Route as AppRouteImport } from "./routes/_app";
+import { Route as LoginRouteImport } from "./routes/login";
+import { Route as SetupRouteImport } from "./routes/setup";
 import { Route as AppIndexRouteImport } from "./routes/_app/index";
-import { Route as AppWorkersIndexRouteImport } from "./routes/_app/workers/index";
-import { Route as AppUsersIndexRouteImport } from "./routes/_app/users/index";
-import { Route as AppSettingsIndexRouteImport } from "./routes/_app/settings/index";
-import { Route as AppSchedulesIndexRouteImport } from "./routes/_app/schedules/index";
-import { Route as AppRepositoriesIndexRouteImport } from "./routes/_app/repositories/index";
-import { Route as AppRemotesIndexRouteImport } from "./routes/_app/remotes/index";
-import { Route as AppNotificationsIndexRouteImport } from "./routes/_app/notifications/index";
 import { Route as AppJobsIndexRouteImport } from "./routes/_app/jobs/index";
-import { Route as AppWorkersNewRouteImport } from "./routes/_app/workers/new";
-import { Route as AppWorkersWorkerIdRouteImport } from "./routes/_app/workers/$workerId";
-import { Route as AppSchedulesNewRouteImport } from "./routes/_app/schedules/new";
-import { Route as AppSchedulesScheduleIdRouteImport } from "./routes/_app/schedules/$scheduleId";
-import { Route as AppRepositoriesNewRouteImport } from "./routes/_app/repositories/new";
-import { Route as AppRepositoriesRepositoryIdRouteImport } from "./routes/_app/repositories/$repositoryId";
-import { Route as AppRemotesNewRouteImport } from "./routes/_app/remotes/new";
-import { Route as AppRemotesRemoteIdRouteImport } from "./routes/_app/remotes/$remoteId";
-import { Route as AppNotificationsNewRouteImport } from "./routes/_app/notifications/new";
-import { Route as AppNotificationsContactIdRouteImport } from "./routes/_app/notifications/$contactId";
-import { Route as AppJobsNewRouteImport } from "./routes/_app/jobs/new";
 import { Route as AppJobsJobIdRouteImport } from "./routes/_app/jobs/$jobId";
+import { Route as AppJobsNewRouteImport } from "./routes/_app/jobs/new";
+import { Route as AppNotificationsIndexRouteImport } from "./routes/_app/notifications/index";
+import { Route as AppNotificationsContactIdRouteImport } from "./routes/_app/notifications/$contactId";
+import { Route as AppNotificationsNewRouteImport } from "./routes/_app/notifications/new";
+import { Route as AppRemotesIndexRouteImport } from "./routes/_app/remotes/index";
+import { Route as AppRemotesRemoteIdRouteImport } from "./routes/_app/remotes/$remoteId";
+import { Route as AppRemotesNewRouteImport } from "./routes/_app/remotes/new";
+import { Route as AppRepositoriesIndexRouteImport } from "./routes/_app/repositories/index";
+import { Route as AppRepositoriesRepositoryIdRouteImport } from "./routes/_app/repositories/$repositoryId";
+import { Route as AppRepositoriesNewRouteImport } from "./routes/_app/repositories/new";
+import { Route as AppSchedulesIndexRouteImport } from "./routes/_app/schedules/index";
+import { Route as AppSchedulesScheduleIdRouteImport } from "./routes/_app/schedules/$scheduleId";
+import { Route as AppSchedulesNewRouteImport } from "./routes/_app/schedules/new";
+import { Route as AppSettingsIndexRouteImport } from "./routes/_app/settings/index";
+import { Route as AppUsersIndexRouteImport } from "./routes/_app/users/index";
+import { Route as AppWorkersIndexRouteImport } from "./routes/_app/workers/index";
+import { Route as AppWorkersWorkerIdRouteImport } from "./routes/_app/workers/$workerId";
+import { Route as AppWorkersNewRouteImport } from "./routes/_app/workers/new";
 import { Route as AppSchedulesScheduleIdEditRouteImport } from "./routes/_app/schedules/$scheduleId_.edit";
 import { Route as AppRepositoriesRepositoryIdSnapshotsSnapshotIdRouteImport } from "./routes/_app/repositories/$repositoryId_.snapshots.$snapshotId";
 
-const SetupRoute = SetupRouteImport.update({
-  id: "/setup",
-  path: "/setup",
+const AppRoute = AppRouteImport.update({
+  id: "/_app",
   getParentRoute: () => rootRouteImport,
 } as any);
 const LoginRoute = LoginRouteImport.update({
@@ -46,8 +45,9 @@ const LoginRoute = LoginRouteImport.update({
   path: "/login",
   getParentRoute: () => rootRouteImport,
 } as any);
-const AppRoute = AppRouteImport.update({
-  id: "/_app",
+const SetupRoute = SetupRouteImport.update({
+  id: "/setup",
+  path: "/setup",
   getParentRoute: () => rootRouteImport,
 } as any);
 const AppIndexRoute = AppIndexRouteImport.update({
@@ -55,90 +55,24 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: "/",
   getParentRoute: () => AppRoute,
 } as any);
-const AppWorkersIndexRoute = AppWorkersIndexRouteImport.update({
-  id: "/workers/",
-  path: "/workers/",
-  getParentRoute: () => AppRoute,
-} as any);
-const AppUsersIndexRoute = AppUsersIndexRouteImport.update({
-  id: "/users/",
-  path: "/users/",
-  getParentRoute: () => AppRoute,
-} as any);
-const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
-  id: "/settings/",
-  path: "/settings/",
-  getParentRoute: () => AppRoute,
-} as any);
-const AppSchedulesIndexRoute = AppSchedulesIndexRouteImport.update({
-  id: "/schedules/",
-  path: "/schedules/",
-  getParentRoute: () => AppRoute,
-} as any);
-const AppRepositoriesIndexRoute = AppRepositoriesIndexRouteImport.update({
-  id: "/repositories/",
-  path: "/repositories/",
-  getParentRoute: () => AppRoute,
-} as any);
-const AppRemotesIndexRoute = AppRemotesIndexRouteImport.update({
-  id: "/remotes/",
-  path: "/remotes/",
-  getParentRoute: () => AppRoute,
-} as any);
-const AppNotificationsIndexRoute = AppNotificationsIndexRouteImport.update({
-  id: "/notifications/",
-  path: "/notifications/",
-  getParentRoute: () => AppRoute,
-} as any);
 const AppJobsIndexRoute = AppJobsIndexRouteImport.update({
   id: "/jobs/",
   path: "/jobs/",
   getParentRoute: () => AppRoute,
 } as any);
-const AppWorkersNewRoute = AppWorkersNewRouteImport.update({
-  id: "/workers/new",
-  path: "/workers/new",
+const AppJobsJobIdRoute = AppJobsJobIdRouteImport.update({
+  id: "/jobs/$jobId",
+  path: "/jobs/$jobId",
   getParentRoute: () => AppRoute,
 } as any);
-const AppWorkersWorkerIdRoute = AppWorkersWorkerIdRouteImport.update({
-  id: "/workers/$workerId",
-  path: "/workers/$workerId",
+const AppJobsNewRoute = AppJobsNewRouteImport.update({
+  id: "/jobs/new",
+  path: "/jobs/new",
   getParentRoute: () => AppRoute,
 } as any);
-const AppSchedulesNewRoute = AppSchedulesNewRouteImport.update({
-  id: "/schedules/new",
-  path: "/schedules/new",
-  getParentRoute: () => AppRoute,
-} as any);
-const AppSchedulesScheduleIdRoute = AppSchedulesScheduleIdRouteImport.update({
-  id: "/schedules/$scheduleId",
-  path: "/schedules/$scheduleId",
-  getParentRoute: () => AppRoute,
-} as any);
-const AppRepositoriesNewRoute = AppRepositoriesNewRouteImport.update({
-  id: "/repositories/new",
-  path: "/repositories/new",
-  getParentRoute: () => AppRoute,
-} as any);
-const AppRepositoriesRepositoryIdRoute =
-  AppRepositoriesRepositoryIdRouteImport.update({
-    id: "/repositories/$repositoryId",
-    path: "/repositories/$repositoryId",
-    getParentRoute: () => AppRoute,
-  } as any);
-const AppRemotesNewRoute = AppRemotesNewRouteImport.update({
-  id: "/remotes/new",
-  path: "/remotes/new",
-  getParentRoute: () => AppRoute,
-} as any);
-const AppRemotesRemoteIdRoute = AppRemotesRemoteIdRouteImport.update({
-  id: "/remotes/$remoteId",
-  path: "/remotes/$remoteId",
-  getParentRoute: () => AppRoute,
-} as any);
-const AppNotificationsNewRoute = AppNotificationsNewRouteImport.update({
-  id: "/notifications/new",
-  path: "/notifications/new",
+const AppNotificationsIndexRoute = AppNotificationsIndexRouteImport.update({
+  id: "/notifications/",
+  path: "/notifications/",
   getParentRoute: () => AppRoute,
 } as any);
 const AppNotificationsContactIdRoute =
@@ -147,14 +81,80 @@ const AppNotificationsContactIdRoute =
     path: "/notifications/$contactId",
     getParentRoute: () => AppRoute,
   } as any);
-const AppJobsNewRoute = AppJobsNewRouteImport.update({
-  id: "/jobs/new",
-  path: "/jobs/new",
+const AppNotificationsNewRoute = AppNotificationsNewRouteImport.update({
+  id: "/notifications/new",
+  path: "/notifications/new",
   getParentRoute: () => AppRoute,
 } as any);
-const AppJobsJobIdRoute = AppJobsJobIdRouteImport.update({
-  id: "/jobs/$jobId",
-  path: "/jobs/$jobId",
+const AppRemotesIndexRoute = AppRemotesIndexRouteImport.update({
+  id: "/remotes/",
+  path: "/remotes/",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppRemotesRemoteIdRoute = AppRemotesRemoteIdRouteImport.update({
+  id: "/remotes/$remoteId",
+  path: "/remotes/$remoteId",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppRemotesNewRoute = AppRemotesNewRouteImport.update({
+  id: "/remotes/new",
+  path: "/remotes/new",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppRepositoriesIndexRoute = AppRepositoriesIndexRouteImport.update({
+  id: "/repositories/",
+  path: "/repositories/",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppRepositoriesRepositoryIdRoute =
+  AppRepositoriesRepositoryIdRouteImport.update({
+    id: "/repositories/$repositoryId",
+    path: "/repositories/$repositoryId",
+    getParentRoute: () => AppRoute,
+  } as any);
+const AppRepositoriesNewRoute = AppRepositoriesNewRouteImport.update({
+  id: "/repositories/new",
+  path: "/repositories/new",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppSchedulesIndexRoute = AppSchedulesIndexRouteImport.update({
+  id: "/schedules/",
+  path: "/schedules/",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppSchedulesScheduleIdRoute = AppSchedulesScheduleIdRouteImport.update({
+  id: "/schedules/$scheduleId",
+  path: "/schedules/$scheduleId",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppSchedulesNewRoute = AppSchedulesNewRouteImport.update({
+  id: "/schedules/new",
+  path: "/schedules/new",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
+  id: "/settings/",
+  path: "/settings/",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppUsersIndexRoute = AppUsersIndexRouteImport.update({
+  id: "/users/",
+  path: "/users/",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppWorkersIndexRoute = AppWorkersIndexRouteImport.update({
+  id: "/workers/",
+  path: "/workers/",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppWorkersWorkerIdRoute = AppWorkersWorkerIdRouteImport.update({
+  id: "/workers/$workerId",
+  path: "/workers/$workerId",
+  getParentRoute: () => AppRoute,
+} as any);
+const AppWorkersNewRoute = AppWorkersNewRouteImport.update({
+  id: "/workers/new",
+  path: "/workers/new",
   getParentRoute: () => AppRoute,
 } as any);
 const AppSchedulesScheduleIdEditRoute =
@@ -346,11 +346,11 @@ export interface RootRouteChildren {
 
 declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
-    "/setup": {
-      id: "/setup";
-      path: "/setup";
-      fullPath: "/setup";
-      preLoaderRoute: typeof SetupRouteImport;
+    "/_app": {
+      id: "/_app";
+      path: "";
+      fullPath: "/";
+      preLoaderRoute: typeof AppRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/login": {
@@ -360,11 +360,11 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof LoginRouteImport;
       parentRoute: typeof rootRouteImport;
     };
-    "/_app": {
-      id: "/_app";
-      path: "";
-      fullPath: "/";
-      preLoaderRoute: typeof AppRouteImport;
+    "/setup": {
+      id: "/setup";
+      path: "/setup";
+      fullPath: "/setup";
+      preLoaderRoute: typeof SetupRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/_app/": {
@@ -374,55 +374,6 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AppIndexRouteImport;
       parentRoute: typeof AppRoute;
     };
-    "/_app/workers/": {
-      id: "/_app/workers/";
-      path: "/workers";
-      fullPath: "/workers/";
-      preLoaderRoute: typeof AppWorkersIndexRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/users/": {
-      id: "/_app/users/";
-      path: "/users";
-      fullPath: "/users/";
-      preLoaderRoute: typeof AppUsersIndexRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/settings/": {
-      id: "/_app/settings/";
-      path: "/settings";
-      fullPath: "/settings/";
-      preLoaderRoute: typeof AppSettingsIndexRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/schedules/": {
-      id: "/_app/schedules/";
-      path: "/schedules";
-      fullPath: "/schedules/";
-      preLoaderRoute: typeof AppSchedulesIndexRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/repositories/": {
-      id: "/_app/repositories/";
-      path: "/repositories";
-      fullPath: "/repositories/";
-      preLoaderRoute: typeof AppRepositoriesIndexRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/remotes/": {
-      id: "/_app/remotes/";
-      path: "/remotes";
-      fullPath: "/remotes/";
-      preLoaderRoute: typeof AppRemotesIndexRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/notifications/": {
-      id: "/_app/notifications/";
-      path: "/notifications";
-      fullPath: "/notifications/";
-      preLoaderRoute: typeof AppNotificationsIndexRouteImport;
-      parentRoute: typeof AppRoute;
-    };
     "/_app/jobs/": {
       id: "/_app/jobs/";
       path: "/jobs";
@@ -430,74 +381,11 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AppJobsIndexRouteImport;
       parentRoute: typeof AppRoute;
     };
-    "/_app/workers/new": {
-      id: "/_app/workers/new";
-      path: "/workers/new";
-      fullPath: "/workers/new";
-      preLoaderRoute: typeof AppWorkersNewRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/workers/$workerId": {
-      id: "/_app/workers/$workerId";
-      path: "/workers/$workerId";
-      fullPath: "/workers/$workerId";
-      preLoaderRoute: typeof AppWorkersWorkerIdRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/schedules/new": {
-      id: "/_app/schedules/new";
-      path: "/schedules/new";
-      fullPath: "/schedules/new";
-      preLoaderRoute: typeof AppSchedulesNewRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/schedules/$scheduleId": {
-      id: "/_app/schedules/$scheduleId";
-      path: "/schedules/$scheduleId";
-      fullPath: "/schedules/$scheduleId";
-      preLoaderRoute: typeof AppSchedulesScheduleIdRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/repositories/new": {
-      id: "/_app/repositories/new";
-      path: "/repositories/new";
-      fullPath: "/repositories/new";
-      preLoaderRoute: typeof AppRepositoriesNewRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/repositories/$repositoryId": {
-      id: "/_app/repositories/$repositoryId";
-      path: "/repositories/$repositoryId";
-      fullPath: "/repositories/$repositoryId";
-      preLoaderRoute: typeof AppRepositoriesRepositoryIdRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/remotes/new": {
-      id: "/_app/remotes/new";
-      path: "/remotes/new";
-      fullPath: "/remotes/new";
-      preLoaderRoute: typeof AppRemotesNewRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/remotes/$remoteId": {
-      id: "/_app/remotes/$remoteId";
-      path: "/remotes/$remoteId";
-      fullPath: "/remotes/$remoteId";
-      preLoaderRoute: typeof AppRemotesRemoteIdRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/notifications/new": {
-      id: "/_app/notifications/new";
-      path: "/notifications/new";
-      fullPath: "/notifications/new";
-      preLoaderRoute: typeof AppNotificationsNewRouteImport;
-      parentRoute: typeof AppRoute;
-    };
-    "/_app/notifications/$contactId": {
-      id: "/_app/notifications/$contactId";
-      path: "/notifications/$contactId";
-      fullPath: "/notifications/$contactId";
-      preLoaderRoute: typeof AppNotificationsContactIdRouteImport;
+    "/_app/jobs/$jobId": {
+      id: "/_app/jobs/$jobId";
+      path: "/jobs/$jobId";
+      fullPath: "/jobs/$jobId";
+      preLoaderRoute: typeof AppJobsJobIdRouteImport;
       parentRoute: typeof AppRoute;
     };
     "/_app/jobs/new": {
@@ -507,11 +395,123 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AppJobsNewRouteImport;
       parentRoute: typeof AppRoute;
     };
-    "/_app/jobs/$jobId": {
-      id: "/_app/jobs/$jobId";
-      path: "/jobs/$jobId";
-      fullPath: "/jobs/$jobId";
-      preLoaderRoute: typeof AppJobsJobIdRouteImport;
+    "/_app/notifications/": {
+      id: "/_app/notifications/";
+      path: "/notifications";
+      fullPath: "/notifications/";
+      preLoaderRoute: typeof AppNotificationsIndexRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/notifications/$contactId": {
+      id: "/_app/notifications/$contactId";
+      path: "/notifications/$contactId";
+      fullPath: "/notifications/$contactId";
+      preLoaderRoute: typeof AppNotificationsContactIdRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/notifications/new": {
+      id: "/_app/notifications/new";
+      path: "/notifications/new";
+      fullPath: "/notifications/new";
+      preLoaderRoute: typeof AppNotificationsNewRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/remotes/": {
+      id: "/_app/remotes/";
+      path: "/remotes";
+      fullPath: "/remotes/";
+      preLoaderRoute: typeof AppRemotesIndexRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/remotes/$remoteId": {
+      id: "/_app/remotes/$remoteId";
+      path: "/remotes/$remoteId";
+      fullPath: "/remotes/$remoteId";
+      preLoaderRoute: typeof AppRemotesRemoteIdRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/remotes/new": {
+      id: "/_app/remotes/new";
+      path: "/remotes/new";
+      fullPath: "/remotes/new";
+      preLoaderRoute: typeof AppRemotesNewRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/repositories/": {
+      id: "/_app/repositories/";
+      path: "/repositories";
+      fullPath: "/repositories/";
+      preLoaderRoute: typeof AppRepositoriesIndexRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/repositories/$repositoryId": {
+      id: "/_app/repositories/$repositoryId";
+      path: "/repositories/$repositoryId";
+      fullPath: "/repositories/$repositoryId";
+      preLoaderRoute: typeof AppRepositoriesRepositoryIdRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/repositories/new": {
+      id: "/_app/repositories/new";
+      path: "/repositories/new";
+      fullPath: "/repositories/new";
+      preLoaderRoute: typeof AppRepositoriesNewRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/schedules/": {
+      id: "/_app/schedules/";
+      path: "/schedules";
+      fullPath: "/schedules/";
+      preLoaderRoute: typeof AppSchedulesIndexRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/schedules/$scheduleId": {
+      id: "/_app/schedules/$scheduleId";
+      path: "/schedules/$scheduleId";
+      fullPath: "/schedules/$scheduleId";
+      preLoaderRoute: typeof AppSchedulesScheduleIdRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/schedules/new": {
+      id: "/_app/schedules/new";
+      path: "/schedules/new";
+      fullPath: "/schedules/new";
+      preLoaderRoute: typeof AppSchedulesNewRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/settings/": {
+      id: "/_app/settings/";
+      path: "/settings";
+      fullPath: "/settings/";
+      preLoaderRoute: typeof AppSettingsIndexRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/users/": {
+      id: "/_app/users/";
+      path: "/users";
+      fullPath: "/users/";
+      preLoaderRoute: typeof AppUsersIndexRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/workers/": {
+      id: "/_app/workers/";
+      path: "/workers";
+      fullPath: "/workers/";
+      preLoaderRoute: typeof AppWorkersIndexRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/workers/$workerId": {
+      id: "/_app/workers/$workerId";
+      path: "/workers/$workerId";
+      fullPath: "/workers/$workerId";
+      preLoaderRoute: typeof AppWorkersWorkerIdRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/workers/new": {
+      id: "/_app/workers/new";
+      path: "/workers/new";
+      fullPath: "/workers/new";
+      preLoaderRoute: typeof AppWorkersNewRouteImport;
       parentRoute: typeof AppRoute;
     };
     "/_app/schedules/$scheduleId_/edit": {
