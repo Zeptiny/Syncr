@@ -19,6 +19,7 @@ class ResizeObserverStub {
   disconnect(): void {}
 }
 globalThis.ResizeObserver ??= ResizeObserverStub;
+/* eslint-disable @typescript-eslint/unbound-method -- feature checks, not calls */
 window.matchMedia ??= (query: string): MediaQueryList =>
   ({
     matches: false,
@@ -30,7 +31,6 @@ window.matchMedia ??= (query: string): MediaQueryList =>
     removeListener: () => {},
     dispatchEvent: () => false,
   }) as MediaQueryList;
-/* eslint-disable @typescript-eslint/unbound-method -- feature checks, not calls */
 Element.prototype.scrollIntoView ??= function scrollIntoView() {};
 Element.prototype.hasPointerCapture ??= () => false;
 Element.prototype.releasePointerCapture ??= () => {};

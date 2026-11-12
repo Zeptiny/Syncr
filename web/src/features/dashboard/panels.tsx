@@ -216,9 +216,11 @@ export function RecentFailures({
   schedules: Map<string, Schedule>;
 }) {
   const items: Problem[] = [
-    ...jobs.map(
-      (job): Problem => ({ kind: "job", at: tsDate(job.finishedAt ?? job.createdAt), job }),
-    ),
+    ...jobs.map((job): Problem => ({
+      kind: "job",
+      at: tsDate(job.finishedAt ?? job.createdAt),
+      job,
+    })),
     ...runs.map((run): Problem => ({ kind: "run", at: tsDate(run.scheduledFor), run })),
   ].sort((a, b) => (b.at?.getTime() ?? 0) - (a.at?.getTime() ?? 0));
   if (!items.length) {
