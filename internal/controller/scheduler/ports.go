@@ -1,0 +1,70 @@
+package scheduler
+
+import (
+	"context"
+	"time"
+
+	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/schedules"
+	"github.com/Zeptiny/Syncr/internal/app/workers"
+	"github.com/Zeptiny/Syncr/internal/domain"
+)
+
+// Schedules is the scheduler-facing part of the schedules use cases
+// (*schedules.Service).
+type Schedules interface {
+	FireDue(ctx context.Context) (int, error)
+	OpenRuns(ctx context.Context, limit int) ([]schedules.Run, error)
+	Load(ctx context.Context, ids []domain.ScheduleID) (map[domain.ScheduleID]schedules.Schedule, error)
+	HasActiveRun(ctx context.Context, id domain.ScheduleID) (bool, error)
+	GetRun(ctx context.Context, id domain.ScheduleRunID) (schedules.Run, error)
+	MarkLaunching(ctx context.Context, run schedules.Run, jobID domain.JobID, workerID domain.WorkerID) (schedules.Run, error)
+	MarkLaunched(ctx context.Context, run schedules.Run) (schedules.Run, error)
+	EndRun(ctx context.Context, run schedules.Run, status schedules.RunStatus, reason, msg string, pause bool) (schedules.Run, error)
+}
+
+// Jobs is the part of the job use cases the scheduler uses (*jobs.Service).
+type Jobs interface {
+	// Create queues a job for the actor; a preset p.ID makes it idempotent
+	// (ErrAlreadyExists once it exists).
+	Create(ctx context.Context, actor domain.Actor, p jobs.CreateParams) (jobs.Job, error)
+	// Cancel cancels a job (a queued one at once, an active one through
+	// its worker); a finished one is unchanged. ErrNotFound if it does not
+	// exist.
+	Cancel(ctx context.Context, actor domain.Actor, id domain.JobID) (jobs.Job, error)
+	// Unfinished returns a worker's queued, dispatched and running jobs.
+	Unfinished(ctx context.Context, workerID domain.WorkerID) ([]jobs.Job, error)
+}
+
+// Workers is the part of the worker use cases the scheduler uses
+// (*workers.Service).
+type Workers interface {
+	// Get returns a worker that is not removed; ErrNotFound otherwise.
+	Get(ctx context.Context, id domain.WorkerID) (workers.Worker, error)
+	// List returns the workers matching f (removed ones only with
+	// f.IncludeRemoved).
+	List(ctx context.Context, f workers.ListFilter) ([]workers.Worker, error)
+	// Reachable reports whether w was in contact recently enough to launch
+	// a run on it now (workers.LaunchWithin, never more than the offline
+	// threshold): a stricter test than its online status, so a run whose
+	// worker just went quiet waits instead of creating a job that would
+	// time out in the queue.
+	Reachable(w workers.Worker) bool
+}
+
+// Owners tells whether a schedule's owner may still run jobs
+// (*users.Service).
+type Owners interface {
+	// Active reports whether the user exists and is not disabled.
+	Active(ctx context.Context, id domain.UserID) (bool, error)
+}
+
+// IDGenerator mints the job IDs a launch reserves (UUIDv7).
+type IDGenerator interface {
+	NewJobID() domain.JobID
+}
+
+// Clock tells the time.
+type Clock interface {
+	Now() time.Time
+}

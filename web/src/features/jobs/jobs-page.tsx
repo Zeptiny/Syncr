@@ -1,0 +1,381 @@
+import { timestampFromDate } from "@bufbuild/protobuf/wkt";
+import { useQuery } from "@connectrpc/connect-query";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { ArrowRightLeft, ChevronDown, Play } from "lucide-react";
+import { useCallback, useMemo } from "react";
+
+import { EmptyState } from "@/components/app/empty-state";
+import { FilterBar, SearchInput } from "@/components/app/filter-bar";
+import { PageHeader } from "@/components/app/page-header";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { JobService, JobStatus, WorkerAdminService } from "@/gen/syncr/v1/api_pb";
+import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
+import { ResticService } from "@/gen/syncr/v1/restic_pb";
+import { ScheduleService } from "@/gen/syncr/v1/schedules_pb";
+import { UserService } from "@/gen/syncr/v1/users_pb";
+import { useKeysetPager } from "@/hooks/use-keyset-pager";
+import { useNow } from "@/hooks/use-now";
+import { useSession } from "@/hooks/use-session";
+import { isTerminal, jobKinds, jobStatuses, jobStatusMeta, kindLabel } from "@/lib/status";
+
+import { JobsTable } from "./jobs-table";
+import type { JobsSearch } from "./search";
+
+const periods = { "24h": 1, "7d": 7, "30d": 30 } as const;
+const ANY = "__any__";
+
+function parseStatuses(s: string | undefined): JobStatus[] {
+  if (!s) return [];
+  return s
+    .split(",")
+    .map(Number)
+    .filter((n) => jobStatuses.includes(n));
+}
+
+function range(search: JobsSearch, now: number): { after?: Date; before?: Date } {
+  if (search.period && search.period !== "custom") {
+    return { after: new Date(now - periods[search.period] * 86_400_000) };
+  }
+  if (search.period === "custom") {
+    const after = search.from ? new Date(`${search.from}T00:00:00`) : undefined;
+    const before = search.to ? new Date(`${search.to}T23:59:59.999`) : undefined;
+    return { after, before };
+  }
+  return {};
+}
+
+function StatusFilter({
+  value,
+  onChange,
+}: {
+  value: JobStatus[];
+  onChange: (v: JobStatus[]) => void;
+}) {
+  const label =
+    value.length === 0
+      ? "Any status"
+      : value.length === 1
+        ? jobStatusMeta(value[0]).label
+        : `${value.length} statuses`;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          className="w-[calc(50%-0.25rem)] justify-between bg-card font-normal sm:w-40"
+        >
+          {label}
+          <ChevronDown className="opacity-50" aria-hidden />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-52 p-1.5">
+        {jobStatuses.map((s) => {
+          const id = `status-${s}`;
+          const checked = value.includes(s);
+          return (
+            <Label
+              key={s}
+              htmlFor={id}
+              className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 font-normal hover:bg-accent"
+            >
+              <Checkbox
+                id={id}
+                checked={checked}
+                onCheckedChange={(c) => onChange(c ? [...value, s] : value.filter((x) => x !== s))}
+              />
+              {jobStatusMeta(s).label}
+            </Label>
+          );
+        })}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** JobsPage lists jobs with filters, search and a keyset pager. */
+export function JobsPage({ search }: { search: JobsSearch }) {
+  const navigate = useNavigate();
+  const { isAdmin } = useSession();
+  const setSearch = useCallback(
+    (patch: Partial<JobsSearch>) =>
+      void navigate({ to: "/jobs", search: (prev) => ({ ...prev, ...patch }), replace: true }),
+    [navigate],
+  );
+  const statuses = parseStatuses(search.status);
+  const allUsers = isAdmin && !!search.all;
+  const filterKey = JSON.stringify(search);
+  // Relative periods move once a minute, so the query key stays stable.
+  const minute = useNow(60_000).getTime();
+  const { after, before } = useMemo(() => range(search, minute), [search, minute]);
+  const pager = useKeysetPager(filterKey);
+
+  const workers = useQuery(WorkerAdminService.method.listWorkers, {});
+  const remotes = useQuery(RemoteService.method.listRemotes, {});
+  const schedules = useQuery(ScheduleService.method.listSchedules, {});
+  const repositories = useQuery(ResticService.method.listRepositories, {});
+  const users = useQuery(UserService.method.listUsers, {}, { enabled: allUsers });
+  const q = useQuery(
+    JobService.method.listJobs,
+    {
+      statuses,
+      workerId: search.worker ?? "",
+      remoteId: search.remote ?? "",
+      scheduleId: search.schedule ?? "",
+      repositoryId: search.repository ?? "",
+      kinds: search.kind ? [search.kind] : [],
+      query: search.q ?? "",
+      createdAfter: after ? timestampFromDate(after) : undefined,
+      createdBefore: before ? timestampFromDate(before) : undefined,
+      allUsers,
+      pageSize: 25,
+      pageToken: pager.token,
+    },
+    {
+      placeholderData: (prev) => prev,
+      refetchInterval: (query) =>
+        query.state.data?.jobs.some((j) => !isTerminal(j.status)) ? 5000 : 30_000,
+    },
+  );
+
+  const workerMap = useMemo(
+    () => new Map((workers.data?.workers ?? []).map((w) => [w.id, w])),
+    [workers.data],
+  );
+  const owners = useMemo(
+    () => (allUsers ? new Map((users.data?.users ?? []).map((u) => [u.id, u])) : undefined),
+    [allUsers, users.data],
+  );
+  const filtered =
+    statuses.length > 0 ||
+    !!search.worker ||
+    !!search.remote ||
+    !!search.schedule ||
+    !!search.repository ||
+    !!search.kind ||
+    !!search.q ||
+    !!search.period;
+
+  return (
+    <>
+      <PageHeader
+        title="Jobs"
+        description="Every transfer, backup and repository job, newest first. Open one to follow it live."
+        actions={
+          <Button asChild>
+            <Link to="/jobs/new">
+              <Play aria-hidden />
+              Run a job
+            </Link>
+          </Button>
+        }
+      />
+      <FilterBar
+        active={filtered}
+        onClear={() => void navigate({ to: "/jobs", search: { all: search.all }, replace: true })}
+      >
+        <SearchInput
+          value={search.q ?? ""}
+          onChange={(v) => setSearch({ q: v || undefined })}
+          placeholder="Search paths, remotes and repositories"
+        />
+        <StatusFilter
+          value={statuses}
+          onChange={(v) => setSearch({ status: v.length ? [...v].sort().join(",") : undefined })}
+        />
+        <Select
+          value={search.worker ?? ANY}
+          onValueChange={(v) => setSearch({ worker: v === ANY ? undefined : v })}
+        >
+          <SelectTrigger className="w-[calc(50%-0.25rem)] bg-card sm:w-40" aria-label="Worker">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ANY}>Any worker</SelectItem>
+            <SelectSeparator />
+            {(workers.data?.workers ?? []).map((w) => (
+              <SelectItem key={w.id} value={w.id}>
+                {w.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={search.remote ?? ANY}
+          onValueChange={(v) => setSearch({ remote: v === ANY ? undefined : v })}
+        >
+          <SelectTrigger className="w-[calc(50%-0.25rem)] bg-card sm:w-40" aria-label="Remote">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ANY}>Any remote</SelectItem>
+            <SelectSeparator />
+            {(remotes.data?.remotes ?? []).map((r) => (
+              <SelectItem key={r.id} value={r.id}>
+                {r.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={search.schedule ?? ANY}
+          onValueChange={(v) => setSearch({ schedule: v === ANY ? undefined : v })}
+        >
+          <SelectTrigger className="w-[calc(50%-0.25rem)] bg-card sm:w-44" aria-label="Schedule">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ANY}>Any schedule</SelectItem>
+            <SelectSeparator />
+            {(schedules.data?.schedules ?? []).map((sc) => (
+              <SelectItem key={sc.id} value={sc.id}>
+                {sc.name}
+              </SelectItem>
+            ))}
+            {schedules.data?.schedules.length === 0 && (
+              <div className="px-2 py-2 text-[13px] text-muted-foreground">No schedules yet.</div>
+            )}
+          </SelectContent>
+        </Select>
+        <Select
+          value={search.repository ?? ANY}
+          onValueChange={(v) => setSearch({ repository: v === ANY ? undefined : v })}
+        >
+          <SelectTrigger className="w-[calc(50%-0.25rem)] bg-card sm:w-44" aria-label="Repository">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ANY}>Any repository</SelectItem>
+            <SelectSeparator />
+            {(repositories.data?.repositories ?? []).map((r) => (
+              <SelectItem key={r.id} value={r.id}>
+                {r.name}
+              </SelectItem>
+            ))}
+            {repositories.data?.repositories.length === 0 && (
+              <div className="px-2 py-2 text-[13px] text-muted-foreground">
+                No repositories yet.
+              </div>
+            )}
+          </SelectContent>
+        </Select>
+        <Select
+          value={search.kind ?? ANY}
+          onValueChange={(v) => setSearch({ kind: v === ANY ? undefined : v })}
+        >
+          <SelectTrigger className="w-[calc(50%-0.25rem)] bg-card sm:w-36" aria-label="Kind">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ANY}>Any kind</SelectItem>
+            <SelectSeparator />
+            {jobKinds.map((k) => (
+              <SelectItem key={k} value={k}>
+                {kindLabel(k)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={search.period ?? ANY}
+          onValueChange={(v) =>
+            setSearch({
+              period: v === ANY ? undefined : (v as JobsSearch["period"]),
+              from: undefined,
+              to: undefined,
+            })
+          }
+        >
+          <SelectTrigger className="w-[calc(50%-0.25rem)] bg-card sm:w-40" aria-label="Created">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ANY}>Any time</SelectItem>
+            <SelectSeparator />
+            <SelectItem value="24h">Last 24 hours</SelectItem>
+            <SelectItem value="7d">Last 7 days</SelectItem>
+            <SelectItem value="30d">Last 30 days</SelectItem>
+            <SelectItem value="custom">Custom range</SelectItem>
+          </SelectContent>
+        </Select>
+        {search.period === "custom" && (
+          <div className="flex items-center gap-1.5">
+            <Input
+              type="date"
+              aria-label="Created from"
+              className="w-40 bg-card"
+              value={search.from ?? ""}
+              max={search.to}
+              onChange={(e) => setSearch({ from: e.target.value || undefined })}
+            />
+            <span className="text-muted-foreground">to</span>
+            <Input
+              type="date"
+              aria-label="Created until"
+              className="w-40 bg-card"
+              value={search.to ?? ""}
+              min={search.from}
+              onChange={(e) => setSearch({ to: e.target.value || undefined })}
+            />
+          </div>
+        )}
+        {isAdmin && (
+          <Label className="ml-auto flex items-center gap-2 text-[13px] font-normal">
+            <Switch
+              checked={!!search.all}
+              onCheckedChange={(c) => setSearch({ all: c || undefined })}
+            />
+            All users
+          </Label>
+        )}
+      </FilterBar>
+      <JobsTable
+        jobs={q.data?.jobs}
+        isLoading={q.isPending}
+        error={q.error ?? undefined}
+        onRetry={() => void q.refetch()}
+        workers={workerMap}
+        owners={owners}
+        pager={{
+          page: pager.page,
+          canPrev: pager.canPrev,
+          canNext: !!q.data?.nextPageToken,
+          onPrev: pager.prev,
+          onNext: () => pager.next(q.data?.nextPageToken ?? ""),
+        }}
+        empty={
+          filtered ? (
+            <EmptyState
+              icon={ArrowRightLeft}
+              title="No jobs match these filters"
+              description="Widen the time range or clear the filters to see more."
+            />
+          ) : (
+            <EmptyState
+              icon={ArrowRightLeft}
+              title="No jobs yet"
+              description="A job copies, syncs or moves files, or backs folders up into a repository, on one of your workers."
+              action={
+                <Button asChild>
+                  <Link to="/jobs/new">Run your first job</Link>
+                </Button>
+              }
+            />
+          )
+        }
+      />
+    </>
+  );
+}

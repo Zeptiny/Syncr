@@ -1,0 +1,2 @@
+{"message_type":"status","seconds_elapsed":1,"percent_done":4.583331232639852e-7,"total_files":6,"files_restored":1,"total_bytes":24000011,"bytes_restored":11}
+{"message_type":"summary","seconds_elapsed":1,"total_files":6,"files_restored":6,"total_bytes":24000011,"bytes_restored":24000011}

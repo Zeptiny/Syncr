@@ -1,0 +1,973 @@
+syntax = "proto3";
+
+package syncr.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "syncr/v1/link.proto";
+
+// Controller API used by the web UI and tooling. Served over Connect (JSON or
+// binary), gRPC and gRPC-Web on the controller's HTTP address.
+//
+// Authentication is described in auth.proto. SystemService, SetupService and
+// AuthService.Login are public; every other call needs a session or an API
+// token.
+//
+// Errors use the standard codes:
+//   - UNAUTHENTICATED: missing, expired or invalid credentials;
+//   - PERMISSION_DENIED: the caller's role does not allow the call;
+//   - NOT_FOUND: unknown IDs, and objects the caller may not see (another
+//     user's remote or job);
+//   - INVALID_ARGUMENT: malformed requests; validation failures carry a
+//     ValidationError detail that names the offending fields;
+//   - ALREADY_EXISTS: a name or other unique value is taken;
+//   - FAILED_PRECONDITION: the object's state forbids the call;
+//   - ABORTED: the object changed since the version the caller read;
+//   - RESOURCE_EXHAUSTED: too many attempts (logins, setup codes, probes);
+//   - UNAVAILABLE: a worker the call needs is offline, busy or did not
+//     answer in time (probes); retrying later may succeed.
+
+// ValidationError is attached as an error detail to INVALID_ARGUMENT errors
+// caused by invalid input, so forms can show messages next to their fields.
+message ValidationError {
+  repeated FieldViolation violations = 1;
+}
+
+// FieldViolation is one invalid input field.
+message FieldViolation {
+  // Path of the field in the request's input, e.g. "name",
+  // "options.endpoint", "secrets.pass", "members[1].path".
+  string field = 1;
+
+  // What is wrong, for display.
+  string message = 2;
+}
+
+// SystemService exposes information about the controller itself.
+service SystemService {
+  // GetInfo returns build information. It has no side effects, so Connect
+  // clients may call it with HTTP GET.
+  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+// GetInfoRequest is empty; reserved for future filters.
+message GetInfoRequest {}
+
+// GetInfoResponse describes the running controller build.
+message GetInfoResponse {
+  // Release version, e.g. "v2.0.0", or "dev" for local builds.
+  string version = 1;
+
+  // VCS commit the binary was built from, or "unknown".
+  string commit = 2;
+
+  // When the binary was built; unset if unknown.
+  google.protobuf.Timestamp build_time = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Workers
+// ---------------------------------------------------------------------------
+
+// WorkerAdminService enrolls, registers and manages workers.
+//
+// Workers are shared: every user may list and inspect them (ListWorkers,
+// GetWorker) and run jobs on any of them; the other calls are admin only
+// (PERMISSION_DENIED otherwise).
+service WorkerAdminService {
+  // CreateEnrollmentToken creates a short-lived, single-use token for
+  // `syncr-worker setup --token`, with ready-to-copy install commands. The
+  // token is returned once; the controller stores only its hash.
+  rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateEnrollmentTokenResponse) {}
+
+  // GetPassiveInstallCommands returns the commands that install a passive
+  // worker (`syncr-worker setup --passive`), which then prints the URL,
+  // fingerprint and pairing secret for RegisterPassiveWorker.
+  rpc GetPassiveInstallCommands(GetPassiveInstallCommandsRequest) returns (GetPassiveInstallCommandsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // RegisterPassiveWorker adds a passive worker from the URL, certificate
+  // fingerprint and pairing secret that `syncr-worker setup --passive`
+  // printed. The controller starts calling the worker right away.
+  rpc RegisterPassiveWorker(RegisterPassiveWorkerRequest) returns (RegisterPassiveWorkerResponse) {}
+
+  // ListWorkers lists the workers that have not been removed, by name.
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // GetWorker returns one worker.
+  rpc GetWorker(GetWorkerRequest) returns (GetWorkerResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // RenameWorker changes a worker's display name.
+  rpc RenameWorker(RenameWorkerRequest) returns (RenameWorkerResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // RemoveWorker removes a worker: its credentials stop working at once, its
+  // queued jobs fail and its dispatched or running jobs become interrupted
+  // (error code WORKER_REMOVED). Job history is kept.
+  rpc RemoveWorker(RemoveWorkerRequest) returns (RemoveWorkerResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // SetWorkerLabels replaces a worker's labels, which schedules target by
+  // label (ScheduleTarget.worker_label). Labels are lower-cased,
+  // deduplicated and sorted; each matches ^[a-z0-9][a-z0-9_.-]{0,31}$ and a
+  // worker has at most 16. Labels are managed by admins, never reported by
+  // workers, so a worker cannot attract other users' jobs.
+  rpc SetWorkerLabels(SetWorkerLabelsRequest) returns (SetWorkerLabelsResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // GetWorkerUpgradeCommands returns the commands that upgrade a worker in
+  // place (`syncr-worker upgrade`) to the controller's release, for the
+  // worker's operating system: one for a system service and one for a
+  // per-user service. Running jobs are interrupted by the restart the
+  // upgrade does. Empty when the worker's operating system is unknown (it
+  // never connected) or has no release build. NOT_FOUND for an unknown or
+  // removed worker.
+  rpc GetWorkerUpgradeCommands(GetWorkerUpgradeCommandsRequest) returns (GetWorkerUpgradeCommandsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+// Worker is an enrolled or registered worker. Secrets are never returned.
+message Worker {
+  // Worker ID (UUID).
+  string id = 1;
+
+  // Display name.
+  string name = 2;
+
+  // Link mode.
+  WorkerMode mode = 3;
+
+  // Connection status derived from the time of the last contact.
+  WorkerStatus status = 4;
+
+  // Last authenticated contact (any link call); unset if never.
+  google.protobuf.Timestamp last_seen = 5;
+
+  // When the worker was enrolled or registered.
+  google.protobuf.Timestamp created_at = 6;
+
+  // PASSIVE only: where the controller reaches the worker.
+  string url = 7;
+
+  // PASSIVE only: the pinned certificate fingerprint, as 64 lower-case hex
+  // digits.
+  string cert_fingerprint = 8;
+
+  // What the worker reported about itself in its latest Hello event; unset
+  // until the worker has connected once.
+  WorkerInfo info = 9;
+
+  // Labels set by an admin (SetWorkerLabels), sorted. Schedules may target
+  // any worker with a label.
+  repeated string labels = 10;
+
+  // The worker should be upgraded (GetWorkerUpgradeCommands): its latest
+  // Hello lacks a link feature this controller knows, or the worker and the
+  // controller are both release builds and the worker's version is older
+  // (by semantic versioning: v2.0.0-rc.1 < v2.0.0 < v2.0.1). A worker newer
+  // than the controller is not outdated. Computed by the controller, never
+  // stored; false until the worker has connected once.
+  bool outdated = 11;
+
+  reserved 12 to 19;
+}
+
+// WorkerStatus is a worker's connection status.
+enum WorkerStatus {
+  WORKER_STATUS_UNSPECIFIED = 0;
+  // Enrolled or registered, but never connected.
+  WORKER_STATUS_PENDING = 1;
+  // Heard from within the controller's offline threshold.
+  WORKER_STATUS_ONLINE = 2;
+  // Not heard from within the offline threshold.
+  WORKER_STATUS_OFFLINE = 3;
+}
+
+// WorkerInfo is what a worker reports about itself (link Hello event).
+message WorkerInfo {
+  // Worker build version.
+  string worker_version = 1;
+  // GOOS and GOARCH of the worker process.
+  string os = 2;
+  string arch = 3;
+  // Host name, for display.
+  string hostname = 4;
+  // Versions of the supervised tools.
+  repeated ToolVersion tools = 5;
+  // Job kinds the worker can run (JobSpec.operation field names).
+  repeated string job_kinds = 6;
+  // Jobs the worker runs concurrently.
+  int32 max_concurrent_jobs = 7;
+  // Local filesystem roots jobs may touch.
+  repeated string local_roots = 8;
+  // When the worker reported this (its Hello event).
+  google.protobuf.Timestamp reported_at = 9;
+  // Link features the worker implements (Hello.features), e.g. "probe",
+  // "restic.v2", "restic.delete". A worker without "restic.v2" must be
+  // upgraded to run restic jobs.
+  repeated string features = 10;
+  // Probe operations the worker can run (Hello.probe_ops).
+  repeated string probe_ops = 11;
+  // The hooks the worker's operator defined (Hello.hooks), by name: what a
+  // job on this worker may name in JobDefinition.hooks.
+  repeated HookInfo hooks = 12;
+
+  reserved 13 to 19;
+}
+
+// CreateEnrollmentTokenRequest configures the token.
+message CreateEnrollmentTokenRequest {
+  // How long the token stays valid. Unset means the controller default (1h);
+  // the controller rejects values below one minute or above seven days.
+  google.protobuf.Duration ttl = 1;
+
+  // The controller URL workers should use, as the browser sees it (its
+  // origin). Used in the install commands only when the controller has no
+  // configured public URL (http.public_url); it must be https or a loopback
+  // http URL. Empty means the configured public URL.
+  string controller_url = 2;
+}
+
+// CreateEnrollmentTokenResponse carries the token, shown only once.
+message CreateEnrollmentTokenResponse {
+  // The token, for `syncr-worker setup --token <token>`.
+  string token = 1;
+
+  // When the token stops being accepted.
+  google.protobuf.Timestamp expires_at = 2;
+
+  // Commands that download, install and enroll a worker with this token,
+  // per platform and scope. Empty if the controller URL is unknown.
+  repeated InstallCommand install_commands = 3;
+}
+
+// GetPassiveInstallCommandsRequest is empty.
+message GetPassiveInstallCommandsRequest {}
+
+// GetPassiveInstallCommandsResponse lists the passive install commands.
+message GetPassiveInstallCommandsResponse {
+  repeated InstallCommand commands = 1;
+}
+
+// InstallCommand is a shell command to copy onto a worker machine.
+message InstallCommand {
+  // Operating system the command is for.
+  InstallPlatform platform = 1;
+
+  // Whether it installs a system service or a per-user one.
+  InstallScope scope = 2;
+
+  // The shell to paste it into: "sh" or "powershell".
+  string shell = 3;
+
+  // Short title, e.g. "Linux (system service)".
+  string title = 4;
+
+  // The command. It may span several lines.
+  string command = 5;
+
+  // Extra advice to show with the command (e.g. "run in an elevated
+  // PowerShell"); may be empty.
+  string note = 6;
+
+  reserved 7 to 15;
+}
+
+// InstallPlatform is a worker operating system.
+enum InstallPlatform {
+  INSTALL_PLATFORM_UNSPECIFIED = 0;
+  INSTALL_PLATFORM_LINUX = 1;
+  INSTALL_PLATFORM_WINDOWS = 2;
+}
+
+// InstallScope is how a worker is installed.
+enum InstallScope {
+  INSTALL_SCOPE_UNSPECIFIED = 0;
+  // A system service (systemd unit, Windows Service); needs root or an
+  // elevated shell.
+  INSTALL_SCOPE_SYSTEM = 1;
+  // A per-user service (systemd user unit, Scheduled Task) for desktops
+  // without admin rights.
+  INSTALL_SCOPE_USER = 2;
+}
+
+// RegisterPassiveWorkerRequest describes a passive worker.
+message RegisterPassiveWorkerRequest {
+  // Display name, 1 to 64 characters.
+  string name = 1;
+
+  // https:// base URL where the worker serves WorkerLinkService, as reachable
+  // from the controller.
+  string url = 2;
+
+  // SHA-256 fingerprint of the worker's certificate (DER) as printed by
+  // setup: 64 hex digits, colons and upper case accepted.
+  string cert_fingerprint = 3;
+
+  // The pairing secret printed by setup: at least 32 printable ASCII
+  // characters without spaces. The controller sends it to the worker in
+  // every call and stores it encrypted.
+  string pairing_secret = 4;
+}
+
+// RegisterPassiveWorkerResponse returns the new worker.
+message RegisterPassiveWorkerResponse {
+  Worker worker = 1;
+}
+
+// ListWorkersRequest filters the worker list.
+message ListWorkersRequest {
+  // Only workers with this label; empty means all.
+  string label = 1;
+}
+
+// ListWorkersResponse lists workers by name.
+message ListWorkersResponse {
+  repeated Worker workers = 1;
+}
+
+// GetWorkerRequest names a worker.
+message GetWorkerRequest {
+  string worker_id = 1;
+}
+
+// GetWorkerResponse returns the worker.
+message GetWorkerResponse {
+  Worker worker = 1;
+}
+
+// RenameWorkerRequest sets a worker's display name.
+message RenameWorkerRequest {
+  string worker_id = 1;
+  // New name, 1 to 64 characters.
+  string name = 2;
+}
+
+// RenameWorkerResponse returns the renamed worker.
+message RenameWorkerResponse {
+  Worker worker = 1;
+}
+
+// RemoveWorkerRequest names the worker to remove.
+message RemoveWorkerRequest {
+  string worker_id = 1;
+}
+
+// RemoveWorkerResponse is empty.
+message RemoveWorkerResponse {}
+
+// GetWorkerUpgradeCommandsRequest names the worker to upgrade.
+message GetWorkerUpgradeCommandsRequest {
+  string worker_id = 1;
+}
+
+// GetWorkerUpgradeCommandsResponse lists the worker's upgrade commands.
+message GetWorkerUpgradeCommandsResponse {
+  repeated InstallCommand commands = 1;
+}
+
+// SetWorkerLabelsRequest replaces a worker's labels.
+message SetWorkerLabelsRequest {
+  string worker_id = 1;
+
+  // The new labels; empty removes them all. Case is ignored and duplicates
+  // are dropped.
+  repeated string labels = 2;
+}
+
+// SetWorkerLabelsResponse returns the worker with its new labels.
+message SetWorkerLabelsResponse {
+  Worker worker = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Jobs
+// ---------------------------------------------------------------------------
+
+// JobService runs and observes jobs.
+//
+// Jobs belong to the user who ran them. A user sees only their own jobs;
+// an admin may view and cancel every job (ListJobs.all_users). Another
+// user's job is NOT_FOUND.
+service JobService {
+  // RunJob queues a job on a worker. The definition refers to the caller's
+  // remotes and restic repositories by ID and carries no secrets; it is
+  // checked for shape and path syntax (INVALID_ARGUMENT with a
+  // ValidationError detail) and its remotes and repository must be the
+  // caller's live ones (NOT_FOUND otherwise). A repository whose data is
+  // being deleted accepts no new jobs (FAILED_PRECONDITION); a
+  // restic_delete_data definition is rejected (INVALID_ARGUMENT on
+  // "definition.restic_delete_data": DeleteRepository starts it). The
+  // controller resolves the credentials only when it hands the job to the
+  // worker, which validates it fully and reports problems as a FAILED job.
+  // Jobs on one restic repository run one at a time, oldest first
+  // (Job.waiting_for_job_id).
+  rpc RunJob(RunJobRequest) returns (RunJobResponse) {}
+
+  // GetJob returns one job.
+  rpc GetJob(GetJobRequest) returns (GetJobResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // ListJobs lists jobs, newest first.
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // CancelJob cancels a job. A queued job is cancelled at once; a dispatched
+  // or running job is asked to stop and becomes CANCELLED when the worker
+  // confirms (if it finishes first, its own outcome stands). Cancelling a
+  // finished job changes nothing. Returns the job after the request.
+  rpc CancelJob(CancelJobRequest) returns (CancelJobResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // WatchJob streams a job's status and live progress. The first message is
+  // the current job; then every status change sends the job again and every
+  // live sample sends progress. The stream ends after the job reaches a
+  // terminal status (at once for a finished job). Intermediate progress
+  // samples may be skipped for slow readers; status changes never are.
+  //
+  // The stream can also end before the job finishes: with DEADLINE_EXCEEDED
+  // after the controller's maximum watch duration (api.watch_max_duration),
+  // or with UNAVAILABLE when the controller shuts down. Clients then call
+  // WatchJob again; its first message is the current job, so nothing is
+  // missed.
+  rpc WatchJob(WatchJobRequest) returns (stream WatchJobResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // ListJobSamples returns the stored progress samples of a job (one about
+  // every five seconds while it ran), oldest first, for charts: at most
+  // max_points of them, evenly thinned. The samples of a job that finished
+  // longer ago than the controller's jobs.sample_retention (30 days by
+  // default) are deleted; its final counters stay on the job.
+  rpc ListJobSamples(ListJobSamplesRequest) returns (ListJobSamplesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+// Job is one run of a job definition on a worker.
+message Job {
+  // Job ID (UUID).
+  string id = 1;
+
+  // The worker that runs the job.
+  string worker_id = 2;
+
+  // Job kind: the JobSpec.operation field name, e.g. "rclone_transfer".
+  string kind = 3;
+
+  // Lifecycle status.
+  JobStatus status = 4;
+
+  // Whether a cancel was requested while the job was dispatched or running
+  // and the worker has not confirmed it yet (or finished first).
+  bool cancel_requested = 5;
+
+  // When the job was created.
+  google.protobuf.Timestamp created_at = 6;
+  // When the worker accepted the job; unset while queued.
+  google.protobuf.Timestamp dispatched_at = 7;
+  // When the job's process started (worker clock); unset if it never did.
+  google.protobuf.Timestamp started_at = 8;
+  // When the job reached its terminal status; unset until then.
+  google.protobuf.Timestamp finished_at = 9;
+
+  // How often the job went back to the queue because its worker restarted
+  // or shut down before starting it.
+  int32 requeues = 10;
+
+  // Cumulative counters: the final ones for a finished job, the latest
+  // stored sample while it runs, unset before.
+  JobStats stats = 11;
+
+  // Why the job failed or was interrupted (or the cause of a cancellation);
+  // unset for successful jobs.
+  JobError error = 12;
+
+  // Non-fatal problems of a job whose operation succeeded.
+  repeated string warnings = 13;
+
+  // Exit code of the tool process; unset if no process ran or the job has not
+  // finished.
+  optional int32 exit_code = 14;
+
+  // Kind-specific output of a job whose operation succeeded, if the kind
+  // has any. That includes a job that failed with HOOK_FAILED afterwards.
+  JobOutput output = 15;
+
+  // ID of the user who ran the job.
+  string owner_id = 16;
+
+  // What the job runs (never contains secrets).
+  JobDefinition definition = 17;
+
+  // The remotes the definition refers to, for display (they may since have
+  // been deleted).
+  repeated JobRemoteRef remotes = 18;
+
+  // The schedule that launched the job; empty for a job run by hand. It is
+  // cleared when the schedule is deleted.
+  string schedule_id = 19;
+
+  // The schedule that launched the job, for display; unset for a job run by
+  // hand or whose schedule was deleted.
+  JobScheduleRef schedule = 20;
+
+  // One-line description of what the job runs, e.g. "Back up /srv/photos →
+  // Photos vault" (the controller's job kind describes it).
+  string title = 21;
+
+  // The restic repository the job uses; unset for other kinds.
+  JobRepositoryRef repository = 22;
+
+  // Set while the job is queued behind an older unfinished job on the same
+  // restic repository (they share a concurrency key): the job it waits for.
+  string waiting_for_job_id = 23;
+
+  // Kind-specific results for display (e.g. "Snapshot", "Data added"), in
+  // order; empty for kinds without any.
+  repeated JobDetail details = 24;
+
+  // The job's effective time limit: its definition's max_runtime or, when
+  // that is unset, the controller's jobs.default_max_runtime (jobs only the
+  // system starts, such as restic_delete_data, never get the default).
+  // Once a worker accepted the job, the limit it was sent then, which a
+  // later change of the default does not change; for a queued job, the
+  // limit it will be sent. Unset when the job has none, or ended before a
+  // worker accepted it. A job stopped by it fails with TIME_LIMIT.
+  google.protobuf.Duration time_limit = 25;
+
+  // The hooks the worker ran for the job (definition.hooks), in the order
+  // they ran, each with how it ended and the end of what it printed. Empty
+  // until the job has finished, and for a job without hooks.
+  repeated HookRun hook_runs = 26;
+
+  reserved 27 to 29;
+}
+
+// JobRepositoryRef names the restic repository a job or schedule uses.
+message JobRepositoryRef {
+  // Repository ID (UUID).
+  string id = 1;
+
+  // The repository's name.
+  string name = 2;
+
+  // Whether the repository has been deleted since.
+  bool deleted = 3;
+
+  reserved 4 to 9;
+}
+
+// JobDetail is one kind-specific result of a job, for display.
+message JobDetail {
+  // What it is, e.g. "Snapshot".
+  string label = 1;
+
+  // Its value, formatted for people, e.g. "1a2b3c4d".
+  string value = 2;
+
+  reserved 3 to 5;
+}
+
+// JobScheduleRef names the schedule that launched a job.
+message JobScheduleRef {
+  // Schedule ID (UUID).
+  string id = 1;
+
+  // The schedule's name.
+  string name = 2;
+}
+
+// JobRemoteRef names a remote a job refers to.
+message JobRemoteRef {
+  // Remote ID (UUID).
+  string id = 1;
+
+  // The remote's name.
+  string name = 2;
+
+  // The remote's backend type ID.
+  string backend_type = 3;
+
+  // Whether the remote has been deleted since.
+  bool deleted = 4;
+
+  reserved 5 to 9;
+}
+
+// JobDefinition is what a job runs, as the API accepts and returns it: the
+// operation with locations on the owner's remotes, referred to by ID. It
+// contains no secrets; the controller builds the worker's JobSpec from it,
+// with the remotes' credentials, when it dispatches the job. Field names of
+// the oneof are the job kinds (the JobSpec operation names).
+message JobDefinition {
+  // Hard time limit of the job, for every kind: the worker stops the job
+  // this long after it started (its before and on_success hooks count, the
+  // hooks that clean up afterwards do not) and the job fails with TIME_LIMIT.
+  // 1 minute to 366 days; unset means the controller's default
+  // (jobs.default_max_runtime, none unless configured). Unlike rclone's
+  // max_duration (RcloneTransferOptions), which only stops starting new
+  // transfers, it ends the job. A worker that cannot enforce it fails the
+  // job with WORKER_OUTDATED instead of running it without a limit.
+  google.protobuf.Duration max_runtime = 1;
+
+  // Hooks of the worker to run around the operation, for every kind a user
+  // may start: commands the worker's operator defined in its configuration,
+  // named here (see JobHooks for when each list runs and what a failing
+  // hook does, and WorkerInfo.hooks for the names a worker offers). The
+  // worker must define every hook named: RunJob and schedules on a worker
+  // refuse a name its latest report lacks, a schedule on a label runs only
+  // on workers that define them all, and a job whose worker no longer
+  // defines one fails with INVALID_SPEC. A worker that cannot run hooks at
+  // all fails the job with WORKER_OUTDATED.
+  JobHooks hooks = 2;
+
+  reserved 3 to 9;
+
+  oneof operation {
+    RcloneTransferDefinition rclone_transfer = 10;
+
+    // Restic operations (Milestone 5) on one of the owner's repositories.
+    ResticBackupDefinition restic_backup = 21;
+    ResticForgetDefinition restic_forget = 22;
+    ResticPruneDefinition restic_prune = 23;
+    ResticCheckDefinition restic_check = 24;
+    // Restores are started from the snapshot browser; they cannot be
+    // scheduled.
+    ResticRestoreDefinition restic_restore = 25;
+    // Created only by ResticService.DeleteRepository (delete_data); RunJob
+    // and schedules reject it.
+    ResticDeleteDataDefinition restic_delete_data = 27;
+  }
+
+  // 20 (restic init) and 26 (restic snapshots) are probe operations, not
+  // job kinds.
+  reserved 20, 26, 28 to 29;
+}
+
+// RcloneTransferDefinition copies, syncs or moves files between two
+// locations (see RcloneTransfer).
+message RcloneTransferDefinition {
+  // Transfer mode.
+  RcloneTransferMode mode = 1;
+
+  // Where files are read from.
+  JobLocation source = 2;
+
+  // Where files are written to.
+  JobLocation destination = 3;
+
+  // Typed allowlist of rclone flags. Unset fields use rclone defaults.
+  RcloneTransferOptions options = 4;
+
+  reserved 5 to 9;
+}
+
+// ResticBackupDefinition backs up local paths of the worker into a
+// repository (see ResticBackup).
+message ResticBackupDefinition {
+  // One of the owner's repositories (ResticService).
+  string repository_id = 1;
+
+  // Absolute local paths to back up, inside the worker's local_roots: 1 to
+  // 100, without ".." segments or duplicates.
+  repeated string paths = 2;
+
+  // --exclude patterns, at most 1000.
+  repeated string excludes = 3;
+
+  // --tag values, at most 32, each 1 to 128 bytes without commas.
+  repeated string tags = 4;
+
+  // --host override; empty uses the worker's host name.
+  string host = 5;
+
+  // --use-fs-snapshot (Windows VSS; the worker must run as a system
+  // service). Fails on other operating systems.
+  bool use_fs_snapshot = 6;
+
+  // --exclude-caches.
+  bool exclude_caches = 7;
+
+  // --one-file-system.
+  bool one_file_system = 8;
+
+  // --exclude-larger-than in bytes; greater than 0 when set.
+  optional int64 exclude_larger_than_bytes = 9;
+
+  // --dry-run.
+  bool dry_run = 10;
+
+  reserved 11 to 29;
+}
+
+// ResticForgetDefinition applies a retention policy (see ResticForget).
+message ResticForgetDefinition {
+  // One of the owner's repositories.
+  string repository_id = 1;
+
+  // Which snapshots to keep: at least one rule.
+  ResticRetentionPolicy policy = 2;
+
+  // --prune: remove unreferenced data afterwards.
+  bool prune = 3;
+
+  // Only consider snapshots with these tags.
+  repeated string tags = 4;
+
+  // Only consider snapshots of this host; empty means all hosts.
+  string host = 5;
+
+  // --dry-run.
+  bool dry_run = 6;
+
+  reserved 7 to 19;
+}
+
+// ResticPruneDefinition removes unreferenced data (see ResticPrune).
+message ResticPruneDefinition {
+  // One of the owner's repositories.
+  string repository_id = 1;
+
+  // --dry-run.
+  bool dry_run = 2;
+
+  reserved 3 to 19;
+}
+
+// ResticCheckDefinition verifies a repository (see ResticCheck).
+message ResticCheckDefinition {
+  // One of the owner's repositories.
+  string repository_id = 1;
+
+  // Percentage of pack data to read and verify, 0 to 100; 0 checks only
+  // the structure.
+  int32 read_data_percent = 2;
+
+  reserved 3 to 19;
+}
+
+// ResticRestoreDefinition restores a snapshot into a local folder of the
+// worker (see ResticRestore).
+message ResticRestoreDefinition {
+  // One of the owner's repositories.
+  string repository_id = 1;
+
+  // "latest" or a snapshot ID of 8 to 64 hex digits.
+  string snapshot_id = 2;
+
+  // Absolute local target folder inside the worker's local_roots.
+  string target = 3;
+
+  // Literal snapshot tree paths to restore (selected items), at most 1000;
+  // each starts with "/". Cannot be combined with subfolder.
+  repeated string paths = 4;
+
+  // --exclude patterns.
+  repeated string excludes = 5;
+
+  // --verify.
+  bool verify = 6;
+
+  // Restore the contents of this snapshot folder (a tree path) directly
+  // into target.
+  string subfolder = 7;
+
+  // What happens to files that exist at the target. UNSPECIFIED means
+  // NEVER: a restore never replaces files unless asked to.
+  ResticRestoreOverwrite overwrite = 8;
+
+  reserved 9 to 19;
+}
+
+// ResticDeleteDataDefinition deletes a repository's data in the backend
+// (see ResticDeleteData). Only ResticService.DeleteRepository creates it.
+message ResticDeleteDataDefinition {
+  // The repository being deleted.
+  string repository_id = 1;
+
+  // An earlier deletion job of the repository ran on this job's worker and
+  // deleted files there (its final stats, or the last progress of a job
+  // lost without a result, count deletions). Only then may this job find
+  // nothing left and succeed (ResticDeleteData.resume).
+  bool resume = 2;
+
+  reserved 3 to 19;
+}
+
+// JobLocation is a path on one of the owner's remotes, or on the worker's
+// local filesystem.
+message JobLocation {
+  // Remote ID. Empty means the worker's local filesystem: path must then be
+  // absolute and inside the worker's local_roots.
+  string remote_id = 1;
+
+  // Path within the remote (relative to its root), or an absolute local
+  // path.
+  string path = 2;
+
+  reserved 3 to 9;
+}
+
+// JobStatus is the lifecycle status of a job (see internal/domain).
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  // Waiting to be accepted by its worker.
+  JOB_STATUS_QUEUED = 1;
+  // Accepted by the worker, not started yet.
+  JOB_STATUS_DISPATCHED = 2;
+  // The worker started the job's process.
+  JOB_STATUS_RUNNING = 3;
+  // Finished successfully. Terminal.
+  JOB_STATUS_SUCCEEDED = 4;
+  // Failed, or never dispatched. Terminal.
+  JOB_STATUS_FAILED = 5;
+  // Stopped on request. Terminal.
+  JOB_STATUS_CANCELLED = 6;
+  // The worker lost the job (restart, shutdown, removal). Terminal.
+  JOB_STATUS_INTERRUPTED = 7;
+}
+
+// RunJobRequest queues a job.
+message RunJobRequest {
+  // The worker to run the job on.
+  string worker_id = 1;
+
+  // Milestone 2 took a complete JobSpec with inline credentials.
+  reserved 2;
+  reserved "spec";
+
+  // What to run.
+  JobDefinition definition = 3;
+}
+
+// RunJobResponse returns the queued job.
+message RunJobResponse {
+  Job job = 1;
+}
+
+// GetJobRequest names a job.
+message GetJobRequest {
+  string job_id = 1;
+}
+
+// GetJobResponse returns the job.
+message GetJobResponse {
+  Job job = 1;
+}
+
+// ListJobsRequest filters and pages the job list.
+message ListJobsRequest {
+  // Only jobs of this worker; empty means all workers.
+  string worker_id = 1;
+
+  // Only jobs in one of these statuses; empty means all.
+  repeated JobStatus statuses = 2;
+
+  // Maximum number of jobs to return: 1 to 500, 0 means 50.
+  int32 page_size = 3;
+
+  // next_page_token of the previous response; empty for the first page.
+  string page_token = 4;
+
+  // Only jobs that use this remote; empty means any.
+  string remote_id = 5;
+
+  // Only jobs of these kinds (e.g. "rclone_transfer"); empty means all.
+  repeated string kinds = 6;
+
+  // Only jobs whose kind, mode, paths or remote names contain this text
+  // (case-insensitive); empty means all.
+  string query = 7;
+
+  // Only jobs created at or after created_after and before created_before;
+  // unset means no bound.
+  google.protobuf.Timestamp created_after = 8;
+  google.protobuf.Timestamp created_before = 9;
+
+  // Admins only: list every user's jobs instead of their own. Ignored for
+  // other users.
+  bool all_users = 10;
+
+  // Only jobs launched by this schedule; empty means any.
+  string schedule_id = 11;
+
+  // Only jobs on this restic repository; empty means any.
+  string repository_id = 12;
+}
+
+// ListJobsResponse is one page of jobs, newest first.
+message ListJobsResponse {
+  repeated Job jobs = 1;
+
+  // Token for the next page; empty on the last page.
+  string next_page_token = 2;
+}
+
+// CancelJobRequest names the job to cancel.
+message CancelJobRequest {
+  string job_id = 1;
+}
+
+// CancelJobResponse returns the job after the cancel request.
+message CancelJobResponse {
+  Job job = 1;
+}
+
+// WatchJobRequest names the job to watch.
+message WatchJobRequest {
+  string job_id = 1;
+}
+
+// WatchJobResponse is one update of a watched job.
+message WatchJobResponse {
+  oneof update {
+    // The job after a status change (and as the first message).
+    Job job = 1;
+    // A live progress sample of the running job.
+    JobProgress progress = 2;
+  }
+}
+
+// ListJobSamplesRequest names a job.
+message ListJobSamplesRequest {
+  string job_id = 1;
+
+  // At most this many samples: a job with more is evenly thinned, always
+  // keeping its first and its last sample. 0 means 1000; larger values are
+  // capped at 5000; negative ones are INVALID_ARGUMENT.
+  int32 max_points = 2;
+}
+
+// ListJobSamplesResponse lists the job's stored samples, oldest first.
+message ListJobSamplesResponse {
+  repeated JobProgress samples = 1;
+
+  // How many samples the job has stored; more than len(samples) means they
+  // were thinned.
+  int32 total = 2;
+}
+
+// JobProgress is a live progress sample. Rates are derived by clients from
+// consecutive samples (delta bytes / delta time).
+message JobProgress {
+  // When the worker took the sample (worker clock).
+  google.protobuf.Timestamp time = 1;
+
+  // Cumulative counters.
+  JobStats stats = 2;
+}

@@ -1,0 +1,446 @@
+syntax = "proto3";
+
+package syncr.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "syncr/v1/api.proto";
+import "syncr/v1/notify.proto";
+
+// Schedules run a job definition on a cron schedule, in a time zone, on one
+// worker or on any worker with a label.
+//
+// Each occurrence becomes a run (ScheduleRun). A run waits while its worker
+// is offline and launches the job when the worker comes back, within the
+// schedule's missed-run policy; otherwise it is MISSED. Occurrences that pass
+// while a run is still waiting are merged into it (coalesced), so a desktop
+// that was asleep runs once when it wakes up, not once per missed occurrence.
+//
+// Times follow the cron expression in the schedule's time zone. An
+// occurrence that does not exist (the spring-forward gap) runs at the
+// transition; one that exists twice (fall-back) runs once, at the first.
+
+// ScheduleService manages the caller's schedules. Schedules are private to
+// their owner, admins included: another user's schedule is NOT_FOUND. Jobs a
+// schedule launches belong to its owner (admins see them through
+// ListJobs.all_users).
+//
+// Invalid input fails with INVALID_ARGUMENT carrying a ValidationError
+// detail. Field paths: "name", "cron", "timezone", "target.worker_id",
+// "target.worker_label", "missed_run.max_delay", "contacts[1].contact_id",
+// "contacts[1].events", and "definition...." as for RunJob. Restores cannot
+// be scheduled ("definition.restic_restore": "restores cannot be
+// scheduled"), nor can repository data deletions
+// ("definition.restic_delete_data": "is started by deleting the
+// repository"). A definition on a restic repository whose data is being
+// deleted fails with FAILED_PRECONDITION.
+service ScheduleService {
+  // ListSchedules lists the caller's schedules, by name.
+  rpc ListSchedules(ListSchedulesRequest) returns (ListSchedulesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // GetSchedule returns one of the caller's schedules.
+  rpc GetSchedule(GetScheduleRequest) returns (GetScheduleResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // CreateSchedule creates a schedule. ALREADY_EXISTS if the caller has a
+  // schedule with the same name (case-insensitive). The definition's
+  // remotes and the linked contacts must be the caller's (NOT_FOUND
+  // otherwise).
+  rpc CreateSchedule(CreateScheduleRequest) returns (CreateScheduleResponse) {}
+
+  // UpdateSchedule changes a schedule. ABORTED if it changed since version
+  // was read. Changing the cron expression, time zone or enabled state
+  // recomputes the next run.
+  rpc UpdateSchedule(UpdateScheduleRequest) returns (UpdateScheduleResponse) {}
+
+  // SetScheduleEnabled pauses or resumes a schedule without a version
+  // check. Pausing cancels a waiting run; resuming clears paused_reason and
+  // computes the next run from now.
+  rpc SetScheduleEnabled(SetScheduleEnabledRequest) returns (SetScheduleEnabledResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // DeleteSchedule deletes a schedule and its run history. Jobs it launched
+  // are kept (their schedule_id is cleared).
+  rpc DeleteSchedule(DeleteScheduleRequest) returns (DeleteScheduleResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // RunScheduleNow starts a run right away (trigger MANUAL), on the same
+  // terms as a cron run. FAILED_PRECONDITION if the overlap policy is SKIP
+  // and a run of the schedule is active.
+  rpc RunScheduleNow(RunScheduleNowRequest) returns (RunScheduleNowResponse) {}
+
+  // ListScheduleRuns lists a schedule's runs, newest first.
+  rpc ListScheduleRuns(ListScheduleRunsRequest) returns (ListScheduleRunsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // PreviewSchedule checks a cron expression and time zone and returns the
+  // next occurrences, for the schedule form.
+  rpc PreviewSchedule(PreviewScheduleRequest) returns (PreviewScheduleResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+// ScheduleTarget is where a schedule's jobs run.
+message ScheduleTarget {
+  oneof target {
+    // This worker. It must exist when the schedule is saved; a schedule
+    // whose worker is removed is paused.
+    string worker_id = 1;
+    // The least busy online worker with this label (see Worker.labels)
+    // that can run the job's kind.
+    string worker_label = 2;
+  }
+}
+
+// MissedRunAction is what happens to a run whose worker is offline when it
+// is due.
+enum MissedRunAction {
+  MISSED_RUN_ACTION_UNSPECIFIED = 0;
+  // Wait for the worker, up to MissedRunPolicy.max_delay, then mark the run
+  // MISSED.
+  MISSED_RUN_ACTION_RUN_LATE = 1;
+  // Mark the run MISSED (after a short grace period) and notify.
+  MISSED_RUN_ACTION_SKIP = 2;
+}
+
+// MissedRunPolicy says how long a due run may wait for its worker.
+message MissedRunPolicy {
+  // What happens when the worker is offline.
+  MissedRunAction action = 1;
+
+  // RUN_LATE: how long after its scheduled time a run may still start, at
+  // most 7 days. Unset or zero means until the next occurrence.
+  google.protobuf.Duration max_delay = 2;
+}
+
+// OverlapPolicy is what happens when a run is due while an earlier run of
+// the schedule is still active (launching, or its job queued, dispatched or
+// running).
+enum OverlapPolicy {
+  OVERLAP_POLICY_UNSPECIFIED = 0;
+  // Do not start another run: the new one is MISSED (reason "overlap").
+  OVERLAP_POLICY_SKIP = 1;
+  // Start the new run when the active one has finished.
+  OVERLAP_POLICY_QUEUE = 2;
+  // Start the new run at once, alongside the active one.
+  OVERLAP_POLICY_ALLOW = 3;
+}
+
+// ScheduleContact links a contact to a schedule.
+message ScheduleContact {
+  // One of the caller's contacts.
+  string contact_id = 1;
+
+  // The events to notify: at least one of SUCCEEDED, FAILED, INTERRUPTED
+  // and MISSED.
+  repeated NotificationEvent events = 2;
+
+  // Output only: the contact's name.
+  string contact_name = 3;
+
+  // Output only: the contact's channel type.
+  string channel_type = 4;
+}
+
+// ScheduleInput is the configuration of a schedule to create or update.
+message ScheduleInput {
+  // Display name, 1 to 64 characters.
+  string name = 1;
+
+  // Free text; may be empty.
+  string description = 2;
+
+  // Cron expression: five fields (minute hour day-of-month month
+  // day-of-week) or a descriptor (@yearly, @annually, @monthly, @weekly,
+  // @daily, @midnight, @hourly). Seconds, @every and CRON_TZ= are not
+  // supported.
+  string cron = 3;
+
+  // IANA time zone name, e.g. "Europe/Berlin" or "UTC".
+  string timezone = 4;
+
+  // Where the jobs run.
+  ScheduleTarget target = 5;
+
+  // What happens to runs whose worker is offline.
+  MissedRunPolicy missed_run = 6;
+
+  // What happens to runs that are due while one is active; unspecified
+  // means SKIP.
+  OverlapPolicy overlap = 7;
+
+  // Whether the schedule runs.
+  bool enabled = 8;
+
+  // What each run runs (checked as for RunJob).
+  JobDefinition definition = 9;
+
+  // Contacts to notify and their events.
+  repeated ScheduleContact contacts = 10;
+}
+
+// Schedule is a configured schedule.
+message Schedule {
+  // Schedule ID (UUID).
+  string id = 1;
+
+  // ID of the user who owns the schedule and its jobs.
+  string owner_id = 2;
+
+  // See ScheduleInput.
+  string name = 3;
+  string description = 4;
+  string cron = 5;
+  string timezone = 6;
+  ScheduleTarget target = 7;
+  MissedRunPolicy missed_run = 8;
+  OverlapPolicy overlap = 9;
+  bool enabled = 10;
+
+  // Why the controller paused the schedule (e.g. its worker was removed);
+  // empty if it did not.
+  string paused_reason = 11;
+
+  // See ScheduleInput.
+  JobDefinition definition = 12;
+
+  // The remotes the definition refers to, for display.
+  repeated JobRemoteRef remotes = 13;
+
+  // See ScheduleInput.
+  repeated ScheduleContact contacts = 14;
+
+  // When the next occurrence is due; unset while paused (or if the
+  // expression has no further occurrence).
+  google.protobuf.Timestamp next_run_at = 15;
+
+  // When an occurrence last fired; unset if never.
+  google.protobuf.Timestamp last_fired_at = 16;
+
+  // The newest run; unset if there is none.
+  ScheduleRun last_run = 17;
+
+  // When the schedule was created and last changed.
+  google.protobuf.Timestamp created_at = 18;
+  google.protobuf.Timestamp updated_at = 19;
+
+  // Optimistic concurrency token for UpdateSchedule.
+  int64 version = 20;
+
+  // The restic repository the definition uses, for display; unset for other
+  // kinds.
+  JobRepositoryRef repository = 21;
+
+  reserved 22 to 39;
+}
+
+// ScheduleRunStatus is where a run is.
+enum ScheduleRunStatus {
+  SCHEDULE_RUN_STATUS_UNSPECIFIED = 0;
+  // Waiting for its worker (or for an active run to finish).
+  SCHEDULE_RUN_STATUS_PENDING = 1;
+  // Its job is being created.
+  SCHEDULE_RUN_STATUS_LAUNCHING = 2;
+  // Its job was created (job_id; job_status tells how it went). Terminal.
+  SCHEDULE_RUN_STATUS_LAUNCHED = 3;
+  // It could not start in time (reason). Terminal.
+  SCHEDULE_RUN_STATUS_MISSED = 4;
+  // It could not start at all (reason). Terminal.
+  SCHEDULE_RUN_STATUS_FAILED = 5;
+  // The schedule was paused while the run waited. Terminal.
+  SCHEDULE_RUN_STATUS_CANCELLED = 6;
+}
+
+// ScheduleRunTrigger is what started a run.
+enum ScheduleRunTrigger {
+  SCHEDULE_RUN_TRIGGER_UNSPECIFIED = 0;
+  // An occurrence of the cron expression.
+  SCHEDULE_RUN_TRIGGER_CRON = 1;
+  // RunScheduleNow.
+  SCHEDULE_RUN_TRIGGER_MANUAL = 2;
+}
+
+// ScheduleRun is one run of a schedule.
+message ScheduleRun {
+  // Run ID (UUID).
+  string id = 1;
+
+  // The schedule.
+  string schedule_id = 2;
+
+  // What started it.
+  ScheduleRunTrigger trigger = 3;
+
+  // The occurrence that opened the run (for a MANUAL run, when it was
+  // requested). Occurrences merged into it later are counted in coalesced;
+  // after controller downtime a run opens for the latest missed occurrence.
+  google.protobuf.Timestamp scheduled_for = 4;
+
+  // The latest time it may still start.
+  google.protobuf.Timestamp deadline = 5;
+
+  // How many earlier occurrences were merged into it.
+  int32 coalesced = 6;
+
+  // Where it is.
+  ScheduleRunStatus status = 7;
+
+  // Why it is MISSED, FAILED or CANCELLED, as a code: worker_offline,
+  // overlap, controller_unavailable, remote_unavailable,
+  // repository_unavailable (the restic repository was deleted),
+  // repository_deleting (its data is being deleted), invalid_definition,
+  // worker_removed, worker_outdated (the worker cannot run the job's kind),
+  // no_worker_with_label, owner_disabled, disabled.
+  // Schedule.paused_reason uses the same codes.
+  string reason = 8;
+
+  // Details of the reason, for display; may be empty.
+  string message = 9;
+
+  // The worker it launched (or is launching) on.
+  string worker_id = 10;
+
+  // The job it launched (or is launching).
+  string job_id = 11;
+
+  // The status of that job; unspecified if there is none yet.
+  JobStatus job_status = 12;
+
+  // When the run was created and last changed.
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+
+  reserved 15 to 29;
+}
+
+// ListSchedulesRequest filters the schedule list.
+message ListSchedulesRequest {
+  // Only schedules whose definition uses this remote; empty means any.
+  string remote_id = 1;
+
+  // Only schedules that notify this contact; empty means any.
+  string contact_id = 2;
+
+  // Only schedules whose definition uses this restic repository; empty
+  // means any.
+  string repository_id = 3;
+}
+
+// ListSchedulesResponse lists schedules by name.
+message ListSchedulesResponse {
+  repeated Schedule schedules = 1;
+}
+
+// GetScheduleRequest names a schedule.
+message GetScheduleRequest {
+  string schedule_id = 1;
+}
+
+// GetScheduleResponse returns the schedule.
+message GetScheduleResponse {
+  Schedule schedule = 1;
+}
+
+// CreateScheduleRequest describes the new schedule.
+message CreateScheduleRequest {
+  ScheduleInput input = 1;
+}
+
+// CreateScheduleResponse returns the new schedule.
+message CreateScheduleResponse {
+  Schedule schedule = 1;
+}
+
+// UpdateScheduleRequest changes a schedule.
+message UpdateScheduleRequest {
+  string schedule_id = 1;
+
+  // The version the caller read (Schedule.version).
+  int64 version = 2;
+
+  // The new configuration.
+  ScheduleInput input = 3;
+}
+
+// UpdateScheduleResponse returns the updated schedule.
+message UpdateScheduleResponse {
+  Schedule schedule = 1;
+}
+
+// SetScheduleEnabledRequest pauses or resumes a schedule.
+message SetScheduleEnabledRequest {
+  string schedule_id = 1;
+  bool enabled = 2;
+}
+
+// SetScheduleEnabledResponse returns the schedule.
+message SetScheduleEnabledResponse {
+  Schedule schedule = 1;
+}
+
+// DeleteScheduleRequest names the schedule to delete.
+message DeleteScheduleRequest {
+  string schedule_id = 1;
+}
+
+// DeleteScheduleResponse is empty.
+message DeleteScheduleResponse {}
+
+// RunScheduleNowRequest names the schedule to run.
+message RunScheduleNowRequest {
+  string schedule_id = 1;
+}
+
+// RunScheduleNowResponse returns the run (a run that was already waiting
+// absorbs the request).
+message RunScheduleNowResponse {
+  ScheduleRun run = 1;
+}
+
+// ListScheduleRunsRequest pages a schedule's runs.
+message ListScheduleRunsRequest {
+  string schedule_id = 1;
+
+  // Maximum number of runs to return: 1 to 500, 0 means 50.
+  int32 page_size = 2;
+
+  // next_page_token of the previous response; empty for the first page.
+  string page_token = 3;
+}
+
+// ListScheduleRunsResponse is one page of runs, newest first.
+message ListScheduleRunsResponse {
+  repeated ScheduleRun runs = 1;
+
+  // Token for the next page; empty on the last page.
+  string next_page_token = 2;
+}
+
+// PreviewScheduleRequest is a cron expression and time zone to check.
+message PreviewScheduleRequest {
+  // See ScheduleInput.
+  string cron = 1;
+  string timezone = 2;
+
+  // How many occurrences to return: 1 to 20, 0 means 5.
+  int32 count = 3;
+
+  // Occurrences strictly after this time; unset means now.
+  google.protobuf.Timestamp after = 4;
+}
+
+// PreviewScheduleResponse lists the next occurrences.
+message PreviewScheduleResponse {
+  // The next occurrences, oldest first.
+  repeated google.protobuf.Timestamp next_runs = 1;
+
+  // The expression as the controller stores it (whitespace collapsed,
+  // lower case).
+  string normalized = 2;
+}

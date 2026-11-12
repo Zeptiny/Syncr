@@ -1,0 +1,112 @@
+package dispatch
+
+import (
+	"context"
+	"time"
+
+	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
+	"github.com/Zeptiny/Syncr/internal/app/workers"
+	"github.com/Zeptiny/Syncr/internal/domain"
+)
+
+// Jobs is the part of the job service (*jobs.Service) the dispatcher uses.
+// Its lifecycle methods are idempotent and safe for concurrent use (see
+// package jobs).
+type Jobs interface {
+	Unfinished(ctx context.Context, workerID domain.WorkerID) ([]jobs.Job, error)
+	QueuedBefore(ctx context.Context, before time.Time, limit int) ([]jobs.Job, error)
+	// Blockers returns, for each of ids (at most jobs.MaxBlockerIDs) with
+	// concurrency keys, the oldest older unfinished job sharing a key.
+	Blockers(ctx context.Context, ids []domain.JobID) (map[domain.JobID]domain.JobID, error)
+	MarkDispatched(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string) (jobs.Job, bool, error)
+	MarkRunning(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, startedAt time.Time) (jobs.Job, bool, error)
+	RecordProgress(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, smp jobs.Sample) (bool, error)
+	Finish(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, o jobs.Outcome) (jobs.Job, bool, error)
+	Requeue(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string) (jobs.Job, bool, error)
+	Interrupt(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, e jobs.JobError) (jobs.Job, bool, error)
+	CancelUnconfirmed(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string) (jobs.Job, bool, error)
+	Abandon(ctx context.Context, workerID domain.WorkerID, id domain.JobID, epoch string, e jobs.JobError) (jobs.Job, bool, error)
+	FailQueued(ctx context.Context, id domain.JobID, queuedBefore time.Time, e jobs.JobError) (jobs.Job, bool, error)
+}
+
+// SpecBuilder builds the worker spec of a queued job from its stored
+// definition, resolving the credentials of the remotes it uses. It is
+// called for every queued job on every poll until the worker accepts it, so
+// the spec (which contains secrets) is never stored. Specs (spec.go) is the
+// implementation over the remotes service and the job kinds.
+//
+// Errors that fail the job instead of being retried: domain.ErrNotFound (a
+// remote was deleted or is not the owner's) fails it with
+// "remote_unavailable" (an error wrapping errRepositoryUnavailable, a
+// repository that is gone, with "repository_unavailable"),
+// domain.ErrInvalidArgument (the definition cannot be decoded or built)
+// with "invalid_spec" (a *WrongOSError, a worker on another operating system
+// than the definition needs, and a *MissingHooksError, a worker that does
+// not define a hook the definition names, too, with a message saying so),
+// ErrWorkerOutdated (the worker lacks a feature the kind requires, or
+// ErrTimeLimitUnsupported: the job has a time limit the worker cannot
+// enforce, or ErrHooksUnsupported: it names hooks the worker cannot run)
+// with "worker_outdated", domain.ErrFailedPrecondition (a
+// remote's stored credentials cannot be used, e.g. they no longer decrypt)
+// with "internal". Any other error is returned to the worker's call and
+// retried on its next poll.
+type SpecBuilder interface {
+	// Build builds the spec of queued job j for its worker, whose current
+	// process reported w in its Hello (the dispatcher never calls it with
+	// the info of an earlier process).
+	Build(ctx context.Context, j jobs.Job, w workers.Info) (*syncrv1.JobSpec, error)
+}
+
+// Repos resolves a job's restic repository with its password
+// (*restic.Service).
+type Repos interface {
+	// Resolve returns a live repository of owner with its decrypted
+	// password: ErrNotFound if it is missing, deleted or not owner's;
+	// ErrFailedPrecondition if its password cannot be decrypted.
+	Resolve(ctx context.Context, owner domain.UserID, id domain.ResticRepoID) (restic.Resolved, error)
+}
+
+// Remotes resolves a job's remotes with their credentials
+// (*remotes.Service).
+type Remotes interface {
+	// Resolve returns ids and the members of the unions among them,
+	// decrypted and mapped to rclone remotes, keyed by ID. ErrNotFound if
+	// any is missing, deleted or not owner's; ErrFailedPrecondition if a
+	// remote's stored secrets cannot be decrypted.
+	Resolve(ctx context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Resolved, error)
+}
+
+// Workers is the part of the worker service (*workers.Service) the
+// dispatcher uses.
+type Workers interface {
+	Get(ctx context.Context, id domain.WorkerID) (workers.Worker, error)
+	List(ctx context.Context, f workers.ListFilter) ([]workers.Worker, error)
+	AdvanceEpoch(ctx context.Context, w workers.Worker, epoch string) (workers.Worker, error)
+	AdvanceAckSeq(ctx context.Context, id domain.WorkerID, epoch string, seq int64) (int64, error)
+	SetInfo(ctx context.Context, id domain.WorkerID, epoch string, info workers.Info) error
+	Touch(ctx context.Context, id domain.WorkerID) error
+	Status(w workers.Worker) domain.WorkerStatus
+}
+
+// Clock tells the time.
+type Clock interface {
+	Now() time.Time
+}
+
+// PassiveClient calls one passive worker's WorkerLinkService. The passive
+// transport implements it (a Connect client with the worker's pinned
+// certificate and secret); it must return an error for any transport or
+// RPC failure. Command and Pull may be called from one goroutine at a time
+// (the worker's PassiveLoop); Probe may be called concurrently with them
+// and with itself (the probe broker).
+type PassiveClient interface {
+	Command(ctx context.Context, req *syncrv1.CommandRequest) (*syncrv1.CommandResponse, error)
+	Pull(ctx context.Context, req *syncrv1.PullRequest) (*syncrv1.PullResponse, error)
+	// Probe runs a probe on the worker; ctx's deadline bounds it (the
+	// client sets no shorter timeout of its own). A worker without probe
+	// support answers Unimplemented.
+	Probe(ctx context.Context, req *syncrv1.ProbeRequest) (*syncrv1.ProbeResponse, error)
+}

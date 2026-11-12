@@ -1,0 +1,217 @@
+syntax = "proto3";
+
+package syncr.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "syncr/v1/users.proto";
+
+// First-run setup, sessions and personal API tokens.
+//
+// Credentials:
+//   - The web UI uses a session cookie (HttpOnly, SameSite=Strict) set by
+//     CompleteSetup and Login and cleared by Logout. Every call that relies
+//     on the cookie, plus Login and CompleteSetup, must carry the header
+//     "X-Syncr-CSRF: 1".
+//   - Tools use a personal API token: "Authorization: Bearer syncr_pat_...".
+//     A token acts with its owner's role. Bearer calls need no CSRF header.
+//
+// Unauthenticated calls to protected services fail with UNAUTHENTICATED;
+// calls the caller's role does not allow fail with PERMISSION_DENIED. Too
+// many failed logins or setup attempts fail with RESOURCE_EXHAUSTED.
+
+// SetupService creates the first admin account. Public: it works only while
+// no user exists, and CompleteSetup requires the one-time setup code the
+// controller prints in its log at start.
+service SetupService {
+  // GetSetupStatus tells whether the first admin still has to be created.
+  rpc GetSetupStatus(GetSetupStatusRequest) returns (GetSetupStatusResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // CompleteSetup creates the first admin and logs them in (sets the session
+  // cookie). FAILED_PRECONDITION once a user exists; INVALID_ARGUMENT with a
+  // field violation on setup_code for a wrong code.
+  rpc CompleteSetup(CompleteSetupRequest) returns (CompleteSetupResponse) {}
+}
+
+// GetSetupStatusRequest is empty.
+message GetSetupStatusRequest {}
+
+// GetSetupStatusResponse reports whether setup is pending.
+message GetSetupStatusResponse {
+  // True while no user exists: the UI shows the setup wizard.
+  bool setup_required = 1;
+}
+
+// CompleteSetupRequest creates the first admin.
+message CompleteSetupRequest {
+  // The setup code from the controller log (dashes and case are ignored).
+  string setup_code = 1;
+
+  // The admin's login name (see User.username).
+  string username = 2;
+
+  // Name to display; may be empty.
+  string display_name = 3;
+
+  // Password: 12 to 256 characters.
+  string password = 4;
+}
+
+// CompleteSetupResponse returns the new admin, now logged in.
+message CompleteSetupResponse {
+  User user = 1;
+}
+
+// AuthService logs users in and out and manages their API tokens.
+//
+// Login is public. ChangePassword, CreateAPIToken and DeleteAPIToken need a
+// session (cookie): an API token cannot change the password or mint and
+// revoke tokens. The other calls accept a session or an API token.
+service AuthService {
+  // Login checks a username and password and starts a session (sets the
+  // session cookie). UNAUTHENTICATED for wrong credentials or a disabled
+  // account, without saying which.
+  rpc Login(LoginRequest) returns (LoginResponse) {}
+
+  // Logout ends the caller's session and clears the cookie. With an API
+  // token it does nothing.
+  rpc Logout(LogoutRequest) returns (LogoutResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // GetSession returns the caller and how they authenticated.
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // ChangePassword sets a new password and ends the caller's other sessions.
+  // INVALID_ARGUMENT with a field violation on current_password if it is
+  // wrong.
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse) {}
+
+  // CreateAPIToken creates a personal API token. Its secret is returned only
+  // once; the controller stores only a hash.
+  rpc CreateAPIToken(CreateAPITokenRequest) returns (CreateAPITokenResponse) {}
+
+  // ListAPITokens lists the caller's API tokens, newest first.
+  rpc ListAPITokens(ListAPITokensRequest) returns (ListAPITokensResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // DeleteAPIToken revokes one of the caller's API tokens.
+  rpc DeleteAPIToken(DeleteAPITokenRequest) returns (DeleteAPITokenResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+}
+
+// AuthMethod is how a call authenticated.
+enum AuthMethod {
+  AUTH_METHOD_UNSPECIFIED = 0;
+  // The session cookie of the web UI.
+  AUTH_METHOD_SESSION = 1;
+  // A personal API token.
+  AUTH_METHOD_API_TOKEN = 2;
+}
+
+// APIToken describes a personal API token. The secret is never returned
+// after creation.
+message APIToken {
+  // Token ID (UUID).
+  string id = 1;
+
+  // Name given at creation, e.g. "backup script".
+  string name = 2;
+
+  // The first characters of the secret ("syncr_pat_" plus four), to
+  // recognize the token.
+  string prefix = 3;
+
+  // When the token was created.
+  google.protobuf.Timestamp created_at = 4;
+
+  // When the token stops working; unset if it never expires.
+  google.protobuf.Timestamp expires_at = 5;
+
+  // Last authenticated use (updated at most once a minute); unset if never.
+  google.protobuf.Timestamp last_used_at = 6;
+
+  reserved 7 to 15;
+}
+
+// LoginRequest carries the credentials.
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+// LoginResponse returns the logged-in user.
+message LoginResponse {
+  User user = 1;
+}
+
+// LogoutRequest is empty.
+message LogoutRequest {}
+
+// LogoutResponse is empty.
+message LogoutResponse {}
+
+// GetSessionRequest is empty.
+message GetSessionRequest {}
+
+// GetSessionResponse describes the caller.
+message GetSessionResponse {
+  // The authenticated user.
+  User user = 1;
+
+  // When the session or API token stops working; unset if never.
+  google.protobuf.Timestamp expires_at = 2;
+
+  // How the call authenticated.
+  AuthMethod method = 3;
+}
+
+// ChangePasswordRequest changes the caller's password.
+message ChangePasswordRequest {
+  string current_password = 1;
+
+  // The new password: 12 to 256 characters.
+  string new_password = 2;
+}
+
+// ChangePasswordResponse is empty.
+message ChangePasswordResponse {}
+
+// CreateAPITokenRequest describes the new token.
+message CreateAPITokenRequest {
+  // Name to recognize the token by: 1 to 64 characters.
+  string name = 1;
+
+  // How long the token stays valid; unset means it never expires.
+  google.protobuf.Duration ttl = 2;
+}
+
+// CreateAPITokenResponse carries the token and its secret, shown only once.
+message CreateAPITokenResponse {
+  APIToken token = 1;
+
+  // The secret to send as "Authorization: Bearer <secret>".
+  string secret = 2;
+}
+
+// ListAPITokensRequest is empty.
+message ListAPITokensRequest {}
+
+// ListAPITokensResponse lists the caller's tokens.
+message ListAPITokensResponse {
+  repeated APIToken tokens = 1;
+}
+
+// DeleteAPITokenRequest names the token to revoke.
+message DeleteAPITokenRequest {
+  string token_id = 1;
+}
+
+// DeleteAPITokenResponse is empty.
+message DeleteAPITokenResponse {}

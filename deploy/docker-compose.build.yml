@@ -1,0 +1,25 @@
+# Builds the images from this checkout instead of pulling the published ones.
+# Use it on top of docker-compose.yml, from the repository root:
+#
+#   cp deploy/.env.example deploy/.env      # then fill in the two secrets
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.build.yml up -d --build --wait
+#
+# The images report the version given as SYNCR_BUILD_VERSION (default dev),
+# like a `go build` without release flags. For the optional worker, uncomment
+# it in docker-compose.yml and below.
+services:
+  controller:
+    image: syncr-controller:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.controller
+      args:
+        VERSION: ${SYNCR_BUILD_VERSION:-dev}
+
+  # worker:
+  #   image: syncr-worker:local
+  #   build:
+  #     context: ..
+  #     dockerfile: deploy/Dockerfile.worker
+  #     args:
+  #       VERSION: ${SYNCR_BUILD_VERSION:-dev}

@@ -1,0 +1,942 @@
+// Package agent executes the controller's commands on a worker: it accepts
+// StartJob and CancelJob commands, runs jobs through the runner registry
+// under a concurrency limit, and reports what happens as events in the
+// worker's outbox (internal/worker/outbox).
+//
+// # Commands
+//
+// HandleCommands acknowledges every command that has an ID, except a
+// StartJob while the agent shuts down (see Shutdown). An ack means
+// "accepted", never "succeeded": outcomes arrive as events. Handling is
+// idempotent, because the controller redelivers commands until it receives
+// their ack:
+//
+//   - StartJob for a job ID the agent already knows in this epoch (queued,
+//     running or finished) is acked and ignored. The result of a finished job
+//     stays in the outbox until the controller acks it; the job's ID is
+//     remembered until 10 minutes after that ack, by when the controller
+//     can no longer send a StartJob for it.
+//   - StartJob whose spec has no runner (no operation, unsupported kind) is
+//     acked and reported at once as a FAILED JobResult.
+//   - CancelJob for a queued job removes it from the queue and reports a
+//     CANCELLED JobResult; for a running job it cancels the runner's
+//     context (the runner stops its tool with the supervisor's grace period)
+//     and the job reports CANCELLED when the runner returns; for an unknown or
+//     finished job it is acked and ignored.
+//
+// # Events of one job
+//
+// A job that runs produces JobStarted, then Progress events (at most one per
+// ProgressInterval, and the last sample the runner emitted is always
+// delivered before the result), then exactly one JobResult. A job that never
+// started (invalid spec, cancelled while queued, worker shutting down)
+// produces only its JobResult. JobStarted means "left the queue": the job's
+// before hooks run first, and a runner may still refuse the spec (e.g. a
+// path outside local_roots) before its tool process starts.
+//
+// # Hooks
+//
+// A job may name hooks of the worker (JobSpec.hooks, see Hooks): commands
+// its operator defined, which run in the job's slot around the runner. A
+// spec naming a hook the worker does not define is rejected as INVALID_SPEC
+// before anything runs. Otherwise a started job goes through these steps:
+//
+//  1. before hooks, in order. The first that does not succeed ends the
+//     step and fails the job with HOOK_FAILED; the runner is skipped.
+//  2. the runner.
+//  3. if the job succeeded so far, the on_success hooks, in order. The
+//     first that does not succeed fails the job with HOOK_FAILED.
+//  4. if the job failed (a hook, the runner, the time limit; not a cancel
+//     or a shutdown), every on_failure hook. Their own failures are
+//     reported with the result and change nothing else.
+//  5. every after hook, whatever happened. If the job succeeded so far, the
+//     first that does not succeed fails it with HOOK_FAILED; otherwise the
+//     job keeps its outcome.
+//
+// Steps 1 to 3 run under the job's context: a CancelJob, the time limit
+// (which counts from JobStarted, hooks included) or a shutdown stops the
+// hook that runs as it stops the runner, and decides the job's outcome
+// (CANCELLED, or FAILED with TIME_LIMIT). Steps 4 and 5 clean up, so they
+// run under a context that none of these end: each hook is bounded by its
+// own timeout only, and a job whose outcome was decided before keeps it
+// even if a cancel arrives while they run. During a shutdown the after
+// hooks still run; Shutdown waits for them as for everything else, until
+// its context ends.
+//
+// The result lists every hook that ran (JobResult.hook_runs). A job whose
+// runner succeeded reports the runner's output and warnings whatever its
+// final status, since a hook can fail a job after its operation is done.
+//
+// # Concurrency and backpressure
+//
+// At most MaxConcurrentJobs jobs run at once; further jobs wait in a local
+// FIFO queue and start in that order (their JobStarted events too). A
+// queued job also waits while the outbox is at its high-water mark
+// (outbox.Stats().Saturated), so a controller that stops acking events
+// stops the admission of new work instead of losing results; results of
+// running jobs are always appended.
+//
+// # Time limits
+//
+// A job whose spec has a positive max_runtime is stopped once that much
+// time has passed since it started running (JobStarted; time spent queued
+// does not count, time spent in before and on_success hooks does), measured
+// on the monotonic clock: its context is
+// cancelled with a cause wrapping ErrTimeLimit, so the runner stops its tool
+// as for a cancel (stop request, grace period, kill, and the rest of the
+// process tree), and the job reports FAILED with code TIME_LIMIT and a
+// message such as "stopped after 6h0m0s: the job's time limit was
+// reached". Whichever comes first decides the outcome: a CancelJob or a
+// shutdown before the limit still reports CANCELLED. A negative or invalid
+// max_runtime is rejected as INVALID_SPEC.
+//
+// # Shutdown
+//
+// Shutdown cancels queued and running jobs, waits for their CANCELLED
+// results to be in the outbox, and from then on refuses StartJob: it is
+// not acked and leaves no event, so the controller keeps the job queued
+// for the worker's next process. (The CANCELLED result of a job that was
+// still queued has no start time and no JobStarted before it, which tells
+// the controller that it never ran, so it queues it again.) The transport
+// then tries a final flush (see internal/worker/linkcore).
+//
+// # Results
+//
+// A CANCELLED result carries code CANCELLED (CancelJob) or WORKER_SHUTDOWN
+// (Shutdown) with the cause as message. Result sizes are bounded so that no
+// event approaches the link's read limits: error messages to
+// MaxErrorMessageBytes, warnings by runner.LimitWarnings and the
+// kind-specific output by Config.MaxOutputBytes (truncated with a warning).
+//
+// Allowed dependencies: the standard library, the generated protobuf code,
+// internal/link, internal/worker/runner (the contract and registry, not the
+// runner implementations) and internal/worker/outbox. Hooks reach the agent
+// through the Hooks port, not through internal/worker/hooks.
+package agent
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"runtime/debug"
+	"slices"
+	"sync"
+	"time"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/link"
+	"github.com/Zeptiny/Syncr/internal/worker/outbox"
+	"github.com/Zeptiny/Syncr/internal/worker/runner"
+)
+
+// Defaults for Config.
+const (
+	// DefaultMaxConcurrentJobs is the default number of jobs run at once.
+	DefaultMaxConcurrentJobs = 2
+	// DefaultProgressInterval is the default minimum time between two
+	// Progress events of one job.
+	DefaultProgressInterval = time.Second
+	// DefaultMaxOutputBytes is the default bound on the encoded JobOutput of
+	// one result (see Config.MaxOutputBytes). With it, no single event comes
+	// near the link's 16 MiB read limits.
+	DefaultMaxOutputBytes = 4 << 20
+	// MaxErrorMessageBytes bounds the error message of a result.
+	MaxErrorMessageBytes = 4096
+)
+
+// Cancellation causes, reported as the message of CANCELLED results.
+var (
+	// ErrCancelled is the cause of a job stopped by a CancelJob command.
+	ErrCancelled = errors.New("job cancelled by the controller")
+	// ErrShuttingDown is the cause of a job stopped because the worker is
+	// shutting down.
+	ErrShuttingDown = errors.New("job cancelled because the worker is shutting down")
+	// ErrTimeLimit is wrapped by the cause of a job stopped at its time
+	// limit (JobSpec.max_runtime).
+	ErrTimeLimit = errors.New("the job's time limit was reached")
+)
+
+// Runners resolves the runner of a job spec. *runner.Registry implements it.
+type Runners interface {
+	// ForSpec returns the runner for spec's kind, or an error (with a
+	// runner.CodeOf code) to report as the job's failure.
+	ForSpec(spec *syncrv1.JobSpec) (runner.Runner, error)
+	// Kinds returns the job kinds the worker can run, for the Hello event.
+	Kinds() []string
+}
+
+// Tool is a supervised external tool and its resolved version.
+type Tool struct {
+	Name    string
+	Version string
+}
+
+// Identity describes the worker process in its Hello event. The composition
+// root fills it from the build, the host and tool resolution.
+type Identity struct {
+	// WorkerVersion is the worker build version (e.g. "v2.0.0" or "dev").
+	WorkerVersion string
+	// OS and Arch are runtime.GOOS and runtime.GOARCH.
+	OS, Arch string
+	// Hostname is the machine's host name, for display only.
+	Hostname string
+	// Tools are the resolved tool versions.
+	Tools []Tool
+	// LocalRoots are the configured local roots.
+	LocalRoots []string
+	// Features are the link features this worker implements
+	// (link.Features of an up-to-date worker).
+	Features []string
+	// ProbeOps are the probe operations this worker can run
+	// (probe.Executor.Ops).
+	ProbeOps []string
+}
+
+// Config configures an Agent.
+type Config struct {
+	// Runners resolves job specs to runners. Required.
+	Runners Runners
+
+	// Identity is reported in the Hello event.
+	Identity Identity
+
+	// Hooks runs the hooks jobs name (JobSpec.hooks) and lists them in the
+	// Hello event. Nil means the worker defines no hooks: a job that names
+	// one is rejected.
+	Hooks Hooks
+
+	// MaxConcurrentJobs caps the jobs that run at once. Zero means
+	// DefaultMaxConcurrentJobs.
+	MaxConcurrentJobs int
+
+	// ProgressInterval is the minimum time between two Progress events of
+	// one job. Zero means DefaultProgressInterval.
+	ProgressInterval time.Duration
+
+	// Outbox configures the event outbox the agent creates.
+	Outbox outbox.Options
+
+	// MaxOutputBytes bounds the encoded kind-specific output of a result. A
+	// larger output is truncated (e.g. only the newest restic snapshots are
+	// listed) with a warning saying so. Zero means DefaultMaxOutputBytes.
+	MaxOutputBytes int
+
+	// Logger receives operational logs (never job specs or secrets). Nil
+	// discards them.
+	Logger *slog.Logger
+
+	// AfterFunc calls f in its own goroutine once d has passed on the
+	// monotonic clock and returns a function that cancels the call (as
+	// time.Timer.Stop does). It times job limits. Nil means time.AfterFunc;
+	// tests replace it to reach a limit at a moment they choose.
+	AfterFunc func(d time.Duration, f func()) (stop func() bool)
+}
+
+// jobState is where a job is in its life on the worker.
+type jobState int
+
+const (
+	// stateQueued: waiting in the local queue for a run slot and outbox
+	// capacity.
+	stateQueued jobState = iota
+	// stateRunning: holds a run slot and was handed to its runner
+	// (JobStarted was emitted).
+	stateRunning
+)
+
+// job is a job the agent holds (queued, admitted or running).
+type job struct {
+	id     string
+	spec   *syncrv1.JobSpec
+	runner runner.Runner
+	state  jobState
+	// ctx is cancelled (with ErrCancelled or ErrShuttingDown) to stop the
+	// job; cancel also releases its resources once the job has finished.
+	ctx       context.Context
+	cancel    context.CancelCauseFunc
+	startedAt time.Time
+	// stopLimit cancels the time limit's timer; nil without a limit.
+	stopLimit func() bool
+}
+
+// Agent runs jobs on behalf of the controller. Create it with New.
+type Agent struct {
+	runners          Runners
+	hooks            Hooks
+	maxConcurrent    int
+	progressInterval time.Duration
+	maxOutputBytes   int
+	out              *outbox.Outbox
+	log              *slog.Logger
+	afterFunc        func(time.Duration, func()) func() bool
+
+	// base is the parent of every job context; stop cancels it on shutdown.
+	base context.Context
+	stop context.CancelCauseFunc
+	// wg tracks job goroutines.
+	wg sync.WaitGroup
+
+	mu sync.Mutex
+	// active holds queued and running jobs; order lists their IDs in
+	// acceptance order.
+	active map[string]*job
+	order  []string
+	// queue holds jobs waiting for a run slot, oldest first.
+	queue []*job
+	// slots counts running jobs.
+	slots int
+	// waiting reports that a goroutine waits for outbox capacity to resume
+	// admission.
+	waiting bool
+	// finished holds the IDs of jobs that finished in this epoch, so a
+	// StartJob delivered again is ignored instead of running the job twice.
+	//
+	// Invariant: an ID stays while the controller may still send a StartJob
+	// for it. The controller derives StartJob only for jobs it considers
+	// queued, and it stores a job's JobResult (after which the job is no
+	// longer queued in this epoch: it is finished, or re-queued after a
+	// shutdown, when StartJob is refused anyway) before it acks that
+	// event. So an ID is kept while its result is unacked, and then for
+	// finishedRetention, which covers a StartJob derived before the result
+	// was stored but delivered after its ack (a delayed long poll or
+	// Command). Then it is dropped, which bounds the set by the unacked
+	// results plus the jobs that finished during the retention.
+	finished map[string]struct{}
+	// retiring lists the finished jobs in the seq order of their results
+	// (results are appended under mu); its first nAcked entries have an
+	// acked result and an ackedAt.
+	retiring []finishedJob
+	nAcked   int
+	stopping bool
+}
+
+// finishedRetention is how long a finished job's ID is kept after its
+// result was acknowledged (see Agent.finished): far longer than any
+// command spends in flight (a long poll lasts at most about 25 s, link
+// calls time out within a minute).
+const finishedRetention = 10 * time.Minute
+
+// finishedJob is an entry of Agent.retiring.
+type finishedJob struct {
+	id string
+	// seq is the seq of the job's JobResult.
+	seq int64
+	// ackedAt is when the agent saw the result acked; zero before.
+	ackedAt time.Time
+}
+
+// New returns an Agent and creates its outbox, whose first event is the
+// Hello built from cfg.
+func New(cfg Config) (*Agent, error) {
+	if cfg.Runners == nil {
+		return nil, errors.New("agent: runners are nil")
+	}
+	if cfg.MaxConcurrentJobs < 0 {
+		return nil, fmt.Errorf("agent: max concurrent jobs is %d", cfg.MaxConcurrentJobs)
+	}
+	if cfg.ProgressInterval < 0 {
+		return nil, fmt.Errorf("agent: progress interval is %s", cfg.ProgressInterval)
+	}
+	if cfg.MaxOutputBytes < 0 {
+		return nil, fmt.Errorf("agent: max output bytes is %d", cfg.MaxOutputBytes)
+	}
+	a := &Agent{
+		runners:          cfg.Runners,
+		hooks:            cfg.Hooks,
+		maxConcurrent:    cfg.MaxConcurrentJobs,
+		progressInterval: cfg.ProgressInterval,
+		maxOutputBytes:   cmp.Or(cfg.MaxOutputBytes, DefaultMaxOutputBytes),
+		log:              cfg.Logger,
+		afterFunc:        cfg.AfterFunc,
+		active:           make(map[string]*job),
+		finished:         make(map[string]struct{}),
+	}
+	if a.maxConcurrent == 0 {
+		a.maxConcurrent = DefaultMaxConcurrentJobs
+	}
+	if a.progressInterval == 0 {
+		a.progressInterval = DefaultProgressInterval
+	}
+	if a.log == nil {
+		a.log = slog.New(slog.DiscardHandler)
+	}
+	if a.afterFunc == nil {
+		a.afterFunc = func(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop }
+	}
+	a.base, a.stop = context.WithCancelCause(context.Background())
+	a.out = outbox.New(a.hello(cfg.Identity), cfg.Outbox)
+	return a, nil
+}
+
+// hello builds the Hello event payload.
+func (a *Agent) hello(id Identity) *syncrv1.Hello {
+	h := &syncrv1.Hello{
+		WorkerVersion:     id.WorkerVersion,
+		Os:                id.OS,
+		Arch:              id.Arch,
+		Hostname:          id.Hostname,
+		JobKinds:          a.runners.Kinds(),
+		MaxConcurrentJobs: int32(min(a.maxConcurrent, 1<<31-1)), //nolint:gosec // clamped to the int32 range
+		LocalRoots:        slices.Clone(id.LocalRoots),
+		Features:          slices.Clone(id.Features),
+		ProbeOps:          slices.Clone(id.ProbeOps),
+	}
+	for _, t := range id.Tools {
+		h.Tools = append(h.Tools, &syncrv1.ToolVersion{Name: t.Name, Version: t.Version})
+	}
+	if a.hooks != nil {
+		h.Hooks = a.hooks.Infos()
+	}
+	return h
+}
+
+// Outbox returns the agent's event outbox.
+func (a *Agent) Outbox() *outbox.Outbox { return a.out }
+
+// Epoch returns the epoch of the agent's outbox.
+func (a *Agent) Epoch() string { return a.out.Epoch() }
+
+// HandleCommands processes cmds in order and returns one ack per accepted
+// command that has an ID, in the same order. It never blocks on job
+// execution. Commands without an ID cannot be acknowledged and are ignored;
+// commands of a type this worker does not know are acked (so the controller
+// stops redelivering them) and ignored. Once Shutdown began, StartJob
+// commands are refused: they get no ack, so the controller keeps the job
+// queued and redelivers it (to the worker's next process, eventually).
+func (a *Agent) HandleCommands(ctx context.Context, cmds []*syncrv1.Command) []*syncrv1.CommandAck {
+	acks := make([]*syncrv1.CommandAck, 0, len(cmds))
+	for _, cmd := range cmds {
+		if cmd.GetId() == "" {
+			a.log.WarnContext(ctx, "ignoring command without id")
+			continue
+		}
+		switch c := cmd.GetCommand().(type) {
+		case *syncrv1.Command_StartJob:
+			if !a.startJob(ctx, c.StartJob) {
+				continue // refused: no ack
+			}
+		case *syncrv1.Command_CancelJob:
+			a.cancelJob(ctx, c.CancelJob.GetJobId())
+		default:
+			a.log.WarnContext(ctx, "ignoring unknown command", "command_id", cmd.GetId())
+		}
+		acks = append(acks, &syncrv1.CommandAck{CommandId: cmd.GetId()})
+	}
+	return acks
+}
+
+// startJob handles a StartJob and reports whether it was accepted (and is
+// to be acked). It is refused only while the agent shuts down, also for a
+// job it knows: the controller keeps a job it has not seen accepted queued,
+// and settles one it has seen accepted by the job's result.
+func (a *Agent) startJob(ctx context.Context, sj *syncrv1.StartJob) bool {
+	id := sj.GetJobId()
+	if id == "" {
+		a.log.WarnContext(ctx, "ignoring start job command without job id")
+		return true
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.stopping {
+		// Debug only: a passive controller redelivers it every round of the
+		// final flush.
+		a.log.DebugContext(ctx, "refusing start job command: the worker is shutting down", "job_id", id)
+		return false
+	}
+	if a.knownLocked(id) {
+		a.log.DebugContext(ctx, "duplicate start job command", "job_id", id)
+		return true
+	}
+	if err := checkTimeLimit(sj.GetSpec()); err != nil {
+		a.log.WarnContext(ctx, "job rejected", "job_id", id, "kind", link.KindOf(sj.GetSpec()), "error", err.Error())
+		a.finishLocked(id, failedResult(id, syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, err.Error(), time.Time{}, runner.Result{ExitCode: -1}))
+		return true
+	}
+	rn, err := a.runners.ForSpec(sj.GetSpec())
+	if err != nil {
+		a.log.WarnContext(ctx, "job rejected", "job_id", id, "kind", link.KindOf(sj.GetSpec()), "error", err.Error())
+		a.finishLocked(id, failedResult(id, runner.CodeOf(err), err.Error(), time.Time{}, runner.Result{ExitCode: -1}))
+		return true
+	}
+	// After the kind, so a job of a kind this worker cannot run says that.
+	if err := a.checkHooks(sj.GetSpec()); err != nil {
+		a.log.WarnContext(ctx, "job rejected", "job_id", id, "kind", rn.Kind(), "error", err.Error())
+		a.finishLocked(id, failedResult(id, syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, err.Error(), time.Time{}, runner.Result{ExitCode: -1}))
+		return true
+	}
+	j := &job{id: id, spec: sj.GetSpec(), runner: rn, state: stateQueued}
+	j.ctx, j.cancel = context.WithCancelCause(a.base)
+	a.active[id] = j
+	a.order = append(a.order, id)
+	a.queue = append(a.queue, j)
+	a.log.InfoContext(ctx, "job accepted", "job_id", id, "kind", rn.Kind())
+	a.admitLocked()
+	return true
+}
+
+func (a *Agent) cancelJob(ctx context.Context, id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	j, ok := a.active[id]
+	if !ok {
+		a.log.DebugContext(ctx, "cancel for unknown or finished job", "job_id", id)
+		return
+	}
+	a.log.InfoContext(ctx, "stopping job on request", "job_id", id)
+	a.cancelLocked(j, ErrCancelled)
+}
+
+// cancelLocked stops j: a queued job finishes at once, a running job
+// through its goroutine.
+func (a *Agent) cancelLocked(j *job, cause error) {
+	if j.state == stateQueued {
+		a.queue = slices.DeleteFunc(a.queue, func(q *job) bool { return q == j })
+		j.cancel(cause)
+		a.finishJobLocked(j, cancelledResult(j.id, cause, time.Time{}, runner.Result{ExitCode: -1}))
+		return
+	}
+	j.cancel(cause)
+}
+
+// knownLocked reports whether the agent holds or has finished job id.
+func (a *Agent) knownLocked(id string) bool {
+	if _, ok := a.active[id]; ok {
+		return true
+	}
+	_, ok := a.finished[id]
+	return ok
+}
+
+// admitLocked starts queued jobs, oldest first, while run slots are free and
+// the outbox is below its high-water mark. Starting happens under the lock,
+// so JobStarted events follow the queue order. When the outbox is
+// saturated, one goroutine waits for capacity and resumes admission.
+func (a *Agent) admitLocked() {
+	for !a.stopping && a.slots < a.maxConcurrent && len(a.queue) > 0 {
+		if a.out.Stats().Saturated {
+			a.awaitCapacityLocked()
+			return
+		}
+		j := a.queue[0]
+		a.queue[0] = nil
+		a.queue = a.queue[1:]
+		a.slots++
+		j.state = stateRunning
+		j.startedAt = time.Now()
+		a.startLimitLocked(j)
+		a.appendLocked(&syncrv1.Event{Payload: &syncrv1.Event_JobStarted{JobStarted: &syncrv1.JobStarted{JobId: j.id}}})
+		a.wg.Go(func() { a.run(j) })
+	}
+}
+
+// startLimitLocked arms the time limit of j, which has just started
+// running: once it is reached, j's context is cancelled with a cause that
+// wraps ErrTimeLimit and names the limit. A limit reached after j finished
+// changes nothing, because the first cause of a context is the one kept.
+func (a *Agent) startLimitLocked(j *job) {
+	limit := j.spec.GetMaxRuntime().AsDuration()
+	if limit <= 0 {
+		return
+	}
+	cause := fmt.Errorf("stopped after %s: %w", limit, ErrTimeLimit)
+	id, cancel := j.id, j.cancel
+	j.stopLimit = a.afterFunc(limit, func() {
+		a.log.Info("stopping job: its time limit was reached", "job_id", id, "time_limit", limit.String())
+		cancel(cause)
+	})
+}
+
+// checkTimeLimit rejects a max_runtime that is not a valid, non-negative
+// duration.
+func checkTimeLimit(spec *syncrv1.JobSpec) error {
+	d := spec.GetMaxRuntime()
+	if d == nil {
+		return nil
+	}
+	if err := d.CheckValid(); err != nil {
+		return fmt.Errorf("invalid max_runtime: %w", err)
+	}
+	if d.AsDuration() < 0 {
+		return fmt.Errorf("invalid max_runtime %s: it is negative", d.AsDuration())
+	}
+	return nil
+}
+
+// awaitCapacityLocked starts the goroutine that resumes admission once the
+// outbox has capacity again, unless it already runs. It ends early on
+// shutdown.
+func (a *Agent) awaitCapacityLocked() {
+	if a.waiting {
+		return
+	}
+	a.waiting = true
+	a.wg.Go(func() {
+		err := a.out.WaitCapacity(a.base)
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.waiting = false
+		if err == nil {
+			a.admitLocked()
+		}
+	})
+}
+
+// run executes a started job on its own goroutine: its hooks and its runner,
+// in the steps the package documentation lists under "Hooks".
+func (a *Agent) run(j *job) {
+	th := newThrottle(a.progressInterval, func(p runner.Progress) {
+		a.append(&syncrv1.Event{Payload: &syncrv1.Event_Progress{Progress: &syncrv1.Progress{JobId: j.id, Stats: p.Proto()}}})
+	})
+	res := runner.Result{ExitCode: -1}
+	operated := false // the runner succeeded: its output and warnings count
+
+	// Steps 1 to 3 end with the job's context.
+	hookRuns, failedHook := a.runHooks(j.ctx, j, syncrv1.HookPhase_HOOK_PHASE_BEFORE, verdict{}, true)
+	var v verdict
+	if failedHook != nil {
+		th.close()
+		v = hookVerdict(j.ctx, failedHook)
+	} else {
+		var err error
+		res, err = a.invoke(j, th.emit)
+		last, seen := th.close()
+		if errors.Is(err, errRunnerPanicked) {
+			res = runner.Result{ExitCode: -1}
+			if seen {
+				res.Stats = last
+			}
+		}
+		v = operationVerdict(j.ctx, err)
+		operated = err == nil
+	}
+	if v.ok() {
+		runs, failedHook := a.runHooks(j.ctx, j, syncrv1.HookPhase_HOOK_PHASE_ON_SUCCESS, v, true)
+		hookRuns = append(hookRuns, runs...)
+		if failedHook != nil {
+			v = hookVerdict(j.ctx, failedHook)
+		}
+	}
+
+	// Steps 4 and 5 clean up: neither a cancel, the time limit nor a
+	// shutdown ends them, and the job's outcome no longer follows its
+	// context.
+	a.disarmLimit(j)
+	cleanup := context.WithoutCancel(j.ctx)
+	if v.status == syncrv1.JobResultStatus_JOB_RESULT_STATUS_FAILED {
+		runs, _ := a.runHooks(cleanup, j, syncrv1.HookPhase_HOOK_PHASE_ON_FAILURE, v, false)
+		hookRuns = append(hookRuns, runs...)
+	}
+	runs, failedHook := a.runHooks(cleanup, j, syncrv1.HookPhase_HOOK_PHASE_AFTER, v, false)
+	hookRuns = append(hookRuns, runs...)
+	if failedHook != nil && v.ok() {
+		v = hookVerdict(cleanup, failedHook)
+	}
+
+	result := a.result(j, v, res, operated)
+	result.HookRuns = hookRuns
+
+	a.mu.Lock()
+	a.finishJobLocked(j, result)
+	a.mu.Unlock()
+}
+
+// result builds the JobResult of j, which ended with v. res is what the
+// runner returned (its counters, and its output and warnings when it
+// succeeded: operated).
+func (a *Agent) result(j *job, v verdict, res runner.Result, operated bool) *syncrv1.JobResult {
+	var r *syncrv1.JobResult
+	switch v.status {
+	case syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED:
+		return succeededResult(j.id, j.startedAt, res, a.maxOutputBytes)
+	case syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED:
+		r = cancelledResult(j.id, v.cause, j.startedAt, res)
+	default:
+		r = failedResult(j.id, v.code, v.msg, j.startedAt, res)
+	}
+	if operated {
+		// A hook, a cancel or the time limit ended the job after its
+		// operation was done: what the operation produced still stands.
+		r.Output, r.Warnings = outputAndWarnings(res, a.maxOutputBytes)
+	}
+	return r
+}
+
+// disarmLimit stops the time limit's timer of j, which has left the steps
+// the limit applies to.
+func (a *Agent) disarmLimit(j *job) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if j.stopLimit != nil {
+		j.stopLimit()
+		j.stopLimit = nil
+	}
+}
+
+// errRunnerPanicked is returned by invoke when the runner panicked.
+var errRunnerPanicked = errors.New("runner panicked")
+
+// invoke runs j's runner, turning a panic into errRunnerPanicked.
+func (a *Agent) invoke(j *job, emit runner.EmitFunc) (res runner.Result, err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			err = errRunnerPanicked
+			a.log.Error("job runner panicked", "job_id", j.id, "kind", j.runner.Kind(),
+				"panic", fmt.Sprint(v), "stack", string(debug.Stack()))
+		}
+	}()
+	return j.runner.Run(j.ctx, runner.Job{ID: j.id, Spec: j.spec}, emit)
+}
+
+// finishJobLocked removes j from the held jobs and reports result.
+func (a *Agent) finishJobLocked(j *job, result *syncrv1.JobResult) {
+	if j.state == stateRunning {
+		a.slots--
+	}
+	if j.stopLimit != nil {
+		j.stopLimit()
+		j.stopLimit = nil
+	}
+	delete(a.active, j.id)
+	a.order = slices.DeleteFunc(a.order, func(id string) bool { return id == j.id })
+	j.cancel(nil) // release the context; the cause of an earlier cancel stays
+	j.spec, j.runner = nil, nil
+	a.finishLocked(j.id, result)
+	a.log.Info("job finished", "job_id", j.id, "status", result.GetStatus().String(),
+		"error_code", result.GetError().GetCode().String())
+	a.admitLocked()
+}
+
+// finishLocked records id as finished and appends its result.
+func (a *Agent) finishLocked(id string, result *syncrv1.JobResult) {
+	a.finished[id] = struct{}{}
+	seq := a.appendLocked(&syncrv1.Event{Payload: &syncrv1.Event_JobResult{JobResult: result}})
+	a.retiring = append(a.retiring, finishedJob{id: id, seq: seq})
+	a.retireLocked(time.Now())
+}
+
+// retireLocked marks the results acked so far and forgets the finished
+// jobs whose result was acked finishedRetention ago or earlier (see
+// Agent.finished).
+func (a *Agent) retireLocked(now time.Time) {
+	acked := a.out.Stats().Acked
+	for a.nAcked < len(a.retiring) && a.retiring[a.nAcked].seq <= acked {
+		a.retiring[a.nAcked].ackedAt = now
+		a.nAcked++
+	}
+	n := 0
+	for n < a.nAcked && now.Sub(a.retiring[n].ackedAt) >= finishedRetention {
+		delete(a.finished, a.retiring[n].id)
+		n++
+	}
+	if n > 0 {
+		clear(a.retiring[:n]) // release the IDs
+		a.retiring = a.retiring[n:]
+		a.nAcked -= n
+	}
+}
+
+// appendLocked appends ev and returns its seq; the agent's lock orders it
+// with state changes.
+func (a *Agent) appendLocked(ev *syncrv1.Event) int64 { return a.append(ev) }
+
+func (a *Agent) append(ev *syncrv1.Event) int64 {
+	seq, err := a.out.Append(ev)
+	if err != nil {
+		// Only events without a payload or Hello events are refused, which
+		// the agent never builds.
+		panic(fmt.Sprintf("agent: outbox refused an event: %v", err))
+	}
+	return seq
+}
+
+// State returns the jobs the agent holds (queued, waiting to start or
+// running), in the order they were accepted.
+func (a *Agent) State() *syncrv1.WorkerState {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stateLocked()
+}
+
+func (a *Agent) stateLocked() *syncrv1.WorkerState {
+	st := &syncrv1.WorkerState{Jobs: make([]*syncrv1.ActiveJob, 0, len(a.order))}
+	for _, id := range a.order {
+		j := a.active[id]
+		aj := &syncrv1.ActiveJob{JobId: id}
+		if j.state == stateRunning {
+			aj.StartedAt = stamp(j.startedAt)
+		}
+		st.Jobs = append(st.Jobs, aj)
+	}
+	return st
+}
+
+// Snapshot is a consistent view of the outbox and the agent's jobs, taken
+// for one Report or Pull.
+type Snapshot struct {
+	// Epoch is the outbox epoch.
+	Epoch string
+	// Events are unacked events after the requested seq, in seq order. They
+	// are shared with the outbox and must not be modified.
+	Events []*syncrv1.Event
+	// More reports that further events are pending after Events.
+	More bool
+	// State lists the jobs the worker holds as of the last event in Events:
+	// the jobs it holds now plus the jobs whose JobResult is pending in the
+	// outbox but not part of Events. So a job missing from State always has
+	// its result in Events or already acked, and a job whose result is in
+	// Events is never listed.
+	State *syncrv1.WorkerState
+}
+
+// Snapshot returns up to limit events with seq > afterSeq (limit <= 0: all)
+// whose encoded sizes sum to at most maxBytes (<= 0: unbounded; the first
+// pending event is always included, see outbox.ReadBounded), and the
+// matching worker state, read atomically. The state's last_seq is the seq of
+// the last returned event or, if none is returned, the last seq assigned in
+// the epoch; outbox_backlog and outbox_saturated describe the whole outbox.
+func (a *Agent) Snapshot(afterSeq int64, limit, maxBytes int) Snapshot {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b := a.out.ReadBounded(afterSeq, limit, maxBytes)
+	st := a.stateLocked()
+	for _, r := range b.Withheld {
+		st.Jobs = append(st.Jobs, &syncrv1.ActiveJob{JobId: r.GetJobId(), StartedAt: r.GetStartedAt()})
+	}
+	st.LastSeq = b.Head
+	if n := len(b.Events); n > 0 {
+		st.LastSeq = b.Events[n-1].GetSeq()
+	}
+	st.OutboxBacklog = int32(min(b.Backlog, 1<<31-1)) //nolint:gosec // clamped to the int32 range
+	st.OutboxSaturated = b.Saturated
+	return Snapshot{Epoch: a.out.Epoch(), Events: b.Events, More: b.More, State: st}
+}
+
+// AckEvents acknowledges events up to and including seq (outbox.Ack). It
+// also forgets finished jobs whose acked result is old enough (see
+// Agent.finished); the transports call it on every Report response and
+// Pull, so this happens even while no new job finishes.
+func (a *Agent) AckEvents(seq int64) error {
+	_, err := a.out.Ack(seq)
+	a.mu.Lock()
+	a.retireLocked(time.Now())
+	a.mu.Unlock()
+	return err
+}
+
+// Shutdown stops the agent: queued jobs are cancelled at once, running jobs
+// are cancelled through their runners (which stop their tools gracefully,
+// then kill them after the supervisor's grace period), and later StartJob
+// commands are refused (not acked, no event). It waits until every job has
+// reported its result to the outbox, or until ctx is done, in which case it
+// returns an error wrapping context.Cause(ctx). Pass a ctx that outlasts the
+// supervisor's grace period. Calling Shutdown again waits again.
+//
+// A cancelled job still runs its after hooks before it reports (they put
+// back what its before hooks changed), so the wait includes them: when ctx
+// ends first, they are cut short by the worker's exit and the job reports
+// nothing, which the controller records as interrupted.
+func (a *Agent) Shutdown(ctx context.Context) error {
+	a.mu.Lock()
+	if !a.stopping {
+		a.stopping = true
+		a.log.InfoContext(ctx, "agent shutting down", "jobs", len(a.active))
+		for _, j := range slices.Clone(a.queue) {
+			a.cancelLocked(j, ErrShuttingDown)
+		}
+		a.stop(ErrShuttingDown)
+	}
+	a.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		a.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("agent: shutdown: jobs still running: %w", context.Cause(ctx))
+	}
+}
+
+// Result builders. Warnings and output are reported only when the runner
+// succeeded, matching the JobResult contract: for SUCCEEDED results, and for
+// those a hook, a cancel or the time limit ended afterwards (Agent.result).
+
+func succeededResult(id string, startedAt time.Time, res runner.Result, maxOutputBytes int) *syncrv1.JobResult {
+	r := baseResult(id, syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED, startedAt, res)
+	r.Output, r.Warnings = outputAndWarnings(res, maxOutputBytes)
+	return r
+}
+
+// outputAndWarnings returns the kind-specific output and the warnings of a
+// runner that succeeded, within the bounds of a result: the output limited
+// to maxOutputBytes (with a warning saying what was left out) and the
+// warnings by runner.LimitWarnings.
+func outputAndWarnings(res runner.Result, maxOutputBytes int) (*syncrv1.JobOutput, []string) {
+	warnings := res.Warnings
+	out, truncated := limitOutput(res.Output, maxOutputBytes)
+	if truncated != "" {
+		// First, so the bound on the number of warnings never drops it.
+		warnings = append([]string{truncated}, warnings...)
+	}
+	return out, runner.LimitWarnings(warnings)
+}
+
+func failedResult(id string, code syncrv1.JobErrorCode, msg string, startedAt time.Time, res runner.Result) *syncrv1.JobResult {
+	r := baseResult(id, syncrv1.JobResultStatus_JOB_RESULT_STATUS_FAILED, startedAt, res)
+	r.Error = &syncrv1.JobError{Code: code, Message: errorMessage(msg)}
+	return r
+}
+
+// cancelledResult reports a cancelled job. The error code is CANCELLED for a
+// CancelJob command and WORKER_SHUTDOWN for a shutdown; the message carries
+// the cause.
+func cancelledResult(id string, cause error, startedAt time.Time, res runner.Result) *syncrv1.JobResult {
+	if cause == nil {
+		cause = ErrCancelled
+	}
+	r := baseResult(id, syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED, startedAt, res)
+	r.Error = &syncrv1.JobError{Code: cancelCode(cause), Message: errorMessage(cause.Error())}
+	return r
+}
+
+// cancelCode is the error code of a job cancelled because of cause:
+// WORKER_SHUTDOWN for a shutdown, CANCELLED otherwise.
+func cancelCode(cause error) syncrv1.JobErrorCode {
+	if errors.Is(cause, ErrShuttingDown) {
+		return syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_SHUTDOWN
+	}
+	return syncrv1.JobErrorCode_JOB_ERROR_CODE_CANCELLED
+}
+
+// errorMessage is the message of a JobError: msg, which may quote tool
+// output, as valid UTF-8 (runner.ValidText) of at most
+// MaxErrorMessageBytes.
+func errorMessage(msg string) string {
+	return clip(runner.ValidText(msg), MaxErrorMessageBytes)
+}
+
+func baseResult(id string, status syncrv1.JobResultStatus, startedAt time.Time, res runner.Result) *syncrv1.JobResult {
+	return &syncrv1.JobResult{
+		JobId:      id,
+		Status:     status,
+		Stats:      res.Stats.Proto(),
+		ExitCode:   int32(max(min(res.ExitCode, 1<<31-1), -1<<31)),
+		StartedAt:  stamp(startedAt),
+		FinishedAt: timestamppb.Now(),
+	}
+}
+
+// stamp converts t, returning nil for the zero time.
+func stamp(t time.Time) *timestamppb.Timestamp {
+	if t.IsZero() {
+		return nil
+	}
+	return timestamppb.New(t)
+}

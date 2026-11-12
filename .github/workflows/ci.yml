@@ -1,0 +1,625 @@
+name: CI
+
+on:
+  push:
+    branches: [v2, main]
+  pull_request:
+    branches: [v2, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Actions are pinned to full commit SHAs (the comment names the release);
+# Dependabot (.github/dependabot.yml) keeps both up to date.
+env:
+  GOLANGCI_LINT_VERSION: v2.15.0
+  BUF_VERSION: "1.75.0"
+  # Run with `go run` (pinned here and in the Makefile), so no install step is
+  # needed and the generated code cannot depend on a stray local version.
+  SQLC_VERSION: v1.31.1
+  # Keep in sync with the Makefile and .github/workflows/release.yml.
+  GORELEASER_VERSION: v2.20.1
+  GOVULNCHECK_VERSION: v1.9.0
+  ACTIONLINT_VERSION: v1.7.12
+
+jobs:
+  lint:
+    name: golangci-lint (${{ matrix.goos }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Lint Windows-only files (build tags) as well as Unix ones.
+        goos: [linux, windows]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true # modules and build cache, keyed by go.sum
+          cache-dependency-path: go.sum
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        env:
+          GOOS: ${{ matrix.goos }}
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+  proto:
+    name: buf lint + generate drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true # modules and build cache, keyed by go.sum
+          cache-dependency-path: go.sum
+      # protoc-gen-es (TypeScript) is pinned in web/package.json.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
+        with:
+          version: ${{ env.BUF_VERSION }}
+          setup_only: true
+      - name: buf lint
+        run: buf lint
+      - name: buf format
+        run: buf format --diff --exit-code
+      - name: Generated code is up to date
+        # Go plugins run via `go tool`, pinned by go.mod; the TypeScript
+        # plugin from web/node_modules.
+        run: |
+          npm ci --prefix web
+          buf generate
+          git add -N gen web/src/gen
+          git diff --exit-code -- gen web/src/gen
+
+  sqlc:
+    name: sqlc generate drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true # modules and build cache, keyed by go.sum
+          cache-dependency-path: go.sum
+      - name: sqlc vet
+        run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@${{ env.SQLC_VERSION }} vet
+      - name: Generated code is up to date
+        run: |
+          go run github.com/sqlc-dev/sqlc/cmd/sqlc@${{ env.SQLC_VERSION }} generate
+          git add -N internal/adapters/postgres/db
+          git diff --exit-code -- internal/adapters/postgres/db
+
+  test:
+    name: go test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true # modules and build cache, keyed by go.sum
+          cache-dependency-path: go.sum
+      - name: go vet
+        run: go vet ./...
+      - name: go vet (integration tests compile)
+        run: go vet -tags integration ./...
+      - name: go test
+        run: go test ./...
+      - name: go test -race
+        if: runner.os == 'Linux'
+        run: go test -race ./...
+      - name: go mod tidy is clean
+        if: runner.os == 'Linux'
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+  govulncheck:
+    name: govulncheck (${{ matrix.goos }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows-only files (build tags) call other code than Unix ones.
+        goos: [linux, windows]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Install govulncheck
+        # For this runner: with GOOS=windows, `go run` would build a Windows
+        # binary it cannot start.
+        run: GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }}
+      - name: govulncheck ./...
+        # Fails on a known vulnerability in code the binaries can reach,
+        # in a module or in the Go release setup-go installed (the newest
+        # patch release of go.mod's version).
+        env:
+          GOOS: ${{ matrix.goos }}
+        run: '"$RUNNER_TEMP/bin/govulncheck" ./...'
+
+  npm-audit:
+    name: npm audit (web, production dependencies)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26
+      # What the controller embeds: dependencies only, not the dev tooling.
+      - run: npm audit --omit=dev --audit-level=high
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: actionlint
+        # Lints .github/workflows/*.yml; the runner's shellcheck checks the
+        # run: scripts.
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@${{ env.ACTIONLINT_VERSION }} -color
+
+  integration-linux:
+    name: integration (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Fetch the pinned rclone and restic
+        id: tools
+        run: |
+          out=$(go run ./cmd/syncr-worker tools fetch --dir "$RUNNER_TEMP/syncr-tools")
+          echo "$out"
+          # The last column of each line is the binary's path.
+          rclone=$(echo "$out" | sed -n 's/^rclone  *[^ ]*  *[^ ]*  *[^ ]*  *//p')
+          restic=$(echo "$out" | sed -n 's/^restic  *[^ ]*  *[^ ]*  *[^ ]*  *//p')
+          test -x "$rclone" && test -x "$restic"
+          echo "rclone=$rclone" >> "$GITHUB_OUTPUT"
+          echo "restic=$restic" >> "$GITHUB_OUTPUT"
+      - name: go test -tags integration
+        # Docker is available on the runner, so the Postgres, MinIO and SFTP
+        # (testcontainers) tests run too, and so do the end-to-end tests of
+        # the real binaries (internal/e2e/system): they build both binaries,
+        # run the controller on Postgres, enroll workers with `setup` and
+        # kill and restart the processes mid-job.
+        env:
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: go test -tags integration -count=1 -timeout 20m ./...
+      - name: go test -race (link wiring and e2e, integration tag)
+        # The unit -race run covers every package without the integration
+        # tag; this adds the integration tests of the composition roots, the
+        # link transports and the in-process link e2e, and again the
+        # concurrent scheduling and outbox code (the scheduler under
+        # internal/controller, schedules and notifications), the probes on
+        # both sides and the restic use cases under the race
+        # detector. (The binary e2e builds its binaries without -race, so it
+        # is not repeated here.)
+        env:
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: >-
+          go test -race -tags integration -count=1 -timeout 15m
+          ./cmd/...
+          ./internal/e2e
+          ./internal/controller/...
+          ./internal/app/schedules/...
+          ./internal/app/notifications/...
+          ./internal/app/restic/...
+          ./internal/app/jobs/...
+          ./internal/jobkind/...
+          ./internal/devseed/...
+          ./internal/adapters/...
+          ./internal/worker/agent/...
+          ./internal/worker/probe/...
+          ./internal/worker/linkcore/...
+          ./internal/worker/transport/...
+      - name: Build the worker for the service test
+        run: go build -o "$RUNNER_TEMP/syncr-worker" ./cmd/syncr-worker
+      - name: Real systemd service (install, start, stop, uninstall)
+        # Installs the worker as a system unit on this throw-away runner, so
+        # the test binary runs as root. It removes the unit again, also when
+        # it fails.
+        env:
+          SYNCR_TEST_SERVICE: "1"
+          SYNCR_TEST_WORKER: ${{ runner.temp }}/syncr-worker
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: |
+          go test -c -tags integration -o "$RUNNER_TEMP/worker.test" ./cmd/syncr-worker
+          sudo -E "$RUNNER_TEMP/worker.test" -test.run '^TestIntegrationRealService$' -test.v -test.count=1 -test.timeout 10m
+      - name: Build the workers for the upgrade test
+        # Before sudo, which has no go on its PATH: two releases that differ
+        # only in their version, and a real worker built with
+        # syncr_broken_release, whose `run` fails only after its whole start
+        # (start-up cleanup included). The same three as the test builds
+        # itself on Windows (upgradeBinaries).
+        run: |
+          pkg=github.com/Zeptiny/Syncr/internal/platform/version.version
+          dir="$RUNNER_TEMP/upgrade"
+          go build -ldflags "-X $pkg=v2.0.0-test.1" -o "$dir/old/syncr-worker" ./cmd/syncr-worker
+          go build -ldflags "-X $pkg=v2.0.0-test.2" -o "$dir/new/syncr-worker" ./cmd/syncr-worker
+          go build -tags syncr_broken_release -ldflags "-X $pkg=v2.0.0-test.3" -o "$dir/broken/syncr-worker" ./cmd/syncr-worker
+      - name: Real systemd service upgrade (old to new, then a rollback)
+        # After the service test, never next to it: both install the unit
+        # syncr-worker. `syncr-worker upgrade --from` a release server on
+        # this machine; the service must end up running the new version, and
+        # a release that does not stay up must be rolled back.
+        env:
+          SYNCR_TEST_SERVICE: "1"
+          SYNCR_TEST_UPGRADE_BIN: ${{ runner.temp }}/upgrade
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: sudo -E "$RUNNER_TEMP/worker.test" -test.run '^TestIntegrationRealServiceUpgrade$' -test.v -test.count=1 -test.timeout 15m
+      - name: Service journal (on failure)
+        if: failure()
+        run: sudo journalctl -u syncr-worker --no-pager -n 100 || true
+
+  integration-windows:
+    name: integration (windows)
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Fetch the pinned rclone and restic
+        id: tools
+        shell: pwsh
+        run: |
+          $out = go run ./cmd/syncr-worker tools fetch --dir "$env:RUNNER_TEMP\syncr-tools"
+          if ($LASTEXITCODE -ne 0) { throw "tools fetch failed with exit code $LASTEXITCODE" }
+          $out | ForEach-Object { Write-Host $_ }
+          # Columns are separated by two or more spaces; the last is the path.
+          foreach ($tool in 'rclone', 'restic') {
+            $line = $out | Where-Object { $_ -match "^$tool\s" } | Select-Object -First 1
+            $path = ($line -split '\s{2,}')[-1].Trim()
+            if (-not (Test-Path -LiteralPath $path)) { throw "$tool binary not found at '$path'" }
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "$tool=$path" -Encoding utf8
+          }
+      - name: go test -tags integration
+        # The Windows runner only runs Windows containers, so the tests that
+        # need Linux containers (MinIO, SFTP) skip themselves with a message.
+        # Everything else runs for real: rclone local transfers, union,
+        # cancel, restic local lifecycle, local_roots, tool provisioning and
+        # the worker wiring. -v shows each skip and its reason.
+        env:
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: go test -v -tags integration -count=1 -timeout 30m ./...
+      - name: Build the worker for the service test
+        shell: pwsh
+        run: go build -o "$env:RUNNER_TEMP\syncr-worker.exe" ./cmd/syncr-worker
+      - name: Real Windows Service (install, start, stop, uninstall)
+        # The runner is an elevated administrator and throw-away, so the
+        # worker may be installed as a Windows Service; the test removes it
+        # again, also when it fails.
+        shell: pwsh
+        env:
+          SYNCR_TEST_SERVICE: "1"
+          SYNCR_TEST_WORKER: ${{ runner.temp }}\syncr-worker.exe
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: go test -v -tags integration -count=1 -timeout 15m -run '^TestIntegrationRealService$' ./cmd/syncr-worker
+      - name: Real Windows Service upgrade (old to new, then a rollback)
+        # After the service test, never next to it: both install the service
+        # syncr-worker. The test builds its workers itself. This is the only
+        # run of the Windows rename-and-swap and its rollback before a
+        # release candidate.
+        shell: pwsh
+        env:
+          SYNCR_TEST_SERVICE: "1"
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: go test -v -tags integration -count=1 -timeout 20m -run '^TestIntegrationRealServiceUpgrade$' ./cmd/syncr-worker
+      - name: Real Scheduled Task of the current user (setup --user)
+        id: user_task
+        # The job runs as runneradmin in the logged-on console session, where
+        # the task's logon trigger and on-demand start work. In session 0 the
+        # test skips (a warning here, and the case stays on the release
+        # candidate checklist). On failure the test logs the task's last run
+        # and the worker's log, and writes them to the evidence directory for
+        # the next step.
+        shell: pwsh
+        env:
+          SYNCR_TEST_USER_TASK: "1"
+          SYNCR_TEST_EVIDENCE_DIR: ${{ runner.temp }}\syncr-evidence
+          SYNCR_TEST_WORKER: ${{ runner.temp }}\syncr-worker.exe
+          SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
+          SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+        run: |
+          $out = go test -v -tags integration -count=1 -timeout 10m -run '^TestIntegrationRealUserTask$' ./cmd/syncr-worker
+          $code = $LASTEXITCODE
+          $out | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if ($out -match '--- SKIP: TestIntegrationRealUserTask') {
+            Write-Host "::warning::the Scheduled Task test was skipped: this runner cannot start a logon task (see the log)"
+          }
+      - name: Service Event Log entries (on failure)
+        if: failure()
+        # Diagnostics only: this step never fails the job. Get-WinEvent
+        # throws ("The parameter is incorrect") when no event source of that
+        # name was ever registered, which -ErrorAction does not catch, and
+        # Actions runs pwsh with $ErrorActionPreference = 'stop'.
+        continue-on-error: true
+        shell: pwsh
+        env:
+          USER_TASK_OUTCOME: ${{ steps.user_task.outcome }}
+          EVIDENCE_DIR: ${{ runner.temp }}\syncr-evidence
+        run: |
+          $ErrorActionPreference = 'Continue'
+          try {
+            Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='syncr-worker'} -MaxEvents 50 -ErrorAction Stop |
+              Format-List TimeCreated, LevelDisplayName, Message
+          } catch {
+            Write-Host "No Event Log entries of syncr-worker: $($_.Exception.Message)"
+          }
+          if ($env:USER_TASK_OUTCOME -eq 'failure') {
+            # Written by TestIntegrationRealUserTask before it removed the
+            # task: the task's last result and the user-task worker's log.
+            if (Test-Path -LiteralPath $env:EVIDENCE_DIR) {
+              Get-ChildItem -LiteralPath $env:EVIDENCE_DIR -File | Sort-Object Name | ForEach-Object {
+                Write-Host "::group::$($_.Name)"
+                Get-Content -LiteralPath $_.FullName | ForEach-Object { Write-Host $_ }
+                Write-Host "::endgroup::"
+              }
+            } else {
+              Write-Host "The Scheduled Task test left no evidence in $env:EVIDENCE_DIR"
+            }
+          }
+          exit 0
+
+  web:
+    name: web (typecheck, lint, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Route tree is up to date
+        run: npm run generate:routes && git diff --exit-code -- src/routeTree.gen.ts
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm test
+      - run: npm run build
+
+  release-build:
+    # The release's own build definition (.goreleaser.yaml), as a snapshot:
+    # both binaries for linux/amd64, linux/arm64 and windows/amd64, the
+    # controller with the embedded web UI, archived as the release names
+    # them. The assertions keep the asset names and layout that the install
+    # commands and `syncr-worker upgrade` depend on.
+    name: release build (GoReleaser snapshot)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0 # GoReleaser reads the tags
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true # modules and build cache, keyed by go.sum
+          cache-dependency-path: go.sum
+      # The before hooks build web/dist.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: ${{ env.GORELEASER_VERSION }}
+          install-only: true
+      - name: goreleaser check
+        run: goreleaser check
+      - name: goreleaser release --snapshot
+        run: goreleaser release --snapshot --clean
+      - name: go vet with the embedded UI
+        run: |
+          GOOS=linux go vet -tags webui ./web/ ./internal/adapters/api/
+          GOOS=windows go vet -tags webui ./web/ ./internal/adapters/api/
+      - name: The six archives, each with only its binary at the root
+        run: |
+          cd dist
+          expected="checksums.txt
+          syncr-controller_linux_amd64.tar.gz
+          syncr-controller_linux_arm64.tar.gz
+          syncr-controller_windows_amd64.zip
+          syncr-worker_linux_amd64.tar.gz
+          syncr-worker_linux_arm64.tar.gz
+          syncr-worker_windows_amd64.zip"
+          actual=$(find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name 'checksums.txt' \) -printf '%f\n' | LC_ALL=C sort)
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::the release assets changed; the install commands and syncr-worker upgrade expect the names above"
+            diff <(echo "$expected") <(echo "$actual") || true
+            exit 1
+          fi
+          test "$(wc -l < checksums.txt)" -eq 6
+          sha256sum --strict -c checksums.txt
+          for f in *.tar.gz *.zip; do
+            bin=${f%%_*}
+            if [ "${f%.zip}" != "$f" ]; then
+              bin=$bin.exe
+              entries=$(unzip -Z1 "$f")
+            else
+              entries=$(tar -tzf "$f")
+            fi
+            if [ "$entries" != "$bin" ]; then
+              echo "::error::$f holds [$entries]; it must hold only $bin, at its root"
+              exit 1
+            fi
+          done
+      - name: The documented install extracts a worker that reports a dev version
+        # The Linux install command pipes the archive into `tar -xz
+        # syncr-worker`; a snapshot reports dev-<commit>, never a release
+        # version (the release workflow checks that a release reports its tag).
+        run: |
+          head=$(git rev-parse HEAD)
+          dist="$PWD/dist"
+          tmp=$(mktemp -d)
+          cd "$tmp"
+          tar -xz syncr-worker < "$dist/syncr-worker_linux_amd64.tar.gz"
+          tar -xz syncr-controller < "$dist/syncr-controller_linux_amd64.tar.gz"
+          for out in "$(./syncr-worker version)" "$(./syncr-controller -version)"; do
+            echo "$out"
+            v=$(echo "$out" | awk '{print $2}')
+            case "$v" in
+              dev-*) ;;
+              *) echo "::error::a snapshot reports version $v"; exit 1 ;;
+            esac
+            case "$head" in
+              "${v#dev-}"*) ;;
+              *) echo "::error::version $v is not of commit $head"; exit 1 ;;
+            esac
+            echo "$out" | grep -q "(commit $head, built " || { echo "::error::no full commit in: $out"; exit 1; }
+          done
+      - name: The install and upgrade code finds every asset (TestReleaseAssets)
+        # Reads the names from internal/adapters/api/install.go and
+        # internal/worker/upgrade, so they are written down in one place.
+        env:
+          SYNCR_RELEASE_DIST: ${{ github.workspace }}/dist
+        run: go test -count=1 -v -run '^TestReleaseAssets$' ./internal/adapters/api ./internal/worker/upgrade
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: syncr-snapshot
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  docker-images:
+    name: docker images (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: syncr-controller, dockerfile: Dockerfile.controller }
+          - { image: syncr-worker, dockerfile: Dockerfile.worker }
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0 # git describe needs tags
+      - name: Version build args
+        id: version
+        # The same values as a local `make build`.
+        run: |
+          {
+            echo "version=$(git describe --tags --match 'v*' --dirty 2>/dev/null || echo dev)"
+            echo "commit=$(git rev-parse HEAD)"
+            echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+      - name: The compose files are valid
+        if: matrix.image == 'syncr-controller'
+        # The quick start (published images) and the build-from-source
+        # override; the two secrets are placeholders.
+        env:
+          POSTGRES_PASSWORD: ci
+          SYNCR_SECRETS_KEY: ci
+        run: |
+          docker compose -f deploy/docker-compose.yml config --quiet
+          docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.build.yml config --quiet
+          docker compose -f deploy/docker-compose.yml config --images | grep -qx 'ghcr.io/zeptiny/syncr-controller:2'
+          docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.build.yml config --images | grep -qx 'syncr-controller:local'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build ${{ matrix.image }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          # The Dockerfiles COPY from the repository root.
+          context: .
+          file: deploy/${{ matrix.dockerfile }}
+          push: false
+          load: true
+          tags: ${{ matrix.image }}:ci
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ steps.version.outputs.commit }}
+            BUILD_TIME=${{ steps.version.outputs.built }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      - name: Smoke test syncr-controller
+        if: matrix.image == 'syncr-controller'
+        # The image is distroless (no shell), so the entrypoint is overridden
+        # to call the binary directly. The health check must fail here: no
+        # server is running in the container. Then a throw-away controller
+        # (in-memory store) must serve the embedded web UI, not the
+        # placeholder of builds without -tags webui.
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/syncr-controller syncr-controller:ci -version
+          if docker run --rm --entrypoint /usr/local/bin/syncr-controller syncr-controller:ci -healthcheck; then
+            echo "::error::-healthcheck succeeded without a running server"
+            exit 1
+          fi
+          docker run -d --name syncr-smoke -p 127.0.0.1:18080:8080 \
+            -e SYNCR_DEV_MEMORY_STORE=true -e SYNCR_SECRETS_KEY="$(openssl rand -base64 32)" syncr-controller:ci
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          page=$(curl -fsS http://127.0.0.1:18080/)
+          docker logs syncr-smoke 2>&1 | grep -q 'setup_code' || { echo "::error::no setup code logged"; docker logs syncr-smoke; exit 1; }
+          docker rm -f syncr-smoke
+          if echo "$page" | grep -qi "built without the web UI"; then
+            echo "::error::the image serves the placeholder page instead of the web UI"
+            exit 1
+          fi
+          echo "$page" | grep -q '<script type="module"' || { echo "::error::unexpected index.html: $page"; exit 1; }
+      - name: Smoke test syncr-worker
+        if: matrix.image == 'syncr-worker'
+        # The pinned rclone and restic must be runnable inside the image, and
+        # their licence texts must be there (the image redistributes them),
+        # readable by the image's non-root user. The modes are printed first,
+        # so a failure shows which file or directory is not readable.
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/syncr-worker syncr-worker:ci version
+          docker run --rm --entrypoint /usr/local/bin/rclone syncr-worker:ci version
+          docker run --rm --entrypoint /usr/local/bin/restic syncr-worker:ci version
+          docker run --rm --entrypoint /bin/sh syncr-worker:ci -c \
+            'id; ls -ld /usr/share/doc/rclone /usr/share/doc/rclone/COPYING /usr/share/doc/restic /usr/share/doc/restic/LICENSE'
+          docker run --rm --entrypoint /bin/sh syncr-worker:ci -c \
+            'grep -q "Permission is hereby granted" /usr/share/doc/rclone/COPYING && grep -q "BSD 2-Clause License" /usr/share/doc/restic/LICENSE'

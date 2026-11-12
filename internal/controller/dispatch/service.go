@@ -1,0 +1,208 @@
+package dispatch
+
+import (
+	"cmp"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/Zeptiny/Syncr/internal/domain"
+)
+
+// ErrStaleEpoch reports a request carrying an epoch the worker has already
+// replaced: a delayed request of a previous worker process. Errors wrapping
+// it also match domain.ErrFailedPrecondition.
+var ErrStaleEpoch = errors.New("dispatch: request from a replaced worker process (stale epoch)")
+
+// Config tunes the dispatcher. Zero fields take the DefaultConfig values.
+type Config struct {
+	// MaxWait caps a long poll (PollRequest.wait); it also applies when the
+	// worker does not set wait. Stay below common proxy idle timeouts.
+	MaxWait time.Duration
+	// MaxCommands caps the commands returned at once.
+	MaxCommands int
+	// DispatchTimeout fails a job that stays queued this long (its worker
+	// is offline or never accepts it), counted from this Service's start at
+	// the earliest, so a controller outage does not count.
+	DispatchTimeout time.Duration
+	// LostAfter ends the dispatched and running jobs of a worker that has
+	// been out of contact this long (no link call, see ExpireLost): they
+	// become interrupted (worker_lost), or cancelled if a cancel was
+	// requested. Contact is counted from this Service's start at the
+	// earliest, so a controller outage never counts against a worker.
+	LostAfter time.Duration
+	// CancelGrace ends a dispatched or running job with a cancel request as
+	// cancelled once its worker has been out of contact this long since
+	// the request (the CancelJob cannot be delivered). It is capped at
+	// LostAfter.
+	CancelGrace time.Duration
+	// SweepInterval is how often Run checks for dispatch timeouts and lost
+	// workers.
+	SweepInterval time.Duration
+	// Passive tunes PassiveLoop.
+	Passive PassiveConfig
+}
+
+// DefaultConfig returns the default configuration.
+func DefaultConfig() Config {
+	return Config{
+		MaxWait:         25 * time.Second,
+		MaxCommands:     64,
+		DispatchTimeout: 15 * time.Minute,
+		LostAfter:       time.Hour,
+		CancelGrace:     5 * time.Minute,
+		SweepInterval:   30 * time.Second,
+		Passive:         DefaultPassiveConfig(),
+	}
+}
+
+// Deps are the dispatcher's collaborators. All are required except Specs,
+// Probes and Logger.
+type Deps struct {
+	Jobs    Jobs
+	Workers Workers
+	// Specs builds the specs of queued jobs, normally NewSpecs(remotes
+	// service, job kinds). If nil, every queued job fails with
+	// "invalid_spec" when it would be dispatched.
+	Specs SpecBuilder
+	Clock Clock
+	// Hub must be the same Hub given to the job service as its Waker.
+	Hub *Hub
+	// Probes is the probe broker whose run_probe commands and results go
+	// through this dispatcher (Milestone 5); nil serves no probes.
+	Probes *ProbeBroker
+	// Logger defaults to discarding.
+	Logger *slog.Logger
+}
+
+// Service is the controller side of the worker link. Create it with New;
+// safe for concurrent use. It keeps only reconstructible state in memory
+// (per-worker sessions), so a new Service over the same stores resumes
+// where the old one stopped.
+type Service struct {
+	jobs    Jobs
+	workers Workers
+	specs   SpecBuilder
+	probes  *ProbeBroker
+	clock   Clock
+	hub     *Hub
+	log     *slog.Logger
+	cfg     Config
+	// started is when the Service was created: the earliest contact
+	// ExpireLost assumes and the earliest queue time ExpireQueued counts
+	// from, because a worker cannot reach a controller that is down.
+	started time.Time
+
+	mu       sync.Mutex
+	sessions map[domain.WorkerID]*session
+}
+
+// New returns a Service.
+func New(d Deps, cfg Config) (*Service, error) {
+	if d.Jobs == nil || d.Workers == nil || d.Clock == nil || d.Hub == nil {
+		return nil, errors.New("dispatch: missing dependency")
+	}
+	def := DefaultConfig()
+	cfg.MaxWait = cmp.Or(cfg.MaxWait, def.MaxWait)
+	cfg.MaxCommands = cmp.Or(cfg.MaxCommands, def.MaxCommands)
+	cfg.DispatchTimeout = cmp.Or(cfg.DispatchTimeout, def.DispatchTimeout)
+	cfg.LostAfter = cmp.Or(cfg.LostAfter, def.LostAfter)
+	cfg.CancelGrace = min(cmp.Or(cfg.CancelGrace, def.CancelGrace), cfg.LostAfter)
+	cfg.SweepInterval = cmp.Or(cfg.SweepInterval, def.SweepInterval)
+	cfg.Passive = cfg.Passive.withDefaults()
+	if cfg.MaxWait < 0 || cfg.MaxCommands < 0 || cfg.DispatchTimeout < 0 || cfg.LostAfter < 0 || cfg.CancelGrace < 0 || cfg.SweepInterval < 0 {
+		return nil, fmt.Errorf("dispatch: invalid config %+v", cfg)
+	}
+	log := d.Logger
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	return &Service{
+		jobs: d.Jobs, workers: d.Workers, specs: d.Specs, probes: d.Probes, clock: d.Clock, hub: d.Hub, log: log, cfg: cfg,
+		started:  d.Clock.Now(),
+		sessions: make(map[domain.WorkerID]*session),
+	}, nil
+}
+
+// MaxWait returns the cap on a long poll (Config.MaxWait). Transports use
+// it to size the time a Poll may hold its connection.
+func (s *Service) MaxWait() time.Duration { return s.cfg.MaxWait }
+
+// session is the in-memory link state of one worker. It is derived from
+// what the worker told this controller process and is rebuilt from the
+// worker's next requests after a restart, so it is never persisted. mu
+// serializes the handling of one worker's link calls in this process (the
+// stores' conditional updates keep it safe beyond that).
+type session struct {
+	mu sync.Mutex
+	// epoch is the worker epoch the fields below belong to.
+	epoch string
+	// cancelAcked holds job IDs whose CancelJob the worker acknowledged in
+	// epoch; they are not sent again.
+	cancelAcked map[string]bool
+	// orphans are job IDs the latest snapshot listed that the controller
+	// considers finished or does not know; each gets a CancelJob.
+	orphans []string
+	// saturated mirrors WorkerState.outbox_saturated, to log changes.
+	saturated bool
+	// awaitsHello is set when a derivation held back StartJob and probe
+	// commands because the Hello of epoch was not stored yet; storing it
+	// then wakes the worker's long poll.
+	awaitsHello bool
+}
+
+func (s *session) reset(epoch string) {
+	s.epoch = epoch
+	s.cancelAcked = make(map[string]bool)
+	s.orphans = nil
+	s.saturated = false
+	s.awaitsHello = false
+}
+
+func (s *Service) session(id domain.WorkerID) *session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.sessions[id]
+	if !ok {
+		sess = &session{cancelAcked: make(map[string]bool)}
+		s.sessions[id] = sess
+	}
+	return sess
+}
+
+// Hub wakes the command long polls (and passive loops) of a worker when its
+// pending commands change. It implements jobs.Waker. Create it with NewHub;
+// safe for concurrent use.
+type Hub struct {
+	mu    sync.Mutex
+	chans map[domain.WorkerID]chan struct{}
+}
+
+// NewHub returns a Hub.
+func NewHub() *Hub { return &Hub{chans: make(map[domain.WorkerID]chan struct{})} }
+
+// Wake wakes everyone waiting for id's commands. It never blocks.
+func (h *Hub) Wake(id domain.WorkerID) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if ch, ok := h.chans[id]; ok {
+		close(ch)
+		delete(h.chans, id)
+	}
+}
+
+// wait returns a channel closed by the next Wake(id). Take it before
+// checking for commands, so a wake between the check and the wait is not
+// lost.
+func (h *Hub) wait(id domain.WorkerID) <-chan struct{} {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ch, ok := h.chans[id]
+	if !ok {
+		ch = make(chan struct{})
+		h.chans[id] = ch
+	}
+	return ch
+}

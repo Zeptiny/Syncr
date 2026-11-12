@@ -1,0 +1,32 @@
+//go:build unix
+
+package proc
+
+import (
+	"os"
+	"os/exec"
+	"syscall"
+)
+
+// configureCmd places the child in its own process group, so terminal
+// signals (Ctrl-C) reach only the worker, and makes cancellation send
+// SIGINT: rclone and restic treat it as a user abort and clean up (finish or
+// remove partial uploads, release repository locks). exec kills the child
+// with SIGKILL if it is still running after WaitDelay.
+//
+// The stop request goes to the child alone, never to its group: restic
+// releases its repository lock through the rclone process it started, so
+// that process must outlive restic's own cleanup. The rest of the group is
+// killed only once the child has exited (tree.wait).
+func configureCmd(cmd *exec.Cmd, _ *tree) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		// Signal the child itself through os.Process, which tracks whether it
+		// was already reaped, so a recycled PID is never signaled.
+		return cmd.Process.Signal(os.Interrupt)
+	}
+}
+
+// transientRemoveError reports whether a failed removal may succeed if
+// retried. Open files never block removal on Unix, so none does.
+func transientRemoveError(error) bool { return false }

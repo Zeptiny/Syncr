@@ -1,0 +1,32 @@
+### INSTALL_PLATFORM_LINUX / INSTALL_SCOPE_SYSTEM / sh: Linux (system service)
+# Needs sudo. Installs /usr/local/bin/syncr-worker and a system service. If syncr-worker is already installed, run only the setup command. The controller must reach this machine at the advertised URL: replace the host name if it cannot. Setup prints the URL, fingerprint and pairing secret to register the worker with.
+curl -fsSL "https://github.com/Zeptiny/Syncr/releases/latest/download/syncr-worker_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar -xz syncr-worker \
+  && sudo install -m 0755 syncr-worker /usr/local/bin/syncr-worker \
+  && sudo /usr/local/bin/syncr-worker setup --passive --listen ':7443' --advertise-url "https://$(hostname):7443"
+
+### INSTALL_PLATFORM_LINUX / INSTALL_SCOPE_USER / sh: Linux (current user)
+# No root needed. Installs ~/.local/bin/syncr-worker and a service of the current user. If syncr-worker is already installed, run only the setup command. The controller must reach this machine at the advertised URL: replace the host name if it cannot. Setup prints the URL, fingerprint and pairing secret to register the worker with.
+curl -fsSL "https://github.com/Zeptiny/Syncr/releases/latest/download/syncr-worker_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar -xz syncr-worker \
+  && mkdir -p "$HOME/.local/bin" \
+  && install -m 0755 syncr-worker "$HOME/.local/bin/syncr-worker" \
+  && "$HOME/.local/bin/syncr-worker" setup --user --passive --listen ':7443' --advertise-url "https://$(hostname):7443"
+
+### INSTALL_PLATFORM_WINDOWS / INSTALL_SCOPE_SYSTEM / powershell: Windows (system service)
+# Run in an elevated PowerShell (Run as administrator). Installs a Windows service. If syncr-worker is already installed, run only the setup command. The controller must reach this machine at the advertised URL: replace the host name if it cannot. Setup prints the URL, fingerprint and pairing secret to register the worker with.
+$ErrorActionPreference = 'Stop'
+$d = Join-Path $env:ProgramFiles 'Syncr'
+$z = Join-Path $env:TEMP 'syncr-worker.zip'
+Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/Zeptiny/Syncr/releases/latest/download/syncr-worker_windows_amd64.zip' -OutFile $z
+Expand-Archive -Path $z -DestinationPath $d -Force
+New-NetFirewallRule -DisplayName 'Syncr worker' -Direction Inbound -Protocol TCP -LocalPort 7443 -Action Allow | Out-Null
+& "$d\syncr-worker.exe" setup --passive --listen ':7443' --advertise-url "https://$($env:COMPUTERNAME):7443"
+
+### INSTALL_PLATFORM_WINDOWS / INSTALL_SCOPE_USER / powershell: Windows (current user)
+# Run in a normal PowerShell. Installs a scheduled task of the current user. If syncr-worker is already installed, run only the setup command. The controller must reach this machine at the advertised URL: replace the host name if it cannot. Setup prints the URL, fingerprint and pairing secret to register the worker with. An administrator must allow inbound TCP port 7443 in the Windows firewall.
+$ErrorActionPreference = 'Stop'
+$d = Join-Path $env:LOCALAPPDATA 'Programs\Syncr'
+$z = Join-Path $env:TEMP 'syncr-worker.zip'
+Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/Zeptiny/Syncr/releases/latest/download/syncr-worker_windows_amd64.zip' -OutFile $z
+Expand-Archive -Path $z -DestinationPath $d -Force
+& "$d\syncr-worker.exe" setup --user --passive --listen ':7443' --advertise-url "https://$($env:COMPUTERNAME):7443"
+

@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package syncr.v1;
+
+import "google/protobuf/timestamp.proto";
+import "syncr/v1/api.proto";
+import "syncr/v1/schedules.proto";
+
+// DashboardService serves the overview page: job statistics over a time
+// range, upcoming scheduled runs, worker health and recent problems.
+service DashboardService {
+  // GetDashboard returns the dashboard of the caller's jobs and schedules
+  // (with all_users, an admin's statistics cover every user's jobs;
+  // schedules stay the caller's own).
+  rpc GetDashboard(GetDashboardRequest) returns (GetDashboardResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+// DashboardRange is the time range of the statistics, ending now.
+enum DashboardRange {
+  DASHBOARD_RANGE_UNSPECIFIED = 0;
+  // The last 24 hours, in hourly buckets.
+  DASHBOARD_RANGE_DAY = 1;
+  // The last 7 days, in daily buckets.
+  DASHBOARD_RANGE_WEEK = 2;
+  // The last 30 days, in daily buckets.
+  DASHBOARD_RANGE_MONTH = 3;
+}
+
+// GetDashboardRequest selects the statistics.
+message GetDashboardRequest {
+  // The range; unspecified means DAY.
+  DashboardRange range = 1;
+
+  // IANA time zone the buckets follow (the browser's); empty means UTC.
+  string timezone = 2;
+
+  // Admins only: statistics of every user's jobs. Ignored for other users.
+  bool all_users = 3;
+}
+
+// GetDashboardResponse is the dashboard.
+message GetDashboardResponse {
+  // The range covered, [from, until).
+  google.protobuf.Timestamp from = 1;
+  google.protobuf.Timestamp until = 2;
+
+  // The bucket size of activity: "hour" or "day".
+  string bucket_unit = 3;
+
+  // Totals over the range, and the jobs active now.
+  JobTotals totals = 4;
+
+  // Finished jobs per bucket, oldest first, without gaps.
+  repeated ActivityBucket activity = 5;
+
+  // The next scheduled runs, soonest first.
+  repeated UpcomingRun upcoming = 6;
+
+  // The workers and how many are online.
+  WorkerHealth workers = 7;
+
+  // The latest failed or interrupted jobs, newest first.
+  repeated Job recent_failures = 8;
+
+  // The latest missed or failed scheduled runs, newest first.
+  repeated ScheduleRun recent_missed = 9;
+
+  reserved 10 to 19;
+}
+
+// JobTotals counts jobs that finished in the range, by status.
+message JobTotals {
+  int64 succeeded = 1;
+  int64 failed = 2;
+  int64 interrupted = 3;
+  int64 cancelled = 4;
+
+  // Bytes and files transferred by the jobs that finished in the range.
+  int64 bytes = 5;
+  int64 files = 6;
+
+  // succeeded / (succeeded + failed + interrupted); 0 without such jobs.
+  double success_rate = 7;
+
+  // Jobs running, and queued or dispatched, now.
+  int64 running = 8;
+  int64 queued = 9;
+
+  // Scheduled runs missed in the range.
+  int64 missed_runs = 10;
+}
+
+// ActivityBucket counts the jobs that finished in one bucket.
+message ActivityBucket {
+  // Start of the bucket (an hour or a local day in the request's time
+  // zone).
+  google.protobuf.Timestamp start = 1;
+
+  int64 succeeded = 2;
+  int64 failed = 3;
+  int64 interrupted = 4;
+  int64 cancelled = 5;
+
+  // Bytes and files transferred by those jobs.
+  int64 bytes = 6;
+  int64 files = 7;
+}
+
+// UpcomingRun is the next occurrence of a schedule.
+message UpcomingRun {
+  string schedule_id = 1;
+  string schedule_name = 2;
+
+  // When it is due.
+  google.protobuf.Timestamp at = 3;
+
+  // Where it will run.
+  ScheduleTarget target = 4;
+
+  // The target worker's name and status (by ID; for a label, unset unless
+  // a worker with it is known).
+  string worker_name = 5;
+  WorkerStatus worker_status = 6;
+}
+
+// WorkerHealth summarizes the workers that have not been removed.
+message WorkerHealth {
+  int32 online = 1;
+  int32 offline = 2;
+  int32 pending = 3;
+
+  // Every worker, by name.
+  repeated Worker workers = 4;
+}

@@ -1,0 +1,1770 @@
+syntax = "proto3";
+
+package syncr.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// Worker link: the protocol between the controller and its workers (see
+// docs/adr/0002-worker-link.md). Unreleased: Milestone 2 may still change it;
+// field numbers are reserved generously so it can grow without breaking
+// changes once released.
+//
+// Design:
+//   - Everything is unary over HTTP/1.1, so it works through any proxy and can
+//     be debugged with curl. The same messages flow in both modes.
+//   - Active mode: the worker calls ControllerLinkService (Report, Poll).
+//   - Passive mode: the controller calls WorkerLinkService (Command, Pull).
+//   - Enrollment: a new worker calls EnrollmentService.Enroll once, with a
+//     single-use enrollment token, to obtain its worker ID and secret.
+//   - Workers keep an in-memory outbox of Events. Each event has a seq that
+//     increases strictly within an epoch (a random ID chosen at worker process
+//     start). The controller ingests idempotently by (epoch, seq) and acks the
+//     highest seq it has durably stored; the worker then drops acked events.
+//   - Commands are idempotent: workers deduplicate StartJob/CancelJob by
+//     job_id, and acknowledge commands by Command.id.
+//
+// Authentication (HTTP Authorization header, never inside messages; secrets
+// are compared in constant time):
+//   - ControllerLinkService: "Authorization: Bearer <worker_id>.<secret>".
+//     The worker identity is derived from this header only.
+//   - WorkerLinkService: "Authorization: Bearer <secret>", sent by the
+//     controller. The controller authenticates the worker by its TLS
+//     certificate, whose SHA-256 fingerprint was pinned at registration;
+//     no CA is involved.
+//   - EnrollmentService: no Authorization header; the enrollment token in
+//     the request is the credential.
+// internal/link has helpers that format and parse these headers.
+
+// ControllerLinkService is served by the controller and called by workers in
+// active mode (desktops, NAT, no open ports on the worker).
+service ControllerLinkService {
+  // Report delivers outbox events and command acks, and carries the worker's
+  // current state. Workers call it about once a second while jobs run and as a
+  // heartbeat (~15s) when idle. Safe to retry: ingest is idempotent by
+  // (epoch, seq) and acks are idempotent by command id.
+  //
+  // The controller handles a request in this order: a new epoch is adopted
+  // (reconciling the jobs of the previous one), then acks, then events in
+  // seq order, then the state snapshot. A request carrying an epoch the
+  // controller has already replaced by a newer one is rejected with
+  // FAILED_PRECONDITION (it can only be a delayed request of a previous
+  // worker process).
+  rpc Report(ReportRequest) returns (ReportResponse) {}
+
+  // Poll long-polls for pending commands. The controller first applies the
+  // request's acks (so acknowledged commands are never returned again), then
+  // holds the call open for up to PollRequest.wait and returns as soon as
+  // commands are available. Commands are redelivered until acknowledged.
+  rpc Poll(PollRequest) returns (PollResponse) {}
+
+  // CompleteProbe delivers the result of a probe the worker received as
+  // Command.run_probe (Milestone 5). Idempotent: an unknown, late or another
+  // worker's probe ID is accepted and ignored. FAILED_PRECONDITION for a
+  // stale epoch, as for Report.
+  rpc CompleteProbe(CompleteProbeRequest) returns (CompleteProbeResponse) {}
+}
+
+// WorkerLinkService is served by workers in passive mode (TLS with a pinned
+// certificate) and called by the controller.
+service WorkerLinkService {
+  // Command delivers commands to the worker. The worker acknowledges every
+  // command it has accepted for processing, including duplicates it already
+  // knows; a worker that is shutting down refuses (does not acknowledge)
+  // StartJob. Safe to retry.
+  rpc Command(CommandRequest) returns (CommandResponse) {}
+
+  // Pull fetches outbox events after a given seq and acknowledges everything
+  // up to and including it. The controller calls it about once a second while
+  // the worker is busy and every ~15s when idle, and again at once while
+  // has_more is set.
+  rpc Pull(PullRequest) returns (PullResponse) {}
+
+  // Probe runs a probe synchronously (Milestone 5). The call's deadline and
+  // cancellation apply to the probe; workers cap its timeout (90s). Failures
+  // of the probe itself are reported in the response (ProbeResult.status),
+  // not as RPC errors. Workers without probe support answer UNIMPLEMENTED.
+  rpc Probe(ProbeRequest) returns (ProbeResponse) {}
+}
+
+// EnrollmentService is served by the controller next to
+// ControllerLinkService. It is the only link endpoint that needs no worker
+// credentials: `syncr-worker setup --token ...` calls it once to exchange a
+// short-lived, single-use enrollment token (created by an admin) for a worker
+// ID and a long-lived worker secret.
+service EnrollmentService {
+  // Enroll registers a new worker. Fails with UNAUTHENTICATED if the token is
+  // unknown, expired or already used (deliberately indistinguishable), and
+  // with INVALID_ARGUMENT for a malformed request. Not idempotent: a retry
+  // after a lost response fails because the token is spent; the admin then
+  // issues a new token (and may remove the orphaned worker).
+  rpc Enroll(EnrollRequest) returns (EnrollResponse) {}
+}
+
+// ---------------------------------------------------------------------------
+// Envelopes
+// ---------------------------------------------------------------------------
+
+// ReportRequest is sent by an active worker.
+message ReportRequest {
+  // Epoch of the sending worker process. A new epoch means the worker
+  // restarted and lost all in-memory state; the controller reconciles.
+  string epoch = 1;
+
+  // Outbox events not yet acknowledged, in seq order, starting at the oldest
+  // unacked one. May be empty (heartbeat). Under backlog, progress events of
+  // the same job may have been merged into the latest one; Hello, JobStarted
+  // and JobResult events are never dropped. Workers bound a batch by count
+  // and by encoded size (about 4 MiB) but always include at least one event.
+  repeated Event events = 2;
+
+  // Acknowledgements for commands received through Poll.
+  repeated CommandAck acks = 3;
+
+  // Snapshot of the jobs the worker currently holds, used for reconcile.
+  WorkerState state = 4;
+
+  reserved 5 to 15;
+}
+
+// ReportResponse acknowledges ingested events.
+message ReportResponse {
+  // Highest seq of the request epoch that the controller has durably stored.
+  // The worker drops all events with seq <= ack_seq. Zero means nothing has
+  // been stored for this epoch yet.
+  int64 ack_seq = 1;
+
+  reserved 2 to 15;
+}
+
+// PollRequest asks the controller for pending commands.
+message PollRequest {
+  // Epoch of the polling worker process.
+  string epoch = 1;
+
+  // Maximum time the controller may hold the call open before returning an
+  // empty response. Unset means the controller's maximum; zero or negative
+  // means "do not wait". The controller caps it (about 25s) to stay below
+  // common proxy idle timeouts.
+  google.protobuf.Duration wait = 2;
+
+  // Acknowledgements for commands received in previous polls. Acks may also be
+  // sent with Report; the controller treats both idempotently.
+  repeated CommandAck acks = 3;
+
+  reserved 4 to 15;
+}
+
+// PollResponse carries pending commands, oldest first.
+message PollResponse {
+  repeated Command commands = 1;
+
+  reserved 2 to 15;
+}
+
+// CommandRequest is sent by the controller to a passive worker.
+message CommandRequest {
+  // Commands to deliver, oldest first.
+  repeated Command commands = 1;
+
+  reserved 2 to 15;
+}
+
+// CommandResponse acknowledges delivered commands.
+message CommandResponse {
+  // Epoch of the worker process that accepted the commands.
+  string epoch = 1;
+
+  // One ack per accepted command. Commands without an ack must be redelivered.
+  repeated CommandAck acks = 2;
+
+  reserved 3 to 15;
+}
+
+// PullRequest asks a passive worker for outbox events.
+message PullRequest {
+  // Epoch that after_seq refers to. If it differs from the worker's current
+  // epoch, after_seq is ignored and the worker returns events from the start
+  // of its current epoch.
+  string epoch = 1;
+
+  // Return events with seq > after_seq. All events with seq <= after_seq in
+  // the given epoch are acknowledged and may be dropped by the worker.
+  int64 after_seq = 2;
+
+  // Upper bound on the number of events returned. Zero means a worker default.
+  int32 max_events = 3;
+
+  // Soft upper bound on the total encoded size of the returned events, in
+  // bytes. Zero means a worker default (about 4 MiB). The worker always
+  // returns at least one pending event, however large, so a big JobResult
+  // (e.g. a long snapshot list) cannot block the outbox.
+  int32 max_bytes = 4;
+
+  reserved 5 to 15;
+}
+
+// PullResponse returns outbox events and the worker's current state.
+message PullResponse {
+  // Epoch of the responding worker process.
+  string epoch = 1;
+
+  // Events with seq > after_seq, in seq order.
+  repeated Event events = 2;
+
+  // True if more events are available beyond the returned ones.
+  bool has_more = 3;
+
+  // Snapshot of the jobs the worker currently holds, used for reconcile.
+  WorkerState state = 4;
+
+  reserved 5 to 15;
+}
+
+// EnrollRequest exchanges an enrollment token for worker credentials.
+message EnrollRequest {
+  // Single-use token from WorkerAdminService.CreateEnrollmentToken.
+  string enrollment_token = 1;
+
+  // Display name of the worker, e.g. its host name. Empty lets the
+  // controller choose one. At most 64 characters; admins can rename workers.
+  string name = 2;
+
+  // Operating system and architecture as reported by Go (GOOS, GOARCH).
+  // Informational; the worker's Hello event updates them.
+  string os = 3;
+  string arch = 4;
+
+  // Link mode. UNSPECIFIED means ACTIVE.
+  WorkerMode mode = 5;
+
+  // PASSIVE only: the https:// base URL where the worker serves
+  // WorkerLinkService, as reachable from the controller.
+  string url = 6;
+
+  // PASSIVE only: SHA-256 fingerprint of the worker's TLS certificate (DER
+  // encoding), as 64 hex digits; colons and upper case are accepted. The
+  // controller pins it instead of trusting a CA.
+  string cert_fingerprint = 7;
+
+  reserved 8 to 15;
+}
+
+// EnrollResponse carries the new worker's credentials. The secret is shown
+// exactly once: the worker stores it in its configuration.
+message EnrollResponse {
+  // The worker's ID (UUID).
+  string worker_id = 1;
+
+  // The worker secret. Active workers send it in every link call; the
+  // controller sends it to passive workers. The controller stores it
+  // encrypted.
+  string worker_secret = 2;
+
+  reserved 3 to 15;
+}
+
+// WorkerMode selects which side of the link initiates calls.
+enum WorkerMode {
+  WORKER_MODE_UNSPECIFIED = 0;
+  // The worker calls the controller (ControllerLinkService). Works behind NAT
+  // and without open ports.
+  WORKER_MODE_ACTIVE = 1;
+  // The controller calls the worker (WorkerLinkService) over TLS with a
+  // pinned certificate.
+  WORKER_MODE_PASSIVE = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Events (worker -> controller)
+// ---------------------------------------------------------------------------
+
+// Event is one entry of a worker's outbox. Events are always delivered inside
+// an envelope that carries the worker epoch (ReportRequest.epoch,
+// PullResponse.epoch); seq is scoped to that epoch.
+message Event {
+  // Strictly increasing within an epoch, starting at 1 (the Hello), but not
+  // contiguous: under backlog the worker coalesces a job's Progress events,
+  // removing older ones. The controller processes the events of a request in
+  // seq order and skips every seq it has already stored, so a batch must
+  // start at the worker's oldest unacked event.
+  int64 seq = 1;
+
+  // When the worker produced the event.
+  google.protobuf.Timestamp time = 2;
+
+  reserved 3 to 9;
+
+  // The event payload. New event types are added as new fields here.
+  oneof payload {
+    // First event of every epoch: who the worker is and what it can run.
+    Hello hello = 10;
+    // A job's process was started; the job is now running.
+    JobStarted job_started = 11;
+    // Cumulative progress sample of a running job.
+    Progress progress = 12;
+    // Terminal outcome of a job. Never dropped or merged.
+    JobResult job_result = 13;
+  }
+}
+
+// Hello describes the worker process at the start of an epoch.
+message Hello {
+  // Worker build version (e.g. "v2.0.0" or "dev").
+  string worker_version = 1;
+
+  // Operating system and architecture as reported by Go (GOOS, GOARCH).
+  string os = 2;
+  string arch = 3;
+
+  // Host name of the machine, for display only.
+  string hostname = 4;
+
+  // Versions of the supervised tools the worker resolved (rclone, restic).
+  repeated ToolVersion tools = 5;
+
+  // Job kinds the worker can run (names of JobSpec.operation fields, e.g.
+  // "rclone_transfer").
+  repeated string job_kinds = 6;
+
+  // Maximum number of jobs the worker runs concurrently.
+  int32 max_concurrent_jobs = 7;
+
+  // Local filesystem roots the worker's admin allows jobs to touch. Local
+  // paths in job specs outside these roots are rejected by the worker.
+  repeated string local_roots = 8;
+
+  // Link features this worker implements, e.g. "probe" (it answers
+  // RunProbe and Probe), "restic.v2" (it honours the Milestone 5 restic spec
+  // fields), "restic.delete" (it runs restic_delete_data),
+  // "job.time_limit" (it enforces JobSpec.max_runtime) and "job.hooks" (it
+  // runs JobSpec.hooks). The controller sends a worker only what its
+  // features allow; a worker that reports none is treated as a Milestone 4
+  // worker.
+  repeated string features = 9;
+
+  // Probe operations the worker can run: names of ProbeSpec.op fields (e.g.
+  // "list_local", "restic_ls").
+  repeated string probe_ops = 10;
+
+  // The hooks the worker's operator defined in its configuration, by name:
+  // what a job may name in JobSpec.hooks. Their commands stay on the
+  // worker. Empty for a worker without hooks or without the "job.hooks"
+  // feature.
+  repeated HookInfo hooks = 11;
+
+  reserved 12 to 19;
+}
+
+// ToolVersion identifies a supervised external tool.
+message ToolVersion {
+  // Tool name, e.g. "rclone" or "restic".
+  string name = 1;
+  // Version as reported by the tool, e.g. "v1.75.2" or "0.19.1".
+  string version = 2;
+}
+
+// JobStarted reports that the worker started a job (the job left the
+// worker's local queue): its before hooks run first, then its runner. It
+// does not guarantee that a tool process started: a before hook may fail
+// (HOOK_FAILED), and the runner may still reject the spec (e.g.
+// PATH_NOT_ALLOWED) and report a FAILED JobResult right after. Every job
+// that ran has exactly one JobStarted, before its Progress events and its
+// JobResult.
+message JobStarted {
+  // Controller-assigned job UUID.
+  string job_id = 1;
+
+  reserved 2 to 9;
+}
+
+// Progress is a cumulative progress sample. Rates are derived by the
+// controller from consecutive samples (delta bytes / delta time).
+message Progress {
+  // Controller-assigned job UUID.
+  string job_id = 1;
+
+  // Cumulative counters at the time of the sample.
+  JobStats stats = 2;
+
+  reserved 3 to 9;
+}
+
+// JobStats are cumulative job counters. All counters only grow during a job,
+// except totals, which may grow while the tool discovers more work. Zero
+// totals mean "unknown".
+message JobStats {
+  // Bytes transferred (rclone) or processed (restic) so far.
+  int64 bytes = 1;
+  // Expected total bytes, 0 if unknown.
+  int64 total_bytes = 2;
+
+  // Files transferred or processed so far.
+  int64 files = 3;
+  // Expected total files, 0 if unknown.
+  int64 total_files = 4;
+
+  // Files checked without transfer (rclone checks).
+  int64 checks = 5;
+  // Files deleted at the destination (sync, move sources).
+  int64 deletes = 6;
+  // Files renamed server-side.
+  int64 renames = 7;
+  // Non-fatal errors encountered so far.
+  int64 errors = 8;
+
+  // Wall-clock time since the job's process started.
+  google.protobuf.Duration elapsed = 9;
+
+  reserved 10 to 19;
+}
+
+// JobResult is the terminal outcome of a job on the worker.
+message JobResult {
+  // Controller-assigned job UUID.
+  string job_id = 1;
+
+  // Terminal status.
+  JobResultStatus status = 2;
+
+  // Failure details; unset when status is SUCCEEDED. For CANCELLED, code is
+  // CANCELLED (stopped by a CancelJob command) or WORKER_SHUTDOWN (stopped
+  // because the worker is shutting down) and message gives the cause.
+  JobError error = 3;
+
+  // Final cumulative counters.
+  JobStats stats = 4;
+
+  // Exit code of the tool process; -1 if no process ran or it was killed by a
+  // signal.
+  int32 exit_code = 5;
+
+  // When the job's process started and finished on the worker.
+  google.protobuf.Timestamp started_at = 6;
+  google.protobuf.Timestamp finished_at = 7;
+
+  // Kind-specific output; unset for kinds without output (e.g. transfers)
+  // and for jobs whose operation did not succeed.
+  JobOutput output = 8;
+
+  // Non-fatal problems of an operation that nevertheless succeeded, for
+  // example "3 items could not be read" for a restic backup that exited
+  // with code 3 after creating its snapshot. Scrubbed of secrets, at most
+  // 10 entries of at most 500 bytes each. Empty for a clean run and when
+  // the operation did not succeed (the error carries the reason).
+  //
+  // The output and the warnings are the operation's. A job whose operation
+  // succeeded reports them whatever its status: a hook (HOOK_FAILED), a
+  // cancel or the time limit can still end the job afterwards.
+  repeated string warnings = 9;
+
+  // The hooks the worker ran for the job (JobSpec.hooks), in the order
+  // they ran; hooks that were skipped are not listed. Empty for a job
+  // without hooks.
+  repeated HookRun hook_runs = 10;
+
+  reserved 11 to 19;
+}
+
+// JobOutput is the kind-specific output of a finished job. Field names match
+// the JobSpec.operation field (the job kind) that produces them.
+message JobOutput {
+  reserved 1 to 9;
+
+  oneof output {
+    ResticBackupOutput restic_backup = 21;
+    ResticForgetOutput restic_forget = 22;
+    ResticCheckOutput restic_check = 24;
+    ResticRestoreOutput restic_restore = 25;
+    ResticSnapshotsOutput restic_snapshots = 26;
+    ResticDeleteDataOutput restic_delete_data = 27;
+  }
+}
+
+// JobResultStatus is the terminal status a worker can report. "interrupted"
+// is not reported by workers; the controller derives it during reconcile.
+enum JobResultStatus {
+  JOB_RESULT_STATUS_UNSPECIFIED = 0;
+  // The job completed.
+  JOB_RESULT_STATUS_SUCCEEDED = 1;
+  // The job could not be run or the tool reported a failure.
+  JOB_RESULT_STATUS_FAILED = 2;
+  // The job was stopped by a CancelJob command or worker shutdown. The
+  // controller records CANCELLED if a cancel was requested; otherwise it
+  // queues the job again if it never started (no JobStarted, no
+  // started_at) and records INTERRUPTED if it did.
+  JOB_RESULT_STATUS_CANCELLED = 3;
+}
+
+// JobError describes why a job failed.
+message JobError {
+  // Machine-readable category.
+  JobErrorCode code = 1;
+
+  // Human-readable summary, safe to display (never contains secrets).
+  string message = 2;
+
+  reserved 3 to 9;
+}
+
+// JobErrorCode classifies job failures.
+enum JobErrorCode {
+  JOB_ERROR_CODE_UNSPECIFIED = 0;
+  // The spec failed validation on the worker.
+  JOB_ERROR_CODE_INVALID_SPEC = 1;
+  // The worker has no runner for the job kind.
+  JOB_ERROR_CODE_UNSUPPORTED_KIND = 2;
+  // A local path is outside the worker's local_roots.
+  JOB_ERROR_CODE_PATH_NOT_ALLOWED = 3;
+  // The required tool (rclone, restic) is missing or unusable.
+  JOB_ERROR_CODE_TOOL_UNAVAILABLE = 4;
+  // The tool ran and reported failure (non-zero exit).
+  JOB_ERROR_CODE_EXECUTION_FAILED = 5;
+  // An unexpected worker-side error.
+  JOB_ERROR_CODE_INTERNAL = 6;
+  // A source or destination (directory, file, repository) does not exist.
+  JOB_ERROR_CODE_NOT_FOUND = 7;
+  // The tool reported a temporary failure that retrying the job may fix
+  // (network errors, rate limits).
+  JOB_ERROR_CODE_TEMPORARY = 8;
+  // The job stopped because a limit from its spec was reached (e.g. rclone
+  // --max-transfer or --max-duration); the work done so far is kept.
+  JOB_ERROR_CODE_LIMIT_REACHED = 9;
+  // The restic repository does not exist at the given location (restic exit
+  // code 10). Run restic_init first or fix the location.
+  JOB_ERROR_CODE_REPOSITORY_NOT_FOUND = 10;
+  // The restic repository is locked by another operation (restic exit code
+  // 11). The controller serializes jobs per repository, so this means a stale
+  // lock or a client outside Syncr; retrying later may succeed.
+  JOB_ERROR_CODE_REPOSITORY_LOCKED = 11;
+  // The restic repository password is wrong (restic exit code 12). Retrying
+  // cannot succeed.
+  JOB_ERROR_CODE_WRONG_PASSWORD = 12;
+
+  // The job was stopped by a CancelJob command (JobResult status
+  // CANCELLED).
+  JOB_ERROR_CODE_CANCELLED = 13;
+  // The job was stopped because the worker is shutting down (JobResult
+  // status CANCELLED). Unless a cancel had been requested, the controller
+  // queues a job that never started again and records one that started as
+  // INTERRUPTED; it also uses this code for a CANCELLED result without a
+  // code that nobody asked for.
+  JOB_ERROR_CODE_WORKER_SHUTDOWN = 14;
+  // restic init found a repository at the location already (also a probe
+  // result: ProbeResticInit).
+  JOB_ERROR_CODE_ALREADY_EXISTS = 15;
+  // Probes only: the worker is running too many probes at once; retry
+  // later.
+  JOB_ERROR_CODE_BUSY = 16;
+  // Probes only: the probe's timeout passed before it finished.
+  JOB_ERROR_CODE_TIMEOUT = 17;
+  // restic_delete_data: the location holds another repository than the
+  // expected one (its config ID differs); nothing was deleted.
+  JOB_ERROR_CODE_REPOSITORY_MISMATCH = 18;
+
+  // Codes 20 to 26 are set by the controller, never by workers.
+
+  // The worker did not accept the job within the controller's dispatch
+  // timeout (it was offline or unreachable). Status FAILED.
+  JOB_ERROR_CODE_DISPATCH_TIMEOUT = 20;
+  // The worker restarted (new epoch) while the job was running, so its
+  // outcome is unknown. Status INTERRUPTED.
+  JOB_ERROR_CODE_WORKER_RESTARTED = 21;
+  // The worker no longer holds the job but never reported its result, or
+  // it has been out of contact for longer than the controller's
+  // workers.lost_after. Status INTERRUPTED.
+  JOB_ERROR_CODE_WORKER_LOST = 22;
+  // The worker was removed before the job finished. Status FAILED (never
+  // dispatched) or INTERRUPTED.
+  JOB_ERROR_CODE_WORKER_REMOVED = 23;
+  // A remote the job references was deleted, or can no longer be used by
+  // the job's owner, before the job was dispatched. Status FAILED.
+  JOB_ERROR_CODE_REMOTE_UNAVAILABLE = 24;
+  // The restic repository the job uses was deleted, or is not available to
+  // the job's owner, before the job was dispatched. Status FAILED.
+  JOB_ERROR_CODE_REPOSITORY_UNAVAILABLE = 25;
+  // The worker lacks a link feature the job's kind requires (it must be
+  // upgraded), checked when the job would be dispatched. Status FAILED.
+  JOB_ERROR_CODE_WORKER_OUTDATED = 26;
+
+  // Set by workers (Milestone 6): the job's time limit
+  // (JobSpec.max_runtime) was reached, so the worker stopped it the way it
+  // stops a cancelled job. Status FAILED; the work done so far is kept.
+  JOB_ERROR_CODE_TIME_LIMIT = 27;
+
+  // Set by workers: a hook of the job (JobSpec.hooks) exited unsuccessfully,
+  // ran into its timeout or could not be started. Status FAILED. When it
+  // was a "before" hook, the operation never ran; when it was an
+  // "on_success" or "after" hook, the operation had succeeded and its
+  // output is kept. JobResult.hook_runs has the details.
+  JOB_ERROR_CODE_HOOK_FAILED = 28;
+}
+
+// WorkerState is a snapshot (not an event) of the jobs a worker holds,
+// consistent with the events of the envelope that carries it: it lists every
+// job the worker holds now (queued locally or running) plus every job whose
+// JobResult is still in the outbox but not among the envelope's events, and
+// never a job whose JobResult is among them. So a job missing from jobs has
+// its JobResult in the envelope or acknowledged before.
+//
+// The controller reconciles it with its own view (see
+// internal/controller/dispatch): listed jobs it considers finished or does
+// not know are cancelled; a listed job it still considers queued counts as
+// accepted; a job it considers running in this epoch but missing here
+// becomes "interrupted", provided the snapshot is current (last_seq equals
+// the highest seq the controller has stored).
+message WorkerState {
+  // Jobs accepted by the worker that have not finished yet (see above).
+  repeated ActiveJob jobs = 1;
+
+  // Seq of the last event this snapshot accounts for: the last event of the
+  // envelope's events or, when it carries none, the last seq the worker has
+  // assigned in its epoch. It lets the controller recognize a stale snapshot
+  // (a delayed or retried request). Zero means unknown: the controller then
+  // uses the envelope's last event and, for an envelope without events,
+  // skips the rules that need it.
+  int64 last_seq = 2;
+
+  // Unacknowledged events in the worker's outbox, including the envelope's.
+  // Informational (shown to admins, logged when growing).
+  int32 outbox_backlog = 3;
+
+  // True while the outbox is above its high-water mark: the worker admits no
+  // new jobs until the controller acknowledges events.
+  bool outbox_saturated = 4;
+
+  reserved 5 to 9;
+}
+
+// ActiveJob is a job accepted by the worker that has not finished yet (or
+// whose JobResult is not in the envelope yet).
+message ActiveJob {
+  // Controller-assigned job UUID.
+  string job_id = 1;
+
+  // When the job was handed to its runner (see JobStarted); unset while the
+  // job waits in the worker's local queue for a free slot.
+  google.protobuf.Timestamp started_at = 2;
+
+  reserved 3 to 9;
+}
+
+// ---------------------------------------------------------------------------
+// Commands (controller -> worker)
+// ---------------------------------------------------------------------------
+
+// Command is an instruction for a worker. Commands are redelivered until
+// acknowledged, so handling must be idempotent.
+message Command {
+  // Controller-assigned command ID, echoed verbatim in CommandAck. Opaque to
+  // workers (do not parse it); at most 128 bytes. The controller derives it
+  // from the job, so a redelivered command keeps its ID.
+  string id = 1;
+
+  reserved 2 to 9;
+
+  oneof command {
+    StartJob start_job = 10;
+    CancelJob cancel_job = 11;
+    // Active mode: run a probe outside the job slots and deliver its result
+    // with ControllerLinkService.CompleteProbe. Sent only to workers whose
+    // Hello lists the "probe" feature.
+    RunProbe run_probe = 12;
+    // Active mode: stop a probe of an earlier run_probe (its caller went
+    // away). Cancelling an unknown or finished probe is acked and ignored.
+    CancelProbe cancel_probe = 13;
+  }
+}
+
+// CommandAck acknowledges that a worker accepted a command for processing.
+// Acceptance is not success: job outcomes are reported as events (an invalid
+// StartJob is acked and then reported as a failed JobResult).
+message CommandAck {
+  // Command.id being acknowledged.
+  string command_id = 1;
+
+  reserved 2 to 9;
+}
+
+// StartJob asks the worker to run a job. A StartJob for a job_id the worker
+// already knows (running or finished in this epoch) is acked and ignored. A
+// worker that is shutting down does not ack it and reports nothing, so the
+// job stays queued for the worker's next process.
+message StartJob {
+  // Controller-assigned job UUID.
+  string job_id = 1;
+
+  // What to run. Contains secrets; never persisted or logged by the worker.
+  JobSpec spec = 2;
+
+  reserved 3 to 9;
+}
+
+// CancelJob asks the worker to stop a job. Cancelling an unknown or finished
+// job is acked and ignored.
+message CancelJob {
+  // Controller-assigned job UUID.
+  string job_id = 1;
+
+  reserved 2 to 9;
+}
+
+// ---------------------------------------------------------------------------
+// Job specs
+// ---------------------------------------------------------------------------
+
+// JobSpec is a self-contained execution spec built by the controller at
+// dispatch time. It may contain secrets (remote credentials, repository
+// passwords); it is sent once over the authenticated link, held only in worker
+// memory, and never persisted or logged. The controller stores its own
+// secret-free job definition instead.
+message JobSpec {
+  // Remotes referenced by alias from locations in the operation. They exist
+  // only for this job's child process, as RCLONE_CONFIG_<ALIAS>_* environment
+  // variables.
+  repeated RemoteDefinition remotes = 1;
+
+  // Hard time limit: this long after the worker started the job (JobStarted,
+  // measured on its monotonic clock, not from queueing; before and
+  // on_success hooks count), it stops what runs as it stops a cancelled job
+  // (interrupt, grace period, kill, and the rest of the process tree) and
+  // reports FAILED with TIME_LIMIT. Unset or zero means none. Sent only to
+  // workers whose Hello lists the "job.time_limit" feature.
+  google.protobuf.Duration max_runtime = 2;
+
+  // Hooks of the worker to run around the operation, by name. Sent only to
+  // workers whose Hello lists the "job.hooks" feature; a name the worker
+  // does not define fails the job with INVALID_SPEC before anything runs.
+  JobHooks hooks = 3;
+
+  reserved 4 to 9;
+
+  // The operation to run. The name of the set field is the job kind (e.g.
+  // "rclone_transfer", "restic_backup") that selects the worker runner.
+  oneof operation {
+    RcloneTransfer rclone_transfer = 10;
+
+    ResticInit restic_init = 20;
+    ResticBackup restic_backup = 21;
+    ResticForget restic_forget = 22;
+    ResticPrune restic_prune = 23;
+    ResticCheck restic_check = 24;
+    ResticRestore restic_restore = 25;
+    ResticSnapshots restic_snapshots = 26;
+    ResticDeleteData restic_delete_data = 27;
+  }
+}
+
+// JobHooks names the hooks a job runs on its worker around its operation.
+//
+// A hook is a command the worker's operator defined in the worker's
+// configuration under a name (docs/hooks.md). A job only ever names hooks:
+// no command, argument or environment value travels from the controller, so
+// whoever may run jobs on a worker can run exactly what its operator
+// prepared, and nothing else.
+//
+// Each list runs in order, one hook at a time, in the job's run slot:
+//
+//   - before: before the operation. A hook that fails (it exits
+//     unsuccessfully, runs into its timeout or cannot be started) fails the
+//     job with HOOK_FAILED; the hooks after it and the operation are
+//     skipped.
+//   - on_success: after the operation succeeded. A hook that fails fails
+//     the job with HOOK_FAILED and skips the hooks after it.
+//   - on_failure: after the job failed, whatever failed: a before hook,
+//     the operation, an on_success hook or the time limit. Not after a
+//     cancel or a worker shutdown. Every hook is run; a failure is recorded
+//     and changes nothing else.
+//   - after: last, whatever happened, also after a cancel, the time limit
+//     or while the worker shuts down. Every hook is run. A failure fails a
+//     job that had succeeded so far with HOOK_FAILED; a job that had
+//     already failed or was cancelled keeps its outcome.
+//
+// A cancel, the job's time limit (which runs from the job's start, hooks
+// included) or a worker shutdown stops a running before or on_success hook
+// as it stops the operation. on_failure and after hooks clean up, so
+// neither a cancel nor the time limit stops them: each is bounded by its
+// own timeout (HookInfo.timeout). A worker that shuts down still runs the
+// after hooks, for as long as its stop budget lasts; a worker that is
+// killed runs none.
+//
+// At most 8 names per list, each a hook name (1 to 63 characters: lower-case
+// letters, digits, ".", "_" and "-", starting with a letter or digit),
+// without duplicates within a list.
+message JobHooks {
+  // Hooks run before the operation.
+  repeated string before = 1;
+
+  // Hooks run after the operation succeeded.
+  repeated string on_success = 2;
+
+  // Hooks run after the job failed.
+  repeated string on_failure = 3;
+
+  // Hooks always run last.
+  repeated string after = 4;
+
+  reserved 5 to 9;
+}
+
+// HookInfo describes a hook a worker defines, without its command.
+message HookInfo {
+  // The hook's name, unique on the worker.
+  string name = 1;
+
+  // What the hook does, as its operator described it; may be empty. At most
+  // 200 characters.
+  string description = 2;
+
+  // How long one run may take before the worker stops it.
+  google.protobuf.Duration timeout = 3;
+
+  reserved 4 to 9;
+}
+
+// HookPhase is when a hook runs (the JobHooks list that names it).
+enum HookPhase {
+  HOOK_PHASE_UNSPECIFIED = 0;
+  HOOK_PHASE_BEFORE = 1;
+  HOOK_PHASE_ON_SUCCESS = 2;
+  HOOK_PHASE_ON_FAILURE = 3;
+  HOOK_PHASE_AFTER = 4;
+}
+
+// HookStatus is how one run of a hook ended.
+enum HookStatus {
+  HOOK_STATUS_UNSPECIFIED = 0;
+  // The command exited with code 0.
+  HOOK_STATUS_SUCCEEDED = 1;
+  // The command exited with another code or could not be started.
+  HOOK_STATUS_FAILED = 2;
+  // The worker stopped the command at the hook's timeout.
+  HOOK_STATUS_TIMED_OUT = 3;
+  // The worker stopped the command because the job was cancelled, reached
+  // its time limit or the worker shut down.
+  HOOK_STATUS_CANCELLED = 4;
+}
+
+// HookRun is one run of a hook for a job.
+message HookRun {
+  // The hook's name.
+  string name = 1;
+
+  // The phase it ran in.
+  HookPhase phase = 2;
+
+  // How it ended.
+  HookStatus status = 3;
+
+  // Exit code of the command; -1 if it did not start or was killed by a
+  // signal.
+  int32 exit_code = 4;
+
+  // When the command was started (worker clock) and how long it ran.
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Duration duration = 6;
+
+  // Why the run did not succeed, for people, e.g. "exited with code 3" or
+  // "timed out after 10m0s"; empty for a run that succeeded.
+  string message = 7;
+
+  // The end of what the command printed (standard output and standard
+  // error, in the order the worker read them), as valid UTF-8, at most
+  // 4096 bytes. Hooks are the operator's own commands: the worker cannot
+  // know their secrets, so it shows the output as it is.
+  string output = 8;
+
+  // Whether the command printed more than output holds.
+  bool output_truncated = 9;
+
+  reserved 10 to 19;
+}
+
+// RemoteDefinition is a typed rclone remote. Remotes are never connection
+// strings: options are passed to the child process as environment variables,
+// so no value is ever parsed as part of a path or command line.
+message RemoteDefinition {
+  // Alias used to reference the remote from locations and from other remotes
+  // (e.g. union upstreams). Unique within a JobSpec; must match
+  // ^[a-z][a-z0-9_]{1,62}$ so it maps cleanly to an environment variable name
+  // and is never mistaken for a Windows drive letter. Within one JobSpec no
+  // alias may be another alias followed by "_" (e.g. "s3" and "s3_eu"),
+  // because their environment variable names would overlap.
+  string alias = 1;
+
+  // rclone backend type, e.g. "s3", "sftp", "union", "b2". Workers reject
+  // "local" (local paths use an empty Location.remote and are checked against
+  // local_roots) and wrapping backends other than "union".
+  string backend_type = 2;
+
+  // Non-secret options keyed by rclone option name (e.g. "provider",
+  // "endpoint", "host"). Values are final rclone values.
+  map<string, string> options = 3;
+
+  // Secret options keyed by rclone option name (e.g. "secret_access_key",
+  // "pass"). Values are plain; keys listed in obscure_keys are obscured by
+  // the worker before they reach rclone. Workers keep them in memory only and
+  // never log them.
+  map<string, string> secrets = 4;
+
+  // Keys of secrets that rclone expects in its "obscured" form (e.g. "pass"
+  // for sftp, ftp, webdav and smb). Each key must be present in secrets.
+  repeated string obscure_keys = 5;
+
+  // Upstreams of a "union" remote, in order. Required (at least two) when
+  // backend_type is "union" and forbidden otherwise; the "upstreams" option
+  // must not be set.
+  repeated UnionUpstream union_upstreams = 6;
+
+  reserved 7 to 9;
+}
+
+// UnionUpstream is one member of a union remote.
+message UnionUpstream {
+  // Where the upstream lives: the alias of another, non-union remote in the
+  // same JobSpec plus a path on it, or (empty remote) an absolute local path
+  // inside the worker's local_roots.
+  Location location = 1;
+
+  // How the union may use the upstream.
+  UnionUpstreamMode mode = 2;
+
+  reserved 3 to 9;
+}
+
+// UnionUpstreamMode restricts what a union does with an upstream.
+enum UnionUpstreamMode {
+  // Same as READ_WRITE.
+  UNION_UPSTREAM_MODE_UNSPECIFIED = 0;
+  // Files may be read, changed and created (rclone's default).
+  UNION_UPSTREAM_MODE_READ_WRITE = 1;
+  // Read only (rclone ":ro").
+  UNION_UPSTREAM_MODE_READ_ONLY = 2;
+  // Existing files may be changed, but no new files are created (rclone
+  // ":nc").
+  UNION_UPSTREAM_MODE_NO_CREATE = 3;
+}
+
+// Location is a path on a remote or on the worker's local filesystem.
+message Location {
+  // Alias of a RemoteDefinition in the same JobSpec. Empty means the worker's
+  // local filesystem, in which case path must be absolute and inside the
+  // worker's local_roots.
+  string remote = 1;
+
+  // Path within the remote (e.g. "bucket/prefix" for S3) or an absolute local
+  // path. Never contains a remote prefix such as "alias:".
+  string path = 2;
+
+  reserved 3 to 9;
+}
+
+// RcloneTransfer copies, syncs or moves files between two locations.
+message RcloneTransfer {
+  // Transfer mode.
+  RcloneTransferMode mode = 1;
+
+  // Where files are read from.
+  Location source = 2;
+
+  // Where files are written to.
+  Location destination = 3;
+
+  // Typed allowlist of rclone flags. Unset fields use rclone defaults.
+  RcloneTransferOptions options = 4;
+
+  reserved 5 to 9;
+}
+
+// RcloneTransferMode selects the rclone command.
+enum RcloneTransferMode {
+  RCLONE_TRANSFER_MODE_UNSPECIFIED = 0;
+  // rclone copy: copy new and changed files; never deletes.
+  RCLONE_TRANSFER_MODE_COPY = 1;
+  // rclone sync: make destination identical to source, deleting extra files.
+  RCLONE_TRANSFER_MODE_SYNC = 2;
+  // rclone move: copy, then delete transferred files from the source.
+  RCLONE_TRANSFER_MODE_MOVE = 3;
+}
+
+// RcloneTransferOptions is the typed allowlist of rclone flags. Free-form
+// flags are deliberately not supported; each field maps to exactly one flag.
+message RcloneTransferOptions {
+  // --transfers: number of parallel file transfers.
+  optional int32 transfers = 1;
+  // --checkers: number of parallel checkers.
+  optional int32 checkers = 2;
+  // --bwlimit in bytes per second; 0 or unset means unlimited.
+  optional int64 bandwidth_limit_bytes_per_second = 3;
+  // --dry-run: report what would happen without changing anything.
+  bool dry_run = 4;
+  // --checksum: compare by checksum instead of modtime and size.
+  bool checksum = 5;
+  // --size-only: compare by size only. Mutually exclusive with checksum.
+  bool size_only = 6;
+  // --ignore-existing: skip files that exist on the destination.
+  bool ignore_existing = 7;
+  // --update: skip files that are newer on the destination.
+  bool update = 8;
+  // --create-empty-src-dirs (copy, sync, move).
+  bool create_empty_src_dirs = 9;
+  // --delete-empty-src-dirs (move only).
+  bool delete_empty_src_dirs = 10;
+  // --track-renames (sync only).
+  bool track_renames = 11;
+  // --fast-list: use recursive listing where the backend supports it.
+  bool fast_list = 12;
+  // --max-transfer in bytes; the job stops once reached.
+  optional int64 max_transfer_bytes = 13;
+  // --max-duration; the job stops starting new transfers once reached.
+  google.protobuf.Duration max_duration = 14;
+  // --retries: retries of the whole operation.
+  optional int32 retries = 15;
+  // --low-level-retries: retries of individual low-level operations.
+  optional int32 low_level_retries = 16;
+  // --filter rules, applied in order.
+  repeated FilterRule filters = 17;
+
+  reserved 18 to 49;
+}
+
+// FilterRule is one ordered rclone filter rule ("+ pattern" or "- pattern").
+message FilterRule {
+  // Whether matching paths are included or excluded.
+  FilterAction action = 1;
+  // rclone filter pattern, e.g. "*.tmp" or "/photos/**".
+  string pattern = 2;
+}
+
+// FilterAction is the effect of a FilterRule.
+enum FilterAction {
+  FILTER_ACTION_UNSPECIFIED = 0;
+  FILTER_ACTION_INCLUDE = 1;
+  FILTER_ACTION_EXCLUDE = 2;
+}
+
+// ResticRepository identifies a restic repository and its password.
+message ResticRepository {
+  // Repository location. A remote alias becomes "rclone:<alias>:<path>", so
+  // every rclone remote type works as a repository; an empty remote is a
+  // local repository path inside the worker's local_roots.
+  Location location = 1;
+
+  // Repository password (secret). Passed to restic through the child's
+  // environment only.
+  string password = 2;
+
+  reserved 3 to 9;
+}
+
+// ResticInit creates a new repository.
+message ResticInit {
+  ResticRepository repository = 1;
+
+  reserved 2 to 9;
+}
+
+// ResticBackup backs up local paths.
+message ResticBackup {
+  ResticRepository repository = 1;
+
+  // Absolute local paths to back up; each must be inside local_roots.
+  repeated string paths = 2;
+
+  // --exclude patterns.
+  repeated string excludes = 3;
+
+  // --tag values attached to the snapshot.
+  repeated string tags = 4;
+
+  // --host override; empty uses the worker's host name.
+  string host = 5;
+
+  // --use-fs-snapshot (Windows VSS). Setting it on a worker that is not
+  // running on Windows is an error (INVALID_SPEC), not silently ignored: the
+  // caller asked for a consistent snapshot that cannot be provided.
+  bool use_fs_snapshot = 6;
+
+  // --exclude-caches: skip directories containing a CACHEDIR.TAG.
+  bool exclude_caches = 7;
+
+  // --one-file-system: do not cross filesystem boundaries.
+  bool one_file_system = 8;
+
+  // --exclude-larger-than in bytes.
+  optional int64 exclude_larger_than_bytes = 9;
+
+  // --dry-run.
+  bool dry_run = 10;
+
+  reserved 11 to 29;
+}
+
+// ResticBackupOutput is the output of a successful backup.
+message ResticBackupOutput {
+  // ID of the created snapshot; empty for dry runs.
+  string snapshot_id = 1;
+
+  // Bytes added to the repository (after deduplication and compression).
+  int64 data_added_bytes = 2;
+
+  // Files new, changed and unmodified relative to the parent snapshot.
+  int64 files_new = 3;
+  int64 files_changed = 4;
+  int64 files_unmodified = 5;
+
+  // Directories new, changed and unmodified relative to the parent
+  // snapshot.
+  int64 dirs_new = 6;
+  int64 dirs_changed = 7;
+  int64 dirs_unmodified = 8;
+
+  // Bytes added to the repository after compression (what the backend
+  // stores).
+  int64 data_added_packed_bytes = 9;
+
+  // Files and bytes the backup processed (read or found unchanged).
+  int64 total_files_processed = 10;
+  int64 total_bytes_processed = 11;
+
+  reserved 12 to 19;
+}
+
+// ResticRetentionPolicy maps to restic forget --keep-* flags. Zero means the
+// rule is not used.
+message ResticRetentionPolicy {
+  int32 keep_last = 1;
+  int32 keep_hourly = 2;
+  int32 keep_daily = 3;
+  int32 keep_weekly = 4;
+  int32 keep_monthly = 5;
+  int32 keep_yearly = 6;
+  // --keep-tag: keep snapshots with any of these tags.
+  repeated string keep_tags = 7;
+  // --keep-within: keep snapshots newer than this duration before the
+  // newest snapshot, in restic's syntax (e.g. "1y6m", "14d"); empty means
+  // the rule is not used.
+  string keep_within = 8;
+
+  reserved 9 to 19;
+}
+
+// ResticForget applies a retention policy, optionally pruning data.
+message ResticForget {
+  ResticRepository repository = 1;
+
+  // Which snapshots to keep. At least one rule must be set.
+  ResticRetentionPolicy policy = 2;
+
+  // --prune: remove unreferenced data after forgetting.
+  bool prune = 3;
+
+  // Only consider snapshots with these tags (--tag).
+  repeated string tags = 4;
+
+  // Only consider snapshots of this host (--host); empty means all hosts.
+  string host = 5;
+
+  // --dry-run.
+  bool dry_run = 6;
+
+  reserved 7 to 19;
+}
+
+// ResticForgetOutput lists the snapshots removed by forget.
+message ResticForgetOutput {
+  // IDs of the snapshots removed. When ResticForget.dry_run is set nothing was
+  // removed and this lists the snapshots that WOULD be removed.
+  repeated string removed_snapshot_ids = 1;
+
+  // How many snapshots the policy kept (summed over restic's groups).
+  int32 kept_count = 2;
+
+  reserved 3 to 9;
+}
+
+// ResticPrune removes unreferenced data from a repository.
+message ResticPrune {
+  ResticRepository repository = 1;
+
+  // --dry-run.
+  bool dry_run = 2;
+
+  reserved 3 to 19;
+}
+
+// ResticCheck verifies repository integrity.
+message ResticCheck {
+  ResticRepository repository = 1;
+
+  // --read-data-subset as a percentage (1-100) of pack data to read and
+  // verify; 0 checks only the structure.
+  int32 read_data_percent = 2;
+
+  reserved 3 to 19;
+}
+
+// ResticCheckOutput is the output of a check that ran to completion. A check
+// that found errors fails (EXECUTION_FAILED); its output is not set.
+message ResticCheckOutput {
+  // Errors restic reported.
+  int64 num_errors = 1;
+
+  // restic suggests running "restic repair index".
+  bool suggest_repair_index = 2;
+
+  // restic suggests running prune.
+  bool suggest_prune = 3;
+
+  // Pack files restic found damaged.
+  repeated string broken_packs = 4;
+
+  // The spec's read_data_percent (how much pack data was read).
+  int32 read_data_percent = 5;
+
+  reserved 6 to 9;
+}
+
+// ResticRestore restores a snapshot into a local directory.
+message ResticRestore {
+  ResticRepository repository = 1;
+
+  // Snapshot ID (full or short) or "latest".
+  string snapshot_id = 2;
+
+  // Absolute local target directory inside local_roots.
+  string target = 3;
+
+  // --include patterns; empty restores everything.
+  repeated string includes = 4;
+
+  // --exclude patterns.
+  repeated string excludes = 5;
+
+  // --verify: read restored files back and verify their content.
+  bool verify = 6;
+
+  // Restore only the contents of this folder of the snapshot (a tree path
+  // such as "/srv/x" or "/C/Users/x") directly into target: the positional
+  // argument becomes "<snapshot_id>:<subfolder>". Empty restores the whole
+  // tree.
+  string subfolder = 7;
+
+  // --overwrite. UNSPECIFIED adds no flag (restic's default, ALWAYS); the
+  // controller always sets it.
+  ResticRestoreOverwrite overwrite = 8;
+
+  // Literal snapshot tree paths to restore, with their contents. The worker
+  // turns each into an --include pattern for its own OS (escaping glob
+  // characters); empty restores everything.
+  repeated string paths = 9;
+
+  reserved 10 to 19;
+}
+
+// ResticRestoreOverwrite is restic restore's --overwrite behavior for files
+// that exist at the target.
+enum ResticRestoreOverwrite {
+  // No flag: restic's default (ALWAYS).
+  RESTIC_RESTORE_OVERWRITE_UNSPECIFIED = 0;
+  // Replace every existing file.
+  RESTIC_RESTORE_OVERWRITE_ALWAYS = 1;
+  // Replace existing files whose content differs.
+  RESTIC_RESTORE_OVERWRITE_IF_CHANGED = 2;
+  // Replace existing files that are older than the snapshot's.
+  RESTIC_RESTORE_OVERWRITE_IF_NEWER = 3;
+  // Keep every existing file.
+  RESTIC_RESTORE_OVERWRITE_NEVER = 4;
+}
+
+// ResticRestoreOutput is restic's restore summary.
+message ResticRestoreOutput {
+  // Files in the selection, and those restored, skipped (kept by the
+  // overwrite behavior or already identical) and deleted.
+  int64 total_files = 1;
+  int64 files_restored = 2;
+  int64 files_skipped = 3;
+  int64 files_deleted = 4;
+
+  // Bytes in the selection, restored and skipped.
+  int64 total_bytes = 5;
+  int64 bytes_restored = 6;
+  int64 bytes_skipped = 7;
+
+  reserved 8 to 9;
+}
+
+// ResticSnapshots lists the snapshots of a repository.
+message ResticSnapshots {
+  ResticRepository repository = 1;
+
+  // Only snapshots with these tags (--tag).
+  repeated string tags = 2;
+
+  // Only snapshots of this host (--host).
+  string host = 3;
+
+  reserved 4 to 19;
+}
+
+// ResticSnapshotsOutput is the result of ResticSnapshots.
+message ResticSnapshotsOutput {
+  repeated ResticSnapshot snapshots = 1;
+
+  // Only the newest snapshots are listed (the probe's max_snapshots was
+  // reached).
+  bool truncated = 2;
+
+  reserved 3 to 9;
+}
+
+// ResticSnapshot summarizes one snapshot.
+message ResticSnapshot {
+  // Full snapshot ID.
+  string id = 1;
+  // When the snapshot was taken.
+  google.protobuf.Timestamp time = 2;
+  // Host the snapshot was taken on.
+  string host = 3;
+  // Backed-up paths.
+  repeated string paths = 4;
+  // Tags attached to the snapshot.
+  repeated string tags = 5;
+  // ID of the parent snapshot the backup compared against; empty if none.
+  string parent = 6;
+  // User the backup ran as.
+  string username = 7;
+  // restic's summary of the backup that created the snapshot (restic 0.17
+  // and later); unset if restic recorded none.
+  ResticSnapshotSummary summary = 8;
+  // Version of the restic that created the snapshot.
+  string program_version = 9;
+
+  reserved 10 to 19;
+}
+
+// ResticSnapshotSummary is the summary restic stores in a snapshot.
+message ResticSnapshotSummary {
+  // When the backup started and ended.
+  google.protobuf.Timestamp backup_start = 1;
+  google.protobuf.Timestamp backup_end = 2;
+
+  // Files and directories new, changed and unmodified relative to the
+  // parent snapshot.
+  int64 files_new = 3;
+  int64 files_changed = 4;
+  int64 files_unmodified = 5;
+  int64 dirs_new = 6;
+  int64 dirs_changed = 7;
+  int64 dirs_unmodified = 8;
+
+  // Blobs added.
+  int64 data_blobs = 9;
+  int64 tree_blobs = 10;
+
+  // Bytes added to the repository, before and after compression.
+  int64 data_added_bytes = 11;
+  int64 data_added_packed_bytes = 12;
+
+  // Files and bytes the backup processed.
+  int64 total_files_processed = 13;
+  int64 total_bytes_processed = 14;
+
+  reserved 15 to 19;
+}
+
+// ResticDeleteData deletes restic's own files at the repository's location,
+// after verifying that the location holds the expected repository: config,
+// and the files named like restic's in its folders (keys/, locks/,
+// snapshots/ and index/ hold files named by 64 lower-case hex digits,
+// data/ such files in sub-folders named by 2 hex digits). Anything else at
+// the location or inside those folders is kept, and reported as a warning
+// when it is inside them. A folder is removed only when it is empty. The
+// directory itself is removed only if remove_directory is set and it is
+// empty afterwards; a remote's root is never removed.
+message ResticDeleteData {
+  // The repository to delete, with its password (to verify it).
+  ResticRepository repository = 1;
+
+  // The repository's config ID (64 hex digits) as the controller stored it.
+  // A location with another ID fails with REPOSITORY_MISMATCH and nothing
+  // is deleted.
+  string expected_restic_id = 2;
+
+  // Remove the repository's directory if it is empty afterwards. The
+  // controller sets it unless the repository is at the remote's root.
+  bool remove_directory = 3;
+
+  // An earlier deletion of this repository ran on this worker and deleted
+  // files at this location. Only then does a location without restic's
+  // files succeed with already_gone, and a config that no key opens while
+  // keys/ holds none get deleted (that attempt stopped between keys/ and
+  // config). Without it both fail and nothing is deleted: a location
+  // without restic's files is REPOSITORY_NOT_FOUND (the wrong worker, or
+  // changed remote settings).
+  bool resume = 4;
+
+  reserved 5 to 19;
+}
+
+// ResticDeleteDataOutput is the output of a successful restic_delete_data.
+message ResticDeleteDataOutput {
+  // Objects (files) deleted.
+  int64 deleted_objects = 1;
+
+  // The parts of the repository removed, in order: "locks", "snapshots",
+  // "index", "data", "keys", "config".
+  repeated string removed_parts = 2;
+
+  // The repository's directory was removed (it was empty afterwards).
+  bool directory_removed = 3;
+
+  // Nothing was left to delete: an earlier attempt had deleted everything
+  // (only with ResticDeleteData.resume).
+  bool already_gone = 4;
+
+  reserved 5 to 9;
+}
+
+// ---------------------------------------------------------------------------
+// Probes (Milestone 5)
+// ---------------------------------------------------------------------------
+//
+// A probe is a short, synchronous request a worker answers outside its job
+// slots: listing a folder, testing a remote, reading a restic repository.
+// Probes are ephemeral: nothing about them is stored on either side. In
+// passive mode the controller calls WorkerLinkService.Probe; in active mode
+// it sends Command.run_probe and the worker answers with
+// ControllerLinkService.CompleteProbe. Probes read restic repositories with
+// --no-lock and never conflict with jobs.
+
+// RunProbe asks the worker to run a probe.
+message RunProbe {
+  // Controller-assigned probe ID (UUID), echoed in ProbeResult. Workers
+  // deduplicate by it.
+  string probe_id = 1;
+
+  // What to run. Contains secrets; never persisted or logged.
+  ProbeSpec spec = 2;
+
+  // How long the probe may run; unset means the worker's default (30s).
+  // Workers cap it (90s).
+  google.protobuf.Duration timeout = 3;
+
+  reserved 4 to 9;
+}
+
+// CancelProbe asks the worker to stop a probe.
+message CancelProbe {
+  // RunProbe.probe_id of the probe to stop.
+  string probe_id = 1;
+
+  reserved 2 to 9;
+}
+
+// ProbeRequest is a passive-mode probe call.
+message ProbeRequest {
+  RunProbe probe = 1;
+
+  reserved 2 to 9;
+}
+
+// ProbeResponse carries the probe's result.
+message ProbeResponse {
+  ProbeResult result = 1;
+
+  reserved 2 to 9;
+}
+
+// CompleteProbeRequest delivers the result of an active-mode probe.
+message CompleteProbeRequest {
+  // Epoch of the worker process that ran the probe.
+  string epoch = 1;
+
+  // The result; result.probe_id names the probe.
+  ProbeResult result = 2;
+
+  reserved 3 to 9;
+}
+
+// CompleteProbeResponse is empty.
+message CompleteProbeResponse {
+  reserved 1 to 9;
+}
+
+// ProbeSpec is built by the controller at request time, like a JobSpec. It
+// contains secrets; it is never persisted or logged.
+message ProbeSpec {
+  // Remotes referenced by alias from the operation (see JobSpec.remotes).
+  repeated RemoteDefinition remotes = 1;
+
+  reserved 2 to 9;
+
+  // The operation. The name of the set field is the probe op (Hello
+  // probe_ops).
+  oneof op {
+    ProbeListLocal list_local = 10;
+    ProbeListRemote list_remote = 11;
+    ProbeAbout about = 12;
+    ProbeResticSnapshots restic_snapshots = 13;
+    ProbeResticLs restic_ls = 14;
+    ProbeResticInit restic_init = 15;
+    ProbeResticConfig restic_config = 16;
+    // Milestone 6: an SFTP server's host keys, fetched by the worker itself
+    // (no tool, no remote).
+    ProbeSftpHostKeys sftp_host_keys = 17;
+  }
+}
+
+// ProbeListLocal lists a folder on the worker's filesystem (Go, no tool).
+message ProbeListLocal {
+  // Absolute local path inside the worker's local_roots; empty lists the
+  // local roots themselves.
+  string path = 1;
+
+  // List directories only.
+  bool dirs_only = 2;
+
+  // At most this many entries; 0 means the worker's default (2000). Workers
+  // cap it (5000).
+  int32 max_entries = 3;
+
+  reserved 4 to 9;
+}
+
+// ProbeListRemote lists a folder of a remote (rclone lsjson --max-depth=1).
+message ProbeListRemote {
+  // The folder: a remote alias of ProbeSpec.remotes (required) and a path
+  // on it.
+  Location location = 1;
+
+  // List directories only.
+  bool dirs_only = 2;
+
+  // As ProbeListLocal.max_entries.
+  int32 max_entries = 3;
+
+  reserved 4 to 9;
+}
+
+// ProbeAbout asks a remote for its usage (rclone about).
+message ProbeAbout {
+  // A remote alias of ProbeSpec.remotes (required) and a path on it.
+  Location location = 1;
+
+  reserved 2 to 9;
+}
+
+// ProbeResticSnapshots lists a repository's snapshots (restic --no-lock
+// snapshots).
+message ProbeResticSnapshots {
+  ResticRepository repository = 1;
+
+  // Only the newest this many snapshots; 0 means the worker's default
+  // (5000), which is also its cap.
+  int32 max_snapshots = 2;
+
+  reserved 3 to 9;
+}
+
+// ProbeResticLs lists one directory of a snapshot (restic --no-lock ls).
+message ProbeResticLs {
+  ResticRepository repository = 1;
+
+  // Snapshot ID (8 to 64 hex digits) or "latest".
+  string snapshot_id = 2;
+
+  // Snapshot tree path of the directory: "/" is the root; always forward
+  // slashes (a Windows snapshot's tree starts with drive letters, e.g.
+  // "/C/Users").
+  string path = 3;
+
+  // As ProbeListLocal.max_entries.
+  int32 max_entries = 4;
+
+  reserved 5 to 9;
+}
+
+// ProbeResticInit creates a repository (restic init), then reads its config
+// (cat config). A repository at the location already fails with
+// ALREADY_EXISTS.
+message ProbeResticInit {
+  ResticRepository repository = 1;
+
+  reserved 2 to 9;
+}
+
+// ProbeResticConfig reads a repository's config (restic --no-lock cat
+// config), which verifies the location and the password.
+message ProbeResticConfig {
+  ResticRepository repository = 1;
+
+  reserved 2 to 9;
+}
+
+// ProbeSftpHostKeys asks an SSH (SFTP) server for its host keys, so they
+// can be pinned in a remote's host_keys option. The worker connects
+// directly (proxy options of a remote are not honoured), once per host key
+// algorithm so that it finds every key type the server offers, and aborts
+// each handshake once it has the key: no credentials are sent and nothing
+// is changed. Each connection attempt has a 10s dial timeout within the
+// probe's timeout.
+message ProbeSftpHostKeys {
+  // Host name or IP address of the server.
+  string host = 1;
+
+  // TCP port, 1 to 65535; 0 means 22.
+  int32 port = 2;
+
+  reserved 3 to 9;
+}
+
+// ProbeStatus is how a probe ended.
+enum ProbeStatus {
+  PROBE_STATUS_UNSPECIFIED = 0;
+  // The probe completed; ProbeResult.output is set.
+  PROBE_STATUS_OK = 1;
+  // The probe failed (ProbeResult.error), including TIMEOUT and BUSY.
+  PROBE_STATUS_FAILED = 2;
+  // The probe was stopped (CancelProbe, or the passive call ended).
+  PROBE_STATUS_CANCELLED = 3;
+}
+
+// ProbeResult is the outcome of a probe.
+message ProbeResult {
+  // RunProbe.probe_id.
+  string probe_id = 1;
+
+  // How the probe ended.
+  ProbeStatus status = 2;
+
+  // Failure details for FAILED and CANCELLED; the message is scrubbed of
+  // secrets and at most 1000 bytes.
+  JobError error = 3;
+
+  // How long the probe ran on the worker.
+  google.protobuf.Duration elapsed = 4;
+
+  reserved 5 to 9;
+
+  // The op's output, for OK.
+  oneof output {
+    // list_local, list_remote, restic_ls.
+    ProbeListing listing = 10;
+    // about.
+    ProbeUsage usage = 11;
+    // restic_snapshots.
+    ResticSnapshotsOutput snapshots = 12;
+    // restic_init, restic_config.
+    ResticRepositoryConfig repository_config = 13;
+    // sftp_host_keys.
+    SftpHostKeys sftp_host_keys = 14;
+  }
+}
+
+// ProbeListing is one listed folder.
+message ProbeListing {
+  // The listed path, as the op named it (normalized).
+  string path = 1;
+
+  // The folder's direct children: directories first, then by name.
+  repeated ProbeEntry entries = 2;
+
+  // Only the first entries are listed (max_entries, or the worker's result
+  // size cap, was reached).
+  bool truncated = 3;
+
+  reserved 4 to 9;
+}
+
+// ProbeEntryType is what a listed entry is.
+enum ProbeEntryType {
+  PROBE_ENTRY_TYPE_UNSPECIFIED = 0;
+  PROBE_ENTRY_TYPE_FILE = 1;
+  PROBE_ENTRY_TYPE_DIR = 2;
+  PROBE_ENTRY_TYPE_SYMLINK = 3;
+  // Devices, sockets, pipes and the like.
+  PROBE_ENTRY_TYPE_OTHER = 4;
+}
+
+// ProbeEntry is one listed file or folder.
+message ProbeEntry {
+  // Base name.
+  string name = 1;
+
+  // Full path in the listing's namespace (local path, path on the remote, or
+  // snapshot tree path).
+  string path = 2;
+
+  // What it is.
+  ProbeEntryType type = 3;
+
+  // Size in bytes (files); 0 for directories.
+  int64 size = 4;
+
+  // Modification time; unset if unknown.
+  google.protobuf.Timestamp mod_time = 5;
+
+  // Permissions as "ls -l" shows them (e.g. "drwxr-xr-x"); may be empty.
+  string mode = 6;
+
+  reserved 7 to 9;
+}
+
+// ProbeUsage is a remote's usage (rclone about). Unset fields are unknown
+// to the backend.
+message ProbeUsage {
+  // Bytes in total, used, free, in the trash and used by other data.
+  optional int64 total = 1;
+  optional int64 used = 2;
+  optional int64 free = 3;
+  optional int64 trashed = 4;
+  optional int64 other = 5;
+
+  // Objects stored.
+  optional int64 objects = 6;
+
+  // The backend cannot report usage (rclone: "doesn't support about").
+  bool unsupported = 7;
+
+  reserved 8 to 9;
+}
+
+// ResticRepositoryConfig is a repository's config (restic cat config).
+message ResticRepositoryConfig {
+  // The repository's ID: 64 hex digits.
+  string id = 1;
+
+  // The repository format version (1 or 2).
+  int32 version = 2;
+
+  reserved 3 to 9;
+}
+
+// SftpHostKeys are the host keys an SSH server offered (sftp_host_keys).
+message SftpHostKeys {
+  // One entry per key type the server offers; never empty for an OK
+  // result.
+  repeated SftpHostKey keys = 1;
+
+  reserved 2 to 9;
+}
+
+// SftpHostKey is one public host key of an SSH server. Its algorithm and
+// key are the second and third fields of a known_hosts line, which is the
+// form rclone's sftp host_keys option takes ("<algorithm> <key>").
+message SftpHostKey {
+  // The key type, as known_hosts and the key itself name it, e.g.
+  // "ssh-ed25519", "ecdsa-sha2-nistp256" or "ssh-rsa".
+  string algorithm = 1;
+
+  // The public key in the SSH wire format, standard base64 with padding.
+  string key = 2;
+
+  // The key's SHA-256 fingerprint as `ssh-keygen -l` prints it:
+  // "SHA256:" and the unpadded standard base64 of the digest of the wire
+  // format.
+  string fingerprint_sha256 = 3;
+
+  reserved 4 to 9;
+}

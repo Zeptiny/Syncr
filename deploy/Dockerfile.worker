@@ -1,0 +1,78 @@
+# syntax=docker/dockerfile:1
+#
+# Worker image: Debian slim with pinned rclone and restic copied from their
+# official images, running as non-root. Build from the repository root:
+#   docker build -f deploy/Dockerfile.worker -t syncr-worker .
+#
+# Mount the data the worker may access and list it in the worker's
+# local_roots; the container user (uid 10001) needs permission on it.
+# deploy/docker-compose.yml has an optional worker service that enrolls on
+# first start.
+
+ARG GO_VERSION=1.27.3
+ARG RCLONE_VERSION=1.75.2
+ARG RESTIC_VERSION=0.19.1
+
+FROM rclone/rclone:${RCLONE_VERSION} AS rclone
+FROM restic/restic:${RESTIC_VERSION} AS restic
+
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY . .
+ARG TARGETOS TARGETARCH
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_TIME=
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+      -ldflags "-s -w \
+        -X github.com/Zeptiny/Syncr/internal/platform/version.version=${VERSION} \
+        -X github.com/Zeptiny/Syncr/internal/platform/version.commit=${COMMIT} \
+        -X github.com/Zeptiny/Syncr/internal/platform/version.buildTime=${BUILD_TIME}" \
+      -o /out/syncr-worker ./cmd/syncr-worker
+
+FROM debian:trixie-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 syncr \
+    && useradd --system --uid 10001 --gid syncr --home-dir /var/lib/syncr --create-home --shell /usr/sbin/nologin syncr \
+    && install -d -m 0755 /usr/share/doc/rclone /usr/share/doc/restic
+COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
+COPY --from=restic /usr/bin/restic /usr/local/bin/restic
+# The image redistributes rclone (MIT) and restic (BSD 2-Clause): their
+# licence texts at the pinned versions, verified by SHA-256. A new version
+# needs the new checksums (sha256sum of the files at its tag).
+#
+# The worker runs as uid 10001, so the files must be world-readable and
+# their directories world-searchable. A downloaded file starts as 0600, so
+# --chmod is needed; but BuildKit also creates the missing parent
+# directories with an octal --chmod mode (moby/buildkit#5943): "--chmod=644"
+# made /usr/share/doc/rclone 0644, without its search bit, and nobody but
+# root could open the file. Hence the directories are created above with
+# 0755, and the mode is symbolic (not used for created directories): X
+# adds no execute bit to the file, so it ends up 0644. Symbolic --chmod
+# needs Dockerfile syntax 1.14 or later (the syntax line above selects the
+# newest 1.x).
+ARG RCLONE_VERSION RESTIC_VERSION
+ADD --checksum=sha256:8cd2e9e750b90a04b7d82dbbca3930c696ae0309d7c10464f90a44f45754cd04 --chmod=u=rwX,go=rX \
+    https://raw.githubusercontent.com/rclone/rclone/v${RCLONE_VERSION}/COPYING /usr/share/doc/rclone/COPYING
+ADD --checksum=sha256:6f08a01a9fab5b24e139a09f15cc24a73087c7bc09e3bacf099fdf2d767bf897 --chmod=u=rwX,go=rX \
+    https://raw.githubusercontent.com/restic/restic/v${RESTIC_VERSION}/LICENSE /usr/share/doc/restic/LICENSE
+COPY --from=build /out/syncr-worker /usr/local/bin/syncr-worker
+USER syncr:syncr
+WORKDIR /var/lib/syncr
+# The pinned tools of this image, and the data directory (keep it on a
+# volume: it holds the worker's configuration and secret once enrolled).
+ENV SYNCR_DATA_DIR=/var/lib/syncr \
+    SYNCR_RCLONE_PATH=/usr/local/bin/rclone \
+    SYNCR_RESTIC_PATH=/usr/local/bin/restic
+ENTRYPOINT ["/usr/local/bin/syncr-worker"]
+# Enroll once (writes /var/lib/syncr/worker.yaml), e.g.:
+#   docker run --rm -v syncr-worker:/var/lib/syncr syncr-worker setup --no-service \
+#     --controller https://syncr.example.com --token <token> --local-root /data \
+#     --config /var/lib/syncr/worker.yaml
+# then run it with the default command.
+CMD ["run", "--config", "/var/lib/syncr/worker.yaml"]

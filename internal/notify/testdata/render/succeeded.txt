@@ -1,0 +1,9 @@
+Transfer succeeded: Copy Photos → B2 offsite
+
+Job: Copy Photos → B2 offsite
+Worker: nas-01
+Type: Transfer
+Status: succeeded
+Transferred: 5.5 GiB in 1 file
+Duration: 1h2m5s
+Finished: 2026-11-04 02:31:07 UTC

@@ -1,165 +1,128 @@
-# Syncr - Remote sincronization with rclone
+# Syncr
 
-THIS PROJECT IS NOT FINISHED AND DOES NOT REPRESENT IT'S FINAL STATE, THINGS WILL BREAK, PLEASE DO NOT USE IT.
-DOCKER IMAGES WILL BE PROVIDED ONCE IT'S STABLE ENOUGH
+Self-hosted manager for [rclone](https://rclone.org/) transfers and
+[restic](https://restic.net/) backups. One controller with a web UI drives
+any number of workers on your servers and desktops (Linux and Windows):
+run jobs by hand or on a schedule, watch them live, browse and restore
+snapshots, and get notified when something fails.
 
-## Overview
-**Syncr** is a Django-based app that uses [Rclone](https://rclone.org/) to handle file synchronization tasks between remote storage services. It allows you to:
-
-- Manage multiple Rclone servers
-- Schedule or manually run sync jobs
-- Receive notifications (currently via Discord)
-- Use temporary, on-the-fly remotes with zero persistence
-
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme/dashboard-dark.png">
+  <img alt="The dashboard: success rate, activity per day, upcoming runs and worker health" src="docs/screenshots/readme/dashboard.png">
+</picture>
 
 ## Features
 
-- **Rclone operations**: `sync`, `copy`, `move`
-- **Remote configuration on the fly**
-- **Rclone Unions support**
-- **Job scheduling via crontab**
-- **Protocol support**: S3 and SFTP
-- **Notifications**: Discord Webhooks
-- **Multi-server support**: allows to have multiple remote rclone instances.
-
-
-## TO-DO
-
-### Slave Server - Priority
-Make a "slave" server, that will be responsible to communicate with a local rclone and restic instance.
-This will allow better control, as well monitoring and simplified communication.
-The "Control" server, this repository, will communicate with the slaves.
-
-### Notifications:
-- Email notifications
-- SMS
-- Slack (Unsure how to use it)
-
-### Protocols:
-- Add more protocols (Only S3 and SFTP is supported)
-- Add key support for SFTP
-
-### Sincronization:
-- Add retry support
-- Warn if no data changed in x time or x transfers
-- Add Restic support
-
-### Servers:
-- Authentication
-- Server Creation outside of admin
-- Fallback servers
-- Multi selection
-- Network cap
-
-### Remotes/Unions
-- Labels/tags
-- Groups (For better visualization)
-- Multi bucket support for S3 remotes
-- Per remote path for union (At the time, it only accepts root)
-- Add Union policy options
-
-### Running:
-- Docs
-
-### Github Workflows
-- Make them work?
-
-### Known Bugs
-- S3 remotes with KMS encryption fails checksum
-- Sometimes the bandwidth can go negative, specially in jobs that are running for longer periods
+- **rclone transfers.** Copy, sync or move between S3 and compatibles,
+  SFTP, Backblaze B2, WebDAV, a worker's local folders and unions of them,
+  with live progress, speed and time left.
+- **restic backups.** Create or connect repositories on any remote, back up
+  a worker's folders, apply retention and check them. Browse snapshots and
+  restore all of one, a folder or selected files.
+- **Hooks.** Run commands a worker's operator prepared before and after a
+  job: dump a database, stop and start containers, ping a monitor.
+- **Schedules.** Cron expressions with time zones and daylight-saving rules,
+  run on one worker or on the least busy worker with a label, with policies
+  for missed runs and overlaps.
+- **Notifications.** Discord, email and signed webhooks (or Slack's format),
+  stored before sending and retried, with a delivery log per contact.
+- **Workers anywhere.** Workers connect to the controller (active) or the
+  controller connects to them over pinned TLS (passive), install as a system
+  or per-user service, and upgrade in place with automatic rollback.
+- **Secure by default.** Credentials are encrypted at rest and only sent to
+  the worker that runs the job; jobs can only touch the folders a worker
+  allows (`local_roots`).
+- **Multi-user.** Admin-created accounts, private remotes and schedules,
+  personal API tokens, and a [Connect API](docs/api.md) for everything the UI
+  does.
 
 ## Screenshots
-### Home page
-![Home Page](./screenshots/home.png)
 
-### Job Creation
-![Job Creation](./screenshots/job_creation.png)
+<table>
+  <tr>
+    <td width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme/job-live-dark.png">
+        <img alt="A running backup with its live throughput chart" src="docs/screenshots/readme/job-live.png">
+      </picture>
+      <p align="center">Following a job live</p>
+    </td>
+    <td width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme/snapshot-browser-dark.png">
+        <img alt="Browsing a restic snapshot with folders selected for restore" src="docs/screenshots/readme/snapshot-browser.png">
+      </picture>
+      <p align="center">Browsing and restoring a snapshot</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme/schedule-dark.png">
+        <img alt="A schedule with its next runs, settings and run history" src="docs/screenshots/readme/schedule.png">
+      </picture>
+      <p align="center">A schedule and its history</p>
+    </td>
+    <td width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme/workers-dark.png">
+        <img alt="Workers on Linux and Windows with their status, link mode, labels and versions" src="docs/screenshots/readme/workers.png">
+      </picture>
+      <p align="center">Workers on Linux and Windows</p>
+    </td>
+  </tr>
+</table>
 
-### Job Detail
-![Job Detail](./screenshots/job_detail.png)
+## Quick start
 
-### Job Search
-![Job Search](./screenshots/job_search.png)
+**1. Start the controller and Postgres** with Docker Compose:
 
-## Other & technical information
-- The scheduled jobs are checked every minute with cron_validator, using huey, if they should be executed, schedules cannot be less than 1 minute.
-- Huey uses redis as the backend storage
-- Remote credentials are never saved to the rclone configuration of any server, they are always maintained on the django database.
-- There is support for multiple users, as well as a registration page.
-- Jobs are executed sending the information to the rclone remote API, the remotes/unions are then created on-the-fly.
-
-# Installation & Setup
-If you REALLY want to trust this while in development, or want to give some feedback, here's how to run it:
-
-1. Clone this repository
-
+```sh
+mkdir syncr && cd syncr
+v=v2.0.0   # or a release candidate's tag, such as v2.0.0-rc.1
+curl -fsSLo docker-compose.yml "https://raw.githubusercontent.com/Zeptiny/Syncr/$v/deploy/docker-compose.yml"
+curl -fsSLo .env "https://raw.githubusercontent.com/Zeptiny/Syncr/$v/deploy/.env.example"
+chmod 600 .env
+# Fill in POSTGRES_PASSWORD (openssl rand -hex 24) and
+# SYNCR_SECRETS_KEY (openssl rand -base64 32) in .env;
+# for a release candidate also SYNCR_VERSION=2.0.0-rc.1 (no v)
+docker compose up -d --wait
 ```
-git clone https://github.com/Zeptiny/Syncr.git && cd Syncr
-``` 
 
-2. Configure the environment
+**2. Create the first admin.** Open <http://127.0.0.1:8080> and enter the
+one-time setup code from the log:
 
-Make a copy of the example:
+```sh
+docker compose logs controller | grep setup_code
 ```
-cp .env.example .env
-```
-Edit the `.env` with your prefereed editor (May it be our lord and savior `vim`)
 
+**3. Add a worker.** In the UI open **Workers → Add worker** and run the
+install command it shows on the machine that should run jobs. It enrolls,
+installs the pinned rclone and restic, and starts the service.
 
-3. Start the docker compose
+**4. Add remotes and run jobs.** Store your storage under **Remotes**, then
+use **Run a job**, or set up **Repositories** and **Schedules**.
 
-At this moment, you will need to build the project, the command is as follows:
-```
-docker compose up -d --build
-```
-It will take a few seconds/minutes, depending on your system
+Workers on other machines need the controller behind HTTPS, and you should
+back up the database and `SYNCR_SECRETS_KEY`: see
+[running the controller](docs/deployment.md).
 
-4. Create the superuser
-```
-docker exec -it syncr-web sh
-python manage.py createsuperuser
-exit
-```
-Enter the required information.
+## Supported platforms
 
-5. Access the interface
+| | |
+|---|---|
+| Controller | Docker image (Linux x86-64, ARM64) or binary (Linux x86-64/ARM64, Windows x86-64); PostgreSQL 17 |
+| Workers | Linux x86-64/ARM64 with systemd (system or `--user`), or any Linux with `--no-service` or in the image; Windows 10 / Server 2016 or newer, x86-64 (service or `--user`) |
+| Web UI | current Firefox, Chrome, Edge and Safari |
 
-Access your browser and go to `http://127.0.0.1:8000`
+## Documentation
 
-6. Add the servers
-
-For the app to be usable, you need to add the server from where the transfers will be done, those being rclone instances.
-In the provided docker compose, there already is a rclone instance, you can also add how many you want.
-
-Go to the admin interface -> `http://127.0.0.1:8000/admin` (Yes, I will make a form, I sort of forgot)
-Add a server: servers -> add
-
-Rclone authentication isn't yet implemented, if you are using the default provided docker compose, use `syncr-rclone` as the host.
-
-7. Add the Remotes
-
-For the sincronization to work, you will need to specify the remotes from witch syncr can access.
-Returning to the home screen, click on "Remotes" and then "Create New Remote".
-Fill the form for each remote you want to use.
-
-8. Running your first Job
-
-Return to the home screen, and then click on "Run Manual Job"
-You will be able to select the sync type, remote, path, and other options
-When running the job, you will be redirected to the job description with it's information.
-
-
-9. Scheduling job
-
-On the navbar, select "Schedules" and then "Create New Schedule"
-The creation is similar to the manual job creation, except for the need of a cron frequency to be added, that's when your job will be run.
-
-
-10. Done!
-
-That's it, you can also specify a contact list to be notified when a job goes wrong, currently, only Discord Webhook is working.
-
-### Using TLS 
-
-You can also use your own domain by using the `.env.tls.example` and `docker-compose-tls.yaml` files.
-Fill the information as normal, also, do not forget to create the docker network with `docker network create proxy` and to change the permissions of the traefik directory with `sudo chown -R $USER:$USER traefik`, TLS should be handled automatically with Let's Encrypt.
+- [Running the controller](docs/deployment.md): HTTPS, backups, upgrades, images
+- [Configuration](docs/configuration.md): every controller setting
+- Workers: [Linux](docs/setup-linux.md), [Windows](docs/setup-windows.md),
+  [configuration](docs/worker-config.md), [upgrading](docs/upgrade.md)
+- [restic backups](docs/restic.md), [hooks](docs/hooks.md) and
+  [notifications](docs/notifications.md)
+- [Scripting the API](docs/api.md)
+- [Development](docs/development.md): building, testing and the architecture
+- [Release notes](docs/releases/) · [Security policy](SECURITY.md)
