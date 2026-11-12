@@ -27,7 +27,11 @@ service runs exactly that path) and runs setup. The UI's command downloads
 the controller's own release (`.../releases/download/v2.0.0/...` for a
 v2.0.0 controller), so a new worker runs the controller's version; the
 `latest` URL above, which a development build of the controller shows,
-installs the newest release. If the controller sets
+installs the newest release. Release candidates (such as `v2.0.0-rc.1`)
+are GitHub pre-releases, which `latest` never points to: a release
+candidate controller's command downloads its own release as above, and to
+install one by hand, use its tag
+(`.../releases/download/v2.0.0-rc.1/...`). If the controller sets
 `workers.download_base_url` (empty by default), the command downloads from
 that mirror instead (a value of
 `https://github.com/Zeptiny/Syncr/releases/latest/download`, the default of
@@ -43,7 +47,7 @@ To check the archive against the release's `checksums.txt` before
 installing it by hand (elevated PowerShell):
 
 ```powershell
-$base = 'https://github.com/Zeptiny/Syncr/releases/latest/download'   # or releases/download/v2.0.0
+$base = 'https://github.com/Zeptiny/Syncr/releases/latest/download'   # or releases/download/<tag>, e.g. v2.0.0 or v2.0.0-rc.1
 $t = Join-Path $env:TEMP 'syncr-download'; New-Item -ItemType Directory -Force $t | Out-Null
 Invoke-WebRequest -UseBasicParsing -Uri "$base/checksums.txt" -OutFile "$t\checksums.txt"
 Invoke-WebRequest -UseBasicParsing -Uri "$base/syncr-worker_windows_amd64.zip" -OutFile "$t\syncr-worker_windows_amd64.zip"

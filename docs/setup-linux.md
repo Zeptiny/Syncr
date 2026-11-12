@@ -25,8 +25,11 @@ It downloads the release archive, installs the binary where the service
 runs it, and runs setup. The UI's command downloads the controller's own
 release (`.../releases/download/v2.0.0/...` for a v2.0.0 controller), so a
 new worker runs the controller's version; the `latest` URL above, which a
-development build of the controller shows, installs the newest release. If
-the controller sets `workers.download_base_url` (empty by default), the
+development build of the controller shows, installs the newest release.
+Release candidates (such as `v2.0.0-rc.1`) are GitHub pre-releases, which
+`latest` never points to: a release candidate controller's command
+downloads its own release as above, and to install one by hand, use its tag
+(`.../releases/download/v2.0.0-rc.1/...`). If the controller sets `workers.download_base_url` (empty by default), the
 command downloads from that mirror instead (a value of
 `https://github.com/Zeptiny/Syncr/releases/latest/download`, the default of
 builds before v2.0.0, counts as unset; the controller warns at start that it
@@ -49,7 +52,7 @@ archive against the release's `checksums.txt` first (and, optionally, its
 GitHub build provenance):
 
 ```sh
-base=https://github.com/Zeptiny/Syncr/releases/latest/download   # or releases/download/v2.0.0
+base=https://github.com/Zeptiny/Syncr/releases/latest/download   # or releases/download/<tag>, e.g. v2.0.0 or v2.0.0-rc.1
 arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 curl -fsSLO "$base/checksums.txt"
 curl -fsSLO "$base/syncr-worker_linux_$arch.tar.gz"
