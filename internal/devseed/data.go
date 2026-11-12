@@ -57,8 +57,9 @@ func tools() []workers.Tool {
 // current build: they report every link feature and probe operation.
 // old-nas reported none before it was removed; attic-nas is online but
 // runs a build from before Milestone 6 (no link.FeatureJobTimeLimit, no
-// sftp_host_keys probe), so the UI shows it outdated with the command that
-// upgrades it.
+// link.FeatureJobHooks, no sftp_host_keys probe), so the UI shows it
+// outdated with the command that upgrades it. nas-01's operator defined
+// hooks (demoHooks), which the backups of its documents run.
 func demoWorkers() []demoWorker {
 	features, ops := link.Features(), link.ProbeOps()
 	return []demoWorker{
@@ -67,7 +68,7 @@ func demoWorkers() []demoWorker {
 			info: workers.Info{
 				Version: "2.0.0-dev", OS: "linux", Arch: "amd64", Hostname: "nas-01", Tools: tools(), JobKinds: link.Kinds(),
 				MaxConcurrentJobs: 2, LocalRoots: []string{"/srv", "/mnt"},
-				Features: features, ProbeOps: ops,
+				Features: features, ProbeOps: ops, Hooks: demoHooks(),
 			},
 			labels: []string{"nas", "linux"},
 		},
@@ -107,8 +108,11 @@ func demoWorkers() []demoWorker {
 			info: workers.Info{
 				Version: "2.0.0-dev", OS: "linux", Arch: "amd64", Hostname: "attic-nas", Tools: tools(), JobKinds: link.Kinds(),
 				MaxConcurrentJobs: 1, LocalRoots: []string{"/volume1"},
-				// Built before Milestone 6: no time limits, no host-key probe.
-				Features: slices.DeleteFunc(slices.Clone(features), func(f string) bool { return f == link.FeatureJobTimeLimit }),
+				// Built before Milestone 6: no time limits, no hooks, no
+				// host-key probe.
+				Features: slices.DeleteFunc(slices.Clone(features), func(f string) bool {
+					return f == link.FeatureJobTimeLimit || f == link.FeatureJobHooks
+				}),
 				ProbeOps: slices.DeleteFunc(slices.Clone(ops), func(op string) bool { return op == "sftp_host_keys" }),
 			},
 			labels: []string{"archive"},
@@ -227,6 +231,10 @@ type demoJob struct {
 	// maxRuntime is the definition's time limit (max_runtime); zero sets
 	// none.
 	maxRuntime time.Duration
+	// hooks are the hooks the definition names; hookRuns how each went,
+	// reported with the finished job's result.
+	hooks    *syncrv1.JobHooks
+	hookRuns []demoHookRun
 
 	status  domain.JobStatus
 	created time.Duration

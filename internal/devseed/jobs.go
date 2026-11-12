@@ -135,7 +135,7 @@ func (s *Seed) seedJob(ctx context.Context, svc *jobs.Service, clk *stepClock, n
 	}
 	_, _, err = svc.Finish(ctx, workerID, id, epoch, jobs.Outcome{
 		Status: dj.status, Error: dj.err, Stats: stats, Warnings: dj.warnings, ExitCode: dj.exitCode,
-		StartedAt: start, FinishedAt: end, Output: output,
+		StartedAt: start, FinishedAt: end, Output: output, HookRuns: hookRunsAt(dj.hookRuns, start, end),
 	})
 	return id, err
 }
@@ -159,6 +159,7 @@ func (s *Seed) definition(dj demoJob) (*syncrv1.JobDefinition, error) {
 	if dj.maxRuntime > 0 {
 		def.MaxRuntime = durationpb.New(dj.maxRuntime)
 	}
+	def.Hooks = dj.hooks
 	return def, nil
 }
 
