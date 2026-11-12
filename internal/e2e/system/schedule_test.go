@@ -174,7 +174,11 @@ func TestSystemScheduleFires(t *testing.T) {
 	w.start()
 	c.waitOnline(w.id)
 	launched := waitRun(t, schedules, scheduleID, waitLong, func(r *syncrv1.ScheduleRun) bool {
-		return r.GetId() == pending.GetId() && r.GetStatus() != syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_PENDING
+		// Launching is the moment between reserving the job's ID and
+		// creating the job; a poll can land in it. Wait for what the
+		// launch ends in.
+		return r.GetId() == pending.GetId() && r.GetStatus() != syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_PENDING &&
+			r.GetStatus() != syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_LAUNCHING
 	})
 	if launched.GetStatus() != syncrv1.ScheduleRunStatus_SCHEDULE_RUN_STATUS_LAUNCHED || launched.GetJobId() == "" ||
 		!time.Now().Before(launched.GetDeadline().AsTime()) {
