@@ -330,9 +330,9 @@ type Summarizer interface {
 	Summarize(def *syncrv1.JobDefinition, out *syncrv1.JobOutput) []Detail
 }
 
-// Builtin returns the built-in kinds: the rclone transfer (Transfer),
-// followed by the restic kinds (ResticKinds).
-func Builtin() []Kind { return append([]Kind{Transfer{}}, ResticKinds()...) }
+// Builtin returns the built-in kinds: the rclone transfer (Transfer) and
+// two-way sync (Bisync), followed by the restic kinds (ResticKinds).
+func Builtin() []Kind { return append([]Kind{Transfer{}, Bisync{}}, ResticKinds()...) }
 
 // Registry is an immutable set of kinds, keyed by name. It is safe for
 // concurrent use.

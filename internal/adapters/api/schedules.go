@@ -314,6 +314,21 @@ func (h *scheduleHandler) input(ctx context.Context, procedure string, m *syncrv
 			} else if ok, why := h.kinds.Schedulable(kind); !ok {
 				v.Add("definition."+kind, why)
 			}
+			// Fields meant for a single run (a two-way sync's resync and
+			// force), which every run would repeat.
+			var once *domain.ValidationError
+			if err := h.kinds.CheckSchedulable(def); errors.As(err, &once) {
+				v.AddAll("", once.Fields)
+			} else if err != nil {
+				return schedules.Input{}, h.fail(ctx, procedure, err)
+			}
+			// Kinds whose state stays on the worker that ran them (two-way
+			// sync) target one worker, never a label.
+			if _, onLabel := m.GetTarget().GetTarget().(*syncrv1.ScheduleTarget_WorkerLabel); onLabel {
+				if ok, why := h.kinds.LabelTargetAllowed(kind); !ok {
+					v.Add("target.worker_label", why)
+				}
+			}
 			// A label's workers are checked when a run picks one.
 			if req, goos, wrong := wrongWorkerOS(ctx, h.kinds, h.workers, in.Target.WorkerID, def); wrong {
 				v.Add(req.Field, req.FieldMessage()+"; this worker runs "+goos)

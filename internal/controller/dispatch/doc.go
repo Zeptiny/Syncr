@@ -123,7 +123,8 @@
 // # Concurrency keys
 //
 // A job may hold concurrency keys, set when it was created (restic jobs
-// hold "restic-repo:<repository id>"; docs/adr/0013-concurrency-keys.md).
+// hold "restic-repo:<repository id>", two-way syncs "bisync:<hash>" for
+// each of their two locations; docs/adr/0013-concurrency-keys.md).
 // Of the unfinished jobs (queued, dispatched, running; any worker) that
 // share a key, only the oldest by (created at, ID) may start: a queued job
 // with an older unfinished sharer gets no StartJob. The dispatcher asks

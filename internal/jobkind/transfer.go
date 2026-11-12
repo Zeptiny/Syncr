@@ -287,7 +287,14 @@ func checkTransferOptions(v *domain.Validation, field string, mode syncrv1.Rclon
 	if o.GetTrackRenames() && mode != syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_SYNC {
 		v.Add(field+".track_renames", "is only valid for sync")
 	}
-	rules := o.GetFilters()
+	checkFilterRules(v, field, o.GetFilters())
+}
+
+// checkFilterRules checks filter rules (field+".filters") like the
+// worker's rclone runner does: at most maxFilters, each include or exclude
+// with a pattern that is not blank, at most maxPatternBytes, without NUL
+// bytes or line breaks.
+func checkFilterRules(v *domain.Validation, field string, rules []*syncrv1.FilterRule) {
 	if len(rules) > maxFilters {
 		v.Add(field+".filters", fmt.Sprintf("must have at most %d rules", maxFilters))
 		return

@@ -5,8 +5,10 @@
 // every built-in backend type (a union among them), restic repositories
 // with their snapshots (one whose data is being deleted, one already
 // deleted), a contact of every built-in channel, schedules of every target
-// type and policy with about a month of runs, and about 270 jobs of every
-// kind over those 30 days in every status with statistics, results,
+// type and policy with about a month of runs (among them a two-way sync of
+// a folder on nas-01 with Cloudflare R2 whose runs show each of its
+// states, bisync_data.go), and about 270 jobs of every kind over those 30
+// days in every status with statistics, results,
 // errors, warnings and stored progress samples, and their notifications in
 // every delivery status. One job keeps running: Animate reports its
 // progress every second through the controller's job service, so live

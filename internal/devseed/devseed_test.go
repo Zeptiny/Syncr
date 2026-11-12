@@ -491,8 +491,9 @@ func TestSeedSchedulesAndNotifications(t *testing.T) {
 		"Old NAS sync":        {paused: "worker_removed", worker: "old-nas"},
 		"Alice's documents":   {label: "linux"},
 	}
-	// The schedules on repositories are checked in TestSeedRestic.
-	if len(s.Schedules) != len(want)+5 {
+	// The schedules on repositories are checked in TestSeedRestic, the
+	// two-way sync's in TestSeedTwoWaySync.
+	if len(s.Schedules) != len(want)+5+1 {
 		t.Fatalf("schedules = %v", s.Schedules)
 	}
 	missed := map[schedules.MissedAction]bool{}
@@ -791,7 +792,7 @@ func TestProbes(t *testing.T) {
 	if got := names(run(nas, local("", false)).GetListing()); !slices.Equal(got, []string{"/srv", "/mnt"}) {
 		t.Errorf("roots of nas-01 = %v", got)
 	}
-	if got := names(run(nas, local("/srv", true)).GetListing()); !slices.Equal(got, []string{"docs", "home", "incoming", "media", "photos", "restore"}) {
+	if got := names(run(nas, local("/srv", true)).GetListing()); !slices.Equal(got, []string{"docs", "home", "incoming", "media", "photos", "restore", "shared"}) {
 		t.Errorf("/srv = %v", got)
 	}
 	month := run(nas, local("/srv/photos/2026/03", false)).GetListing()
