@@ -103,9 +103,9 @@ func openLogFile(path string) (*os.File, error) {
 }
 
 // runWorker loads the configuration, takes the data directory, builds the
-// worker, starts the link and waits for ctx. With logFailure, the error it
-// returns is also logged to logOut (with the configured logger once it
-// exists, a plain one before).
+// worker, starts its housekeeping (startBackground) and the link and waits
+// for ctx. With logFailure, the error it returns is also logged to logOut
+// (with the configured logger once it exists, a plain one before).
 //
 // Before anything else uses the data directory it takes its lock
 // (datadir.Lock: a second worker on the same directory is refused, as two
@@ -170,6 +170,8 @@ func runWorker(ctx context.Context, e *env, configPath string, logOut io.Writer,
 		return err
 	}
 	logger.Info("worker ready", "job_kinds", w.registry.Kinds())
+	stopBackground := w.startBackground(ctx, logger)
+	defer stopBackground()
 
 	stop, err := e.linkStarter()(ctx, cfg, w, logger)
 	if err != nil {

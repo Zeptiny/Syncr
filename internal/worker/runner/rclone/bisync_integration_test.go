@@ -1,0 +1,663 @@
+//go:build integration
+
+package rclone
+
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/worker/bisyncstate"
+	"github.com/Zeptiny/Syncr/internal/worker/localfs"
+	"github.com/Zeptiny/Syncr/internal/worker/proc"
+	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
+	"github.com/Zeptiny/Syncr/internal/worker/runner"
+)
+
+// Two-way sync integration tests run rclone bisync (SYNCR_TEST_RCLONE)
+// through the real supervisor, env builder, path policy and state store,
+// between two local folders. rclone names its state files after both full
+// paths, at most 200 bytes together, so the tests work in a short base
+// directory (shortBase).
+
+const (
+	reasonNone      = syncrv1.BisyncResyncReason_BISYNC_RESYNC_REASON_UNSPECIFIED
+	reasonFirstRun  = syncrv1.BisyncResyncReason_BISYNC_RESYNC_REASON_FIRST_RUN
+	reasonRequested = syncrv1.BisyncResyncReason_BISYNC_RESYNC_REASON_REQUESTED
+)
+
+// shortBase returns a new, empty directory with a short path: under
+// /dev/shm where it exists (Linux; t.TempDir can be long, and memory is
+// fast), else in the system temp directory. It is removed after the test.
+func shortBase(t *testing.T) string {
+	t.Helper()
+	parent := ""
+	if info, err := os.Stat("/dev/shm"); err == nil && info.IsDir() && runtime.GOOS == "linux" {
+		parent = "/dev/shm"
+	}
+	dir, err := os.MkdirTemp(parent, "sb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := proc.RemoveAll(dir); err != nil {
+			t.Errorf("remove the test directory: %v", err)
+		}
+	})
+	dir, err = filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+type bisyncITest struct {
+	base, root, scratch string
+	a, b                string // the two sides, below root
+	states              *bisyncstate.Store
+	cfg                 Config
+	runner              *BisyncRunner
+}
+
+func newBisyncITest(t *testing.T) *bisyncITest {
+	t.Helper()
+	bin := os.Getenv("SYNCR_TEST_RCLONE")
+	if bin == "" {
+		t.Skip("SYNCR_TEST_RCLONE not set")
+	}
+	base := shortBase(t)
+	it := &bisyncITest{base: base, root: filepath.Join(base, "d"), scratch: filepath.Join(base, "s")}
+	it.a, it.b = filepath.Join(it.root, "a"), filepath.Join(it.root, "b")
+	for _, d := range []string{it.a, it.b} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy, err := localfs.NewPolicy([]string{it.root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	it.states, err = bisyncstate.New(bisyncstate.Config{Root: filepath.Join(base, "st")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	it.cfg = Config{
+		Binary:     bin,
+		Supervisor: proc.New(proc.Options{GracePeriod: 10 * time.Second}),
+		Env:        rcloneenv.NewBuilder(policy),
+		Paths:      policy,
+		ScratchDir: it.scratch,
+	}
+	it.runner = it.newRunner(t, it.cfg)
+	return it
+}
+
+func (it *bisyncITest) newRunner(t *testing.T, cfg Config) *BisyncRunner {
+	t.Helper()
+	r, err := NewBisync(cfg, it.states)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// workDir is rclone's work directory of the pair of spec.
+func (it *bisyncITest) workDir() string {
+	return filepath.Join(it.states.Root(), strings.Repeat("ab", 32), bisyncstate.WorkDirName)
+}
+
+// spec is a two-way sync of it.a and it.b.
+func (it *bisyncITest) spec(opts *syncrv1.RcloneBisyncOptions, mutate ...func(*syncrv1.RcloneBisync)) *syncrv1.JobSpec {
+	op := &syncrv1.RcloneBisync{
+		Path1:    local(it.a),
+		Path2:    local(it.b),
+		Options:  opts,
+		StateKey: strings.Repeat("ab", 32),
+	}
+	for _, m := range mutate {
+		m(op)
+	}
+	return &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_RcloneBisync{RcloneBisync: op}}
+}
+
+// run runs spec with r (it.runner if nil) and checks that the scratch
+// directory is cleaned up.
+func (it *bisyncITest) run(ctx context.Context, t *testing.T, r *BisyncRunner, spec *syncrv1.JobSpec, emit runner.EmitFunc) (runner.Result, error) {
+	t.Helper()
+	if r == nil {
+		r = it.runner
+	}
+	res, err := r.Run(ctx, runner.Job{ID: "it-bisync", Spec: spec}, emit)
+	if entries, _ := os.ReadDir(it.scratch); len(entries) != 0 {
+		t.Errorf("scratch dir not cleaned up: %v", entries)
+	}
+	return res, err
+}
+
+// sync runs a two-way sync that must succeed and returns its output.
+func (it *bisyncITest) sync(t *testing.T, spec *syncrv1.JobSpec) (*syncrv1.RcloneBisyncOutput, runner.Result) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	res, err := it.run(ctx, t, nil, spec, nil)
+	if err != nil {
+		t.Fatalf("two-way sync: %v (code %v)", err, runner.CodeOf(err))
+	}
+	return bisyncOutput(t, res), res
+}
+
+// fail runs a two-way sync that must fail with code and a message
+// containing want.
+func (it *bisyncITest) fail(t *testing.T, spec *syncrv1.JobSpec, code syncrv1.JobErrorCode, want string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	_, err := it.run(ctx, t, nil, spec, nil)
+	if err == nil || runner.CodeOf(err) != code || !strings.Contains(err.Error(), want) {
+		t.Fatalf("two-way sync = %v (code %v), want code %v and %q", err, runner.CodeOf(err), code, want)
+	}
+}
+
+// put writes files below dir.
+func put(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for name, content := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func remove(t *testing.T, dir string, names ...string) {
+	t.Helper()
+	for _, n := range names {
+		if err := os.Remove(filepath.Join(dir, filepath.FromSlash(n))); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// names returns the sorted relative paths of the files below dir.
+func names(t *testing.T, dir string) []string {
+	t.Helper()
+	got := slices.Sorted(func(yield func(string) bool) {
+		for k := range tree(t, dir) {
+			if !yield(k) {
+				return
+			}
+		}
+	})
+	return got
+}
+
+// inStep checks that both sides hold the same files with the same
+// contents, and returns their names.
+func (it *bisyncITest) inStep(t *testing.T) []string {
+	t.Helper()
+	sameTree(t, tree(t, it.b), tree(t, it.a))
+	return names(t, it.a)
+}
+
+func TestIntegrationBisyncLocal(t *testing.T) {
+	it := newBisyncITest(t)
+	put(t, it.a, map[string]string{"a1.txt": "from a", "sub/s.txt": "shared", "k1.txt": "1", "k2.txt": "2", "k3.txt": "3", "k4.txt": "4"})
+	put(t, it.b, map[string]string{"b1.txt": "from b"})
+
+	// The first run of a pair resyncs: the union of both sides.
+	out, _ := it.sync(t, it.spec(nil))
+	if out.GetResyncReason() != reasonFirstRun || out.GetConflicts() != 0 {
+		t.Errorf("first run output = %v", out)
+	}
+	if got, want := it.inStep(t), []string{"a1.txt", "b1.txt", "k1.txt", "k2.txt", "k3.txt", "k4.txt", "sub/s.txt"}; !slices.Equal(got, want) {
+		t.Errorf("after the first run: %v, want %v", got, want)
+	}
+
+	// New and changed files spread in both directions, without a resync.
+	put(t, it.a, map[string]string{"new-a.txt": "new on a", "k1.txt": "changed on a"})
+	put(t, it.b, map[string]string{"new-b.txt": "new on b", "sub/s.txt": "changed on b"})
+	out, _ = it.sync(t, it.spec(nil))
+	if out.GetResyncReason() != reasonNone {
+		t.Errorf("second run resynced: %v", out)
+	}
+	it.inStep(t)
+	if got := string(tree(t, it.b)["k1.txt"]); got != "changed on a" {
+		t.Errorf("k1.txt on b = %q", got)
+	}
+	if got := string(tree(t, it.a)["sub/s.txt"]); got != "changed on b" {
+		t.Errorf("sub/s.txt on a = %q", got)
+	}
+
+	// A deletion spreads.
+	remove(t, it.b, "a1.txt")
+	_, res := it.sync(t, it.spec(nil))
+	if got := it.inStep(t); slices.Contains(got, "a1.txt") {
+		t.Errorf("a1.txt not deleted: %v", got)
+	}
+	if res.Stats.Deletes != 1 {
+		t.Errorf("deletes = %d, want 1", res.Stats.Deletes)
+	}
+
+	// A file changed differently on both sides is a conflict: both versions
+	// are kept. One changed the same way on both sides is not.
+	put(t, it.a, map[string]string{"k2.txt": "edited on a", "k3.txt": "same edit"})
+	put(t, it.b, map[string]string{"k2.txt": "edited on b, longer", "k3.txt": "same edit"})
+	out, res = it.sync(t, it.spec(nil))
+	if out.GetConflicts() != 1 || !slices.Equal(out.GetConflictPaths(), []string{"k2.txt"}) {
+		t.Errorf("conflicts = %d %q, want k2.txt only", out.GetConflicts(), out.GetConflictPaths())
+	}
+	if len(res.Warnings) != 1 || !strings.HasPrefix(res.Warnings[0], "1 file changed on both sides; both versions were kept") {
+		t.Errorf("warnings = %q", res.Warnings)
+	}
+	got := it.inStep(t)
+	if slices.Contains(got, "k2.txt") || !slices.Contains(got, "k2.txt.conflict1") || !slices.Contains(got, "k2.txt.conflict2") {
+		t.Errorf("after the conflict: %v", got)
+	}
+	versions := []string{string(tree(t, it.a)["k2.txt.conflict1"]), string(tree(t, it.a)["k2.txt.conflict2"])}
+	if !slices.Equal(versions, []string{"edited on a", "edited on b, longer"}) {
+		t.Errorf("conflict versions = %q", versions)
+	}
+
+	// A dry run changes nothing and says so.
+	put(t, it.a, map[string]string{"dry.txt": "x"})
+	out, _ = it.sync(t, it.spec(&syncrv1.RcloneBisyncOptions{DryRun: true}))
+	if !out.GetDryRun() || slices.Contains(names(t, it.b), "dry.txt") {
+		t.Errorf("dry run: output %v, b has %v", out, names(t, it.b))
+	}
+	out, _ = it.sync(t, it.spec(nil))
+	if out.GetResyncReason() != reasonNone || !slices.Contains(it.inStep(t), "dry.txt") {
+		t.Errorf("after the dry run: output %v", out)
+	}
+}
+
+func TestIntegrationBisyncDeleteLimit(t *testing.T) {
+	it := newBisyncITest(t)
+	files := map[string]string{}
+	for i := range 8 {
+		files["f"+string(rune('1'+i))+".txt"] = "file"
+	}
+	put(t, it.a, files)
+	it.sync(t, it.spec(nil))
+
+	remove(t, it.a, "f1.txt", "f2.txt", "f3.txt", "f4.txt", "f5.txt")
+	it.fail(t, it.spec(nil), syncrv1.JobErrorCode_JOB_ERROR_CODE_SAFETY_ABORT, "too many deletes (>50%, 5 of 8)")
+	if got := len(names(t, it.b)); got != 8 {
+		t.Errorf("b has %d files after the abort, want 8", got)
+	}
+	// A higher limit lets it through; so does force, once.
+	it.fail(t, it.spec(&syncrv1.RcloneBisyncOptions{MaxDeletePercent: ptr[int32](60)}),
+		syncrv1.JobErrorCode_JOB_ERROR_CODE_SAFETY_ABORT, "too many deletes (>60%")
+	out, res := it.sync(t, it.spec(nil, func(op *syncrv1.RcloneBisync) { op.Force = true }))
+	if out.GetResyncReason() != reasonNone || res.Stats.Deletes != 5 {
+		t.Errorf("forced run: output %v, deletes %d", out, res.Stats.Deletes)
+	}
+	if got := it.inStep(t); len(got) != 3 {
+		t.Errorf("after the forced run: %v", got)
+	}
+	it.sync(t, it.spec(nil))
+}
+
+func TestIntegrationBisyncFilterChange(t *testing.T) {
+	it := newBisyncITest(t)
+	put(t, it.a, map[string]string{"doc.txt": "d", "k1.txt": "1", "k2.txt": "2"})
+	it.sync(t, it.spec(nil))
+
+	filtered := &syncrv1.RcloneBisyncOptions{Filters: []*syncrv1.FilterRule{exclude("*.tmp")}}
+	put(t, it.a, map[string]string{"scratch.tmp": "t", "new.txt": "n"})
+	// Changing the filters needs a deliberate resync, every time until
+	// there is one.
+	for range 2 {
+		it.fail(t, it.spec(filtered), syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED, "a resync is required: filters file has changed")
+	}
+	if slices.Contains(names(t, it.b), "new.txt") {
+		t.Error("a run that needs a resync changed b")
+	}
+	out, _ := it.sync(t, it.spec(filtered, func(op *syncrv1.RcloneBisync) { op.Resync = true }))
+	if out.GetResyncReason() != reasonRequested {
+		t.Errorf("resync output = %v", out)
+	}
+	if got := names(t, it.b); slices.Contains(got, "scratch.tmp") || !slices.Contains(got, "new.txt") {
+		t.Errorf("b after the resync: %v", got)
+	}
+	out, _ = it.sync(t, it.spec(filtered))
+	if out.GetResyncReason() != reasonNone {
+		t.Errorf("run after the resync: %v", out)
+	}
+	// Removing every rule is a change too.
+	it.fail(t, it.spec(nil), syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED, "filters file has changed")
+}
+
+func TestIntegrationBisyncSideUnavailable(t *testing.T) {
+	it := newBisyncITest(t)
+	put(t, it.a, map[string]string{"k1.txt": "1", "k2.txt": "2"})
+	it.sync(t, it.spec(nil))
+
+	// An empty side (an unmounted drive's mount point) stops the run, even
+	// with force; the state is kept, so the run after the fix is normal.
+	hidden := filepath.Join(it.base, "hidden")
+	if err := os.Rename(it.a, hidden); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(it.a, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, force := range []bool{false, true} {
+		it.fail(t, it.spec(nil, func(op *syncrv1.RcloneBisync) { op.Force = force }),
+			syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE, "Folder A (path1) is empty")
+	}
+	if got := len(names(t, it.b)); got != 2 {
+		t.Errorf("b has %d files, want 2", got)
+	}
+
+	// A side that does not exist.
+	if err := os.Remove(it.a); err != nil {
+		t.Fatal(err)
+	}
+	it.fail(t, it.spec(nil), syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "a side of the two-way sync does not exist")
+
+	if err := os.Rename(hidden, it.a); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != reasonNone {
+		t.Errorf("run after the fix: %v", out)
+	}
+
+	// check_access needs the RCLONE_TEST files on both sides.
+	access := &syncrv1.RcloneBisyncOptions{CheckAccess: true}
+	it.fail(t, it.spec(access), syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE, "RCLONE_TEST files not found")
+	put(t, it.a, map[string]string{"RCLONE_TEST": ""})
+	put(t, it.b, map[string]string{"RCLONE_TEST": ""})
+	it.sync(t, it.spec(access))
+}
+
+func TestIntegrationBisyncEmptyStart(t *testing.T) {
+	it := newBisyncITest(t)
+	// Two empty folders: the first run resyncs nothing. rclone cannot sync
+	// against its empty listings, so the pair counts as fresh until it has
+	// files.
+	if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != reasonFirstRun {
+		t.Errorf("first run: %v", out)
+	}
+	put(t, it.b, map[string]string{"first.txt": "1", "second.txt": "2"})
+	if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != reasonFirstRun {
+		t.Errorf("run after the first files: %v", out)
+	}
+	put(t, it.a, map[string]string{"third.txt": "3"})
+	if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != reasonNone {
+		t.Errorf("run with a baseline: %v", out)
+	}
+	if got := it.inStep(t); len(got) != 3 {
+		t.Errorf("files = %v", got)
+	}
+}
+
+func TestIntegrationBisyncEveryOption(t *testing.T) {
+	it := newBisyncITest(t)
+	put(t, it.a, map[string]string{"k1.txt": "1", "k2.txt": "2", "k3.txt": "3", "skip.tmp": "t", "empty/.keep": ""})
+	put(t, it.b, map[string]string{"k1.txt": "1 on b"})
+	opts := &syncrv1.RcloneBisyncOptions{
+		Transfers:                    ptr[int32](2),
+		Checkers:                     ptr[int32](4),
+		BandwidthLimitBytesPerSecond: ptr[int64](10 << 20),
+		Compare: []syncrv1.BisyncCompare{
+			syncrv1.BisyncCompare_BISYNC_COMPARE_SIZE, syncrv1.BisyncCompare_BISYNC_COMPARE_MODTIME, syncrv1.BisyncCompare_BISYNC_COMPARE_CHECKSUM,
+		},
+		ConflictResolve:    syncrv1.BisyncConflictResolve_BISYNC_CONFLICT_RESOLVE_NEWER,
+		ConflictLoser:      syncrv1.BisyncConflictLoser_BISYNC_CONFLICT_LOSER_PATHNAME,
+		ConflictSuffix:     "mine,theirs",
+		MaxDeletePercent:   ptr[int32](90),
+		ResyncMode:         syncrv1.BisyncResyncMode_BISYNC_RESYNC_MODE_LARGER,
+		CreateEmptySrcDirs: true,
+		LowLevelRetries:    ptr[int32](2),
+		Filters:            []*syncrv1.FilterRule{exclude("*.tmp"), include("**")},
+	}
+	// rclone accepts every flag (exit code 2 would be INVALID_SPEC).
+	out, _ := it.sync(t, it.spec(opts))
+	if out.GetResyncReason() != reasonFirstRun {
+		t.Errorf("first run: %v", out)
+	}
+	if got := string(tree(t, it.a)["k1.txt"]); got != "1 on b" {
+		t.Errorf("resync mode larger kept %q", got)
+	}
+	// A conflict with a winner: the newer version keeps the name, the other
+	// is kept with its side's suffix.
+	put(t, it.a, map[string]string{"k2.txt": "edited on a"})
+	put(t, it.b, map[string]string{"k2.txt": "edited on b"})
+	older := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(it.a, "k2.txt"), older, older); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = it.sync(t, it.spec(opts))
+	if out.GetConflicts() != 1 {
+		t.Errorf("conflicts = %v", out)
+	}
+	// With two suffixes, pathname names the loser by its side alone.
+	if got := tree(t, it.a); string(got["k2.txt"]) != "edited on b" || string(got["k2.txt.mine"]) != "edited on a" {
+		t.Errorf("after the conflict a has %v", names(t, it.a))
+	}
+	// The filters kept skip.tmp on a.
+	if got, want := names(t, it.b), []string{"empty/.keep", "k1.txt", "k2.txt", "k2.txt.mine", "k3.txt"}; !slices.Equal(got, want) {
+		t.Errorf("b = %v, want %v", got, want)
+	}
+}
+
+// TestIntegrationBisyncLongPaths: two local paths of 200 bytes together
+// work (rclone's state file names stay under 255 bytes; on Windows the work
+// directory's paths exceed 260 characters); one byte more is refused before
+// rclone starts.
+func TestIntegrationBisyncLongPaths(t *testing.T) {
+	it := newBisyncITest(t)
+	side := func(name byte, n int) string {
+		return filepath.Join(it.root, strings.Repeat(string(name), n-len(it.root)-1))
+	}
+	half := maxBisyncPathBytes / 2
+	if len(it.root) > half-10 {
+		t.Skipf("the test directory %q is too long for two paths of %d bytes", it.root, half)
+	}
+	a, b := side('a', half), side('b', half)
+	for _, d := range []string{a, b} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(t, a, map[string]string{"x.txt": "x"})
+	spec := it.spec(nil, func(op *syncrv1.RcloneBisync) { op.Path1, op.Path2 = local(a), local(b) })
+	it.sync(t, spec)
+	put(t, b, map[string]string{"y.txt": "y"})
+	if out, _ := it.sync(t, spec); out.GetResyncReason() != reasonNone {
+		t.Errorf("second run: %v", out)
+	}
+	if got := names(t, a); !slices.Equal(got, []string{"x.txt", "y.txt"}) {
+		t.Errorf("a = %v", got)
+	}
+
+	longer := side('c', half+1)
+	if err := os.MkdirAll(longer, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	it.fail(t, it.spec(nil, func(op *syncrv1.RcloneBisync) { op.Path1, op.Path2 = local(a), local(longer) }),
+		syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, "too long for a two-way sync")
+}
+
+// TestIntegrationBisyncRemoteSide syncs a folder with a remote (a union
+// over local folders, which needs no server): remote paths reach rclone
+// as "<alias>:<path>".
+func TestIntegrationBisyncRemoteSide(t *testing.T) {
+	it := newBisyncITest(t)
+	upstream, readOnly := filepath.Join(it.root, "u"), filepath.Join(it.root, "ro")
+	put(t, upstream, map[string]string{"shared/r.txt": "remote"})
+	if err := os.MkdirAll(readOnly, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	put(t, it.a, map[string]string{"l.txt": "local"})
+	union := &syncrv1.RemoteDefinition{Alias: "r1", BackendType: "union", UnionUpstreams: []*syncrv1.UnionUpstream{
+		{Location: local(upstream)},
+		{Location: local(readOnly), Mode: syncrv1.UnionUpstreamMode_UNION_UPSTREAM_MODE_READ_ONLY},
+	}}
+	spec := it.spec(nil, func(op *syncrv1.RcloneBisync) { op.Path2 = &syncrv1.Location{Remote: "r1", Path: "shared"} })
+	spec.Remotes = []*syncrv1.RemoteDefinition{union}
+	if out, _ := it.sync(t, spec); out.GetResyncReason() != reasonFirstRun {
+		t.Errorf("first run: %v", out)
+	}
+	if got := names(t, filepath.Join(upstream, "shared")); !slices.Equal(got, []string{"l.txt", "r.txt"}) {
+		t.Errorf("remote side = %v", got)
+	}
+	remove(t, filepath.Join(upstream, "shared"), "r.txt")
+	if out, _ := it.sync(t, spec); out.GetResyncReason() != reasonNone {
+		t.Errorf("second run: %v", out)
+	}
+	if got := names(t, it.a); !slices.Equal(got, []string{"l.txt"}) {
+		t.Errorf("local side = %v", got)
+	}
+}
+
+// startBig writes a file of size bytes on side a and returns options that
+// make its transfer take a few seconds.
+func startBig(t *testing.T, it *bisyncITest, size int) *syncrv1.RcloneBisyncOptions {
+	t.Helper()
+	writeFiles(t, it.a, map[string]int{"big.bin": size})
+	return &syncrv1.RcloneBisyncOptions{BandwidthLimitBytesPerSecond: ptr[int64](2 << 20)}
+}
+
+// interrupt runs spec with r and cancels it once bytes have been
+// transferred; the run must report the cancellation.
+func interrupt(t *testing.T, it *bisyncITest, r *BisyncRunner, spec *syncrv1.JobSpec) runner.Result {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	start := time.Now()
+	res, err := it.run(ctx, t, r, spec, func(p runner.Progress) {
+		if p.Bytes > 0 {
+			cancel()
+		}
+	})
+	if !runner.Canceled(err) {
+		t.Fatalf("Run() = %v, want a cancellation", err)
+	}
+	if elapsed := time.Since(start); elapsed > 30*time.Second {
+		t.Errorf("cancel took %v", elapsed)
+	}
+	if res.Stats.Bytes == 0 {
+		t.Errorf("stats = %+v, want a transfer under way", res.Stats)
+	}
+	return res
+}
+
+// TestIntegrationBisyncInterrupted: a run stopped mid-transfer, gracefully
+// (cancel: SIGINT on Unix; Windows kills) or killed (a grace period too
+// short for rclone's graceful stop), is followed by a normal run that
+// succeeds without a resync. A kill can leave a partial file that the next
+// run copies across; the run after that removes it, so the sides are in
+// step after two runs.
+func TestIntegrationBisyncInterrupted(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		grace time.Duration
+	}{
+		{"cancelled", 10 * time.Second},
+		{"killed", 50 * time.Millisecond},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			it := newBisyncITest(t)
+			put(t, it.a, map[string]string{"k1.txt": "1", "k2.txt": "2", "k3.txt": "3"})
+			it.sync(t, it.spec(nil))
+
+			opts := startBig(t, it, 6<<20)
+			cfg := it.cfg
+			cfg.Supervisor = proc.New(proc.Options{GracePeriod: tt.grace})
+			res := interrupt(t, it, it.newRunner(t, cfg), it.spec(opts))
+			killed := tt.name == "killed" || runtime.GOOS == "windows"
+			if !killed && res.ExitCode != 130 {
+				t.Errorf("exit code %d, want 130 (rclone stopped gracefully on SIGINT)", res.ExitCode)
+			}
+			// A killed rclone leaves its lock file; the next run removes it.
+			if locks, _ := filepath.Glob(filepath.Join(it.workDir(), "*.lck")); killed != (len(locks) == 1) {
+				t.Errorf("lock files after the interruption: %v (killed: %v)", locks, killed)
+			}
+
+			for i := range 2 {
+				if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != reasonNone {
+					t.Errorf("run %d after the interruption resynced: %v", i+1, out)
+				}
+			}
+			if got := it.inStep(t); !slices.Equal(got, []string{"big.bin", "k1.txt", "k2.txt", "k3.txt"}) {
+				t.Errorf("files = %v", got)
+			}
+		})
+	}
+}
+
+// TestIntegrationBisyncFirstRunInterrupted: a first run (a resync) stopped
+// part-way, cancelled or killed, leaves no baseline, so the next run
+// resyncs again (rclone: "just run it again"); the one after is normal.
+func TestIntegrationBisyncFirstRunInterrupted(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		grace time.Duration
+	}{
+		{"cancelled", 10 * time.Second},
+		{"killed", 50 * time.Millisecond},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			it := newBisyncITest(t)
+			put(t, it.a, map[string]string{"k1.txt": "1"})
+			put(t, it.b, map[string]string{"k2.txt": "2"})
+			opts := startBig(t, it, 6<<20)
+			cfg := it.cfg
+			cfg.Supervisor = proc.New(proc.Options{GracePeriod: tt.grace})
+			interrupt(t, it, it.newRunner(t, cfg), it.spec(opts))
+
+			for i, want := range []syncrv1.BisyncResyncReason{reasonFirstRun, reasonNone} {
+				if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != want {
+					t.Errorf("run %d after the interruption: %v, want reason %v", i+1, out, want)
+				}
+			}
+			if got := it.inStep(t); !slices.Equal(got, []string{"big.bin", "k1.txt", "k2.txt"}) {
+				t.Errorf("files = %v", got)
+			}
+		})
+	}
+}
+
+// TestIntegrationBisyncStaleRcloneLock: a lock file rclone left (a worker
+// killed with its job) is removed under the pair's lock.
+func TestIntegrationBisyncStaleRcloneLock(t *testing.T) {
+	it := newBisyncITest(t)
+	put(t, it.a, map[string]string{"k1.txt": "1"})
+	it.sync(t, it.spec(nil))
+	work := it.workDir()
+	entries, err := os.ReadDir(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var session string
+	for _, e := range entries {
+		if s, ok := strings.CutSuffix(e.Name(), ".path1.lst"); ok {
+			session = s
+		}
+	}
+	if session == "" {
+		t.Fatalf("no listing in %v", entries)
+	}
+	lck := filepath.Join(work, session+".lck")
+	put(t, work, map[string]string{session + ".lck": `{"Session":"x","PID":"999999","TimeRenewed":"2026-11-12T00:00:00Z","TimeExpires":"2099-01-01T00:00:00Z"}`})
+	put(t, it.b, map[string]string{"k2.txt": "2"})
+	if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != reasonNone {
+		t.Errorf("run with a stale lock: %v", out)
+	}
+	if _, err := os.Stat(lck); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("stale lock left: %v", err)
+	}
+	it.inStep(t)
+}

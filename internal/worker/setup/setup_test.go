@@ -6,11 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -877,11 +879,25 @@ func TestDryRunDefaultPaths(t *testing.T) {
 			r.setup.System.GOOS = tt.goos
 			r.setup.System.Paths = paths.Env{GOOS: tt.goos, LookupEnv: func(k string) (string, bool) { v, ok := env[k]; return v, ok },
 				UserHomeDir: func() (string, error) { return home, nil }, Geteuid: func() int { return 0 }}
+			// The simulated defaults may name the host's real files (a
+			// worker installed in /etc/syncr): the test must not see them.
+			var looked []string
+			r.setup.System.Stat = func(name string) (fs.FileInfo, error) {
+				looked = append(looked, name)
+				if rel, err := filepath.Rel(home, name); err != nil || strings.HasPrefix(rel, "..") {
+					return nil, fs.ErrNotExist
+				}
+				return os.Stat(name)
+			}
 			o := Options{Mode: config.LinkActive, ControllerURL: "https://syncr.example.com", Token: testToken, User: tt.user, DryRun: true}
-			if _, err := r.run(o); err != nil {
+			res, err := r.run(o)
+			if err != nil {
 				t.Fatal(err)
 			}
 			mustContain(t, "plan", r.out.String(), tt.wants...)
+			if !slices.Contains(looked, res.ConfigPath) {
+				t.Errorf("looked for %q, want the config file %q", looked, res.ConfigPath)
+			}
 		})
 	}
 }

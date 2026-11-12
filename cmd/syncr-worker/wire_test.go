@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Zeptiny/Syncr/internal/link"
+	"github.com/Zeptiny/Syncr/internal/worker/bisyncstate"
 	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
 	"github.com/Zeptiny/Syncr/internal/worker/localfs"
 	"github.com/Zeptiny/Syncr/internal/worker/paths"
@@ -139,11 +140,15 @@ func TestBuildWorkerRegistersEveryRunner(t *testing.T) {
 	}
 	want := []string{
 		"restic_backup", "restic_check", "restic_delete_data", "restic_forget", "restic_init",
-		"restic_prune", "restic_restore", "restic_snapshots", "rclone_transfer",
+		"restic_prune", "restic_restore", "restic_snapshots", "rclone_transfer", "rclone_bisync",
 	}
 	slices.Sort(want)
 	if got := w.registry.Kinds(); !slices.Equal(got, want) {
 		t.Errorf("Kinds() = %v, want %v", got, want)
+	}
+	// Every job kind of the wire contract has a runner.
+	if got, all := w.registry.Kinds(), slices.Sorted(slices.Values(link.Kinds())); !slices.Equal(got, all) {
+		t.Errorf("Kinds() = %v, want every kind of the contract %v", got, all)
 	}
 
 	// The probe executor runs every probe operation with the same tools.
@@ -186,6 +191,44 @@ func TestBuildWorkerCreatesPrivateDirectoriesUnderTheDataDir(t *testing.T) {
 		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
 			t.Errorf("%s has mode %v, want 0700", dir, info.Mode().Perm())
 		}
+	}
+}
+
+// TestStartBackgroundPrunesTwoWaySyncState: the two-way sync state lives
+// in <data_dir>/bisync, and the state of pairs that have not run for 180
+// days is gone once startBackground returns, before the link starts.
+func TestStartBackgroundPrunesTwoWaySyncState(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	w, err := f.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := paths.BisyncDir(f.cfg.DataDir)
+	if w.bisync.Root() != root {
+		t.Errorf("state root = %q, want %q", w.bisync.Root(), root)
+	}
+	stale := filepath.Join(root, strings.Repeat("a", 64))
+	recent := filepath.Join(root, strings.Repeat("b", 64))
+	for dir, at := range map[string]time.Time{stale: time.Now().Add(-bisyncstate.Retention - time.Hour), recent: time.Now()} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, bisyncstate.LastRunFileName), []byte(at.UTC().Format(time.RFC3339Nano)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stop := w.startBackground(t.Context(), f.log)
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stale pair kept: %v", err)
+	}
+	if _, err := os.Stat(recent); err != nil {
+		t.Errorf("recent pair removed: %v", err)
+	}
+	stop() // returns once the daily loop has ended
+	if !strings.Contains(f.logs.String(), "component=bisync") {
+		t.Errorf("logs lack the removal:\n%s", f.logs)
 	}
 }
 
@@ -270,7 +313,7 @@ func TestBuildWorkerWithoutLocalRootsDeniesEverythingAndWarns(t *testing.T) {
 		!strings.Contains(logs, "SYNCR_LOCAL_ROOTS") {
 		t.Errorf("logs lack the local_roots warning:\n%s", logs)
 	}
-	if len(w.registry.Kinds()) != 9 {
+	if len(w.registry.Kinds()) != 10 {
 		t.Errorf("Kinds() = %v: runners must be registered even without local roots (remote-to-remote jobs)", w.registry.Kinds())
 	}
 }
