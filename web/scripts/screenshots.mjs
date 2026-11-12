@@ -8,7 +8,8 @@
 //                           01-setup (default: skipped unless SYNCR_UI_MOCK=1)
 //   SYNCR_UI_USER           sign-in user (default admin)
 //   SYNCR_UI_PASSWORD       sign-in password (default syncr-demo-admin)
-//   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3 or readme: which shot list
+//   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3, hooks or readme: which
+//                           shot list
 //   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/<set>)
 //   SYNCR_SCREENSHOT_ONLY   comma-separated shot names to take (default all)
 //   SYNCR_SCREENSHOT_MOBILE 1 to also take 390px-wide shots
@@ -32,7 +33,7 @@ const mock = process.env.SYNCR_UI_MOCK === "1";
 const setupUrl = (process.env.SYNCR_SETUP_URL ?? (mock ? base : "")).replace(/\/$/, "");
 const user = process.env.SYNCR_UI_USER ?? "admin";
 const password = process.env.SYNCR_UI_PASSWORD ?? "syncr-demo-admin";
-const set = ["m3", "m4", "m5", "readme"].includes(process.env.SYNCR_SCREENSHOT_SET)
+const set = ["m3", "m4", "m5", "hooks", "readme"].includes(process.env.SYNCR_SCREENSHOT_SET)
   ? process.env.SYNCR_SCREENSHOT_SET
   : "m6";
 const outDir = resolve(
@@ -558,6 +559,105 @@ async function m6(browser) {
   }
 }
 
+// pickHook adds a hook to one of the four lists of a job form.
+async function pickHook(page, list, hook) {
+  await page.getByRole("combobox", { name: `Add a hook: ${list}` }).click();
+  await page.getByRole("option", { name: new RegExp(`^${hook}`) }).click();
+}
+
+// hooksBackupForm fills the backup form for the documents on nas-01, up to
+// its hooks.
+async function hooksBackupForm(page) {
+  await page.goto(`${base}/jobs/new?kind=restic_backup`);
+  await settle(page);
+  await page.getByRole("combobox", { name: /^Worker/ }).click();
+  await page.getByRole("option", { name: /nas-01/ }).click();
+  await page.getByRole("combobox", { name: /^Repository/ }).click();
+  await page.getByRole("option", { name: /^NAS documents/ }).click();
+  await page.getByLabel("Path to back up 1", { exact: true }).fill("/srv/docs");
+  await pickHook(page, "before the job", "stop-paperless");
+  await pickHook(page, "before the job", "dump-paperless-db");
+  await pickHook(page, "after success", "ping-healthcheck");
+  await pickHook(page, "always, at the end", "start-paperless");
+  await settle(page, 300);
+}
+
+// openHookedBackup opens a finished backup of the NAS documents with the
+// given status (4 succeeded, 5 failed) and brings its hooks into view. The
+// status is quoted as the app writes it: the router reads a bare number as
+// a number, and the list drops a status that is not a string.
+async function openHookedBackup(page, status) {
+  await openRow(page, `/jobs?kind=restic_backup&status=%22${status}%22`, "Back up /srv/docs");
+  await page.getByRole("heading", { name: "Hooks" }).waitFor();
+  await scrollTo(page, page.getByRole("heading", { name: "Hooks" }), 96);
+}
+
+// The hooks shots. They expect the dev seed: nas-01 defines four hooks,
+// the backups of the NAS documents ran them, and one of those failed
+// because its last hook timed out.
+const hooksShots = [
+  [
+    "01-job-form-hooks",
+    async (p) => {
+      await hooksBackupForm(p);
+      await scrollTo(p, p.getByRole("heading", { name: "Hooks" }), 96);
+    },
+  ],
+  [
+    "02-job-form-hook-choices",
+    async (p) => {
+      await hooksBackupForm(p);
+      await scrollTo(p, p.getByRole("heading", { name: "Hooks" }), 96);
+      await p.getByRole("combobox", { name: "Add a hook: after failure" }).click();
+      await settle(p, 300);
+    },
+  ],
+  ["03-job-hook-failed", async (p) => openHookedBackup(p, 5)],
+  ["04-job-hooks-succeeded", async (p) => openHookedBackup(p, 4)],
+  [
+    "05-worker-hooks",
+    async (p) => {
+      await openRow(p, "/workers", "nas-01");
+      await scrollTo(p, p.getByRole("heading", { name: "Hooks" }), 96);
+    },
+  ],
+];
+
+// hooks takes the hooks shots: light at 1440×900, then the failed job in
+// dark and the form's hooks at phone width (and every shot at 390 px with
+// MOBILE=1).
+async function hooks(browser) {
+  const variants = [{ suffix: "", width: 1440, height: 900 }];
+  if (mobile) variants.push({ suffix: "-mobile", width: 390, height: 844 });
+  for (const v of variants) {
+    const p = await newPage(browser, v);
+    await signIn(p);
+    for (const [name, go] of hooksShots) {
+      if (!wanted(name)) continue;
+      await go(p);
+      await shot(p, name + v.suffix);
+      // Close a list a shot left open before the next page.
+      await p.keyboard.press("Escape");
+    }
+    await p.context().close();
+  }
+  if (wanted("06-job-hook-failed-dark")) {
+    const p = await newPage(browser, { dark: true });
+    await signIn(p);
+    await openHookedBackup(p, 5);
+    await shot(p, "06-job-hook-failed-dark");
+    await p.context().close();
+  }
+  if (wanted("07-job-form-hooks-mobile") && !mobile) {
+    const p = await newPage(browser, { width: 390, height: 844 });
+    await signIn(p);
+    await hooksBackupForm(p);
+    await scrollTo(p, p.getByRole("heading", { name: "Hooks" }), 72);
+    await shot(p, "07-job-form-hooks-mobile");
+    await p.context().close();
+  }
+}
+
 // The README shots: one page per feature from the same seeded controller,
 // each in light and dark so the README can follow the reader's theme.
 const readmeShots = [
@@ -609,6 +709,10 @@ async function main() {
     }
     if (set === "m6") {
       await m6(browser);
+      return;
+    }
+    if (set === "hooks") {
+      await hooks(browser);
       return;
     }
     if (set === "m5") {
