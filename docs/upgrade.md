@@ -103,7 +103,7 @@ upgrade started meanwhile refuses and changes nothing.
 
 | Flag | Meaning |
 |---|---|
-| `--version vX.Y.Z` | the release to install (default: the latest release) |
+| `--version vX.Y.Z` | the release to install (default: the latest release, which is never a release candidate: install `vX.Y.Z-rc.N` by naming it) |
 | `--from URL` | where the release assets are (a mirror); https, or http only on this machine |
 | `--user` | the per-user service (systemd user unit, or the Windows Scheduled Task) |
 | `--config FILE` | the worker's config, if not at the default place |

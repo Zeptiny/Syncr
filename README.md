@@ -79,12 +79,13 @@ snapshots, and get notified when something fails.
 
 ```sh
 mkdir syncr && cd syncr
-v=v2.0.0
+v=v2.0.0   # or a release candidate's tag, such as v2.0.0-rc.1
 curl -fsSLo docker-compose.yml "https://raw.githubusercontent.com/Zeptiny/Syncr/$v/deploy/docker-compose.yml"
 curl -fsSLo .env "https://raw.githubusercontent.com/Zeptiny/Syncr/$v/deploy/.env.example"
 chmod 600 .env
 # Fill in POSTGRES_PASSWORD (openssl rand -hex 24) and
-# SYNCR_SECRETS_KEY (openssl rand -base64 32) in .env
+# SYNCR_SECRETS_KEY (openssl rand -base64 32) in .env;
+# for a release candidate also SYNCR_VERSION=2.0.0-rc.1 (no v)
 docker compose up -d --wait
 ```
 
