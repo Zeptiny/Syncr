@@ -3,6 +3,7 @@ package cronexpr_test
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 	_ "time/tzdata" // embedded zone data: the DST cases do not depend on the host's
@@ -149,6 +150,81 @@ func TestDayOfMonthOrDayOfWeek(t *testing.T) {
 	}
 	if got := either.Next(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)); !got.Equal(fri) {
 		t.Errorf("Next = %v, want %v", got, fri)
+	}
+}
+
+// TestSteppedStarDayField: a day field starting with "*" counts as "*" for
+// the day rule even with a step, as in Vixie cron: "*/2" days that are
+// Mondays, not odd days or Mondays.
+func TestSteppedStarDayField(t *testing.T) {
+	t.Parallel()
+	e := mustParse(t, "0 0 */2 * 1", "UTC")
+	mon2 := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC) // a Monday, the 2nd (even)
+	mon9 := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC) // a Monday, the 9th (odd)
+	thu5 := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC) // a Thursday, the 5th (odd)
+	if e.Matches(mon2) || !e.Matches(mon9) || e.Matches(thu5) {
+		t.Error(`"0 0 */2 * 1" must match odd days that are Mondays only`)
+	}
+	if got := e.Next(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)); !got.Equal(mon9) {
+		t.Errorf("Next = %v, want %v", got, mon9)
+	}
+	// The same with the day of week stepped: the 13th, if it is a Sunday,
+	// Tuesday, Thursday or Saturday.
+	e = mustParse(t, "0 0 13 * */2", "UTC")
+	if fri13 := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC); e.Matches(fri13) {
+		t.Error(`"0 0 13 * */2" matches Friday the 13th`)
+	}
+	if sun13 := time.Date(2026, 12, 13, 0, 0, 0, 0, time.UTC); !e.Matches(sun13) {
+		t.Error(`"0 0 13 * */2" does not match Sunday the 13th`)
+	}
+}
+
+// TestSundayIsSeven: 7, and ranges through 7 or "sun", mean Sunday, as in
+// crontab(5).
+func TestSundayIsSeven(t *testing.T) {
+	t.Parallel()
+	week := time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC) // a Sunday
+	tests := []struct {
+		expr string
+		days string // the matching days of the week from Sunday, as 0/1
+	}{
+		{"0 0 * * 7", "1000000"},
+		{"0 0 * * 0", "1000000"},
+		{"0 0 * * 5-7", "1000011"},
+		{"0 0 * * fri-sun", "1000011"},
+		{"0 0 * * mon-sun", "1111111"},
+		{"0 0 * * 0-7", "1111111"},
+		{"0 0 * * 1-7/2", "1101010"},
+		{"0 0 * * 2-7/2", "0010101"},
+		{"0 0 * * 7-7", "1000000"},
+		{"0 0 * * 1,7", "1100000"},
+		{"0 0 * * sat-sun", "1000001"},
+	}
+	for _, tt := range tests {
+		e, err := cronexpr.Parse(tt.expr, "UTC")
+		if err != nil {
+			t.Errorf("Parse(%q): %v", tt.expr, err)
+			continue
+		}
+		if e.String() != tt.expr {
+			t.Errorf("Parse(%q) normalized to %q", tt.expr, e.String())
+		}
+		var got strings.Builder
+		for i := range 7 {
+			if e.Matches(week.AddDate(0, 0, i)) {
+				got.WriteByte('1')
+			} else {
+				got.WriteByte('0')
+			}
+		}
+		if got.String() != tt.days {
+			t.Errorf("%q matches %s, want %s", tt.expr, got.String(), tt.days)
+		}
+	}
+	for _, bad := range []string{"0 0 * * 8", "0 0 * * 7/2", "0 0 * * 1-7/0", "0 0 * * 3-1"} {
+		if _, err := cronexpr.Parse(bad, "UTC"); err == nil {
+			t.Errorf("Parse(%q) succeeded", bad)
+		}
 	}
 }
 

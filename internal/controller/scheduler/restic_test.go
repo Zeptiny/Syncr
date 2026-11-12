@@ -182,6 +182,48 @@ func TestLabelSkipsOutdatedWorkers(t *testing.T) {
 	}
 }
 
+// TestPinnedOutdatedWorker: a schedule pinned to a worker that reports it
+// cannot run the kind (it lacks the kind's link feature, an older version,
+// or does not list the kind) fails the run without creating a job and
+// pauses the schedule, once the worker is reachable; an unreachable one
+// keeps the run waiting, since its report may be a previous process's.
+func TestPinnedOutdatedWorker(t *testing.T) {
+	t.Parallel()
+	for name, w := range map[string]worker{
+		"lacks the feature":    {name: "old", online: true, kinds: []string{"restic_backup"}},
+		"does not list a kind": {name: "old", online: true, kinds: []string{"rclone_transfer"}, features: link.Features()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e, repo := resticEnv(t)
+			id := e.addWorker(w)
+			sc := e.create(e.backupInput("nightly", schedules.Target{WorkerID: id}, repo))
+			e.clock.Set(t0.Add(time.Hour))
+			e.tick(e.newScheduler(nil, nil))
+			r := e.onlyRun(sc.ID)
+			if r.Status != schedules.RunFailed || r.Reason != schedules.ReasonWorkerOutdated ||
+				!strings.HasPrefix(r.Message, `the schedule's worker "old" (version `) || !strings.Contains(r.Message, "cannot run restic_backup jobs") {
+				t.Fatalf("run = %+v", r)
+			}
+			if got := e.schedule(sc.ID); got.Enabled || got.PausedReason != schedules.ReasonWorkerOutdated || len(e.jobsOf(sc.ID)) != 0 {
+				t.Errorf("schedule enabled %v, paused reason %q, jobs %d", got.Enabled, got.PausedReason, len(e.jobsOf(sc.ID)))
+			}
+		})
+	}
+
+	t.Run("unreachable: waits", func(t *testing.T) {
+		t.Parallel()
+		e, repo := resticEnv(t)
+		id := e.addWorker(worker{name: "old", online: false, kinds: []string{"restic_backup"}})
+		sc := e.create(e.backupInput("nightly", schedules.Target{WorkerID: id}, repo))
+		e.clock.Set(t0.Add(time.Hour))
+		e.tick(e.newScheduler(nil, nil))
+		if r := e.onlyRun(sc.ID); r.Status != schedules.RunPending || !e.schedule(sc.ID).Enabled {
+			t.Fatalf("run = %+v, want it waiting", r)
+		}
+	})
+}
+
 // vssInput is backupInput with Windows VSS on.
 func (e *env) vssInput(name string, target schedules.Target, repo domain.ResticRepoID) schedules.Input {
 	in := e.backupInput(name, target, repo)

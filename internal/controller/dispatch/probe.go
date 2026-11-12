@@ -364,6 +364,13 @@ func (b *ProbeBroker) probePassive(ctx context.Context, w workers.Worker, run *s
 		if res.GetProbeId() == "" {
 			res.ProbeId = run.GetProbeId()
 		}
+		if res.GetStatus() == syncrv1.ProbeStatus_PROBE_STATUS_CANCELLED && ctx.Err() == nil && deadlineReached(cctx) {
+			// The worker's handler got this call's deadline in whole
+			// milliseconds (Connect-Timeout-Ms), so it can end the probe a
+			// moment before cctx does and answer CANCELLED: the call ran
+			// out, the worker did not stop the probe on its own.
+			return nil, fmt.Errorf("%w: worker %q did not answer in time", domain.ErrUnavailable, w.Name)
+		}
 		return res, nil
 	case err == nil:
 		return nil, fmt.Errorf("%w: worker %q answered without a result", domain.ErrUnavailable, w.Name)
@@ -378,6 +385,19 @@ func (b *ProbeBroker) probePassive(ctx context.Context, w workers.Worker, run *s
 		b.log.WarnContext(ctx, "probe call to a passive worker failed", "worker_id", w.ID.String(), "error", err.Error())
 		return nil, fmt.Errorf("%w: the controller cannot reach worker %q", domain.ErrUnavailable, w.Name)
 	}
+}
+
+// passiveDeadlineSlack is how close to a passive probe call's deadline a
+// CANCELLED answer counts as the call running out (deadlineReached). The
+// worker's deadline can be earlier than the call's only by the
+// millisecond the Connect-Timeout-Ms header truncates, less the latency.
+const passiveDeadlineSlack = 50 * time.Millisecond
+
+// deadlineReached reports whether ctx's deadline is at most
+// passiveDeadlineSlack away.
+func deadlineReached(ctx context.Context) bool {
+	d, ok := ctx.Deadline()
+	return ok && time.Until(d) <= passiveDeadlineSlack
 }
 
 func (b *ProbeBroker) busy(w workers.Worker) error {

@@ -76,14 +76,21 @@ func TestSecurityNotifications(t *testing.T) {
 	adminHTTP := bearerClient(http.DefaultTransport, bootstrap(t, http.DefaultTransport, base, testSetupCode))
 	admin := newM4Client(adminHTTP, base)
 
-	// A second user, bob, with an API token of his own.
-	users := syncrv1connect.NewUserServiceClient(adminHTTP, base)
+	// A second user, bob, with an API token of his own. Creating a user
+	// needs the admin's session: an API token may not.
+	authc := syncrv1connect.NewAuthServiceClient(http.DefaultClient, base)
+	adminLogin := connect.NewRequest(&syncrv1.LoginRequest{Username: "admin", Password: "a long admin password"})
+	adminLogin.Header().Set(api.CSRFHeader, "1")
+	adminResp, err := authc.Login(ctx, adminLogin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	users := syncrv1connect.NewUserServiceClient(cookieClient(http.DefaultTransport, sessionCookie(t, adminResp.Header()), true), base)
 	if _, err := users.CreateUser(ctx, connect.NewRequest(&syncrv1.CreateUserRequest{
 		Username: "bob", Password: "a long password for bob", Role: syncrv1.UserRole_USER_ROLE_USER,
 	})); err != nil {
 		t.Fatal(err)
 	}
-	authc := syncrv1connect.NewAuthServiceClient(http.DefaultClient, base)
 	login := connect.NewRequest(&syncrv1.LoginRequest{Username: "bob", Password: "a long password for bob"})
 	login.Header().Set(api.CSRFHeader, "1")
 	resp, err := authc.Login(ctx, login)

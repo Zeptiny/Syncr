@@ -80,4 +80,13 @@ func TestUnitTemplatesRender(t *testing.T) { //nolint:paralleltest // changes HO
 			t.Errorf("user unit:\n%s", unit)
 		}
 	})
+	t.Run("escaped", func(t *testing.T) {
+		spec := NewSpec("linux", ScopeSystem, "/unused", "/srv/backup%20data/$HOME/worker.yaml", "/var/lib/sync%r", "")
+		unit := renderUnit(t, systemUnitTemplate, systemdEscaped(spec))
+		for _, want := range []string{`"--config" "/srv/backup%%20data/$$HOME/worker.yaml"`, "WorkingDirectory=/var/lib/sync%%r\n"} {
+			if !strings.Contains(unit, want) {
+				t.Errorf("unit lacks %q:\n%s", want, unit)
+			}
+		}
+	})
 }

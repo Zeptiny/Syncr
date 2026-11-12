@@ -29,6 +29,11 @@ const (
 	userSession
 	// admin procedures need an authenticated admin.
 	admin
+	// adminSession procedures need an admin with a session cookie: an
+	// admin's API token cannot create accounts or set passwords, either of
+	// which would give a leaked token a way to sign in and outlive its
+	// revocation (as userSession does for the token holder's own account).
+	adminSession
 )
 
 func (a access) String() string {
@@ -41,6 +46,8 @@ func (a access) String() string {
 		return "user (session)"
 	case admin:
 		return "admin"
+	case adminSession:
+		return "admin (session)"
 	default:
 		return "unknown"
 	}
@@ -90,11 +97,13 @@ func newPolicy() map[string]access {
 		syncrv1connect.AuthServiceCreateAPITokenProcedure: userSession,
 		syncrv1connect.AuthServiceDeleteAPITokenProcedure: userSession,
 
-		syncrv1connect.UserServiceListUsersProcedure:     admin,
-		syncrv1connect.UserServiceGetUserProcedure:       admin,
-		syncrv1connect.UserServiceCreateUserProcedure:    admin,
+		syncrv1connect.UserServiceListUsersProcedure: admin,
+		syncrv1connect.UserServiceGetUserProcedure:   admin,
+		// Creating an account or setting a password yields a credential
+		// that signs in, so an admin's API token may do neither.
+		syncrv1connect.UserServiceCreateUserProcedure:    adminSession,
 		syncrv1connect.UserServiceUpdateUserProcedure:    admin,
-		syncrv1connect.UserServiceResetPasswordProcedure: admin,
+		syncrv1connect.UserServiceResetPasswordProcedure: adminSession,
 		syncrv1connect.UserServiceDeleteUserProcedure:    admin,
 
 		// Workers are shared: every user may see them and run jobs on them;
@@ -223,10 +232,10 @@ func (g *guard) check(ctx context.Context, header http.Header, spec connect.Spec
 	}
 	var denied string
 	switch {
-	case level == userSession && c.Method != AuthSession:
-		denied = "this call needs a web session; API tokens cannot make it"
-	case level == admin && !c.Actor.IsAdmin():
+	case (level == admin || level == adminSession) && !c.Actor.IsAdmin():
 		denied = "this call needs the admin role"
+	case (level == userSession || level == adminSession) && c.Method != AuthSession:
+		denied = "this call needs a web session; API tokens cannot make it"
 	}
 	if denied != "" {
 		g.log.InfoContext(ctx, "api call denied", "procedure", spec.Procedure, "user_id", c.Actor.UserID.String(),

@@ -151,8 +151,16 @@ func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, 
 			return domain.WorkerID{}, false, s.end(ctx, r, schedules.RunFailed, schedules.ReasonInvalidDefinition,
 				clip(fmt.Sprintf("%s; the schedule's worker %q runs %s. Choose another worker or change the job, then resume the schedule",
 					req.Explain(), w.Name, w.Info.OS)), true)
+		case !s.workers.Reachable(w):
+			return w.ID, false, nil
+		case len(w.Info.JobKinds) > 0 && !s.runsKind(w, sc.Kind):
+			// Judged only while it is reachable, so its Hello is recent: every
+			// run would fail on it (worker_outdated) until it is upgraded.
+			return domain.WorkerID{}, false, s.end(ctx, r, schedules.RunFailed, schedules.ReasonWorkerOutdated,
+				clip(fmt.Sprintf("the schedule's worker %q (version %s) cannot run %s jobs. Upgrade it or choose another worker, then resume the schedule",
+					w.Name, cmp.Or(w.Info.Version, "unknown"), sc.Kind)), true)
 		}
-		return w.ID, s.workers.Reachable(w), nil
+		return w.ID, true, nil
 	}
 	label := sc.Target.Label
 	ws, ok := p.labels[label]
@@ -174,9 +182,7 @@ func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, 
 			continue
 		}
 		reported := len(w.Info.JobKinds) > 0
-		// A worker that lacks a link feature the kind requires (an older
-		// version) cannot run it, whatever kinds it lists.
-		runsKind := slices.Contains(w.Info.JobKinds, sc.Kind) && w.Info.HasFeatures(s.kinds.RequiredFeatures(sc.Kind)...)
+		runsKind := s.runsKind(w, sc.Kind)
 		if !reported || runsKind {
 			known++ // may run the kind (a worker that never reported might)
 		}
@@ -200,6 +206,13 @@ func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, 
 	}
 	c, ok := pick(cands)
 	return c.ID, ok, nil
+}
+
+// runsKind reports whether w reported that it runs kind: it lists the kind
+// and has the link features the kind requires (a worker that lacks one, an
+// older version, cannot run it, whatever kinds it lists).
+func (s *Scheduler) runsKind(w workers.Worker, kind string) bool {
+	return slices.Contains(w.Info.JobKinds, kind) && w.Info.HasFeatures(s.kinds.RequiredFeatures(kind)...)
 }
 
 // requiredOS returns the operating system the schedule's definition needs

@@ -126,6 +126,13 @@ func scopeFlag(p *plan) string {
 	return ""
 }
 
+// installFlags are the flags of the `service install` that installs the
+// service setup did not: the scope and the config written (which may not
+// be the scope's default; the data directory is read from it).
+func installFlags(p *plan) string {
+	return scopeFlag(p) + " --config " + p.configPath
+}
+
 // prepareDirs creates the data directory, and the tools and config
 // directories where they are not inside it, so that only the worker's
 // accounts can change them: the service runs the tools in them with full
@@ -397,14 +404,14 @@ func (s *Setup) serviceError(p *plan, info service.Info, err error) error {
 	var perm *service.PermissionError
 	if errors.As(err, &perm) {
 		return fmt.Errorf("%w\nThe configuration was saved to %s. After fixing this, install the service with: syncr-worker service install --start%s",
-			err, p.configPath, scopeFlag(p))
+			err, p.configPath, installFlags(p))
 	}
 	hint := ""
 	if info.LogHint != "" {
 		hint = "\nLogs: " + info.LogHint
 	}
 	return fmt.Errorf("%w\nThe configuration was saved to %s, so do not enroll again. After fixing this, run: syncr-worker service install --start%s%s",
-		err, p.configPath, scopeFlag(p), hint)
+		err, p.configPath, installFlags(p), hint)
 }
 
 // selfCheck verifies the result and returns the service state.
@@ -559,7 +566,7 @@ func (s *Setup) summary(p *plan, res *Result, info service.Info) {
 	}
 	if p.opts.NoService {
 		s.printf("\nNo service was installed. Run the worker with: syncr-worker run --config %s\n", p.configPath)
-		s.printf("Install the service later with: syncr-worker service install --start%s\n", scopeFlag(p))
+		s.printf("Install the service later with: syncr-worker service install --start%s\n", installFlags(p))
 	}
 	if info.LogHint != "" && !p.opts.NoService {
 		s.printf("\nLogs:    %s\n", info.LogHint)

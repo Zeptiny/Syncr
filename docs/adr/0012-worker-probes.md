@@ -123,7 +123,10 @@ while it runs, and `Probe` calls the worker directly. The passive client
 uses a second HTTP transport for probes: the normal one gives up after
 30 s, a probe may take up to the longer probe setting plus the grace, and
 its context carries the deadline. A caller that gives up ends the call,
-and the worker's handler stops the probe.
+and the worker's handler stops the probe. The deadline reaches the worker
+in whole milliseconds, so its handler may stop a hung probe just before
+the call's own deadline and answer CANCELLED; the controller reads that
+answer, at the deadline, as the worker not answering in time.
 
 The broker lives in `dispatch` and not in the probe package because it
 shares the dispatcher's sessions, command derivation and `Hub`. It is

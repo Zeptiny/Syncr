@@ -19,7 +19,10 @@
 //     than the definition needs (invalid_definition: Windows VSS on a Linux
 //     worker), one not reachable keeps it waiting (offline, never
 //     connected, or not seen within workers.LaunchWithin, 30s, although
-//     still shown online: a worker that just went to sleep); a label
+//     still shown online: a worker that just went to sleep), and a
+//     reachable one that reports it cannot run the kind (it does not list
+//     it, or lacks a link feature it requires) fails it and pauses the
+//     schedule (worker_outdated); a label
 //     without a worker that may run it fails it (no_worker_with_label, no
 //     pause), and otherwise the least busy reachable worker with the label
 //     that runs the kind, with its link features and operating system, is

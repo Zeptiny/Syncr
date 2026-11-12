@@ -385,7 +385,14 @@ func (s *Service) commands(ctx context.Context, sess *session, w workers.Worker,
 	}
 	starts, err := s.starts(ctx, js, w.Info, room-min(len(probes), room/2))
 	if err != nil {
-		return nil, err
+		if len(cancels) == 0 && len(probes) == 0 {
+			return nil, err
+		}
+		// A cancel or a probe (already counted as sent) must not wait for
+		// another job's spec: send them, and let the next poll, which
+		// follows their acks, retry the starts.
+		s.log.WarnContext(ctx, "deriving the worker's job starts failed; sending its other commands", "worker_id", w.ID.String(), "error", err.Error())
+		starts = nil
 	}
 	probes = probes[:min(len(probes), room-len(starts))]
 	return slices.Concat(probes, cancels, starts), nil

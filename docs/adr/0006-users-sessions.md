@@ -143,6 +143,9 @@ and has no HTML forms):
   still works behind such a proxy.
 - A token caller **cannot change the password, mint or delete tokens**
   (policy level `userSession`), so a leaked token cannot entrench itself.
+  For the same reason an admin's token cannot create users or reset
+  passwords (`adminSession`): either yields a password that signs in,
+  even for the token's own owner.
 - Lookups are by hash; with 256 random bits, timing differences of the
   index lookup reveal nothing usable.
 - The provisional admin token goes away; the README's curl examples and the

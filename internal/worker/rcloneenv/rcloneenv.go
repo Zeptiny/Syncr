@@ -510,11 +510,6 @@ func (b *Builder) unionUpstream(env *Env, self string, up *syncrv1.UnionUpstream
 	var suffix string
 	switch up.GetMode() {
 	case syncrv1.UnionUpstreamMode_UNION_UPSTREAM_MODE_UNSPECIFIED, syncrv1.UnionUpstreamMode_UNION_UPSTREAM_MODE_READ_WRITE:
-		for _, s := range unionSuffixes() {
-			if strings.HasSuffix(path, s) {
-				return "", fmt.Errorf("a read-write upstream path must not end with %q (rclone would read it as a mode)", s)
-			}
-		}
 	case syncrv1.UnionUpstreamMode_UNION_UPSTREAM_MODE_READ_ONLY:
 		suffix = ":ro"
 	case syncrv1.UnionUpstreamMode_UNION_UPSTREAM_MODE_NO_CREATE:
@@ -523,7 +518,27 @@ func (b *Builder) unionUpstream(env *Env, self string, up *syncrv1.UnionUpstream
 		return "", fmt.Errorf("unknown mode %d", up.GetMode())
 	}
 
-	alias := loc.GetRemote()
+	upstream, err := b.upstreamPath(env, self, loc.GetRemote(), path)
+	if err != nil {
+		return "", err
+	}
+	// rclone strips one mode suffix from the end of the upstream as it is
+	// passed, so a read-write one must not end with one. This checks the
+	// path after resolving: cleaning a local path ("/data/x:ro/") can
+	// expose a suffix the given path hid.
+	if suffix == "" {
+		for _, s := range unionSuffixes() {
+			if strings.HasSuffix(upstream, s) {
+				return "", fmt.Errorf("a read-write upstream path must not end with %q (rclone would read it as a mode)", s)
+			}
+		}
+	}
+	return upstream + suffix, nil
+}
+
+// upstreamPath returns a union upstream's location as rclone reads it: a
+// local path resolved within local_roots (alias "") or alias:path.
+func (b *Builder) upstreamPath(env *Env, self, alias, path string) (string, error) {
 	if alias == "" {
 		if b.local == nil {
 			return "", fmt.Errorf("%w: local upstreams are not available", ErrLocalPath)
@@ -532,7 +547,7 @@ func (b *Builder) unionUpstream(env *Env, self string, up *syncrv1.UnionUpstream
 		if err != nil {
 			return "", fmt.Errorf("%w: %w", ErrLocalPath, err)
 		}
-		return resolved + suffix, nil
+		return resolved, nil
 	}
 	backend, ok := env.types[alias]
 	switch {
@@ -543,7 +558,7 @@ func (b *Builder) unionUpstream(env *Env, self string, up *syncrv1.UnionUpstream
 	case backend == "union":
 		return "", fmt.Errorf("remote %q is a union; nested unions are not supported", alias)
 	}
-	return RemotePath(alias, path) + suffix, nil
+	return RemotePath(alias, path), nil
 }
 
 func sortedKeys(m map[string]string) []string {

@@ -180,7 +180,7 @@ func (e *resticEnv) secondUser(name string, admin bool) *http.Client {
 		role = syncrv1.UserRole_USER_ROLE_ADMIN
 	}
 	const password = "e2e-second-user-password"
-	if _, err := syncrv1connect.NewUserServiceClient(e.c.client(), e.c.base).CreateUser(ctx, connect.NewRequest(&syncrv1.CreateUserRequest{
+	if _, err := syncrv1connect.NewUserServiceClient(e.c.session, e.c.base).CreateUser(ctx, connect.NewRequest(&syncrv1.CreateUserRequest{
 		Username: name, DisplayName: name, Password: password, Role: role,
 	})); err != nil {
 		e.t.Fatalf("CreateUser(%s): %v", name, err)

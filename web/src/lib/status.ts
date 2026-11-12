@@ -267,6 +267,7 @@ const runReasons: Record<string, string> = {
   remote_unavailable: "A remote it uses is gone",
   invalid_definition: "The job is no longer valid",
   worker_removed: "Its worker was removed",
+  worker_outdated: "Its worker cannot run this job",
   no_worker_with_label: "No worker has the label",
   owner_disabled: "The owner's account is disabled",
   disabled: "The schedule was paused",
@@ -285,6 +286,8 @@ export function pausedReasonLabel(reason: string): string {
   switch (reason) {
     case "worker_removed":
       return "Its worker was removed. Choose another worker or a label, then resume it.";
+    case "worker_outdated":
+      return "Its worker cannot run this job: it needs an upgrade. Upgrade the worker or choose another, then resume it.";
     case "remote_unavailable":
       return "A remote it uses was deleted. Edit the job, then resume it.";
     case "invalid_definition":

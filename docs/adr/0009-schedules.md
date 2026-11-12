@@ -39,8 +39,11 @@ has to handle:
   2020, but its parser's API is frozen and replacing it touches only this
   package.
 - **Occurrences are local wall times** matching every field, with cron's
-  day-of-month/day-of-week OR rule (robfig's star-bit semantics: when both
-  day fields are restricted, either matches).
+  day-of-month/day-of-week OR rule: when both day fields are restricted,
+  either matches; a field that starts with `*` or `?` counts as
+  unrestricted, steps included (`*/2`), as in Vixie cron and cronie
+  (robfig clears its star bit for a step, so `cronexpr` sets it again).
+  Sunday is 0 or 7, as in crontab(5).
 - **One rule for DST:** a wall time runs at the first instant at which the
   zone's clock shows it or a later time. So a wall time in a spring-forward
   gap runs at the transition (Berlin 02:30 runs at 03:00 CEST; several gap
@@ -127,7 +130,9 @@ has to handle:
   (it stays `launching` with reason `disabled`, and can then only become
   `cancelled`), so its launch cannot complete and the scheduler cancels its
   job, if created, and then the run. A paused schedule's run never keeps a
-  job running. Resuming recomputes the next run from now. Edits recompute it only when the expression, zone or
+  job running. Resuming checks the schedule's references as an edit does (its
+  worker, remotes, repository and contacts must still be usable) and
+  recomputes the next run from now. Edits recompute it only when the expression, zone or
   enabled state changed, so an edit never rewinds or skips a fire.
 
 ### The scheduler: `internal/controller/scheduler`

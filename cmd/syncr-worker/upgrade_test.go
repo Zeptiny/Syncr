@@ -135,6 +135,9 @@ type upgradeServices struct {
 	state        service.State
 	afterRestart service.State
 	preflight    error
+	// restartErr and startErr fail Restart and Start (the state is left
+	// as it is).
+	restartErr, startErr error
 	// exe is the program the installed service runs; "" means the spec's.
 	exe   string
 	specs []service.Spec
@@ -161,8 +164,11 @@ func (s *upgradeServices) Uninstall(context.Context, service.Spec) error {
 func (s *upgradeServices) Start(_ context.Context, spec service.Spec) error {
 	s.rec("start", spec)
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.startErr != nil {
+		return s.startErr
+	}
 	s.state = service.StateRunning
-	s.mu.Unlock()
 	return nil
 }
 func (s *upgradeServices) Stop(_ context.Context, spec service.Spec) error {
@@ -175,8 +181,11 @@ func (s *upgradeServices) Stop(_ context.Context, spec service.Spec) error {
 func (s *upgradeServices) Restart(_ context.Context, spec service.Spec) error {
 	s.rec("restart", spec)
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.restartErr != nil {
+		return s.restartErr
+	}
 	s.state = s.afterRestart
-	s.mu.Unlock()
 	return nil
 }
 func (s *upgradeServices) Status(context.Context, service.Spec) (service.State, error) {
@@ -369,6 +378,17 @@ func TestUpgradeCommandOutcomes(t *testing.T) {
 			f.services.preflight = &service.PermissionError{Scope: service.ScopeSystem, Hint: "run it as root (for example with sudo)"}
 		}, wantCode: exitError, wantVersion: installedVersion,
 			wantErr: []string{"upgrading the worker of the system service needs elevated rights: run it as root", "nothing was changed"}},
+		// A permission error after the swap keeps the rollback's message:
+		// something did change, and it says how to recover.
+		{name: "restart denied, rolled back", setup: func(f *upgradeFixture) {
+			f.services.restartErr = &service.PermissionError{Scope: service.ScopeSystem, Hint: "access is denied"}
+		}, wantCode: exitError, wantVersion: installedVersion, wantCalls: []string{"restart", "stop", "start"},
+			wantErr: []string{"the upgrade was rolled back", installedVersion + " was put back and started", "journalctl -u syncr-worker"}},
+		{name: "restart and rollback start denied", setup: func(f *upgradeFixture) {
+			f.services.restartErr = &service.PermissionError{Scope: service.ScopeSystem, Hint: "access is denied"}
+			f.services.startErr = &service.PermissionError{Scope: service.ScopeSystem, Hint: "access is denied"}
+		}, wantCode: exitError, wantVersion: installedVersion, wantCalls: []string{"restart", "stop", "start"},
+			wantErr: []string{"the rollback failed", "the service did not start", "start it by hand", "journalctl -u syncr-worker"}},
 		{name: "invalid version", args: []string{"--version", "2.1"}, wantCode: exitUsage, wantVersion: installedVersion,
 			wantErr: []string{"syncr-worker upgrade: invalid version \"2.1\"", "v2.1.0-rc.1"}},
 		{name: "extra argument", args: []string{"now"}, wantCode: exitUsage, wantVersion: installedVersion,

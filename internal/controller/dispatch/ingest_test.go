@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -318,6 +319,52 @@ func TestSpecBuildErrors(t *testing.T) {
 				t.Errorf("job = %s %+v, want failed with %s", got.Status, got.Error, tt.wantCode)
 			}
 		})
+	}
+}
+
+// TestSpecErrorKeepsTheCancels: a transient error building one queued job's
+// spec does not hold back the cancel of another job; the poll fails only
+// when there is nothing else to send.
+func TestSpecErrorKeepsTheCancels(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	wid := e.enroll("w")
+	w := e.newFakeWorker(wid)
+	running := e.run(wid)
+	w.report()
+	w.poll()
+	w.start(running.ID.String())
+	w.report()
+	if _, err := e.jobs.Cancel(ctx, testActor(), running.ID); err != nil {
+		t.Fatal(err)
+	}
+	queued := e.run(wid)
+	failing := specBuilderFunc(func(context.Context, jobs.Job) (*syncrv1.JobSpec, error) {
+		return nil, errors.New("connection refused")
+	})
+	disp, err := dispatch.New(dispatch.Deps{
+		Jobs: e.jobs, Workers: e.workers, Specs: failing, Clock: e.clock, Hub: e.hub, Logger: slog.New(slog.NewTextHandler(e.logs, nil)),
+	}, e.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmds, err := disp.Commands(ctx, wid, w.epoch)
+	if err != nil || len(cmds) != 1 || cmds[0].GetId() != "cancel:"+running.ID.String() {
+		t.Fatalf("Commands = (%v, %v), want the cancel only", cmds, err)
+	}
+	if got := e.job(queued.ID); got.Status != domain.JobQueued {
+		t.Errorf("queued job = %s", got.Status)
+	}
+	if !strings.Contains(e.logs.String(), "connection refused") {
+		t.Errorf("the spec error was not logged:\n%s", e.logs.String())
+	}
+	// Once the cancel is acked, the error fails the poll, which retries.
+	if err := disp.Ack(ctx, wid, w.epoch, []*syncrv1.CommandAck{{CommandId: cmds[0].GetId()}}); err != nil {
+		t.Fatal(err)
+	}
+	if cmds, err := disp.Commands(ctx, wid, w.epoch); err == nil {
+		t.Errorf("Commands = %v, want the spec error", cmds)
 	}
 }
 
