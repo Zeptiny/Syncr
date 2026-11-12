@@ -215,7 +215,12 @@ func TestRunCleansItsScratchAndHoldsTheLock(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("run did not stop")
 	}
-	release, err := datadir.Lock(t.Context(), f.cfg.DataDir, 0, nil)
+	// Wait a moment for the lock, not zero: a child process that a parallel
+	// test forks while the worker holds the lock keeps a copy of its file
+	// descriptor until the child execs, and flock frees the lock only once
+	// every copy is closed. A lock the worker failed to release is still
+	// held after the wait.
+	release, err := datadir.Lock(t.Context(), f.cfg.DataDir, 5*time.Second, nil)
 	if err != nil {
 		t.Fatalf("the lock is still held after the worker stopped: %v", err)
 	}
