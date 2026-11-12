@@ -533,8 +533,9 @@ message Job {
   // The restic repository the job uses; unset for other kinds.
   JobRepositoryRef repository = 22;
 
-  // Set while the job is queued behind an older unfinished job on the same
-  // restic repository (they share a concurrency key): the job it waits for.
+  // Set while the job is queued behind an older unfinished job that shares
+  // a concurrency key with it (the same restic repository, or a location of
+  // a two-way sync): the job it waits for.
   string waiting_for_job_id = 23;
 
   // Kind-specific results for display (e.g. "Snapshot", "Data added"), in
@@ -640,6 +641,9 @@ message JobDefinition {
 
   oneof operation {
     RcloneTransferDefinition rclone_transfer = 10;
+    // Two-way sync. A schedule of it must target a worker, not a label, and
+    // may not set its one-shot fields (resync, force).
+    RcloneBisyncDefinition rclone_bisync = 11;
 
     // Restic operations (Milestone 5) on one of the owner's repositories.
     ResticBackupDefinition restic_backup = 21;
@@ -675,6 +679,42 @@ message RcloneTransferDefinition {
   RcloneTransferOptions options = 4;
 
   reserved 5 to 9;
+}
+
+// RcloneBisyncDefinition keeps two locations in step in both directions
+// with rclone bisync ("Two-way sync"; see RcloneBisync and
+// docs/adr/0018-two-way-sync.md).
+//
+// The pair's state stays on the worker that ran it, so a schedule of it
+// must target a worker, not a label. RunJob may name any worker; the
+// pair's first run on a worker is a resync, which copies what each side
+// lacks and deletes nothing. Its jobs have one concurrency key per
+// location, so runs that share a location, on any worker, run one at a
+// time, oldest first.
+message RcloneBisyncDefinition {
+  // The two sides, rclone's Path1 and Path2 ("Folder A" and "Folder B" in
+  // the web UI). They must differ, and neither may be inside the other (on
+  // the same remote, or both local). Their paths may be at most 200 bytes
+  // together, and so may their full rclone paths, with the remotes' roots,
+  // when the job is dispatched: rclone names its state files after both.
+  JobLocation path1 = 1;
+  JobLocation path2 = 2;
+
+  // Typed allowlist of rclone bisync flags (see RcloneBisyncOptions for
+  // the ranges and the defaults of unset fields).
+  RcloneBisyncOptions options = 3;
+
+  // Resync in this run (see RcloneBisync.resync): after RESYNC_REQUIRED,
+  // e.g. because the filters changed. One-shot: RunJob accepts it,
+  // schedules refuse it. The job keeps it in its definition.
+  bool resync = 4;
+
+  // Run past the delete limit and the "every file changed" check in this
+  // run (see RcloneBisync.force), after a SAFETY_ABORT whose changes are
+  // intended. It does not override SIDE_UNAVAILABLE. One-shot like resync.
+  bool force = 5;
+
+  reserved 6 to 9;
 }
 
 // ResticBackupDefinition backs up local paths of the worker into a

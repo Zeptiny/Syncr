@@ -58,6 +58,11 @@ func TestErrorCodeNames(t *testing.T) {
 		{syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_OUTDATED, "worker_outdated"},
 		// Milestone 6: set by workers (jobs.CodeTimeLimit).
 		{syncrv1.JobErrorCode_JOB_ERROR_CODE_TIME_LIMIT, "time_limit"},
+		{syncrv1.JobErrorCode_JOB_ERROR_CODE_HOOK_FAILED, "hook_failed"},
+		// Two-way sync (rclone_bisync): set by workers.
+		{syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED, "resync_required"},
+		{syncrv1.JobErrorCode_JOB_ERROR_CODE_SAFETY_ABORT, "safety_abort"},
+		{syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE, "side_unavailable"},
 		{syncrv1.JobErrorCode(999), "unspecified"},
 	}
 	for _, tt := range tests {
