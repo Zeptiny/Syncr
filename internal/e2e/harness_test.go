@@ -660,6 +660,9 @@ type workerOptions struct {
 	prober linkcore.Prober
 	// features and probeOps are reported in the Hello.
 	features, probeOps []string
+	// hooks are the hooks the worker defines (agent.Config.Hooks); nil for
+	// none.
+	hooks agent.Hooks
 }
 
 // upToDate is a worker of this build that answers probes with prober.
@@ -675,7 +678,7 @@ func newAgentWith(t *testing.T, rn runner.Runner, o workerOptions) (*agent.Agent
 		t.Fatal(err)
 	}
 	a, err := agent.New(agent.Config{
-		Runners: reg, ProgressInterval: 20 * time.Millisecond, MaxConcurrentJobs: 4,
+		Runners: reg, Hooks: o.hooks, ProgressInterval: 20 * time.Millisecond, MaxConcurrentJobs: 4,
 		Identity: agent.Identity{WorkerVersion: "test", OS: "linux", Arch: "amd64", Hostname: "e2e", Features: o.features, ProbeOps: o.probeOps},
 	})
 	if err != nil {
