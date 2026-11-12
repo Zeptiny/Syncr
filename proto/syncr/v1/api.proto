@@ -219,8 +219,11 @@ message WorkerInfo {
   repeated string features = 10;
   // Probe operations the worker can run (Hello.probe_ops).
   repeated string probe_ops = 11;
+  // The hooks the worker's operator defined (Hello.hooks), by name: what a
+  // job on this worker may name in JobDefinition.hooks.
+  repeated HookInfo hooks = 12;
 
-  reserved 12 to 19;
+  reserved 13 to 19;
 }
 
 // CreateEnrollmentTokenRequest configures the token.
@@ -494,14 +497,15 @@ message Job {
   // unset for successful jobs.
   JobError error = 12;
 
-  // Non-fatal problems of a successful job.
+  // Non-fatal problems of a job whose operation succeeded.
   repeated string warnings = 13;
 
   // Exit code of the tool process; unset if no process ran or the job has not
   // finished.
   optional int32 exit_code = 14;
 
-  // Kind-specific output of a successful job, if the kind has any.
+  // Kind-specific output of a job whose operation succeeded, if the kind
+  // has any. That includes a job that failed with HOOK_FAILED afterwards.
   JobOutput output = 15;
 
   // ID of the user who ran the job.
@@ -546,7 +550,12 @@ message Job {
   // worker accepted it. A job stopped by it fails with TIME_LIMIT.
   google.protobuf.Duration time_limit = 25;
 
-  reserved 26 to 29;
+  // The hooks the worker ran for the job (definition.hooks), in the order
+  // they ran, each with how it ended and the end of what it printed. Empty
+  // until the job has finished, and for a job without hooks.
+  repeated HookRun hook_runs = 26;
+
+  reserved 27 to 29;
 }
 
 // JobRepositoryRef names the restic repository a job or schedule uses.
@@ -607,7 +616,8 @@ message JobRemoteRef {
 // the oneof are the job kinds (the JobSpec operation names).
 message JobDefinition {
   // Hard time limit of the job, for every kind: the worker stops the job
-  // this long after its process started and the job fails with TIME_LIMIT.
+  // this long after it started (its before and on_success hooks count, the
+  // hooks that clean up afterwards do not) and the job fails with TIME_LIMIT.
   // 1 minute to 366 days; unset means the controller's default
   // (jobs.default_max_runtime, none unless configured). Unlike rclone's
   // max_duration (RcloneTransferOptions), which only stops starting new
@@ -615,7 +625,18 @@ message JobDefinition {
   // job with WORKER_OUTDATED instead of running it without a limit.
   google.protobuf.Duration max_runtime = 1;
 
-  reserved 2 to 9;
+  // Hooks of the worker to run around the operation, for every kind a user
+  // may start: commands the worker's operator defined in its configuration,
+  // named here (see JobHooks for when each list runs and what a failing
+  // hook does, and WorkerInfo.hooks for the names a worker offers). The
+  // worker must define every hook named: RunJob and schedules on a worker
+  // refuse a name its latest report lacks, a schedule on a label runs only
+  // on workers that define them all, and a job whose worker no longer
+  // defines one fails with INVALID_SPEC. A worker that cannot run hooks at
+  // all fails the job with WORKER_OUTDATED.
+  JobHooks hooks = 2;
+
+  reserved 3 to 9;
 
   oneof operation {
     RcloneTransferDefinition rclone_transfer = 10;

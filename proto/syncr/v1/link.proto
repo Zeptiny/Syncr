@@ -336,17 +336,24 @@ message Hello {
 
   // Link features this worker implements, e.g. "probe" (it answers
   // RunProbe and Probe), "restic.v2" (it honours the Milestone 5 restic spec
-  // fields), "restic.delete" (it runs restic_delete_data) and
-  // "job.time_limit" (it enforces JobSpec.max_runtime). The controller
-  // sends a worker only what its features allow; a worker that reports none
-  // is treated as a Milestone 4 worker.
+  // fields), "restic.delete" (it runs restic_delete_data),
+  // "job.time_limit" (it enforces JobSpec.max_runtime) and "job.hooks" (it
+  // runs JobSpec.hooks). The controller sends a worker only what its
+  // features allow; a worker that reports none is treated as a Milestone 4
+  // worker.
   repeated string features = 9;
 
   // Probe operations the worker can run: names of ProbeSpec.op fields (e.g.
   // "list_local", "restic_ls").
   repeated string probe_ops = 10;
 
-  reserved 11 to 19;
+  // The hooks the worker's operator defined in its configuration, by name:
+  // what a job may name in JobSpec.hooks. Their commands stay on the
+  // worker. Empty for a worker without hooks or without the "job.hooks"
+  // feature.
+  repeated HookInfo hooks = 11;
+
+  reserved 12 to 19;
 }
 
 // ToolVersion identifies a supervised external tool.
@@ -357,11 +364,13 @@ message ToolVersion {
   string version = 2;
 }
 
-// JobStarted reports that the worker handed a job to its runner (the job
-// left the worker's local queue). It does not guarantee that a tool process
-// started: the runner may still reject the spec (e.g. PATH_NOT_ALLOWED) and
-// report a FAILED JobResult right after. Every job that ran has exactly one
-// JobStarted, before its Progress events and its JobResult.
+// JobStarted reports that the worker started a job (the job left the
+// worker's local queue): its before hooks run first, then its runner. It
+// does not guarantee that a tool process started: a before hook may fail
+// (HOOK_FAILED), and the runner may still reject the spec (e.g.
+// PATH_NOT_ALLOWED) and report a FAILED JobResult right after. Every job
+// that ran has exactly one JobStarted, before its Progress events and its
+// JobResult.
 message JobStarted {
   // Controller-assigned job UUID.
   string job_id = 1;
@@ -434,17 +443,27 @@ message JobResult {
   google.protobuf.Timestamp started_at = 6;
   google.protobuf.Timestamp finished_at = 7;
 
-  // Kind-specific output; unset for kinds without output (e.g. transfers).
+  // Kind-specific output; unset for kinds without output (e.g. transfers)
+  // and for jobs whose operation did not succeed.
   JobOutput output = 8;
 
-  // Non-fatal problems of a job that nevertheless SUCCEEDED, for example
-  // "3 items could not be read" for a restic backup that exited with code 3
-  // after creating its snapshot. Scrubbed of secrets, at most 10 entries of
-  // at most 500 bytes each. Empty for a clean run and for FAILED or
-  // CANCELLED jobs (their error carries the reason).
+  // Non-fatal problems of an operation that nevertheless succeeded, for
+  // example "3 items could not be read" for a restic backup that exited
+  // with code 3 after creating its snapshot. Scrubbed of secrets, at most
+  // 10 entries of at most 500 bytes each. Empty for a clean run and when
+  // the operation did not succeed (the error carries the reason).
+  //
+  // The output and the warnings are the operation's. A job whose operation
+  // succeeded reports them whatever its status: a hook (HOOK_FAILED), a
+  // cancel or the time limit can still end the job afterwards.
   repeated string warnings = 9;
 
-  reserved 10 to 19;
+  // The hooks the worker ran for the job (JobSpec.hooks), in the order
+  // they ran; hooks that were skipped are not listed. Empty for a job
+  // without hooks.
+  repeated HookRun hook_runs = 10;
+
+  reserved 11 to 19;
 }
 
 // JobOutput is the kind-specific output of a finished job. Field names match
@@ -572,6 +591,13 @@ enum JobErrorCode {
   // (JobSpec.max_runtime) was reached, so the worker stopped it the way it
   // stops a cancelled job. Status FAILED; the work done so far is kept.
   JOB_ERROR_CODE_TIME_LIMIT = 27;
+
+  // Set by workers: a hook of the job (JobSpec.hooks) exited unsuccessfully,
+  // ran into its timeout or could not be started. Status FAILED. When it
+  // was a "before" hook, the operation never ran; when it was an
+  // "on_success" or "after" hook, the operation had succeeded and its
+  // output is kept. JobResult.hook_runs has the details.
+  JOB_ERROR_CODE_HOOK_FAILED = 28;
 }
 
 // WorkerState is a snapshot (not an event) of the jobs a worker holds,
@@ -698,15 +724,20 @@ message JobSpec {
   // variables.
   repeated RemoteDefinition remotes = 1;
 
-  // Hard time limit: this long after the worker started the job's process
-  // (measured on its monotonic clock, not from queueing), it stops the
-  // process as it stops a cancelled job (interrupt, grace period, kill, and
-  // the rest of the process tree) and reports FAILED with TIME_LIMIT. Unset
-  // or zero means none. Sent only to workers whose Hello lists the
-  // "job.time_limit" feature.
+  // Hard time limit: this long after the worker started the job (JobStarted,
+  // measured on its monotonic clock, not from queueing; before and
+  // on_success hooks count), it stops what runs as it stops a cancelled job
+  // (interrupt, grace period, kill, and the rest of the process tree) and
+  // reports FAILED with TIME_LIMIT. Unset or zero means none. Sent only to
+  // workers whose Hello lists the "job.time_limit" feature.
   google.protobuf.Duration max_runtime = 2;
 
-  reserved 3 to 9;
+  // Hooks of the worker to run around the operation, by name. Sent only to
+  // workers whose Hello lists the "job.hooks" feature; a name the worker
+  // does not define fails the job with INVALID_SPEC before anything runs.
+  JobHooks hooks = 3;
+
+  reserved 4 to 9;
 
   // The operation to run. The name of the set field is the job kind (e.g.
   // "rclone_transfer", "restic_backup") that selects the worker runner.
@@ -722,6 +753,131 @@ message JobSpec {
     ResticSnapshots restic_snapshots = 26;
     ResticDeleteData restic_delete_data = 27;
   }
+}
+
+// JobHooks names the hooks a job runs on its worker around its operation.
+//
+// A hook is a command the worker's operator defined in the worker's
+// configuration under a name (docs/hooks.md). A job only ever names hooks:
+// no command, argument or environment value travels from the controller, so
+// whoever may run jobs on a worker can run exactly what its operator
+// prepared, and nothing else.
+//
+// Each list runs in order, one hook at a time, in the job's run slot:
+//
+//   - before: before the operation. A hook that fails (it exits
+//     unsuccessfully, runs into its timeout or cannot be started) fails the
+//     job with HOOK_FAILED; the hooks after it and the operation are
+//     skipped.
+//   - on_success: after the operation succeeded. A hook that fails fails
+//     the job with HOOK_FAILED and skips the hooks after it.
+//   - on_failure: after the job failed, whatever failed: a before hook,
+//     the operation, an on_success hook or the time limit. Not after a
+//     cancel or a worker shutdown. Every hook is run; a failure is recorded
+//     and changes nothing else.
+//   - after: last, whatever happened, also after a cancel, the time limit
+//     or while the worker shuts down. Every hook is run. A failure fails a
+//     job that had succeeded so far with HOOK_FAILED; a job that had
+//     already failed or was cancelled keeps its outcome.
+//
+// A cancel, the job's time limit (which runs from the job's start, hooks
+// included) or a worker shutdown stops a running before or on_success hook
+// as it stops the operation. on_failure and after hooks clean up, so
+// neither a cancel nor the time limit stops them: each is bounded by its
+// own timeout (HookInfo.timeout). A worker that shuts down still runs the
+// after hooks, for as long as its stop budget lasts; a worker that is
+// killed runs none.
+//
+// At most 8 names per list, each a hook name (1 to 63 characters: lower-case
+// letters, digits, ".", "_" and "-", starting with a letter or digit),
+// without duplicates within a list.
+message JobHooks {
+  // Hooks run before the operation.
+  repeated string before = 1;
+
+  // Hooks run after the operation succeeded.
+  repeated string on_success = 2;
+
+  // Hooks run after the job failed.
+  repeated string on_failure = 3;
+
+  // Hooks always run last.
+  repeated string after = 4;
+
+  reserved 5 to 9;
+}
+
+// HookInfo describes a hook a worker defines, without its command.
+message HookInfo {
+  // The hook's name, unique on the worker.
+  string name = 1;
+
+  // What the hook does, as its operator described it; may be empty. At most
+  // 200 characters.
+  string description = 2;
+
+  // How long one run may take before the worker stops it.
+  google.protobuf.Duration timeout = 3;
+
+  reserved 4 to 9;
+}
+
+// HookPhase is when a hook runs (the JobHooks list that names it).
+enum HookPhase {
+  HOOK_PHASE_UNSPECIFIED = 0;
+  HOOK_PHASE_BEFORE = 1;
+  HOOK_PHASE_ON_SUCCESS = 2;
+  HOOK_PHASE_ON_FAILURE = 3;
+  HOOK_PHASE_AFTER = 4;
+}
+
+// HookStatus is how one run of a hook ended.
+enum HookStatus {
+  HOOK_STATUS_UNSPECIFIED = 0;
+  // The command exited with code 0.
+  HOOK_STATUS_SUCCEEDED = 1;
+  // The command exited with another code or could not be started.
+  HOOK_STATUS_FAILED = 2;
+  // The worker stopped the command at the hook's timeout.
+  HOOK_STATUS_TIMED_OUT = 3;
+  // The worker stopped the command because the job was cancelled, reached
+  // its time limit or the worker shut down.
+  HOOK_STATUS_CANCELLED = 4;
+}
+
+// HookRun is one run of a hook for a job.
+message HookRun {
+  // The hook's name.
+  string name = 1;
+
+  // The phase it ran in.
+  HookPhase phase = 2;
+
+  // How it ended.
+  HookStatus status = 3;
+
+  // Exit code of the command; -1 if it did not start or was killed by a
+  // signal.
+  int32 exit_code = 4;
+
+  // When the command was started (worker clock) and how long it ran.
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Duration duration = 6;
+
+  // Why the run did not succeed, for people, e.g. "exited with code 3" or
+  // "timed out after 10m0s"; empty for a run that succeeded.
+  string message = 7;
+
+  // The end of what the command printed (standard output and standard
+  // error, in the order the worker read them), as valid UTF-8, at most
+  // 4096 bytes. Hooks are the operator's own commands: the worker cannot
+  // know their secrets, so it shows the output as it is.
+  string output = 8;
+
+  // Whether the command printed more than output holds.
+  bool output_truncated = 9;
+
+  reserved 10 to 19;
 }
 
 // RemoteDefinition is a typed rclone remote. Remotes are never connection

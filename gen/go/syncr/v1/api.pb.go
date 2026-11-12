@@ -627,7 +627,10 @@ type WorkerInfo struct {
 	// upgraded to run restic jobs.
 	Features []string `protobuf:"bytes,10,rep,name=features,proto3" json:"features,omitempty"`
 	// Probe operations the worker can run (Hello.probe_ops).
-	ProbeOps      []string `protobuf:"bytes,11,rep,name=probe_ops,json=probeOps,proto3" json:"probe_ops,omitempty"`
+	ProbeOps []string `protobuf:"bytes,11,rep,name=probe_ops,json=probeOps,proto3" json:"probe_ops,omitempty"`
+	// The hooks the worker's operator defined (Hello.hooks), by name: what a
+	// job on this worker may name in JobDefinition.hooks.
+	Hooks         []*HookInfo `protobuf:"bytes,12,rep,name=hooks,proto3" json:"hooks,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -735,6 +738,13 @@ func (x *WorkerInfo) GetFeatures() []string {
 func (x *WorkerInfo) GetProbeOps() []string {
 	if x != nil {
 		return x.ProbeOps
+	}
+	return nil
+}
+
+func (x *WorkerInfo) GetHooks() []*HookInfo {
+	if x != nil {
+		return x.Hooks
 	}
 	return nil
 }
@@ -1742,12 +1752,13 @@ type Job struct {
 	// Why the job failed or was interrupted (or the cause of a cancellation);
 	// unset for successful jobs.
 	Error *JobError `protobuf:"bytes,12,opt,name=error,proto3" json:"error,omitempty"`
-	// Non-fatal problems of a successful job.
+	// Non-fatal problems of a job whose operation succeeded.
 	Warnings []string `protobuf:"bytes,13,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	// Exit code of the tool process; unset if no process ran or the job has not
 	// finished.
 	ExitCode *int32 `protobuf:"varint,14,opt,name=exit_code,json=exitCode,proto3,oneof" json:"exit_code,omitempty"`
-	// Kind-specific output of a successful job, if the kind has any.
+	// Kind-specific output of a job whose operation succeeded, if the kind
+	// has any. That includes a job that failed with HOOK_FAILED afterwards.
 	Output *JobOutput `protobuf:"bytes,15,opt,name=output,proto3" json:"output,omitempty"`
 	// ID of the user who ran the job.
 	OwnerId string `protobuf:"bytes,16,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
@@ -1780,7 +1791,11 @@ type Job struct {
 	// later change of the default does not change; for a queued job, the
 	// limit it will be sent. Unset when the job has none, or ended before a
 	// worker accepted it. A job stopped by it fails with TIME_LIMIT.
-	TimeLimit     *durationpb.Duration `protobuf:"bytes,25,opt,name=time_limit,json=timeLimit,proto3" json:"time_limit,omitempty"`
+	TimeLimit *durationpb.Duration `protobuf:"bytes,25,opt,name=time_limit,json=timeLimit,proto3" json:"time_limit,omitempty"`
+	// The hooks the worker ran for the job (definition.hooks), in the order
+	// they ran, each with how it ended and the end of what it printed. Empty
+	// until the job has finished, and for a job without hooks.
+	HookRuns      []*HookRun `protobuf:"bytes,26,rep,name=hook_runs,json=hookRuns,proto3" json:"hook_runs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1986,6 +2001,13 @@ func (x *Job) GetDetails() []*JobDetail {
 func (x *Job) GetTimeLimit() *durationpb.Duration {
 	if x != nil {
 		return x.TimeLimit
+	}
+	return nil
+}
+
+func (x *Job) GetHookRuns() []*HookRun {
+	if x != nil {
+		return x.HookRuns
 	}
 	return nil
 }
@@ -2245,13 +2267,24 @@ func (x *JobRemoteRef) GetDeleted() bool {
 type JobDefinition struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Hard time limit of the job, for every kind: the worker stops the job
-	// this long after its process started and the job fails with TIME_LIMIT.
+	// this long after it started (its before and on_success hooks count, the
+	// hooks that clean up afterwards do not) and the job fails with TIME_LIMIT.
 	// 1 minute to 366 days; unset means the controller's default
 	// (jobs.default_max_runtime, none unless configured). Unlike rclone's
 	// max_duration (RcloneTransferOptions), which only stops starting new
 	// transfers, it ends the job. A worker that cannot enforce it fails the
 	// job with WORKER_OUTDATED instead of running it without a limit.
 	MaxRuntime *durationpb.Duration `protobuf:"bytes,1,opt,name=max_runtime,json=maxRuntime,proto3" json:"max_runtime,omitempty"`
+	// Hooks of the worker to run around the operation, for every kind a user
+	// may start: commands the worker's operator defined in its configuration,
+	// named here (see JobHooks for when each list runs and what a failing
+	// hook does, and WorkerInfo.hooks for the names a worker offers). The
+	// worker must define every hook named: RunJob and schedules on a worker
+	// refuse a name its latest report lacks, a schedule on a label runs only
+	// on workers that define them all, and a job whose worker no longer
+	// defines one fails with INVALID_SPEC. A worker that cannot run hooks at
+	// all fails the job with WORKER_OUTDATED.
+	Hooks *JobHooks `protobuf:"bytes,2,opt,name=hooks,proto3" json:"hooks,omitempty"`
 	// Types that are valid to be assigned to Operation:
 	//
 	//	*JobDefinition_RcloneTransfer
@@ -2299,6 +2332,13 @@ func (*JobDefinition) Descriptor() ([]byte, []int) {
 func (x *JobDefinition) GetMaxRuntime() *durationpb.Duration {
 	if x != nil {
 		return x.MaxRuntime
+	}
+	return nil
+}
+
+func (x *JobDefinition) GetHooks() *JobHooks {
+	if x != nil {
+		return x.Hooks
 	}
 	return nil
 }
@@ -3869,7 +3909,7 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"\x04info\x18\t \x01(\v2\x14.syncr.v1.WorkerInfoR\x04info\x12\x16\n" +
 	"\x06labels\x18\n" +
 	" \x03(\tR\x06labels\x12\x1a\n" +
-	"\boutdated\x18\v \x01(\bR\boutdatedJ\x04\b\f\x10\x14\"\x8a\x03\n" +
+	"\boutdated\x18\v \x01(\bR\boutdatedJ\x04\b\f\x10\x14\"\xb4\x03\n" +
 	"\n" +
 	"WorkerInfo\x12%\n" +
 	"\x0eworker_version\x18\x01 \x01(\tR\rworkerVersion\x12\x0e\n" +
@@ -3885,7 +3925,8 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"reportedAt\x12\x1a\n" +
 	"\bfeatures\x18\n" +
 	" \x03(\tR\bfeatures\x12\x1b\n" +
-	"\tprobe_ops\x18\v \x03(\tR\bprobeOpsJ\x04\b\f\x10\x14\"r\n" +
+	"\tprobe_ops\x18\v \x03(\tR\bprobeOps\x12(\n" +
+	"\x05hooks\x18\f \x03(\v2\x12.syncr.v1.HookInfoR\x05hooksJ\x04\b\r\x10\x14\"r\n" +
 	"\x1cCreateEnrollmentTokenRequest\x12+\n" +
 	"\x03ttl\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x03ttl\x12%\n" +
 	"\x0econtroller_url\x18\x02 \x01(\tR\rcontrollerUrl\"\xb5\x01\n" +
@@ -3935,7 +3976,7 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x16\n" +
 	"\x06labels\x18\x02 \x03(\tR\x06labels\"C\n" +
 	"\x17SetWorkerLabelsResponse\x12(\n" +
-	"\x06worker\x18\x01 \x01(\v2\x10.syncr.v1.WorkerR\x06worker\"\xc6\b\n" +
+	"\x06worker\x18\x01 \x01(\v2\x10.syncr.v1.WorkerR\x06worker\"\xf6\b\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tworker_id\x18\x02 \x01(\tR\bworkerId\x12\x12\n" +
@@ -3971,9 +4012,10 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"\x12waiting_for_job_id\x18\x17 \x01(\tR\x0fwaitingForJobId\x12-\n" +
 	"\adetails\x18\x18 \x03(\v2\x13.syncr.v1.JobDetailR\adetails\x128\n" +
 	"\n" +
-	"time_limit\x18\x19 \x01(\v2\x19.google.protobuf.DurationR\ttimeLimitB\f\n" +
+	"time_limit\x18\x19 \x01(\v2\x19.google.protobuf.DurationR\ttimeLimit\x12.\n" +
+	"\thook_runs\x18\x1a \x03(\v2\x11.syncr.v1.HookRunR\bhookRunsB\f\n" +
 	"\n" +
-	"_exit_codeJ\x04\b\x1a\x10\x1e\"V\n" +
+	"_exit_codeJ\x04\b\x1b\x10\x1e\"V\n" +
 	"\x10JobRepositoryRef\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
@@ -3990,10 +4032,11 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12!\n" +
 	"\fbackend_type\x18\x03 \x01(\tR\vbackendType\x12\x18\n" +
 	"\adeleted\x18\x04 \x01(\bR\adeletedJ\x04\b\x05\x10\n" +
-	"\"\xff\x04\n" +
+	"\"\xa9\x05\n" +
 	"\rJobDefinition\x12:\n" +
 	"\vmax_runtime\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\n" +
-	"maxRuntime\x12M\n" +
+	"maxRuntime\x12(\n" +
+	"\x05hooks\x18\x02 \x01(\v2\x12.syncr.v1.JobHooksR\x05hooks\x12M\n" +
 	"\x0frclone_transfer\x18\n" +
 	" \x01(\v2\".syncr.v1.RcloneTransferDefinitionH\x00R\x0ercloneTransfer\x12G\n" +
 	"\rrestic_backup\x18\x15 \x01(\v2 .syncr.v1.ResticBackupDefinitionH\x00R\fresticBackup\x12G\n" +
@@ -4002,7 +4045,7 @@ const file_syncr_v1_api_proto_rawDesc = "" +
 	"\frestic_check\x18\x18 \x01(\v2\x1f.syncr.v1.ResticCheckDefinitionH\x00R\vresticCheck\x12J\n" +
 	"\x0erestic_restore\x18\x19 \x01(\v2!.syncr.v1.ResticRestoreDefinitionH\x00R\rresticRestore\x12T\n" +
 	"\x12restic_delete_data\x18\x1b \x01(\v2$.syncr.v1.ResticDeleteDataDefinitionH\x00R\x10resticDeleteDataB\v\n" +
-	"\toperationJ\x04\b\x02\x10\n" +
+	"\toperationJ\x04\b\x03\x10\n" +
 	"J\x04\b\x14\x10\x15J\x04\b\x1a\x10\x1bJ\x04\b\x1c\x10\x1e\"\xf5\x01\n" +
 	"\x18RcloneTransferDefinition\x120\n" +
 	"\x04mode\x18\x01 \x01(\x0e2\x1c.syncr.v1.RcloneTransferModeR\x04mode\x12-\n" +
@@ -4221,14 +4264,17 @@ var file_syncr_v1_api_proto_goTypes = []any{
 	(*timestamppb.Timestamp)(nil),             // 56: google.protobuf.Timestamp
 	(WorkerMode)(0),                           // 57: syncr.v1.WorkerMode
 	(*ToolVersion)(nil),                       // 58: syncr.v1.ToolVersion
-	(*durationpb.Duration)(nil),               // 59: google.protobuf.Duration
-	(*JobStats)(nil),                          // 60: syncr.v1.JobStats
-	(*JobError)(nil),                          // 61: syncr.v1.JobError
-	(*JobOutput)(nil),                         // 62: syncr.v1.JobOutput
-	(RcloneTransferMode)(0),                   // 63: syncr.v1.RcloneTransferMode
-	(*RcloneTransferOptions)(nil),             // 64: syncr.v1.RcloneTransferOptions
-	(*ResticRetentionPolicy)(nil),             // 65: syncr.v1.ResticRetentionPolicy
-	(ResticRestoreOverwrite)(0),               // 66: syncr.v1.ResticRestoreOverwrite
+	(*HookInfo)(nil),                          // 59: syncr.v1.HookInfo
+	(*durationpb.Duration)(nil),               // 60: google.protobuf.Duration
+	(*JobStats)(nil),                          // 61: syncr.v1.JobStats
+	(*JobError)(nil),                          // 62: syncr.v1.JobError
+	(*JobOutput)(nil),                         // 63: syncr.v1.JobOutput
+	(*HookRun)(nil),                           // 64: syncr.v1.HookRun
+	(*JobHooks)(nil),                          // 65: syncr.v1.JobHooks
+	(RcloneTransferMode)(0),                   // 66: syncr.v1.RcloneTransferMode
+	(*RcloneTransferOptions)(nil),             // 67: syncr.v1.RcloneTransferOptions
+	(*ResticRetentionPolicy)(nil),             // 68: syncr.v1.ResticRetentionPolicy
+	(ResticRestoreOverwrite)(0),               // 69: syncr.v1.ResticRestoreOverwrite
 }
 var file_syncr_v1_api_proto_depIdxs = []int32{
 	5,  // 0: syncr.v1.ValidationError.violations:type_name -> syncr.v1.FieldViolation
@@ -4240,96 +4286,99 @@ var file_syncr_v1_api_proto_depIdxs = []int32{
 	9,  // 6: syncr.v1.Worker.info:type_name -> syncr.v1.WorkerInfo
 	58, // 7: syncr.v1.WorkerInfo.tools:type_name -> syncr.v1.ToolVersion
 	56, // 8: syncr.v1.WorkerInfo.reported_at:type_name -> google.protobuf.Timestamp
-	59, // 9: syncr.v1.CreateEnrollmentTokenRequest.ttl:type_name -> google.protobuf.Duration
-	56, // 10: syncr.v1.CreateEnrollmentTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	14, // 11: syncr.v1.CreateEnrollmentTokenResponse.install_commands:type_name -> syncr.v1.InstallCommand
-	14, // 12: syncr.v1.GetPassiveInstallCommandsResponse.commands:type_name -> syncr.v1.InstallCommand
-	1,  // 13: syncr.v1.InstallCommand.platform:type_name -> syncr.v1.InstallPlatform
-	2,  // 14: syncr.v1.InstallCommand.scope:type_name -> syncr.v1.InstallScope
-	8,  // 15: syncr.v1.RegisterPassiveWorkerResponse.worker:type_name -> syncr.v1.Worker
-	8,  // 16: syncr.v1.ListWorkersResponse.workers:type_name -> syncr.v1.Worker
-	8,  // 17: syncr.v1.GetWorkerResponse.worker:type_name -> syncr.v1.Worker
-	8,  // 18: syncr.v1.RenameWorkerResponse.worker:type_name -> syncr.v1.Worker
-	14, // 19: syncr.v1.GetWorkerUpgradeCommandsResponse.commands:type_name -> syncr.v1.InstallCommand
-	8,  // 20: syncr.v1.SetWorkerLabelsResponse.worker:type_name -> syncr.v1.Worker
-	3,  // 21: syncr.v1.Job.status:type_name -> syncr.v1.JobStatus
-	56, // 22: syncr.v1.Job.created_at:type_name -> google.protobuf.Timestamp
-	56, // 23: syncr.v1.Job.dispatched_at:type_name -> google.protobuf.Timestamp
-	56, // 24: syncr.v1.Job.started_at:type_name -> google.protobuf.Timestamp
-	56, // 25: syncr.v1.Job.finished_at:type_name -> google.protobuf.Timestamp
-	60, // 26: syncr.v1.Job.stats:type_name -> syncr.v1.JobStats
-	61, // 27: syncr.v1.Job.error:type_name -> syncr.v1.JobError
-	62, // 28: syncr.v1.Job.output:type_name -> syncr.v1.JobOutput
-	34, // 29: syncr.v1.Job.definition:type_name -> syncr.v1.JobDefinition
-	33, // 30: syncr.v1.Job.remotes:type_name -> syncr.v1.JobRemoteRef
-	32, // 31: syncr.v1.Job.schedule:type_name -> syncr.v1.JobScheduleRef
-	30, // 32: syncr.v1.Job.repository:type_name -> syncr.v1.JobRepositoryRef
-	31, // 33: syncr.v1.Job.details:type_name -> syncr.v1.JobDetail
-	59, // 34: syncr.v1.Job.time_limit:type_name -> google.protobuf.Duration
-	59, // 35: syncr.v1.JobDefinition.max_runtime:type_name -> google.protobuf.Duration
-	35, // 36: syncr.v1.JobDefinition.rclone_transfer:type_name -> syncr.v1.RcloneTransferDefinition
-	36, // 37: syncr.v1.JobDefinition.restic_backup:type_name -> syncr.v1.ResticBackupDefinition
-	37, // 38: syncr.v1.JobDefinition.restic_forget:type_name -> syncr.v1.ResticForgetDefinition
-	38, // 39: syncr.v1.JobDefinition.restic_prune:type_name -> syncr.v1.ResticPruneDefinition
-	39, // 40: syncr.v1.JobDefinition.restic_check:type_name -> syncr.v1.ResticCheckDefinition
-	40, // 41: syncr.v1.JobDefinition.restic_restore:type_name -> syncr.v1.ResticRestoreDefinition
-	41, // 42: syncr.v1.JobDefinition.restic_delete_data:type_name -> syncr.v1.ResticDeleteDataDefinition
-	63, // 43: syncr.v1.RcloneTransferDefinition.mode:type_name -> syncr.v1.RcloneTransferMode
-	42, // 44: syncr.v1.RcloneTransferDefinition.source:type_name -> syncr.v1.JobLocation
-	42, // 45: syncr.v1.RcloneTransferDefinition.destination:type_name -> syncr.v1.JobLocation
-	64, // 46: syncr.v1.RcloneTransferDefinition.options:type_name -> syncr.v1.RcloneTransferOptions
-	65, // 47: syncr.v1.ResticForgetDefinition.policy:type_name -> syncr.v1.ResticRetentionPolicy
-	66, // 48: syncr.v1.ResticRestoreDefinition.overwrite:type_name -> syncr.v1.ResticRestoreOverwrite
-	34, // 49: syncr.v1.RunJobRequest.definition:type_name -> syncr.v1.JobDefinition
-	29, // 50: syncr.v1.RunJobResponse.job:type_name -> syncr.v1.Job
-	29, // 51: syncr.v1.GetJobResponse.job:type_name -> syncr.v1.Job
-	3,  // 52: syncr.v1.ListJobsRequest.statuses:type_name -> syncr.v1.JobStatus
-	56, // 53: syncr.v1.ListJobsRequest.created_after:type_name -> google.protobuf.Timestamp
-	56, // 54: syncr.v1.ListJobsRequest.created_before:type_name -> google.protobuf.Timestamp
-	29, // 55: syncr.v1.ListJobsResponse.jobs:type_name -> syncr.v1.Job
-	29, // 56: syncr.v1.CancelJobResponse.job:type_name -> syncr.v1.Job
-	29, // 57: syncr.v1.WatchJobResponse.job:type_name -> syncr.v1.Job
-	55, // 58: syncr.v1.WatchJobResponse.progress:type_name -> syncr.v1.JobProgress
-	55, // 59: syncr.v1.ListJobSamplesResponse.samples:type_name -> syncr.v1.JobProgress
-	56, // 60: syncr.v1.JobProgress.time:type_name -> google.protobuf.Timestamp
-	60, // 61: syncr.v1.JobProgress.stats:type_name -> syncr.v1.JobStats
-	6,  // 62: syncr.v1.SystemService.GetInfo:input_type -> syncr.v1.GetInfoRequest
-	10, // 63: syncr.v1.WorkerAdminService.CreateEnrollmentToken:input_type -> syncr.v1.CreateEnrollmentTokenRequest
-	12, // 64: syncr.v1.WorkerAdminService.GetPassiveInstallCommands:input_type -> syncr.v1.GetPassiveInstallCommandsRequest
-	15, // 65: syncr.v1.WorkerAdminService.RegisterPassiveWorker:input_type -> syncr.v1.RegisterPassiveWorkerRequest
-	17, // 66: syncr.v1.WorkerAdminService.ListWorkers:input_type -> syncr.v1.ListWorkersRequest
-	19, // 67: syncr.v1.WorkerAdminService.GetWorker:input_type -> syncr.v1.GetWorkerRequest
-	21, // 68: syncr.v1.WorkerAdminService.RenameWorker:input_type -> syncr.v1.RenameWorkerRequest
-	23, // 69: syncr.v1.WorkerAdminService.RemoveWorker:input_type -> syncr.v1.RemoveWorkerRequest
-	27, // 70: syncr.v1.WorkerAdminService.SetWorkerLabels:input_type -> syncr.v1.SetWorkerLabelsRequest
-	25, // 71: syncr.v1.WorkerAdminService.GetWorkerUpgradeCommands:input_type -> syncr.v1.GetWorkerUpgradeCommandsRequest
-	43, // 72: syncr.v1.JobService.RunJob:input_type -> syncr.v1.RunJobRequest
-	45, // 73: syncr.v1.JobService.GetJob:input_type -> syncr.v1.GetJobRequest
-	47, // 74: syncr.v1.JobService.ListJobs:input_type -> syncr.v1.ListJobsRequest
-	49, // 75: syncr.v1.JobService.CancelJob:input_type -> syncr.v1.CancelJobRequest
-	51, // 76: syncr.v1.JobService.WatchJob:input_type -> syncr.v1.WatchJobRequest
-	53, // 77: syncr.v1.JobService.ListJobSamples:input_type -> syncr.v1.ListJobSamplesRequest
-	7,  // 78: syncr.v1.SystemService.GetInfo:output_type -> syncr.v1.GetInfoResponse
-	11, // 79: syncr.v1.WorkerAdminService.CreateEnrollmentToken:output_type -> syncr.v1.CreateEnrollmentTokenResponse
-	13, // 80: syncr.v1.WorkerAdminService.GetPassiveInstallCommands:output_type -> syncr.v1.GetPassiveInstallCommandsResponse
-	16, // 81: syncr.v1.WorkerAdminService.RegisterPassiveWorker:output_type -> syncr.v1.RegisterPassiveWorkerResponse
-	18, // 82: syncr.v1.WorkerAdminService.ListWorkers:output_type -> syncr.v1.ListWorkersResponse
-	20, // 83: syncr.v1.WorkerAdminService.GetWorker:output_type -> syncr.v1.GetWorkerResponse
-	22, // 84: syncr.v1.WorkerAdminService.RenameWorker:output_type -> syncr.v1.RenameWorkerResponse
-	24, // 85: syncr.v1.WorkerAdminService.RemoveWorker:output_type -> syncr.v1.RemoveWorkerResponse
-	28, // 86: syncr.v1.WorkerAdminService.SetWorkerLabels:output_type -> syncr.v1.SetWorkerLabelsResponse
-	26, // 87: syncr.v1.WorkerAdminService.GetWorkerUpgradeCommands:output_type -> syncr.v1.GetWorkerUpgradeCommandsResponse
-	44, // 88: syncr.v1.JobService.RunJob:output_type -> syncr.v1.RunJobResponse
-	46, // 89: syncr.v1.JobService.GetJob:output_type -> syncr.v1.GetJobResponse
-	48, // 90: syncr.v1.JobService.ListJobs:output_type -> syncr.v1.ListJobsResponse
-	50, // 91: syncr.v1.JobService.CancelJob:output_type -> syncr.v1.CancelJobResponse
-	52, // 92: syncr.v1.JobService.WatchJob:output_type -> syncr.v1.WatchJobResponse
-	54, // 93: syncr.v1.JobService.ListJobSamples:output_type -> syncr.v1.ListJobSamplesResponse
-	78, // [78:94] is the sub-list for method output_type
-	62, // [62:78] is the sub-list for method input_type
-	62, // [62:62] is the sub-list for extension type_name
-	62, // [62:62] is the sub-list for extension extendee
-	0,  // [0:62] is the sub-list for field type_name
+	59, // 9: syncr.v1.WorkerInfo.hooks:type_name -> syncr.v1.HookInfo
+	60, // 10: syncr.v1.CreateEnrollmentTokenRequest.ttl:type_name -> google.protobuf.Duration
+	56, // 11: syncr.v1.CreateEnrollmentTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	14, // 12: syncr.v1.CreateEnrollmentTokenResponse.install_commands:type_name -> syncr.v1.InstallCommand
+	14, // 13: syncr.v1.GetPassiveInstallCommandsResponse.commands:type_name -> syncr.v1.InstallCommand
+	1,  // 14: syncr.v1.InstallCommand.platform:type_name -> syncr.v1.InstallPlatform
+	2,  // 15: syncr.v1.InstallCommand.scope:type_name -> syncr.v1.InstallScope
+	8,  // 16: syncr.v1.RegisterPassiveWorkerResponse.worker:type_name -> syncr.v1.Worker
+	8,  // 17: syncr.v1.ListWorkersResponse.workers:type_name -> syncr.v1.Worker
+	8,  // 18: syncr.v1.GetWorkerResponse.worker:type_name -> syncr.v1.Worker
+	8,  // 19: syncr.v1.RenameWorkerResponse.worker:type_name -> syncr.v1.Worker
+	14, // 20: syncr.v1.GetWorkerUpgradeCommandsResponse.commands:type_name -> syncr.v1.InstallCommand
+	8,  // 21: syncr.v1.SetWorkerLabelsResponse.worker:type_name -> syncr.v1.Worker
+	3,  // 22: syncr.v1.Job.status:type_name -> syncr.v1.JobStatus
+	56, // 23: syncr.v1.Job.created_at:type_name -> google.protobuf.Timestamp
+	56, // 24: syncr.v1.Job.dispatched_at:type_name -> google.protobuf.Timestamp
+	56, // 25: syncr.v1.Job.started_at:type_name -> google.protobuf.Timestamp
+	56, // 26: syncr.v1.Job.finished_at:type_name -> google.protobuf.Timestamp
+	61, // 27: syncr.v1.Job.stats:type_name -> syncr.v1.JobStats
+	62, // 28: syncr.v1.Job.error:type_name -> syncr.v1.JobError
+	63, // 29: syncr.v1.Job.output:type_name -> syncr.v1.JobOutput
+	34, // 30: syncr.v1.Job.definition:type_name -> syncr.v1.JobDefinition
+	33, // 31: syncr.v1.Job.remotes:type_name -> syncr.v1.JobRemoteRef
+	32, // 32: syncr.v1.Job.schedule:type_name -> syncr.v1.JobScheduleRef
+	30, // 33: syncr.v1.Job.repository:type_name -> syncr.v1.JobRepositoryRef
+	31, // 34: syncr.v1.Job.details:type_name -> syncr.v1.JobDetail
+	60, // 35: syncr.v1.Job.time_limit:type_name -> google.protobuf.Duration
+	64, // 36: syncr.v1.Job.hook_runs:type_name -> syncr.v1.HookRun
+	60, // 37: syncr.v1.JobDefinition.max_runtime:type_name -> google.protobuf.Duration
+	65, // 38: syncr.v1.JobDefinition.hooks:type_name -> syncr.v1.JobHooks
+	35, // 39: syncr.v1.JobDefinition.rclone_transfer:type_name -> syncr.v1.RcloneTransferDefinition
+	36, // 40: syncr.v1.JobDefinition.restic_backup:type_name -> syncr.v1.ResticBackupDefinition
+	37, // 41: syncr.v1.JobDefinition.restic_forget:type_name -> syncr.v1.ResticForgetDefinition
+	38, // 42: syncr.v1.JobDefinition.restic_prune:type_name -> syncr.v1.ResticPruneDefinition
+	39, // 43: syncr.v1.JobDefinition.restic_check:type_name -> syncr.v1.ResticCheckDefinition
+	40, // 44: syncr.v1.JobDefinition.restic_restore:type_name -> syncr.v1.ResticRestoreDefinition
+	41, // 45: syncr.v1.JobDefinition.restic_delete_data:type_name -> syncr.v1.ResticDeleteDataDefinition
+	66, // 46: syncr.v1.RcloneTransferDefinition.mode:type_name -> syncr.v1.RcloneTransferMode
+	42, // 47: syncr.v1.RcloneTransferDefinition.source:type_name -> syncr.v1.JobLocation
+	42, // 48: syncr.v1.RcloneTransferDefinition.destination:type_name -> syncr.v1.JobLocation
+	67, // 49: syncr.v1.RcloneTransferDefinition.options:type_name -> syncr.v1.RcloneTransferOptions
+	68, // 50: syncr.v1.ResticForgetDefinition.policy:type_name -> syncr.v1.ResticRetentionPolicy
+	69, // 51: syncr.v1.ResticRestoreDefinition.overwrite:type_name -> syncr.v1.ResticRestoreOverwrite
+	34, // 52: syncr.v1.RunJobRequest.definition:type_name -> syncr.v1.JobDefinition
+	29, // 53: syncr.v1.RunJobResponse.job:type_name -> syncr.v1.Job
+	29, // 54: syncr.v1.GetJobResponse.job:type_name -> syncr.v1.Job
+	3,  // 55: syncr.v1.ListJobsRequest.statuses:type_name -> syncr.v1.JobStatus
+	56, // 56: syncr.v1.ListJobsRequest.created_after:type_name -> google.protobuf.Timestamp
+	56, // 57: syncr.v1.ListJobsRequest.created_before:type_name -> google.protobuf.Timestamp
+	29, // 58: syncr.v1.ListJobsResponse.jobs:type_name -> syncr.v1.Job
+	29, // 59: syncr.v1.CancelJobResponse.job:type_name -> syncr.v1.Job
+	29, // 60: syncr.v1.WatchJobResponse.job:type_name -> syncr.v1.Job
+	55, // 61: syncr.v1.WatchJobResponse.progress:type_name -> syncr.v1.JobProgress
+	55, // 62: syncr.v1.ListJobSamplesResponse.samples:type_name -> syncr.v1.JobProgress
+	56, // 63: syncr.v1.JobProgress.time:type_name -> google.protobuf.Timestamp
+	61, // 64: syncr.v1.JobProgress.stats:type_name -> syncr.v1.JobStats
+	6,  // 65: syncr.v1.SystemService.GetInfo:input_type -> syncr.v1.GetInfoRequest
+	10, // 66: syncr.v1.WorkerAdminService.CreateEnrollmentToken:input_type -> syncr.v1.CreateEnrollmentTokenRequest
+	12, // 67: syncr.v1.WorkerAdminService.GetPassiveInstallCommands:input_type -> syncr.v1.GetPassiveInstallCommandsRequest
+	15, // 68: syncr.v1.WorkerAdminService.RegisterPassiveWorker:input_type -> syncr.v1.RegisterPassiveWorkerRequest
+	17, // 69: syncr.v1.WorkerAdminService.ListWorkers:input_type -> syncr.v1.ListWorkersRequest
+	19, // 70: syncr.v1.WorkerAdminService.GetWorker:input_type -> syncr.v1.GetWorkerRequest
+	21, // 71: syncr.v1.WorkerAdminService.RenameWorker:input_type -> syncr.v1.RenameWorkerRequest
+	23, // 72: syncr.v1.WorkerAdminService.RemoveWorker:input_type -> syncr.v1.RemoveWorkerRequest
+	27, // 73: syncr.v1.WorkerAdminService.SetWorkerLabels:input_type -> syncr.v1.SetWorkerLabelsRequest
+	25, // 74: syncr.v1.WorkerAdminService.GetWorkerUpgradeCommands:input_type -> syncr.v1.GetWorkerUpgradeCommandsRequest
+	43, // 75: syncr.v1.JobService.RunJob:input_type -> syncr.v1.RunJobRequest
+	45, // 76: syncr.v1.JobService.GetJob:input_type -> syncr.v1.GetJobRequest
+	47, // 77: syncr.v1.JobService.ListJobs:input_type -> syncr.v1.ListJobsRequest
+	49, // 78: syncr.v1.JobService.CancelJob:input_type -> syncr.v1.CancelJobRequest
+	51, // 79: syncr.v1.JobService.WatchJob:input_type -> syncr.v1.WatchJobRequest
+	53, // 80: syncr.v1.JobService.ListJobSamples:input_type -> syncr.v1.ListJobSamplesRequest
+	7,  // 81: syncr.v1.SystemService.GetInfo:output_type -> syncr.v1.GetInfoResponse
+	11, // 82: syncr.v1.WorkerAdminService.CreateEnrollmentToken:output_type -> syncr.v1.CreateEnrollmentTokenResponse
+	13, // 83: syncr.v1.WorkerAdminService.GetPassiveInstallCommands:output_type -> syncr.v1.GetPassiveInstallCommandsResponse
+	16, // 84: syncr.v1.WorkerAdminService.RegisterPassiveWorker:output_type -> syncr.v1.RegisterPassiveWorkerResponse
+	18, // 85: syncr.v1.WorkerAdminService.ListWorkers:output_type -> syncr.v1.ListWorkersResponse
+	20, // 86: syncr.v1.WorkerAdminService.GetWorker:output_type -> syncr.v1.GetWorkerResponse
+	22, // 87: syncr.v1.WorkerAdminService.RenameWorker:output_type -> syncr.v1.RenameWorkerResponse
+	24, // 88: syncr.v1.WorkerAdminService.RemoveWorker:output_type -> syncr.v1.RemoveWorkerResponse
+	28, // 89: syncr.v1.WorkerAdminService.SetWorkerLabels:output_type -> syncr.v1.SetWorkerLabelsResponse
+	26, // 90: syncr.v1.WorkerAdminService.GetWorkerUpgradeCommands:output_type -> syncr.v1.GetWorkerUpgradeCommandsResponse
+	44, // 91: syncr.v1.JobService.RunJob:output_type -> syncr.v1.RunJobResponse
+	46, // 92: syncr.v1.JobService.GetJob:output_type -> syncr.v1.GetJobResponse
+	48, // 93: syncr.v1.JobService.ListJobs:output_type -> syncr.v1.ListJobsResponse
+	50, // 94: syncr.v1.JobService.CancelJob:output_type -> syncr.v1.CancelJobResponse
+	52, // 95: syncr.v1.JobService.WatchJob:output_type -> syncr.v1.WatchJobResponse
+	54, // 96: syncr.v1.JobService.ListJobSamples:output_type -> syncr.v1.ListJobSamplesResponse
+	81, // [81:97] is the sub-list for method output_type
+	65, // [65:81] is the sub-list for method input_type
+	65, // [65:65] is the sub-list for extension type_name
+	65, // [65:65] is the sub-list for extension extendee
+	0,  // [0:65] is the sub-list for field type_name
 }
 
 func init() { file_syncr_v1_api_proto_init() }
