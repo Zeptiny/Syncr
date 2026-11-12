@@ -28,6 +28,8 @@ import { invalidateService } from "@/lib/invalidate";
 import { isWithinRoots, treeToLocal } from "@/lib/restic-paths";
 import { isOnline } from "@/lib/workers";
 
+import { hasHooks, hooksError } from "../jobs/hooks";
+import { HooksFields, hooksEmptyText } from "../jobs/hooks-editor";
 import { PatternList } from "../jobs/pattern-list";
 import { Toggle } from "../jobs/transfer-editor";
 import {
@@ -111,6 +113,9 @@ function Body({
   }
   const target = typedTarget ?? defaultTarget;
   const state = { ...rest, workerId, target };
+  // The hooks are the chosen worker's: another worker offers others.
+  const hooksTarget = { workers: worker?.info ? [worker] : [] };
+  const showHooks = hasHooks(rest.hooks) || hooksEmptyText(rest.hooks, hooksTarget) === undefined;
   const original = what.mode === "folder" ? treeToLocal(what.folder, os) : undefined;
   const outside = target.trim() !== "" && roots.length > 0 && !isWithinRoots(target, roots, os);
 
@@ -132,7 +137,9 @@ function Body({
       const server: RestoreErrors = {};
       const other: string[] = [];
       for (const v of fieldViolations(err)) {
-        if (v.field.includes("worker")) server.worker = v.message;
+        const hooks = hooksError(v);
+        if (hooks !== undefined) server.hooks = server.hooks ? `${server.hooks} ${hooks}` : hooks;
+        else if (v.field.includes("worker")) server.worker = v.message;
         else if (v.field.endsWith(".target")) server.target = v.message;
         else other.push(`${v.field}: ${v.message}`);
       }
@@ -261,6 +268,28 @@ function Body({
             onChange={(excludes) => setRest((p) => ({ ...p, excludes }))}
           />
         </FieldShell>
+
+        {showHooks && (
+          <section className="flex flex-col gap-3" aria-labelledby="restore-hooks">
+            <div>
+              <h3 id="restore-hooks" className="text-[13px] font-medium">
+                Hooks <span className="font-normal text-muted-foreground">(optional)</span>
+              </h3>
+              <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                Commands {worker?.name ?? "the worker"}'s operator prepared, run around the restore:
+                stop what uses the files first, load a restored dump afterwards.
+              </p>
+            </div>
+            <HooksFields
+              idPrefix="restore"
+              value={rest.hooks}
+              onChange={(hooks) => setRest((p) => ({ ...p, hooks }))}
+              target={hooksTarget}
+              error={errors.hooks}
+              className="lg:grid-cols-1"
+            />
+          </section>
+        )}
 
         {errors.form && (
           <p role="alert" className="rounded-md bg-danger-soft px-3 py-2 text-[13px] text-danger">

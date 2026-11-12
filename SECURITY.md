@@ -52,7 +52,9 @@ upgrade), the release files and the images.
 The design records in [docs/adr/](docs/adr/) describe the security
 decisions: users and sessions (0006), how remote credentials are stored and
 handed to workers (0007), the worker link and passive workers' pinned TLS
-(0002), worker probes (0012) and releases (0016). Behaviour they describe
-as intended (for example that an administrator can see and cancel every
-user's jobs, or that fetched SFTP host keys are trusted on first use) is not a
-vulnerability, but a report that it is unsafe is welcome.
+(0002), worker probes (0012), releases (0016) and the commands workers run
+for jobs as hooks (0017). Behaviour they describe as intended (for example
+that an administrator can see and cancel every user's jobs, that fetched
+SFTP host keys are trusted on first use, or that every user can run each
+hook a worker's operator defined) is not a vulnerability, but a report that
+it is unsafe is welcome.

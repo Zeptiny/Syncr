@@ -19,6 +19,8 @@ snapshots, and get notified when something fails.
 - **restic backups.** Create or connect repositories on any remote, back up
   a worker's folders, apply retention and check them. Browse snapshots and
   restore all of one, a folder or selected files.
+- **Hooks.** Run commands a worker's operator prepared before and after a
+  job: dump a database, stop and start containers, ping a monitor.
 - **Schedules.** Cron expressions with time zones and daylight-saving rules,
   run on one worker or on the least busy worker with a label, with policies
   for missed runs and overlaps.
@@ -118,7 +120,8 @@ back up the database and `SYNCR_SECRETS_KEY`: see
 - [Configuration](docs/configuration.md): every controller setting
 - Workers: [Linux](docs/setup-linux.md), [Windows](docs/setup-windows.md),
   [configuration](docs/worker-config.md), [upgrading](docs/upgrade.md)
-- [restic backups](docs/restic.md) and [notifications](docs/notifications.md)
+- [restic backups](docs/restic.md), [hooks](docs/hooks.md) and
+  [notifications](docs/notifications.md)
 - [Scripting the API](docs/api.md)
 - [Development](docs/development.md): building, testing and the architecture
 - [Release notes](docs/releases/) · [Security policy](SECURITY.md)

@@ -354,6 +354,11 @@ const (
 // state: a backup that is running with another waiting behind it on the
 // same repository, and a check that is running on the repository whose
 // data deletion waits for it.
+//
+// The backups of the NAS documents on nas-01 run its hooks (docsHooks):
+// they stop the document app and dump its database first, and start the
+// app again afterwards. The second one's start hook ran into its timeout,
+// so that backup failed with hook_failed although its snapshot was written.
 func demoResticJobs() []demoJob {
 	h, m, s, d := time.Hour, time.Minute, time.Second, 24*time.Hour
 	docs, alice := demoRepos()[1], demoRepos()[5]
@@ -361,8 +366,14 @@ func demoResticJobs() []demoJob {
 		return demoJob{owner: ownerAdmin, worker: "nas-01", def: backupDef(repoNASDocs, false, "/srv/docs"),
 			status: domain.JobSucceeded, created: created, queue: 2 * s, run: run,
 			stats: done(docs.processed+int64(n)*40*mib, docs.fileCount+int64(n)*6, 0), samples: 12,
-			output: backupOutput(docs.key(), n, docs.processed+int64(n)*40*mib, docs.fileCount+int64(n)*6)}
+			output: backupOutput(docs.key(), n, docs.processed+int64(n)*40*mib, docs.fileCount+int64(n)*6),
+			hooks:  docsHooks(), hookRuns: docsHookRuns(false)}
 	}
+	// The backup whose start hook timed out: the two minutes of the timeout
+	// are part of its run.
+	hookFailed := docsBackup(1, 6*d+8*h, 2*m+48*s+startTimeout)
+	hookFailed.status, hookFailed.hookRuns = domain.JobFailed, docsHookRuns(true)
+	hookFailed.err = jobs.JobError{Code: jobs.CodeHookFailed, Message: `hook "` + hookStart + `" (after) timed out after 2m0s`}
 	return []demoJob{
 		{owner: ownerAdmin, worker: "nas-01", def: checkDef(repoNASDocs, 0),
 			status: domain.JobSucceeded, created: 19*d + 4*h, queue: 2 * s, run: 2*m + 40*s, samples: 6, output: checkOutput(0, 0)},
@@ -377,7 +388,7 @@ func demoResticJobs() []demoJob {
 			output: &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticRestore{ResticRestore: &syncrv1.ResticRestoreOutput{
 				TotalFiles: 14, FilesRestored: 14, TotalBytes: 31 * mib, BytesRestored: 31 * mib,
 			}}}},
-		docsBackup(1, 6*d+8*h, 2*m+48*s),
+		hookFailed,
 		{owner: ownerAlice, worker: "nas-01", def: backupDef(repoAlice, false, "/srv/home/alice"),
 			status: domain.JobSucceeded, created: 4*d + 13*h, queue: 4 * s, run: 1*m + 31*s, samples: 8,
 			stats:  done(alice.processed, alice.fileCount, 0),
@@ -391,7 +402,8 @@ func demoResticJobs() []demoJob {
 		// totals are what the earlier ones read (docsBackup), at about 5 MiB/s.
 		{owner: ownerAdmin, worker: "nas-01", def: backupDef(repoNASDocs, false, "/srv/docs"), static: true,
 			status: domain.JobRunning, created: 7 * m, queue: 2 * s, rate: 5 * mib,
-			stats: jobs.Stats{TotalBytes: docs.processed + 3*40*mib, TotalFiles: docs.fileCount + 3*6}},
+			stats: jobs.Stats{TotalBytes: docs.processed + 3*40*mib, TotalFiles: docs.fileCount + 3*6},
+			hooks: docsHooks()},
 		{owner: ownerAdmin, worker: "backup-host", def: backupDef(repoNASDocs, false, "/srv/docs"),
 			status: domain.JobQueued, created: 3 * m},
 	}

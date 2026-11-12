@@ -59,6 +59,8 @@ import {
 import { cn } from "@/lib/utils";
 
 import { isEditableKind } from "./definition";
+import { HookRunsPanel } from "./hook-runs";
+import { hookSummary, hooksState } from "./hooks";
 import { JobOutputCards, ResticBand } from "./job-output";
 import { ScheduleChip, WaitingChip } from "./jobs-table";
 import {
@@ -293,6 +295,8 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
 
   const limit = durationSeconds(job.timeLimit);
   const timedOut = job.error?.code === JobErrorCode.TIME_LIMIT;
+  const hookFailed = job.error?.code === JobErrorCode.HOOK_FAILED;
+  const hooks = hookSummary(hooksState(job.definition));
 
   const runAgain = async () => {
     const res = await rerun.mutateAsync({ workerId: job.workerId, definition: job.definition });
@@ -433,10 +437,18 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
             <div className="min-w-0">
               <div className="text-[13px] font-semibold text-danger">
                 {errorCodeLabel(job.error.code)}
-                {job.exitCode !== undefined && (
+                {job.exitCode !== undefined && !hookFailed && (
                   <span className="font-normal"> (exit code {job.exitCode})</span>
                 )}
               </div>
+              {hookFailed && (
+                <p className="mt-0.5 text-[13px] leading-5">
+                  {job.exitCode !== undefined
+                    ? "The job itself finished: what it did is kept. A hook that ran after it did not succeed."
+                    : "A hook that runs before the job did not succeed, so the job never ran."}{" "}
+                  The hooks below show what happened.
+                </p>
+              )}
               {timedOut && (
                 <p className="mt-0.5 text-[13px] leading-5">
                   It ran longer than its time limit
@@ -467,6 +479,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
         )}
 
         <JobOutputCards job={job} />
+        <HookRunsPanel job={job} />
 
         <Panel title="Throughput" actions={<Connection watch={watch} terminal={terminal} />}>
           <ProgressChart
@@ -513,6 +526,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
                   label: "Time limit",
                   value: limit > 0 ? formatLimit(limit) : "None",
                 },
+                ...(hooks ? [{ label: "Hooks", value: hooks }] : []),
                 {
                   label: "Started by",
                   value: job.scheduleId ? (

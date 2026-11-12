@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
+	"github.com/Zeptiny/Syncr/internal/worker/hooks"
 	"github.com/Zeptiny/Syncr/internal/worker/localfs"
 	"github.com/Zeptiny/Syncr/internal/worker/paths"
 	"github.com/Zeptiny/Syncr/internal/worker/probe"
@@ -59,6 +62,9 @@ type worker struct {
 	// link (folder listings, remote tests, restic's snapshot listings),
 	// with the runners' binaries, remote definitions and local_roots.
 	probes *probe.Executor
+	// hooks are the commands of the configuration that jobs may run
+	// around their operation, by name. Never nil; it may be empty.
+	hooks *hooks.Set
 	// dataDir, scratchDir and cacheDir are the directories in use.
 	dataDir, scratchDir, cacheDir string
 }
@@ -66,7 +72,8 @@ type worker struct {
 // buildWorker wires the worker from cfg: it resolves the pinned tools,
 // builds the local_roots policy and the process supervisor, and registers
 // the rclone runner and the restic runners, and builds the probe executor
-// over the same tools. It creates the data, scratch and
+// over the same tools and the configured hooks over the same supervisor. It
+// creates the data, scratch and
 // cache directories. Every failure is returned with an explanation an
 // operator can act on; nothing is started.
 func buildWorker(ctx context.Context, cfg workerconfig.Config, deps workerDeps, log *slog.Logger) (*worker, error) {
@@ -113,7 +120,40 @@ func buildWorker(ctx context.Context, cfg workerconfig.Config, deps workerDeps, 
 	if err := registerRunners(w, resticCache, log); err != nil {
 		return nil, err
 	}
+	if w.hooks, err = buildHooks(cfg.Hooks, w.supervisor, log); err != nil {
+		return nil, err
+	}
 	return w, nil
+}
+
+// buildHooks returns the hooks of the configuration over the supervisor
+// that runs the tools, so they get the same minimal environment, the same
+// stop and the same end as the worker's other children. It logs their
+// names, and a warning for each whose program cannot be found now: such a
+// hook fails the jobs that name it, which is easier to fix before the first
+// backup needs it.
+func buildHooks(configured map[string]workerconfig.HookConfig, sup *proc.Supervisor, log *slog.Logger) (*hooks.Set, error) {
+	defs := make([]hooks.Definition, 0, len(configured))
+	for _, name := range slices.Sorted(maps.Keys(configured)) {
+		h := configured[name]
+		defs = append(defs, hooks.Definition{
+			Name: name, Description: h.Description, Command: h.Command, Timeout: h.EffectiveTimeout(), Env: h.Env,
+		})
+	}
+	set, err := hooks.New(hooks.Config{Definitions: defs, Supervisor: sup})
+	if err != nil {
+		return nil, fmt.Errorf("hooks: %w", err)
+	}
+	if len(defs) == 0 {
+		return set, nil
+	}
+	log.Info("hooks", "hooks", set.Names())
+	unusable := set.Unusable()
+	for _, name := range slices.Sorted(maps.Keys(unusable)) {
+		log.Warn("the program of a hook was not found: jobs that name the hook will fail until it is there",
+			"hook", name, "program", configured[name].Command[0], "error", unusable[name].Error())
+	}
+	return set, nil
 }
 
 // resolveDataDir returns cfg.DataDir or the platform default.

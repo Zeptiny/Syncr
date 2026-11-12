@@ -18,6 +18,7 @@ export function sortWorkers(workers: Worker[]): Worker[] {
 export const FEATURE_PROBE = "probe";
 export const FEATURE_RESTIC = "restic.v2";
 export const FEATURE_RESTIC_DELETE = "restic.delete";
+export const FEATURE_HOOKS = "job.hooks";
 
 /** hasFeature reports whether a worker reported a link feature. */
 export function hasFeature(w: Worker | undefined, feature: string): boolean {

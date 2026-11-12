@@ -24,7 +24,9 @@ type document struct {
 	Tools             *ToolsConfig   `yaml:"tools,omitempty"`
 	MaxConcurrentJobs int            `yaml:"max_concurrent_jobs"`
 	ProgressInterval  time.Duration  `yaml:"progress_interval"`
-	Link              linkDocument   `yaml:"link"`
+	// Hooks keep their order by name (yaml sorts map keys).
+	Hooks map[string]HookConfig `yaml:"hooks,omitempty"`
+	Link  linkDocument          `yaml:"link"`
 }
 
 type linkDocument struct {
@@ -54,6 +56,7 @@ func Marshal(cfg Config) ([]byte, error) {
 		LocalRoots:        cfg.LocalRoots,
 		MaxConcurrentJobs: cfg.MaxConcurrentJobs,
 		ProgressInterval:  cfg.ProgressInterval,
+		Hooks:             cfg.Hooks,
 		Link: linkDocument{
 			Mode:             cfg.Link.Mode,
 			WorkerID:         cfg.Link.WorkerID,

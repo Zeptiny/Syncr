@@ -22,6 +22,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
+	"github.com/Zeptiny/Syncr/internal/link"
 )
 
 // TimeLimits computes the effective time limit of a job: its definition's
@@ -59,8 +60,8 @@ type jobHandler struct {
 	// repos names the jobs' restic repositories (Job.repository and the
 	// title); nil leaves the reference without a name.
 	repos RepositoryNames
-	// workers tells RunJob the worker's operating system (the VSS check);
-	// nil skips the check.
+	// workers tells RunJob the worker's operating system (the VSS check)
+	// and the hooks it defines; nil skips the checks.
 	workers WorkerNames
 	// limits computes Job.time_limit of queued jobs; nil leaves it unset
 	// for them.
@@ -287,6 +288,41 @@ func wrongWorkerOS(ctx context.Context, kinds *jobkind.Registry, ws WorkerNames,
 	return req, w.Info.OS, true
 }
 
+// unrunnableHooks returns, as field errors, why the chosen worker is known
+// not to run the hooks def names (JobDefinition.hooks): it is too old to run
+// hooks at all ("definition.hooks"), or it does not define some of them
+// (each at the first place def names it, e.g. "definition.hooks.before[0]").
+// Nil when def names no hooks or the worker defines them all.
+//
+// Like wrongWorkerOS, this is an early answer from the worker's latest
+// Hello: a worker that has not reported yet, or cannot be read, passes, and
+// the dispatcher checks the worker's current process before it sends the
+// job. A worker whose operator just added a hook reports it when it starts.
+func unrunnableHooks(ctx context.Context, ws WorkerNames, id domain.WorkerID, def *syncrv1.JobDefinition) []domain.FieldError {
+	names := jobkind.HookNames(def)
+	if ws == nil || id.IsZero() || len(names) == 0 {
+		return nil
+	}
+	w, err := ws.Get(ctx, id)
+	if err != nil || workerInfoToProto(w.Info) == nil {
+		return nil
+	}
+	if !w.Info.HasFeatures(link.FeatureJobHooks) {
+		return []domain.FieldError{{
+			Field:   "definition.hooks",
+			Message: fmt.Sprintf("cannot be used on worker %q yet: it must be upgraded to run hooks", w.Name),
+		}}
+	}
+	var fields []domain.FieldError
+	for _, name := range jobkind.MissingHooks(def, w.Info.HookNames()) {
+		fields = append(fields, domain.FieldError{
+			Field:   jobkind.HookField(def, name),
+			Message: fmt.Sprintf("worker %q defines no hook named %q: its operator adds hooks in the worker's configuration", w.Name, name),
+		})
+	}
+	return fields
+}
+
 // RunJob checks the definition with its job kind and queues the job for
 // the caller. The definition is secret-free and its remotes must be the
 // caller's live remotes; the dispatcher builds the worker's spec, with the
@@ -316,6 +352,9 @@ func (h *jobHandler) RunJob(ctx context.Context, req *connect.Request[syncrv1.Ru
 	}
 	if req, goos, wrong := wrongWorkerOS(ctx, h.kinds, h.workers, workerID, def); wrong {
 		return nil, invalidField(req.Field, req.FieldMessage()+"; this worker runs "+goos)
+	}
+	if fields := unrunnableHooks(ctx, h.workers, workerID, def); len(fields) > 0 {
+		return nil, h.fail(ctx, procedure, &domain.ValidationError{Fields: fields})
 	}
 	encoded, err := jobkind.Marshal(def)
 	if err != nil {

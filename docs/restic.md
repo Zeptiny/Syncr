@@ -66,6 +66,17 @@ A backup's job page shows the snapshot it wrote, how many files were new,
 changed and unmodified, and how much data was added. Notifications carry
 the same details.
 
+### Databases and running applications: hooks
+
+restic reads files as they are. A database that writes while it is backed
+up, or an application whose files belong together, needs something to run
+first: a dump, or a stop. Every job above, restores included, can run
+**hooks** of its worker before and after its operation, for example
+`dump-db` before a backup and `start-app` at its end. The worker's
+operator defines them in the worker's configuration; the job's form offers
+them by name. If a hook before the backup fails, no snapshot is written and
+the job fails. See [hooks](hooks.md).
+
 ### Windows: volume snapshots (VSS)
 
 **Use a volume snapshot** backs up open and locked files (`restic

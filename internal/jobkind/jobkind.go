@@ -56,12 +56,22 @@
 // effective limit (with the controller's default) and writes it into the
 // spec.
 //
+// # Hooks
+//
+// A definition's hooks (JobDefinition.hooks) apply to every kind a user
+// may start, too: Registry.Check checks their names and counts (hooks.go),
+// and Registry.Build copies them into the spec. Kinds do not see them.
+// Whether a worker defines the hooks a definition names is a requirement on
+// the worker like its operating system: HookNames and MissingHooks answer
+// it for the API, the scheduler and the dispatcher.
+//
 // The package is pure: no I/O, no logging. Specs contain secrets and exist
 // only in memory.
 //
 // Allowed dependencies: the standard library, the generated protobuf code,
 // google.golang.org/protobuf, internal/domain, internal/backend (the core
-// API) and internal/link (feature names).
+// API) and internal/link (feature names, and the names and limits of
+// hooks).
 package jobkind
 
 import (
@@ -329,26 +339,35 @@ func (r *Registry) Get(name string) (Kind, bool) {
 
 // Check validates def with its kind and returns the kind's name and what
 // def refers to, with the concurrency keys of a Keyed kind (sorted, without
-// duplicates). It also checks the definition's time limit (max_runtime,
-// for every kind: unset or zero, or between MinMaxRuntime and
-// MaxMaxRuntime).
-// Errors are *domain.ValidationError.
+// duplicates). It also checks, for every kind, the definition's time limit
+// (max_runtime: unset or zero, or between MinMaxRuntime and MaxMaxRuntime)
+// and its hooks (checkHooks; a kind only the system starts takes none).
+// Errors are *domain.ValidationError, with the fields of everything that is
+// wrong.
 func (r *Registry) Check(def *syncrv1.JobDefinition) (kind string, refs Refs, err error) {
 	k, err := r.kindOf(def)
 	if err != nil {
 		return "", Refs{}, err
 	}
-	limitErr := checkMaxRuntime(def)
+	var common []domain.FieldError
+	if e := checkMaxRuntime(def); e != nil {
+		common = append(common, e.Fields...)
+	}
+	if e := checkHooks(def); e != nil {
+		common = append(common, e.Fields...)
+	} else if s, is := k.(SystemOnly); is && HooksOf(def) != nil {
+		common = append(common, domain.FieldError{Field: hooksField, Message: "cannot be set: a job of this kind " + s.SystemOnly()})
+	}
 	refs, err = k.Check(def)
 	if err != nil {
 		var verr *domain.ValidationError
-		if limitErr != nil && errors.As(err, &verr) {
-			err = &domain.ValidationError{Fields: append(slices.Clone(verr.Fields), limitErr.Fields...)}
+		if len(common) > 0 && errors.As(err, &verr) {
+			err = &domain.ValidationError{Fields: append(slices.Clone(verr.Fields), common...)}
 		}
 		return "", Refs{}, err
 	}
-	if limitErr != nil {
-		return "", Refs{}, limitErr
+	if len(common) > 0 {
+		return "", Refs{}, &domain.ValidationError{Fields: common}
 	}
 	refs.ConcurrencyKeys = nil
 	if kk, ok := k.(Keyed); ok {
@@ -361,14 +380,20 @@ func (r *Registry) Check(def *syncrv1.JobDefinition) (kind string, refs Refs, er
 	return k.Name(), refs, nil
 }
 
-// Build builds the worker spec of def with its kind (see Kind.Build).
-// Errors wrap domain.ErrInvalidArgument or domain.ErrNotFound.
+// Build builds the worker spec of def with its kind (see Kind.Build) and
+// gives it def's hooks (HooksOf; unset when def names none). Errors wrap
+// domain.ErrInvalidArgument or domain.ErrNotFound.
 func (r *Registry) Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.JobSpec, error) {
 	k, err := r.kindOf(def)
 	if err != nil {
 		return nil, err
 	}
-	return k.Build(def, in)
+	spec, err := k.Build(def, in)
+	if err != nil {
+		return nil, err
+	}
+	spec.Hooks = HooksOf(def)
+	return spec, nil
 }
 
 // DescribeOperation describes what def does with its kind (see

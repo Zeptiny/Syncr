@@ -219,6 +219,13 @@ worker, back up with restic and restore into
 a current worker: one that shows as **Outdated** in the web UI is upgraded
 with `syncr-worker upgrade` ([above](#upgrading)).
 
+## Hooks: commands around jobs
+
+To let jobs dump a database, or stop and start containers, around a backup,
+define the commands as `hooks` in `/etc/syncr/worker.yaml` and restart the
+worker (`sudo syncr-worker service restart`). Users then choose them by
+name in a job's form. See [hooks](hooks.md).
+
 ## Uninstall
 
 ```sh

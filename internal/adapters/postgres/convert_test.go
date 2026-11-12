@@ -1,12 +1,15 @@
 package postgres
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
@@ -131,9 +134,8 @@ func TestEmbeddedMigrationsAreSequential(t *testing.T) {
 		t.Fatal("no embedded migrations")
 	}
 	for i, e := range entries {
-		want := []byte("00000")
-		want[4] = byte('1' + i)
-		if got := e.Name()[:5]; got != string(want) {
+		want := fmt.Sprintf("%05d_", i+1)
+		if !strings.HasPrefix(e.Name(), want) {
 			t.Errorf("migration %d is %s, want prefix %s (versions must be gapless)", i, e.Name(), want)
 		}
 	}
@@ -153,5 +155,56 @@ func TestLikeEscape(t *testing.T) {
 		if got := likeEscape(in); got != want {
 			t.Errorf("likeEscape(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestHookRunsRoundTrip(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 4, 12, 0, 0, 123456789, time.FixedZone("x", 3600))
+	runs := []jobs.HookRun{
+		{Name: "stop-app", Phase: domain.HookBefore, Status: domain.HookSucceeded, StartedAt: at, Duration: 1500 * time.Millisecond, Output: "stopping “app”\nline 2"},
+		{Name: "start-app", Phase: domain.HookAfter, Status: domain.HookFailed, ExitCode: -1, Message: "could not be started", OutputTruncated: true},
+	}
+	b, err := encodeHookRuns(runs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decodeHookRuns(b)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("decode = %+v, %v", got, err)
+	}
+	// The instant is kept to the nanosecond, in UTC.
+	if !got[0].StartedAt.Equal(at) || got[0].StartedAt.Location() != time.UTC || !got[1].StartedAt.IsZero() {
+		t.Errorf("started at = %v and %v", got[0].StartedAt, got[1].StartedAt)
+	}
+	got[0].StartedAt, runs[0].StartedAt = time.Time{}, time.Time{}
+	if !slices.Equal(got, runs) {
+		t.Errorf("round trip:\n got %+v\nwant %+v", got, runs)
+	}
+
+	// No runs are an empty array (the column is NOT NULL), which reads back
+	// as nil, as does a row without the column's value.
+	for _, none := range [][]jobs.HookRun{nil, {}} {
+		if b, err := encodeHookRuns(none); err != nil || string(b) != "[]" {
+			t.Errorf("encode(%v) = %s, %v", none, b, err)
+		}
+	}
+	for _, empty := range [][]byte{nil, []byte("[]"), []byte("null")} {
+		if got, err := decodeHookRuns(empty); err != nil || got != nil {
+			t.Errorf("decode(%q) = %+v, %v", empty, got, err)
+		}
+	}
+	if _, err := decodeHookRuns([]byte(`{"not":"an array"}`)); err == nil {
+		t.Error("decode accepted an object")
+	}
+
+	// What jsonb cannot hold is replaced, not refused: a hook prints what it
+	// likes.
+	b, err = encodeHookRuns([]jobs.HookRun{{Name: "x", Output: "a\x00b\xffc", Message: "m\x00"}})
+	if err != nil || strings.Contains(string(b), `\u0000`) {
+		t.Fatalf("encode with NUL and invalid UTF-8 = %s, %v", b, err)
+	}
+	if got, err := decodeHookRuns(b); err != nil || got[0].Output != "a\uFFFDb\uFFFDc" || got[0].Message != "m\uFFFD" {
+		t.Errorf("decode = %+v, %v", got, err)
 	}
 }

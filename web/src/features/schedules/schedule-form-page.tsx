@@ -79,6 +79,15 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
           (w) => w.status === WorkerStatus.ONLINE,
         )
       : undefined;
+  // The workers a run may go to, for the hooks they offer: the chosen one,
+  // or every worker with the label that has reported in.
+  const hooksTarget =
+    s.target.kind === "label"
+      ? {
+          workers: labelledWorkers(workerList, s.target.label).filter((w) => w.info),
+          label: s.target.label,
+        }
+      : { workers: worker?.info ? [worker] : [] };
   const pending = create.isPending || update.isPending;
 
   const submit = async (e: React.FormEvent) => {
@@ -189,6 +198,7 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
           kinds={scheduleKinds}
           worker={worker}
           browseWorker={labelWorker}
+          hooksTarget={hooksTarget}
           browseNote={
             labelWorker
               ? `Absolute paths on the workers labelled ${s.target.label}. Browse shows ${labelWorker.name}, the first one online.`

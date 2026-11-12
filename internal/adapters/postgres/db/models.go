@@ -99,6 +99,7 @@ type Job struct {
 	RepositoryID      pgtype.UUID
 	ConcurrencyKeys   []string
 	TimeLimitNs       int64
+	HookRuns          []byte
 }
 
 type JobRemote struct {

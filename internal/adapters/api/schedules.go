@@ -318,6 +318,7 @@ func (h *scheduleHandler) input(ctx context.Context, procedure string, m *syncrv
 			if req, goos, wrong := wrongWorkerOS(ctx, h.kinds, h.workers, in.Target.WorkerID, def); wrong {
 				v.Add(req.Field, req.FieldMessage()+"; this worker runs "+goos)
 			}
+			v.AddAll("", unrunnableHooks(ctx, h.workers, in.Target.WorkerID, def))
 		}
 	}
 	for i, c := range m.GetContacts() {

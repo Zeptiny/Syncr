@@ -161,7 +161,8 @@ Design records: [architecture](adr/0001-architecture.md),
 [concurrency keys](adr/0013-concurrency-keys.md),
 [job time limits and retention](adr/0014-job-time-limits-retention.md),
 [one controller per database](adr/0015-single-controller-guard.md),
-[releases and versioning](adr/0016-releases-versioning.md).
+[releases and versioning](adr/0016-releases-versioning.md),
+[job hooks](adr/0017-job-hooks.md).
 
 ## Repository layout
 
@@ -203,6 +204,7 @@ internal/adapters/idgen/      entity ID generators
 internal/adapters/notify/     built-in notification channels: discord, email, webhook
 internal/worker/agent/    runs the controller's commands through the runners; outbox events
 internal/worker/probe/    runs the controller's probes with the runners' tools and local_roots
+internal/worker/hooks/    runs the hooks of the worker's configuration that jobs name
 internal/worker/outbox/   event buffer with (epoch, seq), acks and coalescing
 internal/worker/linkcore/ link envelopes for both transports, no networking
 internal/worker/transport/ active (Report/Poll loops) and passive (TLS server) transports

@@ -22,10 +22,13 @@
 //     still shown online: a worker that just went to sleep), and a
 //     reachable one that reports it cannot run the kind (it does not list
 //     it, or lacks a link feature it requires) fails it and pauses the
-//     schedule (worker_outdated); a label
+//     schedule (worker_outdated), as does a reachable one that cannot run
+//     hooks when the definition names some (worker_outdated) or does not
+//     define one of them (invalid_definition, naming them); a label
 //     without a worker that may run it fails it (no_worker_with_label, no
 //     pause), and otherwise the least busy reachable worker with the label
-//     that runs the kind, with its link features and operating system, is
+//     that runs the kind, with its link features and operating system, and
+//     that defines every hook the definition names, is
 //     chosen (fewest unfinished jobs, then name), or the run waits. What
 //     the workers reported is their latest Hello, a hint: the dispatcher
 //     checks the chosen worker's current process again.

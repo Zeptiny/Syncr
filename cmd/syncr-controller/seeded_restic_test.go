@@ -201,22 +201,35 @@ func TestRunSeededRestic(t *testing.T) {
 		t.Fatal(err)
 	}
 	seen = append(seen, jobs.Msg.String())
-	var waiting, running, detailed int
+	// One of the finished backups failed because a hook after it timed
+	// out: its snapshot was written, so it has its details like the ones
+	// that succeeded, and it lists how its hooks went.
+	var waiting, running, detailed, hookFailed int
 	for _, j := range jobs.Msg.GetJobs() {
+		byHook := j.GetStatus() == syncrv1.JobStatus_JOB_STATUS_FAILED && j.GetError().GetCode() == syncrv1.JobErrorCode_JOB_ERROR_CODE_HOOK_FAILED
 		switch {
 		case j.GetStatus() == syncrv1.JobStatus_JOB_STATUS_QUEUED && j.GetWaitingForJobId() != "":
 			waiting++
 		case j.GetStatus() == syncrv1.JobStatus_JOB_STATUS_RUNNING:
 			running++
-		case j.GetStatus() == syncrv1.JobStatus_JOB_STATUS_SUCCEEDED && j.GetKind() == "restic_backup" && len(j.GetDetails()) > 0:
+		case (j.GetStatus() == syncrv1.JobStatus_JOB_STATUS_SUCCEEDED || byHook) && j.GetKind() == "restic_backup" && len(j.GetDetails()) > 0:
 			detailed++
+			if len(j.GetHookRuns()) != 4 || len(j.GetDefinition().GetHooks().GetBefore()) != 2 {
+				t.Errorf("job %s: hook runs %v, hooks %v", j.GetId(), j.GetHookRuns(), j.GetDefinition().GetHooks())
+			}
+			if byHook {
+				hookFailed++
+				if last := j.GetHookRuns()[len(j.GetHookRuns())-1]; last.GetStatus() != syncrv1.HookStatus_HOOK_STATUS_TIMED_OUT || last.GetPhase() != syncrv1.HookPhase_HOOK_PHASE_AFTER {
+					t.Errorf("job %s: last hook run %v", j.GetId(), last)
+				}
+			}
 		}
 		if j.GetRepository().GetName() != "NAS documents" || j.GetTitle() == "" {
 			t.Errorf("job %s: repository %v, title %q", j.GetId(), j.GetRepository(), j.GetTitle())
 		}
 	}
-	if waiting != 1 || running != 1 || detailed < 3 {
-		t.Errorf("NAS documents: %d waiting, %d running, %d backups with details", waiting, running, detailed)
+	if waiting != 1 || running != 1 || detailed < 3 || hookFailed != 1 {
+		t.Errorf("NAS documents: %d waiting, %d running, %d backups with details, %d of them failed by a hook", waiting, running, detailed, hookFailed)
 	}
 
 	// Another user reaches none of it, and neither does anyone unknown.

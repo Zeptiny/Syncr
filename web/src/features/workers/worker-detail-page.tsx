@@ -30,10 +30,17 @@ import { WorkerMode } from "@/gen/syncr/v1/link_pb";
 import { useSession } from "@/hooks/use-session";
 import { copyText } from "@/lib/clipboard";
 import { errorMessage } from "@/lib/errors";
-import { formatDateTime, tsDate } from "@/lib/format";
+import { durationSeconds, formatDateTime, formatLimit, tsDate } from "@/lib/format";
 import { invalidateService } from "@/lib/invalidate";
 import { isTerminal, workerModeLabel } from "@/lib/status";
-import { FEATURE_PROBE, hasFeature, isOnline, isOutdated, outdatedHelp } from "@/lib/workers";
+import {
+  FEATURE_HOOKS,
+  FEATURE_PROBE,
+  hasFeature,
+  isOnline,
+  isOutdated,
+  outdatedHelp,
+} from "@/lib/workers";
 import { JobsTable } from "@/features/jobs/jobs-table";
 
 import { UpgradeWorkerCard } from "./upgrade-card";
@@ -89,6 +96,52 @@ function RenameDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * WorkerHooksPanel lists the hooks a worker's operator defined: what a job
+ * on it may run before or after its operation. Their commands stay on the
+ * worker; the controller knows a name, a description and a timeout.
+ */
+export function WorkerHooksPanel({ worker: w }: { worker: Worker }) {
+  const hooks = w.info?.hooks ?? [];
+  // A worker that has not connected yet has nothing to say about hooks.
+  if (!w.info) return null;
+  return (
+    <Panel
+      className="mb-6"
+      title="Hooks"
+      description="Commands its operator prepared, which jobs on this worker can run before or after their operation: stop an app, dump a database, start the app again."
+      flush={hooks.length > 0}
+    >
+      {hooks.length > 0 ? (
+        <ul className="flex flex-col divide-y">
+          {hooks.map((h) => (
+            <li
+              key={h.name}
+              className="flex flex-col gap-x-4 gap-y-0.5 px-5 py-3 sm:flex-row sm:items-baseline"
+            >
+              <span className="shrink-0 font-mono text-[13px] font-medium sm:w-56">{h.name}</span>
+              <span className="min-w-0 flex-1 text-[13px] text-muted-foreground">
+                {h.description || "No description"}
+              </span>
+              {durationSeconds(h.timeout) > 0 && (
+                <span className="tabular shrink-0 text-xs text-muted-foreground">
+                  stopped after {formatLimit(durationSeconds(h.timeout))}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-[13px] text-muted-foreground">
+          {hasFeature(w, FEATURE_HOOKS)
+            ? "None. To offer some, add them to the worker's configuration file under “hooks” and restart the worker: each is a name and the command it runs."
+            : "This worker's version cannot run hooks. Upgrade it first."}
+        </p>
+      )}
+    </Panel>
   );
 }
 
@@ -259,6 +312,7 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
           )}
         </Panel>
       </div>
+      <WorkerHooksPanel worker={w} />
       <WorkerLabelsPanel worker={w} canEdit={isAdmin} />
       <h2 className="mt-8 mb-3 text-[15px] font-semibold">Recent jobs</h2>
       <JobsTable

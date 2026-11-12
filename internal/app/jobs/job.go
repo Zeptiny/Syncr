@@ -77,8 +77,13 @@ type Job struct {
 	// ExitCode of the tool process; -1 if unknown or no process ran.
 	ExitCode int
 	// Output is the kind-specific output as an encoded link JobOutput; nil
-	// if none.
+	// if none. A job has one when its operation succeeded, whatever its
+	// status: a hook can fail a job afterwards (CodeHookFailed).
 	Output []byte
+	// HookRuns are the hooks the worker ran for the job (its definition's
+	// hooks), in the order they ran; nil for a job without hooks and until
+	// the worker reported its result.
+	HookRuns []HookRun
 
 	// Version increases with every stored change; it is the optimistic
 	// concurrency token of Repository.UpdateJob. A created job has version 1.
@@ -153,6 +158,43 @@ const (
 // only reads it (notifications, the UI).
 const CodeTimeLimit = "time_limit"
 
+// CodeHookFailed is the error code of a job that failed because one of its
+// hooks did (it exited unsuccessfully, ran into its timeout or could not be
+// started): a before hook, and the operation never ran, or a hook after the
+// operation, whose output the job then still has. Workers report it; the
+// controller only reads it.
+const CodeHookFailed = "hook_failed"
+
+// HookRun is one run of a hook for a job, as its worker reported it.
+type HookRun struct {
+	// Name is the hook's name.
+	Name string
+	// Phase is when it ran: domain.HookBefore, HookOnSuccess, HookOnFailure
+	// or HookAfter.
+	Phase string
+	// Status is how it ended: domain.HookSucceeded, HookFailed,
+	// HookTimedOut or HookCancelled.
+	Status string
+	// ExitCode of the command; -1 if it did not start or was killed by a
+	// signal.
+	ExitCode int
+	// StartedAt is when the command was started (worker clock); Duration
+	// how long it ran.
+	StartedAt time.Time
+	Duration  time.Duration
+	// Message says why the run did not succeed; empty for one that did.
+	Message string
+	// Output is the end of what the command printed, at most
+	// domain.MaxHookOutputBytes; OutputTruncated whether it printed more.
+	// It is the operator's own program's output, shown as it is.
+	Output          string
+	OutputTruncated bool
+}
+
+// MaxHookRuns bounds the hook runs kept of one job: every phase's hooks
+// once (a job runs each of its lists at most once).
+const MaxHookRuns = 4 * domain.MaxHooksPerPhase
+
 // Outcome is a worker-reported terminal result (Finish).
 type Outcome struct {
 	// Status is the terminal status to record.
@@ -165,6 +207,8 @@ type Outcome struct {
 	StartedAt  time.Time
 	FinishedAt time.Time
 	Output     []byte
+	// HookRuns are the hooks the worker ran, in order.
+	HookRuns []HookRun
 }
 
 // Update is a change of a job published to watchers. Exactly one of Job and

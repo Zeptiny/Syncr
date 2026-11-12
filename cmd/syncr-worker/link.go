@@ -52,7 +52,8 @@ type linkInfo struct {
 //
 // The link also carries the controller's probes to w.probes (linkcore
 // WithProber), and the Hello event names the link features and probe
-// operations of this build (identity).
+// operations of this build (identity) and the hooks of the configuration
+// (w.hooks), which the agent runs for the jobs that name them.
 //
 // The returned stop function shuts down in order: (1) the transport's run
 // context ends (active loops stop; passive keeps serving), (2) the probes
@@ -69,6 +70,7 @@ func startLink(ctx context.Context, cfg workerconfig.Config, w *worker, log *slo
 
 	a, err := agent.New(agent.Config{
 		Runners:           w.registry,
+		Hooks:             w.hooks,
 		Identity:          identity(w, info),
 		MaxConcurrentJobs: cfg.MaxConcurrentJobs,
 		ProgressInterval:  cfg.ProgressInterval,

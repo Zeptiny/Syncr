@@ -8,6 +8,7 @@ import type { DeleteRepositoryRequestSchema, Repository } from "@/gen/syncr/v1/r
 import { isWindowsOS } from "@/lib/restic-paths";
 import { FEATURE_RESTIC, hasFeature, isOnline, sortWorkers } from "@/lib/workers";
 
+import { emptyHooks, toHooks, type HooksState } from "../jobs/hooks";
 import { overwriteLabel } from "../jobs/model";
 
 /** shortId is the first eight characters of a snapshot or repository ID. */
@@ -75,6 +76,11 @@ export interface RestoreState {
   overwrite: ResticRestoreOverwrite;
   verify: boolean;
   excludes: string[];
+  /**
+   * hooks are the worker's hooks to run around the restore: stop what uses
+   * the files first, load a restored database dump afterwards.
+   */
+  hooks: HooksState;
 }
 
 /** emptyRestore keeps existing files: a restore never overwrites unless asked. */
@@ -85,6 +91,7 @@ export function emptyRestore(): RestoreState {
     overwrite: ResticRestoreOverwrite.NEVER,
     verify: false,
     excludes: [],
+    hooks: emptyHooks(),
   };
 }
 
@@ -115,7 +122,9 @@ export function restoreSummary(
 }
 
 /** RestoreErrors are the restore form's problems. */
-export type RestoreErrors = Partial<Record<"worker" | "target" | "what" | "form", string>>;
+export type RestoreErrors = Partial<
+  Record<"worker" | "target" | "what" | "hooks" | "form", string>
+>;
 
 /** validateRestore checks what the browser can check before sending. */
 export function validateRestore(what: RestoreWhat, s: RestoreState): RestoreErrors {
@@ -136,9 +145,11 @@ export function toRestoreRequest(
   what: RestoreWhat,
   s: RestoreState,
 ): MessageInitShape<typeof RunJobRequestSchema> {
+  const hooks = toHooks(s.hooks);
   return {
     workerId: s.workerId,
     definition: {
+      ...(hooks ? { hooks } : {}),
       operation: {
         case: "resticRestore",
         value: {

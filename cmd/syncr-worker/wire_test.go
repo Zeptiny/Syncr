@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Zeptiny/Syncr/internal/link"
 	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
@@ -398,5 +399,52 @@ func TestBuildWorkerSupervisorDeliversLinesOfRestic(t *testing.T) {
 	}
 	if maxToolLineBytes != 32<<20 {
 		t.Errorf("maxToolLineBytes = %d, want 32 MiB", maxToolLineBytes)
+	}
+}
+
+func TestBuildWorkerBuildsTheConfiguredHooks(t *testing.T) {
+	t.Parallel()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFixture(t)
+	missing := filepath.Join(f.base, "bin", "no-such-hook")
+	f.cfg.Hooks = map[string]workerconfig.HookConfig{
+		"stop-app": {Command: []string{self, "stop"}, Description: "Stop the app", Timeout: 90 * time.Second},
+		"dump-db":  {Command: []string{missing}},
+	}
+	w, err := f.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	infos := w.hooks.Infos()
+	if len(infos) != 2 || infos[0].GetName() != "dump-db" || infos[0].GetTimeout().AsDuration() != workerconfig.DefaultHookTimeout ||
+		infos[1].GetName() != "stop-app" || infos[1].GetDescription() != "Stop the app" || infos[1].GetTimeout().AsDuration() != 90*time.Second {
+		t.Errorf("hooks = %v", infos)
+	}
+	// A hook whose program is missing is a warning, not a failed start: the
+	// program may be on a disk that is mounted later.
+	logs := f.logs.String()
+	if !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "hook=dump-db") || !strings.Contains(logs, "no-such-hook") {
+		t.Errorf("logs lack the warning about the missing program:\n%s", logs)
+	}
+	if strings.Contains(logs, "hook=stop-app") {
+		t.Errorf("logs warn about a hook whose program exists:\n%s", logs)
+	}
+}
+
+func TestBuildWorkerWithoutHooks(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	w, err := f.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.hooks == nil || len(w.hooks.Infos()) != 0 {
+		t.Errorf("hooks = %v, want an empty set", w.hooks)
+	}
+	if strings.Contains(f.logs.String(), "hooks") {
+		t.Errorf("logs mention hooks although none are configured:\n%s", f.logs)
 	}
 }

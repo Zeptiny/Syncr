@@ -9,11 +9,12 @@ import (
 
 func TestFeatures(t *testing.T) {
 	t.Parallel()
-	want := []string{"probe", "restic.v2", "restic.delete", "job.time_limit"}
+	want := []string{"probe", "restic.v2", "restic.delete", "job.time_limit", "job.hooks"}
 	if got := Features(); !slices.Equal(got, want) {
 		t.Errorf("Features() = %q, want %q", got, want)
 	}
-	if FeatureProbe != want[0] || FeatureResticV2 != want[1] || FeatureResticDelete != want[2] || FeatureJobTimeLimit != want[3] {
+	if FeatureProbe != want[0] || FeatureResticV2 != want[1] || FeatureResticDelete != want[2] || FeatureJobTimeLimit != want[3] ||
+		FeatureJobHooks != want[4] {
 		t.Error("feature constants changed: they are part of the wire contract")
 	}
 }

@@ -18,6 +18,12 @@ curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/j
 # {"job":{"id":"01a1a7c0-...", "status":"JOB_STATUS_QUEUED", ...}}
 ```
 
+A definition may name hooks of the worker to run around the job
+(`"hooks":{"before":["dump-db"],"after":["start-app"]}` next to the
+operation; the lists are `before`, `onSuccess`, `onFailure` and `after`).
+A worker's hooks are in `ListWorkers` under `info.hooks`, and how they went
+in a job's `hookRuns` ([hooks](hooks.md)).
+
 A location is a path on one of your remotes (`remoteId`, path relative to its
 root) or, without `remoteId`, an absolute path on the worker inside its
 `local_roots`. `JobService.WatchJob` streams status changes and live

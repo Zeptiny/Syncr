@@ -124,6 +124,7 @@ func cloneWorker(w workers.Worker) workers.Worker {
 	w.Info.LocalRoots = slices.Clone(w.Info.LocalRoots)
 	w.Info.Features = slices.Clone(w.Info.Features)
 	w.Info.ProbeOps = slices.Clone(w.Info.ProbeOps)
+	w.Info.Hooks = slices.Clone(w.Info.Hooks)
 	w.Link.PastEpochs = slices.Clone(w.Link.PastEpochs)
 	return w
 }
@@ -134,6 +135,7 @@ func cloneJob(j jobs.Job) jobs.Job {
 	j.ConcurrencyKeys = slices.Clone(j.ConcurrencyKeys)
 	j.Warnings = slices.Clone(j.Warnings)
 	j.Output = slices.Clone(j.Output)
+	j.HookRuns = slices.Clone(j.HookRuns)
 	return j
 }
 

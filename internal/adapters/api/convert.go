@@ -124,6 +124,9 @@ func workerInfoToProto(in workers.Info) *syncrv1.WorkerInfo {
 	for _, t := range in.Tools {
 		out.Tools = append(out.Tools, &syncrv1.ToolVersion{Name: t.Name, Version: t.Version})
 	}
+	for _, h := range in.Hooks {
+		out.Hooks = append(out.Hooks, &syncrv1.HookInfo{Name: h.Name, Description: h.Description, Timeout: durationpb.New(h.Timeout)})
+	}
 	return out
 }
 
@@ -252,7 +255,31 @@ func jobToProto(j jobs.Job, stats *jobs.Stats, refs map[domain.RemoteID]remotes.
 			out.Output = &output
 		}
 	}
+	out.HookRuns = hookRunsToProto(j.HookRuns)
 	return out, errors.Join(errs...)
+}
+
+// hookRunsToProto converts the hooks a job's worker ran (Job.hook_runs). A
+// phase or status this build does not know is UNSPECIFIED.
+func hookRunsToProto(runs []jobs.HookRun) []*syncrv1.HookRun {
+	if len(runs) == 0 {
+		return nil
+	}
+	out := make([]*syncrv1.HookRun, len(runs))
+	for i, r := range runs {
+		out[i] = &syncrv1.HookRun{
+			Name:            r.Name,
+			Phase:           link.ParseHookPhase(r.Phase),
+			Status:          link.ParseHookStatus(r.Status),
+			ExitCode:        int32(max(min(r.ExitCode, 1<<31-1), -1<<31)),
+			StartedAt:       ts(r.StartedAt),
+			Duration:        durationpb.New(r.Duration),
+			Message:         r.Message,
+			Output:          r.Output,
+			OutputTruncated: r.OutputTruncated,
+		}
+	}
+	return out
 }
 
 // timeLimitToProto converts a job's effective time limit; zero (none) is
