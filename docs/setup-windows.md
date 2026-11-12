@@ -156,6 +156,14 @@ worker, back up with restic and restore into
 tests and restic jobs need a current worker: one that shows as **Outdated**
 in the web UI is upgraded with `syncr-worker upgrade` ([above](#upgrading)).
 
+## Hooks: commands around jobs
+
+To let jobs stop a service or export a database around a backup, define
+the commands as `hooks` in `%ProgramData%\Syncr\worker.yaml` and restart
+the worker (`syncr-worker.exe service restart`). Users then choose them by
+name in a job's form. A script is run by its interpreter
+(`powershell.exe -File ...`); see [hooks](hooks.md#windows).
+
 ## Uninstall
 
 ```powershell

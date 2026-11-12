@@ -50,6 +50,16 @@ max_concurrent_jobs: 2       # SYNCR_MAX_CONCURRENT_JOBS
 # sample of a job is always reported before its result.
 progress_interval: 1s        # SYNCR_PROGRESS_INTERVAL
 
+# Commands jobs may run on this machine before and after their operation,
+# by name (see "Hooks" below). No environment form.
+hooks:
+  dump-app-db:
+    description: Dump the app's database to /srv/data/app/db
+    command: ["/usr/local/lib/syncr-hooks/dump-app-db.sh"]
+    timeout: 15m             # 1s-24h, default 10m
+    env:
+      PGPASSFILE: /etc/syncr/app.pgpass
+
 # The link to the controller; written by `syncr-worker setup`. Without a
 # mode the worker is not enrolled: it starts, but has no controller.
 link:
@@ -202,6 +212,29 @@ managed rclone and restic versions in it that this worker no longer pins
 different versions sharing one tools directory would delete each other's
 tools, and so would any other program that keeps an `rclone` or `restic`
 directory there. Configured, bundled and `PATH` binaries are never touched.
+
+## Hooks
+
+`hooks` lists the commands that jobs may run on this machine around their
+operation: dump a database before a backup, stop and start containers,
+ping a monitor. A job only ever names a hook; the command, its arguments
+and its environment come from this file alone, so users of the controller
+can run what you list here and nothing else. Everyone who can run jobs on
+this worker can run every hook, as the worker's account.
+
+| Setting | |
+| --- | --- |
+| name (the key) | 1 to 63 lower-case letters, digits, `.`, `_` and `-`, starting with a letter or digit |
+| `command` | required list: the program (an absolute path, or a bare name found in `PATH`) and its arguments; started without a shell |
+| `description` | optional, one line of at most 200 characters, shown in the web UI |
+| `timeout` | `1s` to `24h`, default `10m`; a hook that runs longer is stopped and counts as failed |
+| `env` | optional variables for the command; names starting with `SYNCR_` are reserved |
+
+At most 64 hooks. The worker reads them at startup, logs their names and
+warns about a hook whose program it cannot find. Restart the worker after
+changing them. The phases, the `SYNCR_*` variables a hook receives,
+examples for databases and Docker, and the limits are in
+[hooks](hooks.md).
 
 ## Child process limits
 
