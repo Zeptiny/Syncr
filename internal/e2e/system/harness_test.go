@@ -378,6 +378,9 @@ type controller struct {
 	remotes syncrv1connect.RemoteServiceClient
 	// apiToken is the admin's API token.
 	apiToken string
+	// session is an HTTP client signed in with the admin's session cookie,
+	// for the calls an API token may not make (creating users).
+	session *http.Client
 }
 
 // client is an HTTP client authenticated with the admin's API token.
@@ -428,7 +431,8 @@ func newController(t *testing.T, bin string, extra ...string) *controller {
 
 // bootstrap completes the first-run setup with the preset code as the web
 // UI's wizard does (CompleteSetup with the CSRF header sets the session
-// cookie), creates an API token with that session and returns it.
+// cookie), keeps that session in c.session, creates an API token with it
+// and returns the token.
 func (c *controller) bootstrap() string {
 	c.t.Helper()
 	ctx := c.t.Context()
@@ -447,11 +451,11 @@ func (c *controller) bootstrap() string {
 	if cookie == nil {
 		c.t.Fatalf("CompleteSetup set no cookie: %q", resp.Header().Values("Set-Cookie"))
 	}
-	session := &http.Client{Transport: headers{next: http.DefaultTransport, set: func(h http.Header) {
+	c.session = &http.Client{Transport: headers{next: http.DefaultTransport, set: func(h http.Header) {
 		h.Set("Cookie", cookie.Name+"="+cookie.Value)
 		h.Set(csrfHeader, "1")
 	}}}
-	tok, err := syncrv1connect.NewAuthServiceClient(session, c.base).CreateAPIToken(ctx, connect.NewRequest(&syncrv1.CreateAPITokenRequest{Name: "e2e"}))
+	tok, err := syncrv1connect.NewAuthServiceClient(c.session, c.base).CreateAPIToken(ctx, connect.NewRequest(&syncrv1.CreateAPITokenRequest{Name: "e2e"}))
 	if err != nil {
 		c.t.Fatalf("CreateAPIToken: %v", err)
 	}

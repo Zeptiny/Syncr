@@ -1,6 +1,8 @@
 package cronexpr
 
 import (
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +32,8 @@ const starBit = 1 << 63
 type Expr struct {
 	// Bit sets of the matching values (bit n set: value n matches), as
 	// robfig's parser builds them; starBit is set in a field written "*".
+	// Parse also sets it in a day field that starts with "*" or "?" (such
+	// as "*/2"), whose star robfig clears, as Vixie cron does (dayMatches).
 	minute, hour, dom, month, dow uint64
 	loc                           *time.Location
 	// src is the normalized expression.
@@ -67,6 +71,17 @@ func Parse(expr, tz string) (*Expr, error) {
 	e := &Expr{
 		minute: spec.Minute, hour: spec.Hour, dom: spec.Dom, month: spec.Month, dow: spec.Dow,
 		loc: loc, src: src,
+	}
+	// Vixie cron (and cronie) treat a day field whose text starts with "*"
+	// as unrestricted for the day rule, steps included ("*/2"); robfig
+	// clears its star bit for a step, which would OR the two day fields.
+	if f := strings.Fields(src); len(f) == 5 {
+		if starred(f[2]) {
+			e.dom |= starBit
+		}
+		if starred(f[4]) {
+			e.dow |= starBit
+		}
 	}
 	// A fixed reference keeps Parse pure; within five years of it every
 	// possible date (February 29 included) occurs, so an expression without
@@ -113,7 +128,12 @@ func parseSpec(src string, rawLen int) (spec *cron.SpecSchedule, msg string) {
 			return nil, "must have 5 fields (minute hour day-of-month month day-of-week) or be a descriptor such as @daily"
 		}
 	}
-	sched, err := parser().Parse(src)
+	parsed := src
+	if f := strings.Fields(src); len(f) == 5 {
+		f[4] = sundaySeven(f[4])
+		parsed = strings.Join(f, " ")
+	}
+	sched, err := parser().Parse(parsed)
 	if err != nil {
 		return nil, "is not a valid cron expression (" + err.Error() + ")"
 	}
@@ -122,6 +142,74 @@ func parseSpec(src string, rawLen int) (spec *cron.SpecSchedule, msg string) {
 		return nil, "is not a valid cron expression"
 	}
 	return spec, ""
+}
+
+// starred reports whether a day field counts as "*" for the day rule: its
+// text starts with "*" or "?", as Vixie cron decides it.
+func starred(field string) bool {
+	return strings.HasPrefix(field, "*") || strings.HasPrefix(field, "?")
+}
+
+// weekday reads a day-of-week number (0 to 7) or name (as robfig accepts
+// them: "sun" to "sat").
+func weekday(s string) (int, bool) {
+	if n := slices.Index([]string{"sun", "mon", "tue", "wed", "thu", "fri", "sat"}, s); n >= 0 {
+		return n, true
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 || n > 7 {
+		return 0, false
+	}
+	return n, true
+}
+
+// sundaySeven rewrites a day-of-week field so that 7 means Sunday, as in
+// crontab(5), for robfig, which knows only 0 to 6: "7" becomes "0", and a
+// range that ends in 7 or "sun" ("5-7", "mon-sun", "1-7/2") ends at 6 with
+// 0 added when the range (with its step) reaches 7. Anything else is left
+// to robfig's parser, which rejects what is invalid.
+func sundaySeven(field string) string {
+	items := strings.Split(field, ",")
+	out := make([]string, 0, len(items)+1)
+	for _, item := range items {
+		rng, step, hasStep := strings.Cut(item, "/")
+		lo, hi, isRange := strings.Cut(rng, "-")
+		a, okA := weekday(lo)
+		if !okA || !isRange {
+			if okA && a == 7 && !hasStep {
+				item = "0"
+			}
+			out = append(out, item)
+			continue
+		}
+		b, okB := weekday(hi)
+		if okB && b == 0 && a > 0 {
+			b = 7 // "mon-sun", "6-0": through Sunday
+		}
+		s := 1
+		if hasStep {
+			n, err := strconv.Atoi(step)
+			if err != nil || n <= 0 {
+				okB = false
+			}
+			s = n
+		}
+		if !okB || b != 7 || a > b {
+			out = append(out, item)
+			continue
+		}
+		if a < 7 {
+			r := strconv.Itoa(a) + "-6"
+			if hasStep {
+				r += "/" + step
+			}
+			out = append(out, r)
+		}
+		if (7-a)%s == 0 {
+			out = append(out, "0")
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 // Location returns the expression's time zone.

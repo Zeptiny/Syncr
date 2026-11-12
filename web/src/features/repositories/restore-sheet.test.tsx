@@ -1,5 +1,6 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it } from "vitest";
 
 import { WorkerStatus, type RunJobRequest } from "@/gen/syncr/v1/api_pb";
@@ -139,6 +140,43 @@ describe("RestoreSheet", () => {
       },
     });
     await waitFor(() => expect(location().pathname).toMatch(/^\/jobs\/job-/));
+  });
+
+  it("keeps the proposed worker and folder when the workers are refetched", async () => {
+    const api = m5Api(now);
+    const state = api.repo(m5.ids.photosVault);
+    const snapshot = state.snapshots[0];
+    const refetched = m5.workers(now);
+    refetched.find((w) => w.id === fx.ids.nas)!.status = WorkerStatus.OFFLINE;
+    function Refetching() {
+      const [workers, setWorkers] = useState(() => m5.workers(now));
+      return (
+        <>
+          <button type="button" onClick={() => setWorkers(refetched)}>
+            refetch
+          </button>
+          <RestoreSheet
+            open
+            onOpenChange={() => {}}
+            repository={state.repo}
+            snapshot={snapshot}
+            what={{ mode: "snapshot" }}
+            workers={workers}
+            now={day}
+          />
+        </>
+      );
+    }
+    renderInRouter(<Refetching />, { transport: api.transport });
+    const target = `/srv/restore-${short(snapshot.id)}-20261110`;
+    expect(await screen.findByRole("combobox", { name: "Worker" })).toHaveTextContent("nas-01");
+    // The sheet is modal, so the button outside it takes a plain click.
+    fireEvent.click(screen.getByText("refetch"));
+    expect(
+      await screen.findByText("nas-01 is offline: the restore waits until it is back."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Worker" })).toHaveTextContent("nas-01");
+    expect(screen.getByLabelText("Target folder")).toHaveValue(target);
   });
 
   it("sends Keep existing when nothing is touched", async () => {

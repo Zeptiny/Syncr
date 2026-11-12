@@ -213,6 +213,35 @@ func TestInstallSystemdSystemConfig(t *testing.T) {
 	}
 }
 
+// TestInstallSystemdEscapes: '%' (a specifier) and, in the arguments, '$' (a
+// variable) reach the unit doubled, so systemd reads the paths as given;
+// other service managers get them unchanged.
+func TestInstallSystemdEscapes(t *testing.T) {
+	t.Parallel()
+	spec := NewSpec("linux", ScopeSystem, "/opt/sync%r/syncr-worker", "/srv/backup%20data/$HOME/worker.yaml", "/var/lib/syncr%h", "")
+	h := newHarness("linux", "linux-systemd", true)
+	h.runner.reply = func(string, []string) (string, int, error) { return "LoadState=not-found", 0, nil }
+	if err := h.m.Install(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	cfg := h.svc.cfg
+	if cfg.Executable != "/opt/sync%%r/syncr-worker" || cfg.WorkingDirectory != "/var/lib/syncr%%h" ||
+		!slices.Equal(cfg.Arguments, []string{"run", "--config", "/srv/backup%%20data/$$HOME/worker.yaml"}) {
+		t.Errorf("config = %q %q %q", cfg.Executable, cfg.WorkingDirectory, cfg.Arguments)
+	}
+	if spec.Args[2] != "/srv/backup%20data/$HOME/worker.yaml" {
+		t.Errorf("the caller's spec was changed: %q", spec.Args)
+	}
+
+	h = newHarness("linux", "linux-openrc", true)
+	if err := h.m.Install(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := h.svc.cfg; cfg.Executable != spec.Executable || !slices.Equal(cfg.Arguments, spec.Args) {
+		t.Errorf("openrc config = %q %q", cfg.Executable, cfg.Arguments)
+	}
+}
+
 func TestInstallSystemdUserConfig(t *testing.T) {
 	t.Parallel()
 	h := newHarness("linux", "linux-systemd", false)

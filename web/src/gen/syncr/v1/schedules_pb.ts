@@ -425,7 +425,8 @@ export type ScheduleRun = Message<"syncr.v1.ScheduleRun"> & {
    * overlap, controller_unavailable, remote_unavailable,
    * repository_unavailable (the restic repository was deleted),
    * repository_deleting (its data is being deleted), invalid_definition,
-   * worker_removed, no_worker_with_label, owner_disabled, disabled.
+   * worker_removed, worker_outdated (the worker cannot run the job's kind),
+   * no_worker_with_label, owner_disabled, disabled.
    * Schedule.paused_reason uses the same codes.
    *
    * @generated from field: string reason = 8;

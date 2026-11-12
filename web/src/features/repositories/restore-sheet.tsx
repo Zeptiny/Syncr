@@ -84,18 +84,32 @@ function Body({
   const queryClient = useQueryClient();
   const run = useMutation(JobService.method.runJob);
   // The worker and the target start as proposals; once the user chooses,
-  // their choice stays.
+  // their choice stays. The proposals are made once (the target once per
+  // worker), so a background refetch of the workers cannot move the
+  // restore to another machine or folder while the sheet is open.
   const [chosenWorker, setChosenWorker] = useState<string | undefined>();
   const [typedTarget, setTypedTarget] = useState<string | undefined>();
+  const [proposedWorker, setProposedWorker] = useState<string | undefined>();
+  const [proposedTarget, setProposedTarget] = useState<{ workerId: string; target: string }>();
+  const [date] = useState(now);
   const [rest, setRest] = useState(emptyRestore);
   const [errors, setErrors] = useState<RestoreErrors>({});
   const [browsing, setBrowsing] = useState(false);
 
-  const workerId = chosenWorker ?? pickRestoreWorker(workers, snapshot.host ?? "")?.id ?? "";
+  const proposal = proposedWorker ?? pickRestoreWorker(workers, snapshot.host ?? "")?.id;
+  if (proposedWorker === undefined && proposal !== undefined) setProposedWorker(proposal);
+  const workerId = chosenWorker ?? proposal ?? "";
   const worker = workers.find((w) => w.id === workerId);
   const os = worker?.info?.os;
   const roots = worker?.info?.localRoots ?? [];
-  const target = typedTarget ?? defaultRestoreTarget(roots, snapshot.id, now, os);
+  const defaultTarget =
+    proposedTarget?.workerId === workerId
+      ? proposedTarget.target
+      : defaultRestoreTarget(roots, snapshot.id, date, os);
+  if (worker && proposedTarget?.workerId !== workerId) {
+    setProposedTarget({ workerId, target: defaultTarget });
+  }
+  const target = typedTarget ?? defaultTarget;
   const state = { ...rest, workerId, target };
   const original = what.mode === "folder" ? treeToLocal(what.folder, os) : undefined;
   const outside = target.trim() !== "" && roots.length > 0 && !isWithinRoots(target, roots, os);

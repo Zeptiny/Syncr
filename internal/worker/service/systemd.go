@@ -8,7 +8,8 @@ import (
 
 // The unit templates use the small template language of kardianos/service:
 // {{Key}}, {{Key | fn}}, {{if Key}} and {{range Key}}. cmd and cmdEscape quote
-// for the unit file; a literal "%" is escaped by the library.
+// for the unit file, but escape only '"' and blanks; systemdEscaped escapes
+// what systemd would otherwise expand before the values reach them.
 //
 // What the built-in template of kardianos/service gets wrong for this worker,
 // and why a custom one is used: it hard-codes RestartSec=120, restarts even
@@ -82,6 +83,26 @@ NoNewPrivileges=yes
 [Install]
 WantedBy=default.target
 `
+
+// systemdEscaped returns spec with its paths and arguments escaped for a
+// unit file, which the template functions of kardianos/service (v1.3.0) do
+// not do: systemd expands specifiers ("%h", "%2") in ExecStart=,
+// ConditionFileIsExecutable= and WorkingDirectory=, so every '%' is
+// doubled; it expands "$VAR" and "${VAR}" in the arguments of ExecStart=
+// (not in its program path, nor in the other settings), so a '$' there is
+// doubled too.
+func systemdEscaped(spec Spec) Spec {
+	pct := strings.NewReplacer("%", "%%")
+	arg := strings.NewReplacer("%", "%%", "$", "$$")
+	spec.Executable = pct.Replace(spec.Executable)
+	spec.WorkDir = pct.Replace(spec.WorkDir)
+	args := make([]string, len(spec.Args))
+	for i, a := range spec.Args {
+		args[i] = arg.Replace(a)
+	}
+	spec.Args = args
+	return spec
+}
 
 func unitTemplate(scope Scope) string {
 	if scope == ScopeUser {

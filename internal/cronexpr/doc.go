@@ -5,11 +5,12 @@
 //
 // An expression has five fields, minute hour day-of-month month
 // day-of-week, with the usual lists, ranges, steps and month and weekday
-// names, or is one of the descriptors @yearly, @annually, @monthly,
-// @weekly, @daily, @midnight and @hourly. It is case-insensitive. Seconds,
-// @every and "TZ="/"CRON_TZ=" prefixes are rejected: the time zone is a
-// separate IANA name ("Europe/Berlin", "UTC"; never "" or "Local", which
-// would depend on the controller host). An expression that has no
+// names (Sunday is 0 or 7, as in crontab(5)), or is one of the descriptors
+// @yearly, @annually, @monthly, @weekly, @daily, @midnight and @hourly. It
+// is case-insensitive. Seconds, @every and "TZ="/"CRON_TZ=" prefixes are
+// rejected: the time zone is a separate IANA name ("Europe/Berlin", "UTC";
+// never "" or "Local", which would depend on the controller host). An
+// expression that has no
 // occurrence within five years (e.g. "0 0 31 2 *") is rejected too.
 // Parsing uses github.com/robfig/cron/v3 (its parser only); errors are
 // *domain.ValidationError with the fields "cron" and "timezone".
@@ -18,8 +19,10 @@
 //
 //  1. Occurrences are local wall times (year, month, day, hour, minute in
 //     the expression's zone) that match every field. When both day fields
-//     are restricted, a day matches either (cron's OR rule); when one is
-//     "*", only the other counts.
+//     are restricted, a day matches either (cron's OR rule); when one
+//     starts with "*" or "?", steps included ("*/2"), a day must match both,
+//     as in Vixie cron and cronie: "0 0 */2 * 1" runs on odd days that are
+//     Mondays.
 //  2. A wall time that does not exist (the spring-forward gap) runs at the
 //     transition instant: Europe/Berlin 02:30 on the last Sunday of March
 //     runs at 03:00 CEST. Several occurrences inside one gap collapse into

@@ -129,6 +129,9 @@ func elevationHint(goos string) string {
 }
 
 func (m *manager) config(spec Spec) *kservice.Config {
+	if m.goos == "linux" && m.isSystemd() {
+		spec = systemdEscaped(spec)
+	}
 	cfg := &kservice.Config{
 		Name:             spec.Name,
 		DisplayName:      spec.DisplayName,

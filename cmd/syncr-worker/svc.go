@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Zeptiny/Syncr/internal/platform/config"
+	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
 	"github.com/Zeptiny/Syncr/internal/worker/paths"
 	"github.com/Zeptiny/Syncr/internal/worker/service"
 )
@@ -45,7 +47,7 @@ func serviceCmd(ctx context.Context, e *env, args []string) error {
 	fs := newFlagSet(e, "service "+action)
 	user := fs.Bool("user", false, "the per-user service instead of the machine-wide one")
 	configPath := fs.String("config", "", "worker config file (default: the platform default for the scope)")
-	dataDir := fs.String("data-dir", "", "worker data directory (default: platform default, $"+dataDirEnv+")")
+	dataDir := fs.String("data-dir", "", "worker data directory (default: the config's data_dir, $"+dataDirEnv+" or the platform default)")
 	start := fs.Bool("start", false, "install: also start the service")
 	if helped, err := parseFlags(fs, args[1:]); helped || err != nil {
 		return err
@@ -68,6 +70,14 @@ func serviceCmd(ctx context.Context, e *env, args []string) error {
 		}
 	}
 	dir := *dataDir
+	if dir == "" {
+		// The worker runs with the config's data_dir (which setup always
+		// writes), so the service's working and log directories follow it.
+		var err error
+		if dir, err = configuredDataDir(cfgPath, action == "install"); err != nil {
+			return err
+		}
+	}
 	if dir == "" {
 		dir, _ = e.lookupEnv(dataDirEnv)
 	}
@@ -146,6 +156,26 @@ func serviceCmd(ctx context.Context, e *env, args []string) error {
 		}
 	}
 	return nil
+}
+
+// configuredDataDir returns the data_dir of the config file at cfgPath, or
+// "" when the file is missing or sets none. This terminal's SYNCR_*
+// variables are not applied: the service does not run with them. A config
+// that does not load is an error when strict (install: the service would
+// not start with it); otherwise it is ignored, so a broken config can
+// still be uninstalled or stopped.
+func configuredDataDir(cfgPath string, strict bool) (string, error) {
+	if _, err := os.Stat(cfgPath); err != nil { //nolint:gosec,nolintlint // the operator's --config path; gosec flags it only on some GOOS
+		return "", nil
+	}
+	cfg := workerconfig.Default()
+	if err := config.Load(cfgPath, nil, &cfg); err != nil {
+		if strict {
+			return "", err
+		}
+		return "", nil
+	}
+	return cfg.DataDir, nil
 }
 
 func scopeSuffix(user bool) string {

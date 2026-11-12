@@ -308,6 +308,48 @@ func TestSetEnabled(t *testing.T) {
 	}
 }
 
+// TestResumeChecksTheSchedule: resuming refuses a schedule whose worker or
+// remote went away while it was paused, as Update would, and leaves it
+// paused with its reason.
+func TestResumeChecksTheSchedule(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	pause := func(e *env, sc schedules.Schedule, reason string) {
+		t.Helper()
+		if _, err := e.store.SetScheduleEnabled(ctx, sc.ID, schedules.Toggle{Enabled: false, PausedReason: reason, At: t0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	e := newEnv(t)
+	sc := e.create(e.alice, e.input("on a removed worker"))
+	pause(e, sc, schedules.ReasonWorkerRemoved)
+	if _, err := e.store.RemoveWorker(ctx, e.worker, t0); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.svc.SetEnabled(ctx, e.alice, sc.ID, true)
+	wantErr(t, "SetEnabled(true) with the worker removed", err, domain.ErrInvalidArgument)
+	if got := e.schedule(sc.ID); got.Enabled || got.PausedReason != schedules.ReasonWorkerRemoved {
+		t.Errorf("schedule = enabled %v, reason %q; want still paused", got.Enabled, got.PausedReason)
+	}
+
+	e = newEnv(t)
+	in := e.input("with a remote")
+	remote := e.addRemote(e.alice, "archive")
+	in.RemoteIDs = []domain.RemoteID{remote}
+	sc = e.create(e.alice, in)
+	pause(e, sc, schedules.ReasonOwnerDisabled)
+	if on, err := e.svc.SetEnabled(ctx, e.alice, sc.ID, true); err != nil || !on.Enabled {
+		t.Fatalf("SetEnabled(true) with everything in place = (%+v, %v)", on, err)
+	}
+	pause(e, e.schedule(sc.ID), schedules.ReasonOwnerDisabled)
+	e.remotes.mu.Lock()
+	delete(e.remotes.owner, remote)
+	e.remotes.mu.Unlock()
+	_, err = e.svc.SetEnabled(ctx, e.alice, sc.ID, true)
+	wantErr(t, "SetEnabled(true) with the remote gone", err, schedules.ErrUnknownRemote)
+}
+
 func TestDeleteKeepsJobs(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

@@ -44,6 +44,8 @@ type cmdServices struct {
 	state service.State
 	exe   string // the installed service's program
 	calls []string
+	// workDir is the working directory of the last install.
+	workDir string
 }
 
 func (s *cmdServices) rec(c string) { s.mu.Lock(); s.calls = append(s.calls, c); s.mu.Unlock() }
@@ -54,6 +56,7 @@ func (s *cmdServices) Install(_ context.Context, sp service.Spec) error {
 	s.mu.Lock()
 	s.state = service.StateStopped
 	s.exe = sp.Executable
+	s.workDir = sp.WorkDir
 	s.mu.Unlock()
 	return nil
 }
@@ -311,6 +314,33 @@ func TestServiceCommands(t *testing.T) {
 	}
 	if code := run(t.Context(), []string{"service", "stop", "--start"}, e5); code != exitUsage {
 		t.Errorf("--start with stop: exit %d (%s)", code, err5)
+	}
+}
+
+// TestServiceInstallUsesTheConfiguredDataDir: after `setup --no-service`
+// with a --data-dir of its own, `service install` as setup's hint says
+// (without --data-dir) runs the service in the configured data directory,
+// not the platform default, and the hint names the config.
+func TestServiceInstallUsesTheConfiguredDataDir(t *testing.T) {
+	t.Parallel()
+	f, e, stdout, stderr := newSetupFixture(t, map[string]string{tokenEnv: "wtok_x"})
+	cfg := filepath.Join(f.dir, "worker.yaml")
+	if code := run(t.Context(), f.args("--controller", "https://syncr.example.com", "--no-service"), e); code != exitOK {
+		t.Fatalf("setup: exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout(), stderr())
+	}
+	mustHave(t, stdout(), "service install --start --config "+cfg)
+
+	// This terminal's $SYNCR_DATA_DIR does not reach the service, so the
+	// config wins over it.
+	e2, _, stderr2 := testEnv(map[string]string{dataDirEnv: filepath.Join(f.dir, "elsewhere")})
+	e2.setup = e.setup
+	if code := run(t.Context(), []string{"service", "install", "--config", cfg}, e2); code != exitOK {
+		t.Fatalf("service install: exit %d, %s", code, stderr2.String())
+	}
+	f.services.mu.Lock()
+	defer f.services.mu.Unlock()
+	if want := filepath.Join(f.dir, "data"); f.services.workDir != want {
+		t.Errorf("service working directory = %q, want the configured %q", f.services.workDir, want)
 	}
 }
 

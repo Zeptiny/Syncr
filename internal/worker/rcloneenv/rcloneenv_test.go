@@ -8,6 +8,7 @@ import (
 	"errors"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -328,6 +329,42 @@ func TestRemotesRejects(t *testing.T) {
 				t.Errorf("error message leaks a value: %v", err)
 			}
 		})
+	}
+}
+
+// cleaningResolver resolves like localfs does: it cleans the path.
+type cleaningResolver struct{}
+
+func (cleaningResolver) Resolve(p string) (string, error) {
+	if !strings.HasPrefix(p, "/data/") {
+		return "", errOutside
+	}
+	return path.Clean(p), nil
+}
+
+// TestUnionModeSuffixAfterResolving: a read-write local upstream whose
+// cleaned path ends in a mode suffix is refused, though the path as given
+// hid it behind a trailing "/" or "/.". With a mode, the suffix is the
+// directory's name and rclone strips only the mode's.
+func TestUnionModeSuffixAfterResolving(t *testing.T) {
+	t.Parallel()
+	union := func(alias string, ups ...*syncrv1.UnionUpstream) *syncrv1.RemoteDefinition {
+		return remote(alias, "union", withUpstreams(ups...))
+	}
+	rw := syncrv1.UnionUpstreamMode_UNION_UPSTREAM_MODE_READ_WRITE
+	ro := syncrv1.UnionUpstreamMode_UNION_UPSTREAM_MODE_READ_ONLY
+	for _, p := range []string{"/data/x:writeback/", "/data/x:ro/", "/data/x:nc/.", "/data/x:ro"} {
+		_, err := NewBuilder(cleaningResolver{}).Remotes([]*syncrv1.RemoteDefinition{union("un", upstream("", "/data/a", rw), upstream("", p, rw))})
+		if err == nil || !strings.Contains(err.Error(), "must not end with") {
+			t.Errorf("read-write %q: err = %v, want the mode suffix refused", p, err)
+		}
+	}
+	env, err := NewBuilder(cleaningResolver{}).Remotes([]*syncrv1.RemoteDefinition{union("un", upstream("", "/data/a", rw), upstream("", "/data/x:ro/", ro))})
+	if err != nil {
+		t.Fatalf("read-only /data/x:ro/: %v", err)
+	}
+	if got := env.Vars()[EnvName("un", "upstreams")]; got != "/data/a /data/x:ro:ro" {
+		t.Errorf("upstreams = %q", got)
 	}
 }
 

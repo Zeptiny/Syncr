@@ -188,9 +188,13 @@ const (
 	// hits it anyway fails with it and pauses the schedule.
 	ReasonRepositoryDeleting = "repository_deleting"
 	ReasonWorkerRemoved      = "worker_removed"
-	ReasonNoWorkerWithLabel  = "no_worker_with_label"
-	ReasonOwnerDisabled      = "owner_disabled"
-	ReasonDisabled           = "disabled"
+	// ReasonWorkerOutdated: the schedule's worker reported that it does
+	// not run the job's kind, or lacks a link feature the kind needs (an
+	// older version). It pauses the schedule.
+	ReasonWorkerOutdated    = "worker_outdated"
+	ReasonNoWorkerWithLabel = "no_worker_with_label"
+	ReasonOwnerDisabled     = "owner_disabled"
+	ReasonDisabled          = "disabled"
 )
 
 // Run is one run of a schedule: one occurrence (or several merged ones)

@@ -216,11 +216,13 @@ func (s *Service) Update(ctx context.Context, actor domain.Actor, id domain.Sche
 }
 
 // SetEnabled pauses or resumes one of actor's schedules without a version
-// check. Resuming clears PausedReason and sets NextRunAt to the next
-// occurrence after now; pausing clears NextRunAt and cancels the open run
-// (without a notification). A schedule already in the requested state is
-// returned unchanged, so a retried call cannot move NextRunAt past a due
-// occurrence.
+// check. Resuming checks the schedule as Update would (its worker, remotes,
+// repository and contacts must still be usable: a schedule paused because
+// one went away stays paused until it is edited) then clears PausedReason
+// and sets NextRunAt to the next occurrence after now; pausing clears
+// NextRunAt and cancels the open run (without a notification). A schedule
+// already in the requested state is returned unchanged, so a retried call
+// cannot move NextRunAt past a due occurrence.
 func (s *Service) SetEnabled(ctx context.Context, actor domain.Actor, id domain.ScheduleID, enabled bool) (Schedule, error) {
 	cur, err := s.owned(ctx, actor, id)
 	if err != nil {
@@ -237,6 +239,9 @@ func (s *Service) SetEnabled(ctx context.Context, actor domain.Actor, id domain.
 			// The stored expression no longer parses (e.g. the host lost its
 			// zone data): resuming would never fire.
 			return Schedule{}, fmt.Errorf("resume schedule %s: %w: %w", id, domain.ErrFailedPrecondition, err)
+		}
+		if _, err := s.check(ctx, cur.OwnerID, inputOf(cur)); err != nil {
+			return Schedule{}, fmt.Errorf("resume schedule %s: %w", id, err)
 		}
 		t.NextRunAt = e.Next(now)
 	}
@@ -303,6 +308,22 @@ func (s *Service) Names(ctx context.Context, ids []domain.ScheduleID) (map[domai
 		out[sc.ID] = Ref{ID: sc.ID, Name: sc.Name}
 	}
 	return out, nil
+}
+
+// inputOf returns the stored configuration of sc as an enabled Input, for
+// checking it again. Its RemoteIDs still include the repository's remote,
+// which check adds anyway (and deduplicates).
+func inputOf(sc Schedule) Input {
+	var terms []string
+	if sc.SearchText != "" {
+		terms = strings.Split(sc.SearchText, "\n")
+	}
+	return Input{
+		Name: sc.Name, Description: sc.Description, Cron: sc.Cron, Timezone: sc.Timezone,
+		Target: sc.Target, Missed: sc.Missed, Overlap: sc.Overlap, Enabled: true,
+		Kind: sc.Kind, Definition: sc.Definition, RemoteIDs: sc.RemoteIDs, SearchTerms: terms,
+		RepositoryID: sc.RepositoryID, Contacts: sc.Contacts,
+	}
 }
 
 // checked is a validated Input.

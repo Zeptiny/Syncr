@@ -24,4 +24,5 @@ root) or, without `remoteId`, an absolute path on the worker inside its
 progress (a Connect server stream; use a Connect or gRPC client rather than
 plain `curl`). Calls with the browser's session cookie need the
 `X-Syncr-CSRF: 1` header; bearer calls do not. API tokens cannot create or
-delete tokens or change the password.
+delete tokens or change the password, and an admin's token cannot create
+users or reset passwords: each of these needs a signed-in session.

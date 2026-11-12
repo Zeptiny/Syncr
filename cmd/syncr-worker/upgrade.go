@@ -147,7 +147,9 @@ func upgradeCmd(ctx context.Context, e *env, args []string) error {
 	case errors.Is(err, upgrade.ErrInvalidVersion), errors.Is(err, upgrade.ErrInsecureSource):
 		fmt.Fprintf(e.stderr, "%s upgrade: %v\n", name, err)
 		return errUsage
-	case errors.As(err, &perm):
+	case errors.As(err, &perm) && !errors.Is(err, upgrade.ErrRolledBack) && !errors.Is(err, upgrade.ErrRollbackFailed):
+		// Refused before the swap. After it, the rollback's own message
+		// says what changed and how to recover, so it is kept as it is.
 		return fmt.Errorf("upgrading the worker of the %s service needs elevated rights: %s; nothing was changed", scope, perm.Hint)
 	case err != nil:
 		return err

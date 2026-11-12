@@ -145,6 +145,9 @@ func TestPolicyLevels(t *testing.T) {
 			syncrv1connect.WorkerAdminServiceRemoveWorkerProcedure, syncrv1connect.WorkerAdminServiceSetWorkerLabelsProcedure,
 			syncrv1connect.WorkerAdminServiceGetWorkerUpgradeCommandsProcedure,
 		},
+		adminSession: {
+			syncrv1connect.UserServiceCreateUserProcedure, syncrv1connect.UserServiceResetPasswordProcedure,
+		},
 	}
 	for level, procs := range want {
 		for _, p := range procs {
@@ -156,7 +159,7 @@ func TestPolicyLevels(t *testing.T) {
 	for p, level := range policy {
 		svc := strings.Split(p, "/")[1]
 		switch {
-		case svc == syncrv1connect.UserServiceName && level != admin:
+		case svc == syncrv1connect.UserServiceName && level != admin && level != adminSession:
 			t.Errorf("%s is %v; UserService is admin only", p, level)
 		case slices.Contains([]string{
 			syncrv1connect.JobServiceName, syncrv1connect.RemoteServiceName, syncrv1connect.BackendServiceName,
@@ -269,6 +272,27 @@ func TestGuardChecksRoleAndMethod(t *testing.T) {
 	wantCode(t, err, connect.CodePermissionDenied)
 	_, err = syncrv1connect.NewUserServiceClient(as(testAdmin, "session"), e.srv.URL).ListUsers(t.Context(), connect.NewRequest(&syncrv1.ListUsersRequest{}))
 	wantPastGuard(t, err)
+
+	// An admin's API token cannot create accounts or set passwords: either
+	// would let a leaked token sign in. A session can; a user cannot either
+	// way.
+	resetPassword := func(c *http.Client) error {
+		_, err := syncrv1connect.NewUserServiceClient(c, e.srv.URL).ResetPassword(t.Context(),
+			connect.NewRequest(&syncrv1.ResetPasswordRequest{UserId: testAdmin.UserID.String(), NewPassword: "a long enough password"}))
+		return err
+	}
+	createUser := func(c *http.Client) error {
+		_, err := syncrv1connect.NewUserServiceClient(c, e.srv.URL).CreateUser(t.Context(),
+			connect.NewRequest(&syncrv1.CreateUserRequest{Username: "mallory", Password: "a long enough password", Role: syncrv1.UserRole_USER_ROLE_ADMIN}))
+		return err
+	}
+	for _, call := range []func(*http.Client) error{resetPassword, createUser} {
+		wantCode(t, call(as(testAdmin, "token")), connect.CodePermissionDenied)
+		wantCode(t, call(as(testUser, "session")), connect.CodePermissionDenied)
+		wantPastGuard(t, call(as(testAdmin, "session")))
+	}
+	_, err = syncrv1connect.NewUserServiceClient(as(testAdmin, "token"), e.srv.URL).ListUsers(t.Context(), connect.NewRequest(&syncrv1.ListUsersRequest{}))
+	wantPastGuard(t, err) // other admin procedures accept tokens
 
 	// API tokens cannot mint tokens, whatever the role; sessions can.
 	for _, a := range []domain.Actor{testUser, testAdmin} {
@@ -397,7 +421,7 @@ func TestCallerContext(t *testing.T) {
 			t.Errorf("%d.String() = %q", m, m.String())
 		}
 	}
-	for a, want := range map[access]string{public: "public", user: "user", userSession: "user (session)", admin: "admin", 99: "unknown"} {
+	for a, want := range map[access]string{public: "public", user: "user", userSession: "user (session)", admin: "admin", adminSession: "admin (session)", 99: "unknown"} {
 		if a.String() != want {
 			t.Errorf("access %d = %q", a, a.String())
 		}
