@@ -33,7 +33,7 @@ jobs:
       notes: ${{ steps.check.outputs.notes }}
       prerelease: ${{ steps.check.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: The tag is a release version with release notes
         id: check
         # Only vX.Y.Z and vX.Y.Z-rc.N: the versions the controller treats as
@@ -69,7 +69,7 @@ jobs:
       id-token: write # sign the provenance (Sigstore)
       attestations: write # store the provenance
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # GoReleaser reads the tags
       # No caches in a release build.
@@ -124,7 +124,7 @@ jobs:
           - { image: syncr-controller, dockerfile: Dockerfile.controller }
           - { image: syncr-worker, dockerfile: Dockerfile.worker }
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Version build args
         id: version
         # The values GoReleaser gives the binaries: the tag, the full commit
