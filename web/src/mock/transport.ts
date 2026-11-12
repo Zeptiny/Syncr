@@ -34,6 +34,7 @@ import {
 import { UserRole, UserSchema, UserService } from "@/gen/syncr/v1/users_pb";
 import * as fx from "@/test/fixtures";
 
+import * as hooksMock from "./hooks";
 import { registerM4 } from "./m4";
 import * as m5mock from "./m5";
 import * as m6 from "./m6";
@@ -76,6 +77,7 @@ export function createMockTransport(): Transport {
   const users = fx.users(now);
   const workers = m5mock.workers(now);
   m6.applyWorkers(workers);
+  hooksMock.applyWorkers(workers);
   workers.push(m6.atticWorker(now));
   let remotes = [...fx.remotes(now), m6.verifiedRemote(now)].sort((a, b) =>
     a.name.localeCompare(b.name),
@@ -84,7 +86,13 @@ export function createMockTransport(): Transport {
   const m5data = m5mock.data(now);
   hist.schedules.push(...m5data.schedules);
   const limited = m6.timeLimitJob(now);
-  const jobs = [...fx.jobs(now), ...hist.jobs, ...m5data.jobs, limited.job].sort(
+  const jobs = [
+    ...fx.jobs(now),
+    ...hist.jobs,
+    ...m5data.jobs,
+    limited.job,
+    ...hooksMock.jobs(now),
+  ].sort(
     (a, b) =>
       timestampMs(b.createdAt ?? timestampFromMs(0)) -
       timestampMs(a.createdAt ?? timestampFromMs(0)),
@@ -595,7 +603,10 @@ export function createMockTransport(): Transport {
       runJob: (req) => {
         const u = me();
         const op = req.definition?.operation;
-        const problems = m5.check(req.definition, false, req.workerId);
+        const problems = [
+          ...m5.check(req.definition, false, req.workerId),
+          ...hooksMock.check(req.definition, workers, req.workerId),
+        ];
         if (problems.length) throw invalid(problems);
         if (op?.case === undefined)
           throw invalid([{ field: "definition", message: "Choose what to do." }]);

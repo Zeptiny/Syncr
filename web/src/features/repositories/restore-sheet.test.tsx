@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { WorkerStatus, type RunJobRequest } from "@/gen/syncr/v1/api_pb";
 import { ResticRestoreOverwrite } from "@/gen/syncr/v1/link_pb";
+import * as hooksMock from "@/mock/hooks";
 import * as m5 from "@/mock/m5";
 import * as fx from "@/test/fixtures";
 import { m5Api } from "@/test/m5-api";
@@ -188,5 +189,28 @@ describe("RestoreSheet", () => {
       paths: [],
       subfolder: "",
     });
+  });
+  it("offers no hooks section when the worker defines none", async () => {
+    open(m5.ids.photosVault, { mode: "snapshot" });
+    await screen.findByRole("combobox", { name: "Worker" });
+    expect(screen.queryByText(/^Hooks/)).toBeNull();
+    expect(screen.queryByRole("combobox", { name: /^Add a hook/ })).toBeNull();
+  });
+
+  it("runs the worker's hooks around a restore", async () => {
+    const { api, user } = open(m5.ids.photosVault, { mode: "snapshot" }, hooksMock.applyWorkers);
+    await screen.findByRole("combobox", { name: "Worker" });
+    expect(
+      screen.getByText(/Commands nas-01's operator prepared, run around the restore/),
+    ).toBeVisible();
+    await user.click(screen.getByRole("combobox", { name: "Add a hook: before the job" }));
+    await user.click(await screen.findByRole("option", { name: /stop-paperless/ }));
+    await user.click(screen.getByRole("combobox", { name: "Add a hook: always, at the end" }));
+    await user.click(await screen.findByRole("option", { name: /start-paperless/ }));
+    await user.click(screen.getByRole("button", { name: "Start restore" }));
+    await waitFor(() => expect(api.of("RunJob")).toHaveLength(1));
+    const def = api.of<RunJobRequest>("RunJob")[0].definition;
+    expect(def?.operation.case).toBe("resticRestore");
+    expect(def?.hooks).toMatchObject({ before: ["stop-paperless"], after: ["start-paperless"] });
   });
 });

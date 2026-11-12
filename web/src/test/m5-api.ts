@@ -20,6 +20,7 @@ import { BackendService, RemoteService } from "@/gen/syncr/v1/remotes_pb";
 import { ContactService } from "@/gen/syncr/v1/notify_pb";
 import { ScheduleSchema, ScheduleService } from "@/gen/syncr/v1/schedules_pb";
 import { csrfHeader } from "@/lib/transport";
+import * as hooksMock from "@/mock/hooks";
 import * as m5 from "@/mock/m5";
 import * as m6 from "@/mock/m6";
 
@@ -48,13 +49,16 @@ export interface M5Api {
  * m5Api serves the milestone 5 mock (repositories, probes) and the
  * milestone 6 methods (host keys, upgrade commands) with the services its
  * pages also need, answers at once and never starts timers, and records
- * every request. Its workers are m5's, with m6's outdated flags.
+ * every request. Its workers are m5's, with m6's outdated flags and the
+ * hooks mock's hooks (nas-01 defines four), and its jobs include the hooks
+ * mock's two backups.
  */
 export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
   const data = m5.data(now);
   const workers = m5.workers(now);
   m6.applyWorkers(workers);
-  const jobs = [...data.jobs];
+  hooksMock.applyWorkers(workers);
+  const jobs = [...data.jobs, ...hooksMock.jobs(now)];
   const schedules = [...data.schedules];
   const remotes = fx.remotes(now);
   const me = fx.users(now).find((u) => u.username === user)!;
@@ -108,11 +112,12 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
         listScheduleRuns: () => ({ runs: [] }),
         previewSchedule: () => ({ nextRuns: [timestampFromMs(now + 3_600_000)] }),
         createSchedule: (req) => {
-          const problems = api.check(
-            req.input?.definition,
-            true,
-            req.input?.target?.target.case === "workerId" ? req.input.target.target.value : "",
-          );
+          const workerId =
+            req.input?.target?.target.case === "workerId" ? req.input.target.target.value : "";
+          const problems = [
+            ...api.check(req.input?.definition, true, workerId),
+            ...hooksMock.check(req.input?.definition, workers, workerId),
+          ];
           if (problems.length) throw invalid(problems);
           return { schedule: create(ScheduleSchema, { id: "s-new", name: req.input?.name }) };
         },
@@ -135,7 +140,10 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
           return { job: j };
         },
         runJob: (req) => {
-          const problems = api.check(req.definition, false, req.workerId);
+          const problems = [
+            ...api.check(req.definition, false, req.workerId),
+            ...hooksMock.check(req.definition, workers, req.workerId),
+          ];
           if (problems.length) throw invalid(problems);
           const d = api.describe(req.definition);
           const j = create(JobSchema, {

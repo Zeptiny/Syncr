@@ -5,6 +5,7 @@ import type { FieldViolation, JobDefinition, JobDefinitionSchema } from "@/gen/s
 import { FilterAction, RcloneTransferMode } from "@/gen/syncr/v1/link_pb";
 import { toNumber } from "@/lib/format";
 
+import { emptyHooks, hooksError, hooksState, toHooks, type HooksState } from "./hooks";
 import {
   backupState,
   checkState,
@@ -78,7 +79,7 @@ export interface TransferState {
 /**
  * DefinitionErrors are the definition's problems, by form section. The
  * first four belong to transfers; repository, paths, excludes, policy and
- * readData to the restic kinds; options and timeLimit to every kind.
+ * readData to the restic kinds; options, timeLimit and hooks to every kind.
  */
 export type DefinitionErrors = Partial<
   Record<
@@ -92,7 +93,8 @@ export type DefinitionErrors = Partial<
     | "excludes"
     | "policy"
     | "readData"
-    | "timeLimit",
+    | "timeLimit"
+    | "hooks",
     string
   >
 >;
@@ -249,6 +251,12 @@ export function definitionError(v: FieldViolation, errors: DefinitionErrors): bo
     errors.timeLimit = v.message;
     return true;
   }
+  const hooks = hooksError(v);
+  if (hooks !== undefined) {
+    // Several hooks can be wrong at once: keep every message.
+    errors.hooks = errors.hooks ? `${errors.hooks} ${hooks}` : hooks;
+    return true;
+  }
   if (f.includes(".restic_")) {
     if (f.endsWith("repository_id")) errors.repository = v.message;
     else if (f.includes(".paths")) errors.paths = v.message;
@@ -286,6 +294,11 @@ export type JobDefinitionState = (
    * default, if one is configured, then applies).
    */
   timeLimit: Quantity<DurationUnit>;
+  /**
+   * hooks is JobDefinition.hooks: the hooks of the worker that run around
+   * the operation, by phase, in the order they run.
+   */
+  hooks: HooksState;
 };
 
 /** emptyTimeLimit is an unset time limit, in hours. */
@@ -337,18 +350,18 @@ export function emptyDefinition(
   kind: EditableKind = "rclone_transfer",
   repositoryId = "",
 ): JobDefinitionState {
-  const timeLimit = emptyTimeLimit();
+  const common = { timeLimit: emptyTimeLimit(), hooks: emptyHooks() };
   switch (kind) {
     case "restic_backup":
-      return { kind, backup: { ...emptyBackup(), repositoryId }, timeLimit };
+      return { kind, backup: { ...emptyBackup(), repositoryId }, ...common };
     case "restic_forget":
-      return { kind, retention: { ...emptyRetentionJob(), repositoryId }, timeLimit };
+      return { kind, retention: { ...emptyRetentionJob(), repositoryId }, ...common };
     case "restic_check":
-      return { kind, check: { ...emptyCheck(), repositoryId }, timeLimit };
+      return { kind, check: { ...emptyCheck(), repositoryId }, ...common };
     case "restic_prune":
-      return { kind, prune: { ...emptyPrune(), repositoryId }, timeLimit };
+      return { kind, prune: { ...emptyPrune(), repositoryId }, ...common };
     default:
-      return { kind: "rclone_transfer", transfer: emptyTransfer(), timeLimit };
+      return { kind: "rclone_transfer", transfer: emptyTransfer(), ...common };
   }
 }
 
@@ -368,10 +381,14 @@ export function definitionRepositoryId(s: JobDefinitionState): string {
   }
 }
 
-/** withKind switches the form to another kind, keeping the repository and the time limit. */
+/** withKind switches the form to another kind, keeping the repository, the time limit and the hooks. */
 export function withKind(s: JobDefinitionState, kind: EditableKind): JobDefinitionState {
   if (s.kind === kind) return s;
-  return { ...emptyDefinition(kind, definitionRepositoryId(s)), timeLimit: s.timeLimit };
+  return {
+    ...emptyDefinition(kind, definitionRepositoryId(s)),
+    timeLimit: s.timeLimit,
+    hooks: s.hooks,
+  };
 }
 
 /**
@@ -380,18 +397,18 @@ export function withKind(s: JobDefinitionState, kind: EditableKind): JobDefiniti
  */
 export function definitionState(def: JobDefinition | undefined): JobDefinitionState {
   const op = def?.operation;
-  const timeLimit = timeLimitState(def);
+  const common = { timeLimit: timeLimitState(def), hooks: hooksState(def) };
   switch (op?.case) {
     case "resticBackup":
-      return { kind: "restic_backup", backup: backupState(op.value), timeLimit };
+      return { kind: "restic_backup", backup: backupState(op.value), ...common };
     case "resticForget":
-      return { kind: "restic_forget", retention: retentionState(op.value), timeLimit };
+      return { kind: "restic_forget", retention: retentionState(op.value), ...common };
     case "resticCheck":
-      return { kind: "restic_check", check: checkState(op.value), timeLimit };
+      return { kind: "restic_check", check: checkState(op.value), ...common };
     case "resticPrune":
-      return { kind: "restic_prune", prune: pruneState(op.value), timeLimit };
+      return { kind: "restic_prune", prune: pruneState(op.value), ...common };
     default:
-      return { kind: "rclone_transfer", transfer: transferState(def), timeLimit };
+      return { kind: "rclone_transfer", transfer: transferState(def), ...common };
   }
 }
 
@@ -420,8 +437,12 @@ function validateKind(s: JobDefinitionState): DefinitionErrors {
 /** toDefinition builds the JobDefinition the API takes. */
 export function toDefinition(s: JobDefinitionState): MessageInitShape<typeof JobDefinitionSchema> {
   const maxRuntime = quantityToDuration(s.timeLimit);
-  const def = kindDefinition(s);
-  return maxRuntime ? { ...def, maxRuntime } : def;
+  const hooks = toHooks(s.hooks);
+  return {
+    ...kindDefinition(s),
+    ...(maxRuntime ? { maxRuntime } : {}),
+    ...(hooks ? { hooks } : {}),
+  };
 }
 
 function kindDefinition(s: JobDefinitionState): MessageInitShape<typeof JobDefinitionSchema> {

@@ -6,6 +6,8 @@ import type { Repository } from "@/gen/syncr/v1/restic_pb";
 
 import { BackupEditor } from "./backup-editor";
 import { CheckEditor } from "./check-editor";
+import type { HooksTarget } from "./hooks";
+import { HooksPanel } from "./hooks-editor";
 import {
   editableKinds,
   withKind,
@@ -34,6 +36,11 @@ export interface JobDefinitionEditorProps {
    */
   browseWorker?: Worker;
   browseNote?: string;
+  /**
+   * hooksTarget is where the job runs, as far as hooks go: the workers it
+   * may run on (one, or a label's) that have reported in. Default: worker.
+   */
+  hooksTarget?: HooksTarget;
   /** how renders next to the kind's first fields, e.g. the worker picker of "Run a job". */
   how?: React.ReactNode;
   /** idPrefix keeps input IDs unique when two editors share a page. */
@@ -60,6 +67,7 @@ export function JobDefinitionEditor({
   worker,
   browseWorker,
   browseNote,
+  hooksTarget,
   how,
   idPrefix = "run",
   kinds = editableKinds,
@@ -131,6 +139,13 @@ export function JobDefinitionEditor({
           )}
         </>
       )}
+      <HooksPanel
+        idPrefix={idPrefix}
+        value={s.hooks}
+        onChange={(hooks) => onChange({ ...s, hooks })}
+        target={hooksTarget ?? { workers: worker?.info ? [worker] : [] }}
+        error={errors.hooks}
+      />
       <Panel title="Time limit">
         <div className="max-w-md">
           <QuantityInput

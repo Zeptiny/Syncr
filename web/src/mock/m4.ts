@@ -52,6 +52,7 @@ import { FieldKind } from "@/gen/syncr/v1/remotes_pb";
 import * as fx from "@/test/fixtures";
 
 import { CronError, nextRuns, parseCron } from "./cron";
+import { check as checkHooks } from "./hooks";
 import type { M5 } from "./m5";
 
 type Violation = { field: string; message: string };
@@ -187,6 +188,9 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
       if (!l.events.length)
         v.push({ field: `contacts[${i}].events`, message: "Choose at least one event." });
     });
+    v.push(
+      ...checkHooks(input.definition, d.workers, t?.case === "workerId" ? t.value : undefined),
+    );
     const op = input.definition?.operation;
     if (op?.case !== "rcloneTransfer") {
       if (op?.case === undefined || !d.m5)
