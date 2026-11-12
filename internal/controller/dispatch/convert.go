@@ -2,7 +2,9 @@ package dispatch
 
 import (
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -40,6 +42,15 @@ func infoFromHello(h *syncrv1.Hello, at time.Time) workers.Info {
 	for _, t := range h.GetTools() {
 		info.Tools = append(info.Tools, workers.Tool{Name: t.GetName(), Version: t.GetVersion()})
 	}
+	// The workers service keeps the ones a job could name (valid names,
+	// bounded).
+	for _, hk := range h.GetHooks() {
+		hook := workers.Hook{Name: hk.GetName(), Description: hk.GetDescription()}
+		if d := hk.GetTimeout(); d != nil && d.CheckValid() == nil {
+			hook.Timeout = d.AsDuration()
+		}
+		info.Hooks = append(info.Hooks, hook)
+	}
 	return info
 }
 
@@ -49,12 +60,26 @@ func infoFromHello(h *syncrv1.Hello, at time.Time) workers.Info {
 // report as FAILED) is failed whatever status came with the code, so it
 // notifies and fails its schedule's run like any other failure
 // (jobs.CodeTimeLimit).
+//
+// The output and the warnings are the operation's, so they are kept
+// whatever the status: a job whose operation succeeded can still fail or be
+// stopped in a hook that follows it (jobs.CodeHookFailed), and its backup
+// exists all the same. A worker reports neither for an operation that did
+// not succeed. The hook runs are kept as reported, within bounds
+// (hookRunsFromProto).
 func outcomeFromResult(r *syncrv1.JobResult) jobs.Outcome {
 	o := jobs.Outcome{
 		Stats:      statsFromProto(r.GetStats()),
 		ExitCode:   int(r.GetExitCode()),
 		StartedAt:  timeOf(r.GetStartedAt()),
 		FinishedAt: timeOf(r.GetFinishedAt()),
+		Warnings:   r.GetWarnings(),
+		HookRuns:   hookRunsFromProto(r.GetHookRuns()),
+	}
+	if r.GetOutput() != nil {
+		if b, err := (proto.MarshalOptions{Deterministic: true}).Marshal(r.GetOutput()); err == nil {
+			o.Output = b
+		}
 	}
 	if r.GetError() != nil {
 		o.Error = jobs.JobError{Code: link.ErrorCodeName(r.GetError().GetCode()), Message: r.GetError().GetMessage()}
@@ -68,12 +93,6 @@ func outcomeFromResult(r *syncrv1.JobResult) jobs.Outcome {
 	case syncrv1.JobResultStatus_JOB_RESULT_STATUS_SUCCEEDED:
 		o.Status = domain.JobSucceeded
 		o.Error = jobs.JobError{}
-		o.Warnings = r.GetWarnings()
-		if r.GetOutput() != nil {
-			if b, err := (proto.MarshalOptions{Deterministic: true}).Marshal(r.GetOutput()); err == nil {
-				o.Output = b
-			}
-		}
 	case syncrv1.JobResultStatus_JOB_RESULT_STATUS_FAILED:
 		o.Status = domain.JobFailed
 		if o.Error.IsZero() {
@@ -86,4 +105,50 @@ func outcomeFromResult(r *syncrv1.JobResult) jobs.Outcome {
 		o.Error = jobs.JobError{Code: jobs.CodeInternal, Message: fmt.Sprintf("the worker reported an unknown result status %d", r.GetStatus())}
 	}
 	return o
+}
+
+// hookRunsFromProto converts the hook runs of a worker's result, bounded so
+// that a misbehaving worker cannot bloat a job's record: at most
+// jobs.MaxHookRuns runs, each with its texts as valid UTF-8 within the
+// link's limits. A run whose phase or status this controller does not know
+// keeps the others: its phase or status is stored empty.
+func hookRunsFromProto(runs []*syncrv1.HookRun) []jobs.HookRun {
+	if len(runs) == 0 {
+		return nil
+	}
+	runs = runs[:min(len(runs), jobs.MaxHookRuns)]
+	out := make([]jobs.HookRun, 0, len(runs))
+	for _, r := range runs {
+		run := jobs.HookRun{
+			Name:            clipText(r.GetName(), link.MaxHookNameLen),
+			Phase:           link.HookPhaseName(r.GetPhase()),
+			Status:          link.HookStatusName(r.GetStatus()),
+			ExitCode:        int(r.GetExitCode()),
+			StartedAt:       timeOf(r.GetStartedAt()),
+			Message:         clipText(r.GetMessage(), link.MaxHookMessageBytes),
+			Output:          clipText(r.GetOutput(), link.MaxHookOutputBytes),
+			OutputTruncated: r.GetOutputTruncated(),
+		}
+		if d := r.GetDuration(); d != nil && d.CheckValid() == nil {
+			run.Duration = max(d.AsDuration(), 0)
+		}
+		if len(run.Output) < len(r.GetOutput()) {
+			run.OutputTruncated = true
+		}
+		out = append(out, run)
+	}
+	return out
+}
+
+// clipText returns s as valid UTF-8 of at most n bytes, cut on a character
+// boundary.
+func clipText(s string, n int) string {
+	s = strings.ToValidUTF8(s, "\uFFFD")
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }

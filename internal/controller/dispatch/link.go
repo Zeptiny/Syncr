@@ -473,15 +473,18 @@ func (s *Service) startSpec(ctx context.Context, j jobs.Job, info workers.Info) 
 	}
 	spec, err := s.specs.Build(ctx, j, info)
 	var wrongOS *WrongOSError
+	var missingHooks *MissingHooksError
 	switch {
 	case err == nil:
 		return spec, nil
 	case errors.As(err, &wrongOS):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, s.wrongOSMessage(ctx, j, wrongOS), err)
+	case errors.As(err, &missingHooks):
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, missingHooks.Message(s.workerName(ctx, j)), err)
 	case errors.Is(err, errRepositoryUnavailable):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeRepositoryUnavailable, "the repository was deleted or is not available to its owner", err)
 	case errors.Is(err, ErrWorkerOutdated):
-		return nil, s.failUnbuildable(ctx, j, jobs.CodeWorkerOutdated, s.outdatedMessage(ctx, j, errors.Is(err, ErrTimeLimitUnsupported)), err)
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeWorkerOutdated, s.outdatedMessage(ctx, j, err), err)
 	case errors.Is(err, domain.ErrNotFound):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeRemoteUnavailable, "a remote of the job was deleted or is not available to its owner", err)
 	case errors.Is(err, domain.ErrInvalidArgument):
@@ -493,19 +496,30 @@ func (s *Service) startSpec(ctx context.Context, j jobs.Job, info workers.Info) 
 	}
 }
 
-// outdatedMessage names the job's worker in the worker_outdated failure;
-// timeLimit says the worker lacks only the time limit (a job of its kind
-// without one would run).
-func (s *Service) outdatedMessage(ctx context.Context, j jobs.Job, timeLimit bool) string {
+// outdatedMessage names the job's worker in the worker_outdated failure
+// cause, and what it cannot run: the job's kind, or only its time limit or
+// its hooks (a job of its kind without them would run).
+func (s *Service) outdatedMessage(ctx context.Context, j jobs.Job, cause error) string {
 	what := j.Kind + " jobs"
-	if timeLimit {
+	switch {
+	case errors.Is(cause, ErrTimeLimitUnsupported):
 		what = "jobs with a time limit"
+	case errors.Is(cause, ErrHooksUnsupported):
+		what = "jobs with hooks"
 	}
+	if name := s.workerName(ctx, j); name != "" {
+		return fmt.Sprintf("worker %q must be upgraded to run %s", name, what)
+	}
+	return fmt.Sprintf("the worker must be upgraded to run %s", what)
+}
+
+// workerName returns the name of j's worker, or "" if it cannot be read.
+func (s *Service) workerName(ctx context.Context, j jobs.Job) string {
 	w, err := s.workers.Get(ctx, j.WorkerID)
 	if err != nil {
-		return fmt.Sprintf("the worker must be upgraded to run %s", what)
+		return ""
 	}
-	return fmt.Sprintf("worker %q must be upgraded to run %s", w.Name, what)
+	return w.Name
 }
 
 // wrongOSMessage says why a job fails on a worker that runs another

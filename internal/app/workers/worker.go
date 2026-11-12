@@ -70,8 +70,36 @@ type Info struct {
 	Features []string
 	// ProbeOps are the probe operations it can run (Hello.probe_ops).
 	ProbeOps []string
+	// Hooks are the hooks the worker's operator defined (Hello.hooks),
+	// sorted by name: what a job on the worker may name. Nil for a worker
+	// without hooks, and for one too old to run any.
+	Hooks []Hook
 	// ReportedAt is when the worker sent the Hello (worker clock).
 	ReportedAt time.Time
+}
+
+// HookNames returns the names of the hooks the worker defines.
+func (i Info) HookNames() []string {
+	if len(i.Hooks) == 0 {
+		return nil
+	}
+	out := make([]string, len(i.Hooks))
+	for n, h := range i.Hooks {
+		out[n] = h.Name
+	}
+	return out
+}
+
+// Hook is a hook a worker defines: a command of its operator's that jobs
+// may run around their operation by naming it. The controller knows no more
+// of it than this.
+type Hook struct {
+	// Name is the hook's name (domain.ValidHookName).
+	Name string
+	// Description says what it does, as the operator put it; may be empty.
+	Description string
+	// Timeout is how long one run may take before the worker stops it.
+	Timeout time.Duration
 }
 
 // HasFeatures reports whether the worker reported every one of features.

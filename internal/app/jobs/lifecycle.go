@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -182,6 +183,7 @@ func (s *Service) Finish(ctx context.Context, workerID domain.WorkerID, id domai
 			j.FinishedAt = now
 		}
 		j.Stats, j.Error, j.Warnings, j.ExitCode, j.Output = o.Stats, e, o.Warnings, o.ExitCode, o.Output
+		j.HookRuns = slices.Clone(o.HookRuns[:min(len(o.HookRuns), MaxHookRuns)])
 		return true, nil
 	})
 	if err != nil {

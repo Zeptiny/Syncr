@@ -23,9 +23,13 @@ func (s *Store) CreateJob(ctx context.Context, j jobs.Job) error {
 	op := fmt.Sprintf("create job %s", j.ID)
 	// Errors are mapped once, below: pgx errors keep their SQLSTATE through
 	// the wrapping.
-	err := pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+	params, err := createJobParams(j)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	err = pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		q := s.q.WithTx(tx)
-		n, err := q.CreateJob(ctx, createJobParams(j))
+		n, err := q.CreateJob(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -42,7 +46,11 @@ func (s *Store) CreateJob(ctx context.Context, j jobs.Job) error {
 	return mapErr(op, err)
 }
 
-func createJobParams(j jobs.Job) db.CreateJobParams {
+func createJobParams(j jobs.Job) (db.CreateJobParams, error) {
+	hookRuns, err := encodeHookRuns(j.HookRuns)
+	if err != nil {
+		return db.CreateJobParams{}, err
+	}
 	return db.CreateJobParams{
 		ID:                pgID(j.ID),
 		WorkerID:          pgID(j.WorkerID),
@@ -78,7 +86,8 @@ func createJobParams(j jobs.Job) db.CreateJobParams {
 		RepositoryID:      pgOptID(j.RepositoryID),
 		ConcurrencyKeys:   textArray(j.ConcurrencyKeys),
 		TimeLimitNs:       int64(j.TimeLimit),
-	}
+		HookRuns:          hookRuns,
+	}, nil
 }
 
 // jobsWithRemotes converts rows and fills in their RemoteIDs with one
@@ -132,6 +141,10 @@ func (s *Store) GetJob(ctx context.Context, id domain.JobID) (jobs.Job, error) {
 // mismatch (ErrConflict).
 func (s *Store) UpdateJob(ctx context.Context, j jobs.Job) (jobs.Job, error) {
 	op := fmt.Sprintf("update job %s", j.ID)
+	hookRuns, err := encodeHookRuns(j.HookRuns)
+	if err != nil {
+		return jobs.Job{}, fmt.Errorf("%s: %w", op, err)
+	}
 	row, err := s.q.UpdateJob(ctx, db.UpdateJobParams{
 		ID:                pgID(j.ID),
 		ExpectedVersion:   j.Version,
@@ -158,6 +171,7 @@ func (s *Store) UpdateJob(ctx context.Context, j jobs.Job) (jobs.Job, error) {
 		ExitCode:          int32(j.ExitCode), //nolint:gosec // G115: a process exit code
 		Output:            j.Output,
 		TimeLimitNs:       int64(j.TimeLimit),
+		HookRuns:          hookRuns,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		exists, qerr := s.q.JobExists(ctx, pgID(j.ID))

@@ -394,7 +394,11 @@ func testWorkerInfoAndTouch(t *testing.T, s Store) {
 	if got, _ := s.GetWorker(ctx, w.ID); got.InfoCurrent() {
 		t.Errorf("Info = %+v is current before the epoch's Hello", got.Info)
 	}
-	info := workers.Info{Epoch: "e", Version: "v2", OS: "linux", JobKinds: []string{"a", "b"}, MaxConcurrentJobs: 2, ReportedAt: t0()}
+	hooks := []workers.Hook{
+		{Name: "dump-db", Description: "Dump the database: “app”", Timeout: 15*time.Minute + time.Nanosecond},
+		{Name: "start-app"},
+	}
+	info := workers.Info{Epoch: "e", Version: "v2", OS: "linux", JobKinds: []string{"a", "b"}, MaxConcurrentJobs: 2, Hooks: hooks, ReportedAt: t0()}
 	if err := s.SetWorkerInfo(ctx, w.ID, "e", info); err != nil {
 		t.Fatal(err)
 	}
@@ -403,6 +407,18 @@ func testWorkerInfoAndTouch(t *testing.T, s Store) {
 	if got.Info.Version != "v2" || !slices.Equal(got.Info.JobKinds, []string{"a", "b"}) || got.Info.MaxConcurrentJobs != 2 ||
 		got.Info.Epoch != "e" || !got.InfoCurrent() {
 		t.Errorf("Info = %+v", got.Info)
+	}
+	// The hooks the worker defines are stored as reported, in their order.
+	if !slices.Equal(got.Info.Hooks, hooks) || !slices.Equal(got.Info.HookNames(), []string{"dump-db", "start-app"}) {
+		t.Errorf("Info.Hooks = %+v, want %+v", got.Info.Hooks, hooks)
+	}
+	// A later Hello without hooks removes them: Info is replaced as a whole.
+	info.Hooks = nil
+	if err := s.SetWorkerInfo(ctx, w.ID, "e", info); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetWorker(ctx, w.ID); len(got.Info.Hooks) != 0 || got.Info.HookNames() != nil {
+		t.Errorf("Info.Hooks after a Hello without hooks = %+v", got.Info.Hooks)
 	}
 	// A new epoch keeps the info, which is then the previous process's.
 	if _, err := s.AdvanceWorkerEpoch(ctx, w.ID, "e", workers.NewEpoch{Epoch: "e2", PastEpochs: []string{"e"}}); err != nil {
@@ -601,7 +617,7 @@ func testJobCreateGet(t *testing.T, s Store) {
 	got, err := s.GetJob(ctx, j.ID)
 	if err != nil || got.Status != domain.JobQueued || got.Version != 1 || got.OwnerID != ownerID(t) ||
 		!sameJSON(got.Definition, []byte(testDefinition)) || got.ExitCode != -1 || !got.QueuedAt.Equal(t0()) ||
-		got.SearchText != j.SearchText || len(got.RemoteIDs) != 0 || got.TimeLimit != time.Minute {
+		got.SearchText != j.SearchText || len(got.RemoteIDs) != 0 || got.TimeLimit != time.Minute || got.HookRuns != nil {
 		t.Errorf("GetJob = (%+v, %v)", got, err)
 	}
 	_, err = s.GetJob(ctx, jobID(t, 99))
@@ -622,6 +638,7 @@ func testJobUpdateVersioned(t *testing.T, s Store) {
 	next.Warnings, next.Output, next.ExitCode, next.Requeues = []string{"w"}, []byte{1}, 3, 2
 	next.CancelRequestedAt = t0().Add(2 * time.Second)
 	next.TimeLimit = 6*time.Hour + time.Nanosecond
+	next.HookRuns = testHookRuns()
 	// Immutable fields are never written.
 	next.Kind, next.Definition, next.CreatedAt = "other", []byte(`{"other": true}`), t0().Add(time.Hour)
 	next.OwnerID, next.SearchText, next.RemoteIDs = userID(t, 99), "other", []domain.RemoteID{remoteID(t, 99)}
@@ -637,11 +654,24 @@ func testJobUpdateVersioned(t *testing.T, s Store) {
 	if got, err := s.GetJob(ctx, j.ID); err != nil || got.TimeLimit != 6*time.Hour+time.Nanosecond {
 		t.Errorf("GetJob after UpdateJob: time limit %v, %v", got.TimeLimit, err)
 	}
-	// The time limit is cleared like any other mutable field.
+	// The hook runs are stored as given, in their order: every field, with
+	// text that is not ASCII and the worker's time to the nanosecond.
+	if !sameHookRuns(stored.HookRuns, testHookRuns()) {
+		t.Errorf("UpdateJob returned the hook runs\n got %+v\nwant %+v", stored.HookRuns, testHookRuns())
+	}
+	if got, err := s.GetJob(ctx, j.ID); err != nil || !sameHookRuns(got.HookRuns, testHookRuns()) {
+		t.Errorf("GetJob after UpdateJob: hook runs %+v, %v", got.HookRuns, err)
+	}
+	if list, err := s.ListJobs(ctx, jobs.ListFilter{Limit: 10}); err != nil || len(list) != 1 || !sameHookRuns(list[0].HookRuns, testHookRuns()) {
+		t.Errorf("ListJobs after UpdateJob: %+v, %v", list, err)
+	}
+	// The time limit and the hook runs are cleared like any other mutable
+	// field.
 	cleared := stored
 	cleared.TimeLimit = 0
-	if stored, err = s.UpdateJob(ctx, cleared); err != nil || stored.TimeLimit != 0 || stored.Version != 3 {
-		t.Fatalf("UpdateJob(no time limit) = %v, %v", stored.TimeLimit, err)
+	cleared.HookRuns = nil
+	if stored, err = s.UpdateJob(ctx, cleared); err != nil || stored.TimeLimit != 0 || stored.HookRuns != nil || stored.Version != 3 {
+		t.Fatalf("UpdateJob(no time limit, no hook runs) = %v, %+v, %v", stored.TimeLimit, stored.HookRuns, err)
 	}
 	if stored.Kind != "rclone_transfer" || !sameJSON(stored.Definition, []byte(testDefinition)) || stored.OwnerID != ownerID(t) || !stored.CreatedAt.Equal(t0()) ||
 		stored.SearchText != "" || len(stored.RemoteIDs) != 0 {
@@ -1088,13 +1118,16 @@ func testNoAliasing(t *testing.T, s Store) {
 
 	j := newJob(t, 1, w.ID)
 	j.Warnings = []string{"w"}
+	j.HookRuns = testHookRuns()
 	mustCreateJob(t, s, j)
 	j.Warnings[0] = "mutated"
 	j.Definition[0] = 'X'
+	j.HookRuns[0].Name = "mutated"
 	gj, _ := s.GetJob(ctx, j.ID)
 	gj.Definition[0] = 'X'
+	gj.HookRuns[0].Name = "mutated"
 	gj2, _ := s.GetJob(ctx, j.ID)
-	if gj2.Warnings[0] != "w" || !sameJSON(gj2.Definition, []byte(testDefinition)) {
+	if gj2.Warnings[0] != "w" || !sameJSON(gj2.Definition, []byte(testDefinition)) || !sameHookRuns(gj2.HookRuns, testHookRuns()) {
 		t.Error("store aliases job values")
 	}
 
@@ -1115,6 +1148,33 @@ func testNoAliasing(t *testing.T, s Store) {
 		if again, _ := s.GetJob(ctx, k.ID); !slices.Equal(again.RemoteIDs, []domain.RemoteID{r1, r2}) {
 			t.Errorf("store aliases job remote IDs: %v", again.RemoteIDs)
 		}
+	})
+}
+
+// testHookRuns are two runs of hooks with every field set.
+func testHookRuns() []jobs.HookRun {
+	return []jobs.HookRun{
+		{
+			Name: "stop-app", Phase: domain.HookBefore, Status: domain.HookSucceeded, ExitCode: 0,
+			StartedAt: t0().Add(123456789 * time.Nanosecond), Duration: 1500*time.Millisecond + time.Nanosecond,
+			Output: "stopping “app”… done\nline 2",
+		},
+		{
+			Name: "start-app", Phase: domain.HookAfter, Status: domain.HookTimedOut, ExitCode: -1,
+			StartedAt: t0().Add(time.Minute), Duration: 10 * time.Minute,
+			Message: "timed out after 10m0s", Output: "waiting", OutputTruncated: true,
+		},
+	}
+}
+
+// sameHookRuns compares hook runs field by field, times by instant.
+func sameHookRuns(a, b []jobs.HookRun) bool {
+	return slices.EqualFunc(a, b, func(x, y jobs.HookRun) bool {
+		if !x.StartedAt.Equal(y.StartedAt) {
+			return false
+		}
+		x.StartedAt, y.StartedAt = time.Time{}, time.Time{}
+		return x == y
 	})
 }
 

@@ -112,12 +112,21 @@ type infoDoc struct {
 	LocalRoots        []string  `json:"local_roots,omitempty"`
 	Features          []string  `json:"features,omitempty"`
 	ProbeOps          []string  `json:"probe_ops,omitempty"`
+	Hooks             []hookDoc `json:"hooks,omitempty"`
 	ReportedAt        time.Time `json:"reported_at,omitzero"`
 }
 
 type toolDoc struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
+}
+
+// hookDoc is the stored form of workers.Hook; the timeout is a
+// time.Duration in nanoseconds.
+type hookDoc struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	TimeoutNs   int64  `json:"timeout_ns,omitempty"`
 }
 
 func encodeInfo(in workers.Info) ([]byte, error) {
@@ -136,6 +145,9 @@ func encodeInfo(in workers.Info) ([]byte, error) {
 	}
 	for _, t := range in.Tools {
 		doc.Tools = append(doc.Tools, toolDoc{Name: cleanText(t.Name), Version: cleanText(t.Version)})
+	}
+	for _, h := range in.Hooks {
+		doc.Hooks = append(doc.Hooks, hookDoc{Name: cleanText(h.Name), Description: cleanText(h.Description), TimeoutNs: int64(h.Timeout)})
 	}
 	b, err := json.Marshal(doc)
 	if err != nil {
@@ -166,6 +178,9 @@ func decodeInfo(b []byte) (workers.Info, error) {
 	}
 	for _, t := range doc.Tools {
 		out.Tools = append(out.Tools, workers.Tool{Name: t.Name, Version: t.Version})
+	}
+	for _, h := range doc.Hooks {
+		out.Hooks = append(out.Hooks, workers.Hook{Name: h.Name, Description: h.Description, Timeout: time.Duration(h.TimeoutNs)})
 	}
 	return out, nil
 }
@@ -250,6 +265,69 @@ func tokenFrom(r db.EnrollmentToken) (workers.EnrollmentToken, error) {
 	return t, nil
 }
 
+// hookRunDoc is the stored form of jobs.HookRun (an element of
+// jobs.hook_runs jsonb). It is decoupled from the domain struct, as infoDoc
+// is; add fields only with omitempty so old rows still decode.
+type hookRunDoc struct {
+	Name     string `json:"name"`
+	Phase    string `json:"phase"`
+	Status   string `json:"status"`
+	ExitCode int    `json:"exit_code"`
+	// StartedAt keeps the worker's time as it was reported (jsonb has no
+	// timestamp type, so nothing rounds it to microseconds).
+	StartedAt       time.Time `json:"started_at,omitzero"`
+	DurationNs      int64     `json:"duration_ns,omitempty"`
+	Message         string    `json:"message,omitempty"`
+	Output          string    `json:"output,omitempty"`
+	OutputTruncated bool      `json:"output_truncated,omitempty"`
+}
+
+// encodeHookRuns encodes runs as the JSON array of jobs.hook_runs ("[]" for
+// none). Texts are cleaned as every stored text is: jsonb rejects NUL.
+func encodeHookRuns(runs []jobs.HookRun) ([]byte, error) {
+	docs := make([]hookRunDoc, 0, len(runs))
+	for _, r := range runs {
+		doc := hookRunDoc{
+			Name: cleanText(r.Name), Phase: cleanText(r.Phase), Status: cleanText(r.Status), ExitCode: r.ExitCode,
+			DurationNs: int64(r.Duration), Message: cleanText(r.Message), Output: cleanText(r.Output), OutputTruncated: r.OutputTruncated,
+		}
+		if !r.StartedAt.IsZero() {
+			doc.StartedAt = r.StartedAt.UTC()
+		}
+		docs = append(docs, doc)
+	}
+	b, err := json.Marshal(docs)
+	if err != nil {
+		return nil, fmt.Errorf("encode hook runs: %w", err)
+	}
+	return b, nil
+}
+
+// decodeHookRuns is the inverse of encodeHookRuns; an empty array is nil.
+func decodeHookRuns(b []byte) ([]jobs.HookRun, error) {
+	if len(b) == 0 {
+		return nil, nil
+	}
+	var docs []hookRunDoc
+	if err := json.Unmarshal(b, &docs); err != nil {
+		return nil, fmt.Errorf("decode hook runs: %w", err)
+	}
+	if len(docs) == 0 {
+		return nil, nil
+	}
+	out := make([]jobs.HookRun, len(docs))
+	for i, d := range docs {
+		out[i] = jobs.HookRun{
+			Name: d.Name, Phase: d.Phase, Status: d.Status, ExitCode: d.ExitCode,
+			Duration: time.Duration(d.DurationNs), Message: d.Message, Output: d.Output, OutputTruncated: d.OutputTruncated,
+		}
+		if !d.StartedAt.IsZero() {
+			out[i].StartedAt = d.StartedAt.UTC()
+		}
+	}
+	return out, nil
+}
+
 func statsFrom(bytes, totalBytes, files, totalFiles, checks, deletes, renames, errs, elapsed int64) jobs.Stats {
 	return jobs.Stats{
 		Bytes: bytes, TotalBytes: totalBytes, Files: files, TotalFiles: totalFiles,
@@ -297,6 +375,11 @@ func jobFrom(r db.Job) (jobs.Job, error) {
 		return jobs.Job{}, err
 	}
 	j.ConcurrencyKeys = nilIfEmpty(r.ConcurrencyKeys)
+	runs, err := decodeHookRuns(r.HookRuns)
+	if err != nil {
+		return jobs.Job{}, fmt.Errorf("job %s: %w", j.ID, err)
+	}
+	j.HookRuns = runs
 	return j, nil
 }
 

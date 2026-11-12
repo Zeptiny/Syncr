@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
@@ -119,5 +122,43 @@ func sanitizeInfo(in Info) Info {
 	for _, op := range in.ProbeOps[:min(len(in.ProbeOps), maxProbeOps)] {
 		out.ProbeOps = append(out.ProbeOps, clampString(op, maxInfoString))
 	}
+	out.Hooks = sanitizeHooks(in.Hooks)
 	return out
+}
+
+// sanitizeHooks returns the hooks a worker reported that a job could name:
+// those with a valid name, each once, at most domain.MaxWorkerHooks of
+// them, sorted by name, with the description as one line of at most
+// domain.MaxHookDescriptionLen characters and a timeout that is not
+// negative.
+func sanitizeHooks(in []Hook) []Hook {
+	var out []Hook
+	seen := make(map[string]struct{}, len(in))
+	for _, h := range in {
+		if len(out) == domain.MaxWorkerHooks {
+			break
+		}
+		if _, dup := seen[h.Name]; dup || !domain.ValidHookName(h.Name) {
+			continue
+		}
+		seen[h.Name] = struct{}{}
+		out = append(out, Hook{Name: h.Name, Description: oneLine(h.Description, domain.MaxHookDescriptionLen), Timeout: max(h.Timeout, 0)})
+	}
+	slices.SortFunc(out, func(a, b Hook) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}
+
+// oneLine returns s as valid UTF-8 without control characters (each is
+// replaced by a space), cut to at most n characters.
+func oneLine(s string, n int) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, strings.ToValidUTF8(s, ""))
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n])
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
+	"github.com/Zeptiny/Syncr/internal/link"
 )
 
 // maxMessage bounds the details stored with a failed run.
@@ -132,12 +133,12 @@ func (s *Scheduler) decide(ctx context.Context, p *pass, sc schedules.Schedule, 
 // workers.LaunchWithin), not merely online: one that went quiet makes the
 // run wait, and the missed-run policy decides if it never comes back.
 //
-// What the workers reported (job kinds, features, operating system) is
-// their latest Hello, maybe of a previous process: a hint good enough to
-// choose among them. The dispatcher checks the chosen worker's current
-// process again before it sends the job.
+// What the workers reported (job kinds, features, operating system, the
+// hooks they define) is their latest Hello, maybe of a previous process: a
+// hint good enough to choose among them. The dispatcher checks the chosen
+// worker's current process again before it sends the job.
 func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, r schedules.Run) (domain.WorkerID, bool, error) {
-	req := s.requiredOS(sc)
+	req, hooks := s.requirements(sc)
 	if id := sc.Target.WorkerID; !id.IsZero() {
 		w, err := s.workers.Get(ctx, id)
 		switch {
@@ -159,6 +160,16 @@ func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, 
 			return domain.WorkerID{}, false, s.end(ctx, r, schedules.RunFailed, schedules.ReasonWorkerOutdated,
 				clip(fmt.Sprintf("the schedule's worker %q (version %s) cannot run %s jobs. Upgrade it or choose another worker, then resume the schedule",
 					w.Name, cmp.Or(w.Info.Version, "unknown"), sc.Kind)), true)
+		case len(hooks) > 0 && len(w.Info.JobKinds) > 0 && !w.Info.HasFeatures(link.FeatureJobHooks):
+			// As above: it is reachable, and too old to run any hook.
+			return domain.WorkerID{}, false, s.end(ctx, r, schedules.RunFailed, schedules.ReasonWorkerOutdated,
+				clip(fmt.Sprintf("the schedule's worker %q (version %s) cannot run hooks. Upgrade it, or remove the hooks from the job, then resume the schedule",
+					w.Name, cmp.Or(w.Info.Version, "unknown"))), true)
+		case len(hooks) > 0 && len(w.Info.JobKinds) > 0 && len(missingHooks(w, hooks)) > 0:
+			// Every run would fail on it until its operator defines them.
+			return domain.WorkerID{}, false, s.end(ctx, r, schedules.RunFailed, schedules.ReasonInvalidDefinition,
+				clip(fmt.Sprintf("the schedule's worker %q defines no %s. Add what is missing to the worker's configuration (hooks) and restart it, or change the job, then resume the schedule",
+					w.Name, hooksNamed(missingHooks(w, hooks)))), true)
 		}
 		return w.ID, true, nil
 	}
@@ -172,7 +183,7 @@ func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, 
 		p.labels[label] = ws
 	}
 	var cands []candidate
-	known, wrongOS := 0, 0
+	known, wrongOS, noHooks := 0, 0, 0
 	for _, w := range ws {
 		if w.Removed() {
 			continue
@@ -182,6 +193,10 @@ func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, 
 			continue
 		}
 		reported := len(w.Info.JobKinds) > 0
+		if reported && len(hooks) > 0 && (!w.Info.HasFeatures(link.FeatureJobHooks) || len(missingHooks(w, hooks)) > 0) {
+			noHooks++ // it cannot run the hooks the definition names
+			continue
+		}
 		runsKind := s.runsKind(w, sc.Kind)
 		if !reported || runsKind {
 			known++ // may run the kind (a worker that never reported might)
@@ -199,6 +214,9 @@ func (s *Scheduler) target(ctx context.Context, p *pass, sc schedules.Schedule, 
 		switch {
 		case wrongOS > 0:
 			msg = fmt.Sprintf("no worker with the label %q can run this job: %s", label, req.Explain())
+		case noHooks > 0:
+			msg = fmt.Sprintf("no worker with the label %q can run this job: none defines the %s it names (a worker's operator adds hooks in its configuration)",
+				label, hooksNamed(hooks))
 		case len(ws) > 0:
 			msg = fmt.Sprintf("no worker with the label %q runs %s jobs", label, sc.Kind)
 		}
@@ -215,14 +233,41 @@ func (s *Scheduler) runsKind(w workers.Worker, kind string) bool {
 	return slices.Contains(w.Info.JobKinds, kind) && w.Info.HasFeatures(s.kinds.RequiredFeatures(kind)...)
 }
 
-// requiredOS returns the operating system the schedule's definition needs
-// (jobkind OSRequirement); decide has checked the definition.
-func (s *Scheduler) requiredOS(sc schedules.Schedule) jobkind.OSRequirement {
+// requirements returns what the schedule's definition needs of a worker
+// beyond its kind: an operating system (jobkind OSRequirement) and the
+// hooks it names (jobkind.HookNames; nil when it names none). decide has
+// checked the definition.
+func (s *Scheduler) requirements(sc schedules.Schedule) (jobkind.OSRequirement, []string) {
 	def, err := jobkind.Unmarshal(sc.Definition)
 	if err != nil {
-		return jobkind.OSRequirement{}
+		return jobkind.OSRequirement{}, nil
 	}
-	return s.kinds.RequiredOS(def)
+	return s.kinds.RequiredOS(def), jobkind.HookNames(def)
+}
+
+// missingHooks returns the hooks of names that w did not report, in order.
+func missingHooks(w workers.Worker, names []string) []string {
+	defined := w.Info.HookNames()
+	var missing []string
+	for _, name := range names {
+		if !slices.Contains(defined, name) {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
+// hooksNamed names hooks for people: `hook "a"` or `hooks "a", "b"`. Hook
+// names need no escaping (jobkind checked them).
+func hooksNamed(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = `"` + n + `"`
+	}
+	if len(quoted) == 1 {
+		return "hook " + quoted[0]
+	}
+	return "hooks " + strings.Join(quoted, ", ")
 }
 
 // osMayRun reports whether w may meet req as far as the scheduler can tell:

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -27,6 +28,54 @@ var ErrWorkerOutdated = fmt.Errorf("the worker must be upgraded: %w", domain.Err
 // stopping it: the job fails with "worker_outdated" instead. It matches
 // ErrWorkerOutdated (and so domain.ErrFailedPrecondition).
 var ErrTimeLimitUnsupported = fmt.Errorf("it cannot enforce a time limit: %w", ErrWorkerOutdated)
+
+// ErrHooksUnsupported reports a job with hooks for a worker that does not
+// report link.FeatureJobHooks, so it would run the job without them: the
+// job fails with "worker_outdated" instead. It matches ErrWorkerOutdated
+// (and so domain.ErrFailedPrecondition).
+var ErrHooksUnsupported = fmt.Errorf("it cannot run hooks: %w", ErrWorkerOutdated)
+
+// MissingHooksError reports a worker that does not define hooks the job's
+// definition names (they were removed from its configuration, or the job
+// was sent to another worker than the one it was made for): the job fails
+// with "invalid_spec", the code the worker itself would fail it with. It
+// matches domain.ErrInvalidArgument.
+type MissingHooksError struct {
+	// Hooks are the names the worker lacks, in the order they would run.
+	Hooks []string
+}
+
+func (e *MissingHooksError) Error() string { return "the worker defines no " + e.what() }
+
+// what names the missing hooks: `hook named "a"` or `hooks named "a", "b"`.
+// Hook names need no escaping (jobkind checked them).
+func (e *MissingHooksError) what() string {
+	quoted := make([]string, len(e.Hooks))
+	for i, h := range e.Hooks {
+		quoted[i] = `"` + h + `"`
+	}
+	if len(quoted) == 1 {
+		return "hook named " + quoted[0]
+	}
+	return "hooks named " + strings.Join(quoted, ", ")
+}
+
+// Message says what is wrong and what to do about it, for the job's owner;
+// worker names the worker ("" if unknown).
+func (e *MissingHooksError) Message(worker string) string {
+	who := "the worker"
+	if worker != "" {
+		who = fmt.Sprintf("worker %q", worker)
+	}
+	fix := "add it to the worker's configuration (hooks) or remove it from the job"
+	if len(e.Hooks) > 1 {
+		fix = "add them to the worker's configuration (hooks) or remove them from the job"
+	}
+	return fmt.Sprintf("%s defines no %s: %s", who, e.what(), fix)
+}
+
+// Unwrap makes the error match domain.ErrInvalidArgument.
+func (e *MissingHooksError) Unwrap() error { return domain.ErrInvalidArgument }
 
 // WrongOSError reports a worker that runs another operating system than
 // the job's definition needs (jobkind OSRequirement, e.g. Windows VSS): the
@@ -139,9 +188,11 @@ func (s *Specs) TimeLimitOf(j jobs.Job) time.Duration {
 // decoded, checked or built (also when its kind is not the job's); a
 // *WrongOSError when w reported another operating system than the
 // definition needs (jobkind Registry.RequiredOS); ErrWorkerOutdated when w
-// lacks a link feature the kind requires, and ErrTimeLimitUnsupported (which
+// lacks a link feature the kind requires, ErrTimeLimitUnsupported (which
 // matches it) when the job has a time limit and w does not report
-// link.FeatureJobTimeLimit;
+// link.FeatureJobTimeLimit, and ErrHooksUnsupported (which matches it too)
+// when the job names hooks and w does not report link.FeatureJobHooks; a
+// *MissingHooksError when w does not define a hook the job names;
 // errRepositoryUnavailable when its repository is gone; domain.ErrNotFound
 // (from Resolve or the kind) when a remote is missing, deleted or not the
 // owner's; whatever else the Resolves return (domain.ErrFailedPrecondition
@@ -173,6 +224,19 @@ func (s *Specs) Build(ctx context.Context, j jobs.Job, w workers.Info) (*syncrv1
 	if limit > 0 && !w.HasFeatures(link.FeatureJobTimeLimit) {
 		return nil, fmt.Errorf("job %s: %w: it lacks the feature %q (the job's time limit is %v)",
 			j.ID, ErrTimeLimitUnsupported, link.FeatureJobTimeLimit, limit)
+	}
+	// A worker that ignores hooks would run the operation without them: a
+	// backup of a database that was never dumped, of an app that was never
+	// stopped. And one that does not define a hook can only fail the job;
+	// failing it here names the worker.
+	if hooks := jobkind.HookNames(def); len(hooks) > 0 {
+		if !w.HasFeatures(link.FeatureJobHooks) {
+			return nil, fmt.Errorf("job %s: %w: it lacks the feature %q (the job names the hooks %q)",
+				j.ID, ErrHooksUnsupported, link.FeatureJobHooks, hooks)
+		}
+		if missing := jobkind.MissingHooks(def, w.HookNames()); len(missing) > 0 {
+			return nil, fmt.Errorf("job %s: %w", j.ID, &MissingHooksError{Hooks: missing})
+		}
 	}
 	in := jobkind.Resolved{Remotes: make(map[domain.RemoteID]jobkind.Remote)}
 	remoteIDs := refs.RemoteIDs

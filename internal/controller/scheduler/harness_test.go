@@ -138,6 +138,8 @@ type worker struct {
 	features []string
 	// os is the reported operating system ("": not reported).
 	os string
+	// hooks are the names of the hooks it reported.
+	hooks []string
 }
 
 func (e *env) addWorker(w worker) domain.WorkerID {
@@ -149,6 +151,9 @@ func (e *env) addWorker(w worker) domain.WorkerID {
 	wk := workers.Worker{
 		ID: domain.NewWorkerID(), Name: w.name, Mode: domain.WorkerActive, CreatedAt: t0, Labels: w.labels,
 		Info: workers.Info{JobKinds: kinds, Features: w.features, OS: w.os},
+	}
+	for _, h := range w.hooks {
+		wk.Info.Hooks = append(wk.Info.Hooks, workers.Hook{Name: h})
 	}
 	if len(kinds) > 0 {
 		wk.Info.ReportedAt = t0

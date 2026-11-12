@@ -153,6 +153,10 @@
 //	  (an older version; jobkind RequiredFeatures)         worker_outdated
 //	the job has a time limit and the worker does not
 //	  report link.FeatureJobTimeLimit                      worker_outdated, saying so
+//	the job names hooks and the worker does not report
+//	  link.FeatureJobHooks                                 worker_outdated, saying so
+//	the worker does not define a hook the job names
+//	  (what its current process reported in its Hello)     invalid_spec, naming the hooks
 //	the definition cannot be decoded, checked or built     invalid_spec
 //	a remote's credentials cannot be used (decryption)     internal
 //	anything else (e.g. the store is down)                 none: the call fails, the next poll retries
@@ -163,6 +167,14 @@
 // only the system starts (Specs.TimeLimit). The worker enforces it and
 // reports FAILED with TIME_LIMIT, which ends the job failed (time_limit).
 //
+// The spec also carries the hooks the definition names (JobSpec.hooks;
+// docs/adr/0017-job-hooks.md): only their names, which the worker resolves
+// to the commands its operator defined. The worker runs them around the
+// operation and reports each run with the result (JobResult.hook_runs,
+// stored as jobs.Job.HookRuns). A hook that fails the job is reported as
+// FAILED with HOOK_FAILED; when that happens after the operation
+// succeeded, the result still has the operation's output and warnings,
+// which are kept whatever the result's status.
 // # Reconcile
 //
 // Epoch rules, run when a new epoch is adopted and again whenever the

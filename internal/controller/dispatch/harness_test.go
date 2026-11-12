@@ -444,6 +444,8 @@ type fakeWorker struct {
 	// older than Milestone 5).
 	features []string
 	probeOps []string
+	// hooks are the hooks its Hello reports.
+	hooks []*syncrv1.HookInfo
 	// probes are the run_probe commands it received in this epoch, by
 	// arrival; probeCancels the probe IDs it was told to stop.
 	probes       []*syncrv1.RunProbe
@@ -478,7 +480,7 @@ func (w *fakeWorker) restart() {
 	w.emit(&syncrv1.Event{Payload: &syncrv1.Event_Hello{Hello: &syncrv1.Hello{
 		WorkerVersion: "v2.0.0-test", Os: "linux", Arch: "amd64", JobKinds: []string{"rclone_transfer"}, MaxConcurrentJobs: 2,
 		LocalRoots: []string{"/data"}, Tools: []*syncrv1.ToolVersion{{Name: "rclone", Version: "v1.75.2"}},
-		Features: w.features, ProbeOps: w.probeOps,
+		Features: w.features, ProbeOps: w.probeOps, Hooks: w.hooks,
 	}}})
 }
 

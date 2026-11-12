@@ -66,7 +66,7 @@ var milestone4Tables = []string{"contacts", "schedules", "schedule_remotes", "sc
 var milestone5Tables = []string{"restic_repositories", "restic_snapshots"}
 
 // allVersions are the versions of the embedded migrations.
-var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9}
+var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 
 func columnExists(t *testing.T, s *Store, table, column string) bool {
 	t.Helper()
@@ -542,6 +542,54 @@ func TestMigrateRelease(t *testing.T) {
 	}
 	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) {
 		t.Errorf("applied versions = %v, want %v", got, allVersions)
+	}
+}
+
+// TestMigrateJobHooks checks migration 00010: it adds jobs.hook_runs, down
+// removes it and up restores it; a job that was there before reads back
+// without hook runs.
+func TestMigrateJobHooks(t *testing.T) {
+	s := openStore(t, createDB(t, true))
+	ctx := t.Context()
+	w := newTestWorker()
+	if err := s.CreateWorker(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	j := newTestJob(w.ID, seedUser(t, s))
+	j.HookRuns = []jobs.HookRun{{Name: "stop-app", Phase: domain.HookBefore, Status: domain.HookSucceeded, Output: "stopped"}}
+	if err := s.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetJob(ctx, j.ID); err != nil || len(got.HookRuns) != 1 || got.HookRuns[0] != j.HookRuns[0] {
+		t.Fatalf("GetJob = %+v, %v; want the hook run", got.HookRuns, err)
+	}
+	p, closeDB, err := s.migrationProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	if _, err := p.DownTo(ctx, 9); err != nil {
+		t.Fatalf("down to 9: %v", err)
+	}
+	if columnExists(t, s, "jobs", "hook_runs") {
+		t.Error("jobs.hook_runs survived the down migration")
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions[:9]) {
+		t.Errorf("applied versions = %v, want %v", got, allVersions[:9])
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) {
+		t.Errorf("applied versions = %v, want %v", got, allVersions)
+	}
+	// The job is one from before the column existed now.
+	var runs string
+	if err := s.pool.QueryRow(ctx, `SELECT hook_runs::text FROM jobs WHERE id = $1`, j.ID.String()).Scan(&runs); err != nil || runs != "[]" {
+		t.Errorf("hook_runs of a job from before the migration = %q (%v), want []", runs, err)
+	}
+	if got, err := s.GetJob(ctx, j.ID); err != nil || got.HookRuns != nil {
+		t.Errorf("GetJob of a job from before the migration: hook runs %+v, %v", got.HookRuns, err)
 	}
 }
 
