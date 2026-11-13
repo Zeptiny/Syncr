@@ -65,7 +65,13 @@ func (nopWaker) Wake(domain.WorkerID) {}
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	e := &env{store: memstore.New(), clock: clock.NewFake(t0), broker: broker.New(), logs: &bytes.Buffer{}}
+	return newEnvAt(t, t0)
+}
+
+// newEnvAt is newEnv with the clock at now.
+func newEnvAt(t *testing.T, now time.Time) *env {
+	t.Helper()
+	e := &env{store: memstore.New(), clock: clock.NewFake(now), broker: broker.New(), logs: &bytes.Buffer{}}
 	log := slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	key := secrets.Key{ID: 1, Bytes: make([]byte, secrets.KeySize)}
 	if _, err := crand.Read(key.Bytes); err != nil {
@@ -569,33 +575,7 @@ func TestSeedSchedulesAndNotifications(t *testing.T) {
 		t.Errorf("%d jobs, %d in the last 7 days, %d older than 25 days", len(page.Jobs), week, month)
 	}
 
-	// Deliveries in every status: delivered, retrying (pending after a
-	// failed attempt), pending (never attempted since queued again),
-	// sending and dead, the failed ones with their reason.
-	ds, err := e.store.ListDeliveries(ctx, notifications.DeliveryFilter{Limit: -1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var delivered, retrying, pending, sending, dead int
-	for _, d := range ds {
-		switch {
-		case d.Status == notifications.StatusDelivered:
-			delivered++
-		case d.Status == notifications.StatusPending && d.Attempts > 0 && d.LastError != "" && d.NextAttemptAt.After(t0):
-			retrying++
-		case d.Status == notifications.StatusPending && d.Attempts == 0 && d.NextAttemptAt.After(t0):
-			pending++
-		case d.Status == notifications.StatusSending && d.LeaseUntil.After(t0.Add(30*time.Minute)):
-			sending++
-		case d.Status == notifications.StatusDead && d.LastError != "":
-			dead++
-		default:
-			t.Errorf("unexpected delivery %+v", d)
-		}
-	}
-	if delivered < 20 || retrying != 1 || pending != 1 || sending != 1 || dead != 1 {
-		t.Errorf("deliveries: %d delivered, %d retrying, %d pending, %d sending, %d dead", delivered, retrying, pending, sending, dead)
-	}
+	checkDeliveries(t, e, s, t0)
 
 	// Nothing was sent, and no contact secret was logged.
 	if strings.Contains(e.logs.String(), "the seed tried to send") {
@@ -605,6 +585,53 @@ func TestSeedSchedulesAndNotifications(t *testing.T) {
 		if strings.Contains(e.logs.String(), secret) {
 			t.Errorf("the log contains %q", secret)
 		}
+	}
+}
+
+// checkDeliveries checks the deliveries of a seed started at now: some
+// delivered, one retrying (pending after a failed attempt), one pending
+// (the nightly run's dead webhook, never attempted since queued again),
+// one dead, the failed ones with their reason, and one sending: the email
+// of the interrupted manual job of a few minutes ago (the sending demo).
+func checkDeliveries(t *testing.T, e *env, s *devseed.Seed, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	ds, err := e.store.ListDeliveries(ctx, notifications.DeliveryFilter{Limit: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var delivered, retrying, pending, sending, dead int
+	for _, d := range ds {
+		switch {
+		case d.Status == notifications.StatusDelivered:
+			delivered++
+		case d.Status == notifications.StatusPending && d.Attempts > 0 && d.LastError != "" && d.NextAttemptAt.After(now):
+			retrying++
+		case d.Status == notifications.StatusPending && d.Attempts == 0 && d.NextAttemptAt.After(now):
+			pending++
+			// The nightly run's webhook of about two days back (fires at
+			// most 25 hours apart).
+			j, err := e.store.GetJob(ctx, d.JobID)
+			if err != nil || d.ContactID != s.Contacts["Home Assistant"] || j.ScheduleID != s.Schedules["Nightly photos → B2"] ||
+				j.CreatedAt.Before(now.Add(-61*time.Hour)) || !j.CreatedAt.Before(now.Add(-36*time.Hour)) {
+				t.Errorf("pending delivery %+v is not the nightly run's webhook: job %+v (%v)", d, j, err)
+			}
+		case d.Status == notifications.StatusSending && d.LeaseUntil.After(now.Add(30*time.Minute)):
+			sending++
+			j, err := e.store.GetJob(ctx, d.JobID)
+			if err != nil || d.ContactID != s.Contacts["Admin mail"] || j.Status != domain.JobInterrupted ||
+				j.WorkerID != s.Workers["backup-host"] || !j.ScheduleID.IsZero() ||
+				j.CreatedAt.Before(now.Add(-6*time.Minute)) || !j.CreatedAt.Before(now.Add(-5*time.Minute)) {
+				t.Errorf("sending delivery %+v is not the sending demo's email: job %+v (%v)", d, j, err)
+			}
+		case d.Status == notifications.StatusDead && d.LastError != "":
+			dead++
+		default:
+			t.Errorf("unexpected delivery %+v", d)
+		}
+	}
+	if delivered < 20 || retrying != 1 || pending != 1 || sending != 1 || dead != 1 {
+		t.Errorf("deliveries: %d delivered, %d retrying, %d pending, %d sending, %d dead", delivered, retrying, pending, sending, dead)
 	}
 }
 
@@ -895,6 +922,79 @@ func TestProbes(t *testing.T) {
 	for what, res := range map[string]*syncrv1.ProbeResult{"an unknown snapshot": ls(strings.Repeat("0", 64), "/"), "a missing folder": ls(snaps[0].GetId(), "/nope")} {
 		if res.GetError().GetCode() != syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND {
 			t.Errorf("%s = %v", what, res)
+		}
+	}
+}
+
+// TestSeedAtEveryTimeOfDay: the history follows the time of day (the
+// schedules fire at local times, the office PC is on during office hours
+// and off on Sundays, the controller's downtime starts at midnight UTC),
+// so the seed is run every 10 minutes of a weekday, and every 30 minutes
+// of a Sunday and of two days whose last 60 hours hold a clock change in
+// Europe/Berlin (the nightly schedule's fires are 23.5 or 25 hours apart
+// there). Each seed must leave the schedules and deliveries the seeded
+// controller's tests and the screenshots expect.
+func TestSeedAtEveryTimeOfDay(t *testing.T) {
+	t.Parallel()
+	// The first is a seed time that failed: the office PC's night run's
+	// missed email was claimed instead of the sending demo's.
+	starts := []time.Time{time.Date(2026, 11, 13, 8, 6, 4, 0, time.UTC)}
+	for _, day := range []struct {
+		start time.Time
+		step  time.Duration
+	}{
+		{time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC), 10 * time.Minute}, // a Friday
+		{time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC), 30 * time.Minute}, // a Sunday
+		{time.Date(2026, 3, 30, 0, 0, 0, 0, time.UTC), 30 * time.Minute},  // CET to CEST on March 29
+		{time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC), 30 * time.Minute}, // CEST to CET on October 25
+	} {
+		for at := day.start; at.Before(day.start.Add(24 * time.Hour)); at = at.Add(day.step) {
+			starts = append(starts, at.Add(4*time.Second))
+		}
+	}
+	for _, now := range starts {
+		t.Run(now.Format(time.RFC3339), func(t *testing.T) {
+			t.Parallel()
+			e := newEnvAt(t, now)
+			s, err := devseed.Run(context.Background(), e.deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkSchedules(t, e, s, now)
+			checkDeliveries(t, e, s, now)
+		})
+	}
+}
+
+// checkSchedules checks what the seeded controller's tests and the
+// screenshots expect of the schedules of a seed started at now, whatever
+// the time of day: the office PC's schedules' newest runs are pending with
+// fires merged into them, every enabled schedule's next run is to come,
+// and no run lies in the future.
+func checkSchedules(t *testing.T, e *env, s *devseed.Seed, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	for name, id := range s.Schedules {
+		sc, err := e.store.GetSchedule(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sc.Enabled && !sc.NextRunAt.After(now) {
+			t.Errorf("%s next run %v is not after the seed", name, sc.NextRunAt)
+		}
+		runs, err := e.store.ListRuns(ctx, schedules.RunFilter{ScheduleID: id, Limit: -1})
+		if err != nil || len(runs) == 0 {
+			t.Fatalf("%s: %d runs (%v)", name, len(runs), err)
+		}
+		for _, r := range runs {
+			if r.ScheduledFor.After(now) || r.UpdatedAt.After(now) {
+				t.Errorf("%s run %+v lies in the future", name, r)
+			}
+		}
+		if name == "Office docs hourly" || name == "Office documents backup" {
+			if newest := runs[0]; newest.Status != schedules.RunPending || newest.Coalesced == 0 {
+				t.Errorf("%s newest run = %+v, want pending with fires merged into it", name, newest)
+			}
 		}
 	}
 }

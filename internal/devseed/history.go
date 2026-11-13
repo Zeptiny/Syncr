@@ -81,7 +81,7 @@ func (s *Seed) seedHistory(ctx context.Context, now time.Time) error {
 	clk := &stepClock{now: now}
 	ids := &seedIDs{clock: clk}
 	h := &history{
-		s: s, now: now, clk: clk, ids: ids, script: newScript(now),
+		s: s, now: now, clk: clk, ids: ids, script: newScript(),
 		byID: map[domain.ScheduleID]*seededSchedule{}, runN: map[domain.ScheduleRunID]int{}, removed: map[domain.WorkerID]bool{},
 	}
 	var err error
@@ -156,6 +156,9 @@ func (h *history) events() ([]event, error) {
 				continue
 			}
 			ticks[t.UTC()] = true
+			if d.name == sNightly && t.Before(h.now.Add(-hookGoneAgo)) {
+				h.script.hookGoneFire = t
+			}
 		}
 		if d.pausedAgo > 0 {
 			out = append(out, event{at: h.now.Add(-d.pausedAgo), order: orderChange, do: func(ctx context.Context) error {
@@ -253,11 +256,21 @@ func (h *history) create(ctx context.Context, ss *seededSchedule) error {
 	return nil
 }
 
-// tick is one scheduler pass at at: fire what is due, then decide the open
-// runs.
+// tick is one scheduler pass at at: fire what is due, notify what the
+// fires ended (a pending run a fire supersedes past its deadline is
+// missed), then decide the open runs.
+//
+// Without the notify, such a run's notification waited for the next job's:
+// when that was the sending demo's, it was planned with it, at the same
+// time, and claimed in its place (the office PC's night run is superseded
+// this way at 09:00 Berlin time, a few minutes before some seeds' sending
+// demo).
 func (h *history) tick(ctx context.Context, at time.Time) error {
 	h.clk.set(at)
 	if _, err := h.sched.FireDue(ctx); err != nil {
+		return err
+	}
+	if err := h.notify(ctx); err != nil {
 		return err
 	}
 	return h.launchOpen(ctx, at)
@@ -445,7 +458,7 @@ func (h *history) finish(ctx context.Context) error {
 	}
 	id, ok := h.script.requeue()
 	if !ok {
-		return nil
+		return errors.New("no nightly run's webhook was scripted to fail")
 	}
 	ds, err := h.s.d.Store.ListDeliveries(ctx, notifications.DeliveryFilter{
 		ContactID: h.s.Contacts[cHA], Statuses: []notifications.Status{notifications.StatusDead}, Limit: -1,
@@ -473,18 +486,27 @@ const requeueIn = 45 * time.Minute
 // (without leaving the process) except the failures it scripted for some
 // jobs: the newest failed manual job's email is refused for now (the
 // delivery retries) and its webhook is gone (dead); the webhook of the
-// nightly run two days back is gone too (that dead delivery is queued
-// again at the end, a pending delivery never attempted since).
+// nightly run about two days back is gone too (that dead delivery is
+// queued again at the end, a pending delivery never attempted since).
 type script struct {
-	now      time.Time
-	mu       sync.Mutex
-	failures map[string]map[string]*notify.SendError // job ID -> channel -> error
-	requeued domain.JobID
+	// hookGoneFire is the nightly schedule's fire whose run's webhook is
+	// gone: its last before hookGoneAgo before the seed.
+	hookGoneFire time.Time
+	mu           sync.Mutex
+	failures     map[string]map[string]*notify.SendError // job ID -> channel -> error
+	requeued     domain.JobID
 }
 
-func newScript(now time.Time) *script {
-	return &script{now: now, failures: map[string]map[string]*notify.SendError{}}
+func newScript() *script {
+	return &script{failures: map[string]map[string]*notify.SendError{}}
 }
+
+// hookGoneAgo bounds the nightly run whose webhook is gone: the last one
+// that fired at least this long before the seed. It is picked by its fire,
+// not by a window of launch times: the nightly schedule fires at 02:30
+// Berlin time, 23.5 or 25 hours apart around the clock changes, so a
+// 24-hour window held two of its runs or none at some times of day.
+const hookGoneAgo = 36 * time.Hour
 
 // Scripted failures.
 var (
@@ -507,15 +529,22 @@ func (sc *script) fail(job domain.JobID, channel string, err *notify.SendError) 
 // onScheduledJob is told of a schedule's run launching job at at with
 // status.
 func (sc *script) onScheduledJob(schedule string, at time.Time, status domain.JobStatus, job domain.JobID) {
-	inWindow := !at.Before(sc.now.Add(-60*time.Hour)) && at.Before(sc.now.Add(-36*time.Hour))
+	// The run of hookGoneFire launches at its tick, a few seconds after
+	// the fire at most.
+	fired := !sc.hookGoneFire.IsZero() && !at.Before(sc.hookGoneFire) && at.Before(sc.hookGoneFire.Add(time.Hour))
 	// Home Assistant hears of the nightly run's success or failure.
-	if schedule != sNightly || !inWindow || (status != domain.JobSucceeded && status != domain.JobFailed) {
+	if schedule != sNightly || !fired || (status != domain.JobSucceeded && status != domain.JobFailed) {
 		return
 	}
-	sc.fail(job, "webhook", errHookGone)
 	sc.mu.Lock()
-	sc.requeued = job
+	first := sc.requeued.IsZero()
+	if first {
+		sc.requeued = job
+	}
 	sc.mu.Unlock()
+	if first {
+		sc.fail(job, "webhook", errHookGone)
+	}
 }
 
 // onManualJob is told of a manual demo job's ID before it is notified.

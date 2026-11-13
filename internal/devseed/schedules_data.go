@@ -141,11 +141,22 @@ func varied(n int, lo, hi int64) int64 {
 }
 
 // officeOnline reports whether the office PC is on at at: weekdays and
-// Saturdays from 07:00 to 19:00 Berlin time, and never during the last
-// officeOffline before the seed (it is offline now).
+// Saturdays from 07:00 to 19:00 Berlin time, and in the hour before its
+// last contact officeOffline before the seed, whatever the time of day;
+// never since (it is offline now).
+//
+// That hour makes its hourly schedules' newest runs the same at every
+// time of day: opened by the first of the three fires since, pending, the
+// other two merged into it. Without it, a seed at night or on a Sunday
+// had the PC off for more than the runs' 14-hour deadline, and in the
+// hour after a deadline passed the newest run had nothing merged into it.
 func officeOnline(at, seed time.Time) bool {
-	if at.After(seed.Add(-officeOffline)) {
+	lastContact := seed.Add(-officeOffline)
+	switch {
+	case at.After(lastContact):
 		return false
+	case at.After(lastContact.Add(-time.Hour)):
+		return true
 	}
 	berlin, err := time.LoadLocation("Europe/Berlin")
 	if err != nil {
