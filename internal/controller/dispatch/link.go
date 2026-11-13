@@ -231,6 +231,10 @@ func (s *Service) ingest(ctx context.Context, sess *session, w workers.Worker, e
 				s.hub.Wake(w.ID)
 			}
 		}
+		if !sess.stopping && ev.GetJobResult().GetError().GetCode() == syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_SHUTDOWN {
+			sess.stopping = true
+			s.log.InfoContext(ctx, "worker process is shutting down; it gets no more jobs", "worker_id", w.ID.String(), "epoch", epoch)
+		}
 		applied = ev.GetSeq()
 	}
 	if applied > cursor {
@@ -306,7 +310,10 @@ func (s *Service) ack(ctx context.Context, sess *session, workerID domain.Worker
 		case s.probes != nil && s.probes.ack(workerID, cmdID):
 		case strings.HasPrefix(cmdID, startPrefix):
 			id, err := domain.ParseJobID(strings.TrimPrefix(cmdID, startPrefix))
-			if err != nil {
+			if err != nil || sess.stopping {
+				// A stopping process's start ack is late: the job's own
+				// result settles it (see Shutdown in the package
+				// documentation).
 				continue
 			}
 			if _, _, err := s.jobs.MarkDispatched(ctx, workerID, id, epoch); err != nil && !errors.Is(err, domain.ErrNotFound) {
@@ -383,7 +390,11 @@ func (s *Service) commands(ctx context.Context, sess *session, w workers.Worker,
 		// budget below leaves out (see ProbeBroker.commands).
 		probes = s.probes.commands(w.ID, room)
 	}
-	starts, err := s.starts(ctx, js, w.Info, room-min(len(probes), room/2))
+	startRoom := room - min(len(probes), room/2)
+	if sess.stopping {
+		startRoom = 0 // it would refuse them; the jobs wait for its next process
+	}
+	starts, err := s.starts(ctx, js, w.Info, startRoom)
 	if err != nil {
 		if len(cancels) == 0 && len(probes) == 0 {
 			return nil, err

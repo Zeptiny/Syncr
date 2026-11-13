@@ -151,6 +151,11 @@ type session struct {
 	// commands because the Hello of epoch was not stored yet; storing it
 	// then wakes the worker's long poll.
 	awaitsHello bool
+	// stopping is set once epoch reported a job stopped by its shutdown
+	// (a JobResult with code WORKER_SHUTDOWN): the process never takes a
+	// job again, so no job is dispatched to it (see Shutdown in the
+	// package documentation).
+	stopping bool
 }
 
 func (s *session) reset(epoch string) {
@@ -159,6 +164,7 @@ func (s *session) reset(epoch string) {
 	s.orphans = nil
 	s.saturated = false
 	s.awaitsHello = false
+	s.stopping = false
 }
 
 func (s *Service) session(id domain.WorkerID) *session {
