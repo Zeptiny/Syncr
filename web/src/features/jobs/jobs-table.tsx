@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { createColumnHelper } from "@tanstack/react-table";
-import { ArrowRight, CalendarClock, Hourglass } from "lucide-react";
+import { CalendarClock, Hourglass } from "lucide-react";
 import { useMemo } from "react";
 
 import { DataTable, type Pager } from "@/components/app/data-table";
@@ -10,10 +10,10 @@ import { JobStatus, type Job, type Worker } from "@/gen/syncr/v1/api_pb";
 import type { User } from "@/gen/syncr/v1/users_pb";
 import { useNow } from "@/hooks/use-now";
 import { formatBytes, formatDuration, percent, tsDate } from "@/lib/format";
-import { isTerminal, kindLabel, transferModeLabel } from "@/lib/status";
+import { isTerminal, kindLabel } from "@/lib/status";
 
-import { Endpoint } from "./endpoint";
-import { endpoint, jobElapsed, jobProgress, jobTitle, transferOf } from "./model";
+import { RouteEndpoints } from "./endpoint";
+import { jobElapsed, jobProgress, jobRoute, jobTitle } from "./model";
 
 const col = createColumnHelper<Job>();
 
@@ -53,20 +53,26 @@ export function ScheduleChip({ job }: { job: Job }) {
 
 /**
  * WaitingChip marks a queued job that waits for an older job on the same
- * repository, and links to that job.
+ * repository (or, for a two-way sync, the same folder), and links to that
+ * job.
  */
 export function WaitingChip({ job }: { job: Job }) {
   if (job.status !== JobStatus.QUEUED || !job.waitingForJobId) return null;
+  const twoWay = job.kind === "rclone_bisync";
   return (
     <Link
       to="/jobs/$jobId"
       params={{ jobId: job.waitingForJobId }}
       onClick={(e) => e.stopPropagation()}
       className="inline-flex w-fit items-center gap-1 rounded-md bg-warning-soft px-1.5 py-0.5 text-[12px] font-medium whitespace-nowrap text-warning hover:underline"
-      title="An older job on the same repository runs first. Open it."
+      title={
+        twoWay
+          ? "An older two-way sync of the same folder runs first. Open it."
+          : "An older job on the same repository runs first. Open it."
+      }
     >
       <Hourglass className="size-3 shrink-0" aria-hidden />
-      Waiting for repository
+      {twoWay ? "Waiting for folder" : "Waiting for repository"}
     </Link>
   );
 }
@@ -150,8 +156,8 @@ export function JobsTable({
         id: "transfer",
         header: "Job",
         cell: ({ row: { original: job } }) => {
-          const t = transferOf(job);
-          if (!t)
+          const route = jobRoute(job);
+          if (!route)
             return (
               <div className="flex w-0 min-w-full flex-col gap-0.5">
                 <span className="truncate font-medium" title={jobTitle(job)}>
@@ -165,12 +171,8 @@ export function JobsTable({
             );
           return (
             <div className="flex w-0 min-w-full flex-col gap-0.5">
-              <div className="flex min-w-0 items-center gap-2">
-                <Endpoint e={endpoint(job, t.source)} className="max-w-[45%]" />
-                <ArrowRight className="size-3.5 shrink-0 text-muted-foreground" aria-label="to" />
-                <Endpoint e={endpoint(job, t.destination)} className="max-w-[45%]" />
-              </div>
-              <span className="text-xs text-muted-foreground">{transferModeLabel(t.mode)}</span>
+              <RouteEndpoints route={route} endpointClassName="max-w-[45%]" />
+              <span className="text-xs text-muted-foreground">{route.mode}</span>
             </div>
           );
         },

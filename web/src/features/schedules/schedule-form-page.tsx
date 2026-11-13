@@ -28,10 +28,13 @@ import { invalidateService } from "@/lib/invalidate";
 import { labelledWorkers } from "@/lib/labels";
 import { sortWorkers } from "@/lib/workers";
 
-import { scheduleKinds } from "../jobs/definition";
+import { filtersNeedResync } from "../jobs/bisync-definition";
+import { scheduleKinds, type JobDefinitionState } from "../jobs/definition";
 import { JobDefinitionEditor } from "../jobs/job-definition-editor";
 import {
+  labelTargetAllowed,
   scheduleServerErrors,
+  SINGLE_WORKER_REASON,
   toScheduleInput,
   validateSchedule,
   type ScheduleErrors,
@@ -52,7 +55,8 @@ export interface ScheduleFormProps {
  * ScheduleFormPage creates or edits a schedule: when it runs (cron and
  * time zone), where (a worker or a label), the job, what happens when a run
  * can't start on time, and who hears about it. The job is a transfer, a
- * backup, a retention run, a check or a prune; restores are never scheduled.
+ * two-way sync (on one worker), a backup, a retention run, a check or a
+ * prune; restores are never scheduled.
  */
 export function ScheduleFormPage({ initial, schedule, title, description }: ScheduleFormProps) {
   const navigate = useNavigate();
@@ -69,6 +73,22 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
   const [formError, setFormError] = useState<string | undefined>();
   const set = <K extends keyof ScheduleFormState>(k: K, v: ScheduleFormState[K]) =>
     setS((p) => ({ ...p, [k]: v }));
+  // A kind that keeps its state on one worker cannot run on a label.
+  const setDefinition = (definition: JobDefinitionState) =>
+    setS((p) => ({
+      ...p,
+      definition,
+      target:
+        p.target.kind === "label" && !labelTargetAllowed(definition.kind)
+          ? { ...p.target, kind: "worker" }
+          : p.target,
+    }));
+  // The stored definition, when editing: changed filters of a two-way sync need a resync.
+  const saved = schedule ? initial.definition : undefined;
+  const needsResync =
+    saved?.kind === "rclone_bisync" &&
+    s.definition.kind === "rclone_bisync" &&
+    filtersNeedResync(saved.bisync, s.definition.bisync);
   const workerList = workers.data?.workers ?? [];
   const worker =
     s.target.kind === "worker" ? workerList.find((w) => w.id === s.target.workerId) : undefined;
@@ -110,7 +130,12 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
         invalidateService(queryClient, ContactService),
         invalidateService(queryClient, ResticService),
       ]);
-      toast.success(schedule ? `Saved ${input.name}` : `Created ${input.name}`);
+      if (needsResync)
+        toast.success(`Saved ${input.name}`, {
+          description:
+            "The filters changed, so its next run stops with “Resync required”. The schedule's page then offers Resync now (Run now starts that run at once).",
+        });
+      else toast.success(schedule ? `Saved ${input.name}` : `Created ${input.name}`);
       const id = res.schedule?.id ?? schedule?.id;
       if (id) await navigate({ to: "/schedules/$scheduleId", params: { scheduleId: id } });
     } catch (err) {
@@ -190,7 +215,8 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
         <JobDefinitionEditor
           idPrefix="sched"
           value={s.definition}
-          onChange={(v) => set("definition", v)}
+          onChange={setDefinition}
+          saved={saved}
           errors={errors}
           remotes={remotes.data?.remotes ?? []}
           backends={backends}
@@ -213,6 +239,11 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
             onChange={(v) => set("target", v)}
             workers={workerList}
             error={errors.target}
+            labelDisabled={
+              labelTargetAllowed(s.definition.kind)
+                ? undefined
+                : `${SINGLE_WORKER_REASON}, so its schedule runs on a specific worker, not on any worker with a label.`
+            }
           />
         </Panel>
 

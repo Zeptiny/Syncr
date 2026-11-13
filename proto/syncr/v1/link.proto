@@ -337,10 +337,10 @@ message Hello {
   // Link features this worker implements, e.g. "probe" (it answers
   // RunProbe and Probe), "restic.v2" (it honours the Milestone 5 restic spec
   // fields), "restic.delete" (it runs restic_delete_data),
-  // "job.time_limit" (it enforces JobSpec.max_runtime) and "job.hooks" (it
-  // runs JobSpec.hooks). The controller sends a worker only what its
-  // features allow; a worker that reports none is treated as a Milestone 4
-  // worker.
+  // "job.time_limit" (it enforces JobSpec.max_runtime), "job.hooks" (it
+  // runs JobSpec.hooks) and "rclone.bisync" (it runs rclone_bisync). The
+  // controller sends a worker only what its features allow; a worker that
+  // reports none is treated as a Milestone 4 worker.
   repeated string features = 9;
 
   // Probe operations the worker can run: names of ProbeSpec.op fields (e.g.
@@ -472,6 +472,8 @@ message JobOutput {
   reserved 1 to 9;
 
   oneof output {
+    RcloneBisyncOutput rclone_bisync = 11;
+
     ResticBackupOutput restic_backup = 21;
     ResticForgetOutput restic_forget = 22;
     ResticCheckOutput restic_check = 24;
@@ -598,6 +600,37 @@ enum JobErrorCode {
   // "on_success" or "after" hook, the operation had succeeded and its
   // output is kept. JobResult.hook_runs has the details.
   JOB_ERROR_CODE_HOOK_FAILED = 28;
+
+  // Set by workers (rclone_bisync): only a resync of the pair lets it sync
+  // again, and the worker does not start one on its own. Status FAILED.
+  // The cases: the filters changed since the pair's state was made (or
+  // their hash is missing); a critical error left no listings a normal run
+  // can go on from (the pair had none before it, e.g. the first run after a
+  // resync); or the pair's automatic first run found a local side empty,
+  // which it never fills (rclone was not run). The message says which, and
+  // what to fix first: whatever stopped the run stops a resync too. A
+  // critical error after which rclone's --recover can go on from the
+  // previous listings is EXECUTION_FAILED instead, with the cause to fix.
+  // A job with RcloneBisync.resync set resyncs, deliberately.
+  JOB_ERROR_CODE_RESYNC_REQUIRED = 29;
+  // Set by workers (rclone_bisync): a safety check that RcloneBisync.force
+  // overrides stopped the run: more files would have been deleted on one
+  // side than RcloneBisyncOptions.max_delete_percent allows, or every file
+  // had changed on both sides (as after a clock or time zone change).
+  // Status FAILED. The message says which check, with rclone's counts. The
+  // pair's state is kept, so the next run needs no resync. If the changes
+  // are intended, a one-shot run with force set applies them.
+  JOB_ERROR_CODE_SAFETY_ABORT = 30;
+  // Set by workers (rclone_bisync): a side looked unavailable, so the run
+  // stopped before syncing: its current listing was empty ("Empty current
+  // PathN listing"), or the RCLONE_TEST files of
+  // RcloneBisyncOptions.check_access were missing. Usually a drive that is
+  // not mounted or a wrong path. Status FAILED. The message says which side
+  // and which check. The pair's state is kept, so the next run needs no
+  // resync. RcloneBisync.force does not override it: the fix is the
+  // location (mount the drive, create the check files). A side that does
+  // not exist at all is NOT_FOUND.
+  JOB_ERROR_CODE_SIDE_UNAVAILABLE = 31;
 }
 
 // WorkerState is a snapshot (not an event) of the jobs a worker holds,
@@ -743,6 +776,8 @@ message JobSpec {
   // "rclone_transfer", "restic_backup") that selects the worker runner.
   oneof operation {
     RcloneTransfer rclone_transfer = 10;
+    // Sent only to workers whose Hello lists the "rclone.bisync" feature.
+    RcloneBisync rclone_bisync = 11;
 
     ResticInit restic_init = 20;
     ResticBackup restic_backup = 21;
@@ -1041,6 +1076,250 @@ enum FilterAction {
   FILTER_ACTION_UNSPECIFIED = 0;
   FILTER_ACTION_INCLUDE = 1;
   FILTER_ACTION_EXCLUDE = 2;
+}
+
+// RcloneBisync keeps two locations in step in both directions with rclone
+// bisync: new and changed files and deletions on either side spread to the
+// other, and a file changed on both sides is a conflict that keeps both
+// versions unless options.conflict_resolve picks one (see
+// docs/adr/0018-two-way-sync.md).
+//
+// Unlike a transfer, a two-way sync has state: the listings of both sides
+// after its last run, which the next run compares against. The worker keeps
+// it in its data directory under state_key, as rclone's work directory, and
+// removes the state of pairs that have not run for 180 days. A pair's state
+// exists only on the worker that ran it: on another worker, its first run
+// is a resync.
+//
+// The worker always runs rclone with --recover and --resilient, and always
+// passes the filters as a filters file (empty without rules), so rclone
+// notices any change of them. A run of a pair that has no baseline on the
+// worker is a resync even when resync is not set
+// (RcloneBisyncOutput.resync_reason FIRST_RUN). No baseline means no
+// listing from a completed run that holds entries: the pair's first run
+// there, a new state_key, state removed for age, a first resync that was
+// cancelled or killed part-way (it leaves only rclone's "-new" listings),
+// or a resync of two empty sides (listings without entries). Dry-run
+// listings never count as a baseline (rclone keeps them apart), and
+// listings renamed after a critical error ("-err") always do: after a
+// critical error the worker never resyncs on its own.
+//
+// rclone checks neither side during --resync, so before any resync the
+// worker checks the local sides itself: a local side that does not exist
+// fails the job with NOT_FOUND (rclone would create it), and the
+// automatic first run never fills an empty local side (no entry at all;
+// a drive that is not mounted looks the same): it fails with
+// RESYNC_REQUIRED without running rclone, unless every side is local and
+// empty (nothing to fill). A run with resync set fills it.
+message RcloneBisync {
+  // The two sides, rclone's Path1 and Path2. Each is a path on a remote of
+  // the spec or an absolute local path inside the worker's local_roots, as
+  // for transfers. rclone names its state files after both full paths, so
+  // the two rclone path strings (e.g. "r1:bucket/x" and a cleaned local
+  // path) may be at most 200 bytes together; the worker rejects longer ones
+  // with INVALID_SPEC.
+  Location path1 = 1;
+  Location path2 = 2;
+
+  // Typed allowlist of rclone bisync flags. Unset fields use the defaults
+  // given there.
+  RcloneBisyncOptions options = 3;
+
+  // --resync (with --resync-mode): rebuild the pair's state from both
+  // sides as they are now. Files on one side only are copied to the other
+  // and nothing is deleted; a file that differs keeps one version, the one
+  // options.resync_mode picks (the other is overwritten). One-shot: set for
+  // a single run, e.g. after RESYNC_REQUIRED; schedules never set it.
+  bool resync = 4;
+
+  // --force: run even when more files would be deleted than
+  // options.max_delete_percent allows, or every file changed on both sides
+  // (the checks of SAFETY_ABORT). It does not override SIDE_UNAVAILABLE (an
+  // empty side, missing check_access files). One-shot like resync: set for
+  // a single run after a SAFETY_ABORT whose changes are intended; schedules
+  // never set it.
+  bool force = 5;
+
+  // The name of the pair's state on the worker: 64 lower-case hex digits
+  // (^[0-9a-f]{64}$). The controller computes it from both locations (local
+  // or remote, the remote's ID, backend type and non-secret options, and
+  // the path), never from secrets: the same pair gets the same key, a
+  // rotated credential keeps it, and any other change of a location, or
+  // swapping the sides, gives a new key and so a pair that starts with a
+  // resync. The worker checks the format (INVALID_SPEC otherwise) before
+  // the key becomes a directory name, and computes nothing from it.
+  string state_key = 6;
+
+  reserved 7 to 9;
+}
+
+// RcloneBisyncOptions is the typed allowlist of rclone bisync flags. As for
+// transfers, free-form flags are deliberately not supported: each field
+// maps to exactly one flag. Unset fields use the defaults described here,
+// which are Syncr's where they differ from rclone's.
+message RcloneBisyncOptions {
+  // --transfers: number of parallel file transfers, 1 to 64.
+  optional int32 transfers = 1;
+  // --checkers: number of parallel checkers, 1 to 256.
+  optional int32 checkers = 2;
+  // --bwlimit in bytes per second; 0 or unset means unlimited.
+  optional int64 bandwidth_limit_bytes_per_second = 3;
+  // --dry-run: report what would happen without changing anything. The
+  // pair's state is not updated either.
+  bool dry_run = 4;
+  // --compare: what tells that a file changed, each at most once (no
+  // UNSPECIFIED). Empty means size and modification time.
+  repeated BisyncCompare compare = 5;
+  // --conflict-resolve: which version of a file changed on both sides
+  // wins. UNSPECIFIED means NONE: both versions are kept, renamed as
+  // conflict_loser says.
+  BisyncConflictResolve conflict_resolve = 6;
+  // --conflict-loser: how a version that did not win is kept.
+  // UNSPECIFIED means NUM.
+  BisyncConflictLoser conflict_loser = 7;
+  // --conflict-suffix: the suffix of renamed conflict versions, one for
+  // both sides or two separated by a comma (Path1's, then Path2's), each 1
+  // to 32 characters among letters, digits, ".", "_" and "-". Empty means
+  // rclone's "conflict" (e.g. "report.docx.conflict1").
+  string conflict_suffix = 8;
+  // --max-delete, which for bisync is a percentage: a run that would
+  // delete more than this share of the files on either side stops with
+  // SAFETY_ABORT (RcloneBisync.force overrides it once). 1 to 100; unset
+  // means 50.
+  optional int32 max_delete_percent = 9;
+  // --check-access: run only if both sides hold the same RCLONE_TEST
+  // files, placed there by people beforehand, as a guard against a drive
+  // that is not mounted or a wrong path. Missing files stop the run with
+  // SIDE_UNAVAILABLE, which RcloneBisync.force does not override.
+  bool check_access = 10;
+  // --resync-mode: which version a resync keeps of a file that differs on
+  // the two sides. UNSPECIFIED means NEWER (rclone's own default is PATH1).
+  BisyncResyncMode resync_mode = 11;
+  // --create-empty-src-dirs: also create and delete empty directories.
+  bool create_empty_src_dirs = 12;
+  // --low-level-retries: retries of individual low-level operations, 0 to
+  // 1000.
+  optional int32 low_level_retries = 13;
+  // Filter rules, applied in order, at most 1000 (the same pattern rules as
+  // for transfers). The worker writes them to the pair's filters file
+  // (--filters-file). rclone remembers a hash of that file, so a run after
+  // the rules changed, including removing all of them, fails with
+  // RESYNC_REQUIRED until a resync accepts the new rules.
+  repeated FilterRule filters = 14;
+
+  reserved 15 to 49;
+}
+
+// BisyncCompare is one property rclone bisync compares to tell whether a
+// file changed (--compare).
+enum BisyncCompare {
+  // Not a valid entry.
+  BISYNC_COMPARE_UNSPECIFIED = 0;
+  // The file's size.
+  BISYNC_COMPARE_SIZE = 1;
+  // The file's modification time.
+  BISYNC_COMPARE_MODTIME = 2;
+  // The file's checksum (a hash both sides support).
+  BISYNC_COMPARE_CHECKSUM = 3;
+}
+
+// BisyncConflictResolve picks the winner of a conflict, a file changed on
+// both sides since the last run (--conflict-resolve). The winner keeps the
+// file's name on both sides; the loser is kept as conflict_loser says.
+// Where the property cannot decide (equal values, or a backend that lacks
+// it), rclone keeps both versions as with NONE.
+enum BisyncConflictResolve {
+  // Same as NONE.
+  BISYNC_CONFLICT_RESOLVE_UNSPECIFIED = 0;
+  // No winner: both versions are kept, renamed.
+  BISYNC_CONFLICT_RESOLVE_NONE = 1;
+  // Path1's version wins.
+  BISYNC_CONFLICT_RESOLVE_PATH1 = 2;
+  // Path2's version wins.
+  BISYNC_CONFLICT_RESOLVE_PATH2 = 3;
+  // The version modified last wins.
+  BISYNC_CONFLICT_RESOLVE_NEWER = 4;
+  // The version modified first wins.
+  BISYNC_CONFLICT_RESOLVE_OLDER = 5;
+  // The bigger version wins.
+  BISYNC_CONFLICT_RESOLVE_LARGER = 6;
+  // The smaller version wins.
+  BISYNC_CONFLICT_RESOLVE_SMALLER = 7;
+}
+
+// BisyncConflictLoser is how rclone keeps a conflict's version that did not
+// win (--conflict-loser), named with RcloneBisyncOptions.conflict_suffix.
+// rclone's "delete" (drop the loser) is deliberately not offered: a
+// conflict never loses data.
+enum BisyncConflictLoser {
+  // Same as NUM.
+  BISYNC_CONFLICT_LOSER_UNSPECIFIED = 0;
+  // Renamed with the suffix and the next free number, e.g.
+  // "report.docx.conflict1", "report.docx.conflict2".
+  BISYNC_CONFLICT_LOSER_NUM = 1;
+  // Renamed with the suffix and the side it came from, e.g.
+  // "report.docx.conflict1" for Path1's version and "report.docx.conflict2"
+  // for Path2's. A later conflict of the same file replaces those copies.
+  BISYNC_CONFLICT_LOSER_PATHNAME = 2;
+}
+
+// BisyncResyncMode picks which version a resync keeps of a file that
+// differs on the two sides (--resync-mode); the other version is
+// overwritten.
+enum BisyncResyncMode {
+  // Same as NEWER.
+  BISYNC_RESYNC_MODE_UNSPECIFIED = 0;
+  // Path1's version.
+  BISYNC_RESYNC_MODE_PATH1 = 1;
+  // Path2's version.
+  BISYNC_RESYNC_MODE_PATH2 = 2;
+  // The version modified last.
+  BISYNC_RESYNC_MODE_NEWER = 3;
+  // The version modified first.
+  BISYNC_RESYNC_MODE_OLDER = 4;
+  // The bigger version.
+  BISYNC_RESYNC_MODE_LARGER = 5;
+  // The smaller version.
+  BISYNC_RESYNC_MODE_SMALLER = 6;
+}
+
+// BisyncResyncReason is why a two-way sync run was a resync.
+enum BisyncResyncReason {
+  // The run was not a resync.
+  BISYNC_RESYNC_REASON_UNSPECIFIED = 0;
+  // The pair had no baseline on the worker, so it resynced on its own: no
+  // listing from a completed run that holds entries (its first run on that
+  // worker, a new state_key, state removed after 180 days without a run, a
+  // first resync that was cancelled or killed part-way, or a resync of two
+  // empty sides). Dry-run listings never count as a baseline; listings
+  // renamed after a critical error always do. Such a run never fills an
+  // empty local side: the job fails with RESYNC_REQUIRED instead (see
+  // RcloneBisync).
+  BISYNC_RESYNC_REASON_FIRST_RUN = 1;
+  // The spec asked for it (RcloneBisync.resync).
+  BISYNC_RESYNC_REASON_REQUESTED = 2;
+}
+
+// RcloneBisyncOutput is the output of a successful rclone_bisync.
+message RcloneBisyncOutput {
+  // Why the run was a resync; UNSPECIFIED for a normal run.
+  BisyncResyncReason resync_reason = 1;
+
+  // Files changed on both sides since the last run whose two versions
+  // differ, each kept or resolved as the options say. A file changed the
+  // same way on both sides is not a conflict.
+  int64 conflicts = 2;
+
+  // The paths of the first conflicts, relative to the two sides, in the
+  // order rclone reported them: at most 20, each valid UTF-8 of at most 500
+  // bytes. conflicts counts them all.
+  repeated string conflict_paths = 3;
+
+  // The run was a dry run (RcloneBisyncOptions.dry_run): it changed
+  // nothing, and the conflicts are those it found.
+  bool dry_run = 4;
+
+  reserved 5 to 9;
 }
 
 // ResticRepository identifies a restic repository and its password.

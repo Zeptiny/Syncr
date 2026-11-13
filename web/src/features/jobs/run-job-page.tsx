@@ -21,6 +21,7 @@ import { ResticService } from "@/gen/syncr/v1/restic_pb";
 import { useBackendMap } from "@/hooks/use-backends";
 import { errorMessage, fieldViolations } from "@/lib/errors";
 import { invalidateService } from "@/lib/invalidate";
+import { isResticKind } from "@/lib/status";
 
 import {
   definitionError,
@@ -93,8 +94,8 @@ export interface RunJobPageProps {
 }
 
 /**
- * RunJobPage queues a job on a worker: a transfer, a backup, a retention
- * run, a check or a prune.
+ * RunJobPage queues a job on a worker: a transfer, a two-way sync, a
+ * backup, a retention run, a check or a prune.
  */
 export function RunJobPage({ from, kind, repository }: RunJobPageProps) {
   const navigate = useNavigate();
@@ -107,6 +108,7 @@ export function RunJobPage({ from, kind, repository }: RunJobPageProps) {
   const [s, setS] = useState<RunJobState>(() =>
     from ? fromJob(from) : emptyRunJob(kind, repository),
   );
+  const [saved] = useState(() => (from ? definitionState(from.definition) : undefined));
   const [errors, setErrors] = useState<Errors>({});
   const [formError, setFormError] = useState<string | undefined>();
   const worker = workers.data?.workers.find((w) => w.id === s.workerId);
@@ -120,8 +122,7 @@ export function RunJobPage({ from, kind, repository }: RunJobPageProps) {
     try {
       const res = await run.mutateAsync(toRunJobRequest(s, worker?.info?.os));
       await invalidateService(queryClient, JobService);
-      if (s.definition.kind !== "rclone_transfer")
-        await invalidateService(queryClient, ResticService);
+      if (isResticKind(s.definition.kind)) await invalidateService(queryClient, ResticService);
       toast.success(isDryRun(s.definition) ? "Dry run queued" : "Job queued");
       if (res.job) await navigate({ to: "/jobs/$jobId", params: { jobId: res.job.id } });
     } catch (err) {
@@ -158,6 +159,7 @@ export function RunJobPage({ from, kind, repository }: RunJobPageProps) {
           backends={backends}
           repositories={repositories.data?.repositories ?? []}
           worker={worker}
+          saved={saved}
           onKindChange={(k) =>
             void navigate({
               to: "/jobs/new",

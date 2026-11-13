@@ -1,0 +1,24 @@
+{"time":"2026-11-12T17:57:04.237116664-03:00","level":"notice","msg":"- Path1             File changed: time (older)                  - f1.txt","source":"bisync/deltas.go:232"}
+{"time":"2026-11-12T17:57:04.237217864-03:00","level":"notice","msg":"- Path1             File changed: size (smaller), time (newer)  - f2.txt","source":"bisync/deltas.go:232"}
+{"time":"2026-11-12T17:57:04.237239863-03:00","level":"notice","msg":"- Path1             File changed: size (smaller), time (older)  - f3.txt","source":"bisync/deltas.go:232"}
+{"time":"2026-11-12T17:57:04.237293711-03:00","level":"notice","msg":"- Path2             File changed: size (larger), time (older)   - f1.txt","source":"bisync/deltas.go:232"}
+{"time":"2026-11-12T17:57:04.237315641-03:00","level":"notice","msg":"- Path2             File changed: size (smaller), time (newer)  - f2.txt","source":"bisync/deltas.go:232"}
+{"time":"2026-11-12T17:57:04.237335755-03:00","level":"notice","msg":"- Path2             File changed: size (smaller), time (older)  - f3.txt","source":"bisync/deltas.go:232"}
+{"time":"2026-11-12T17:57:04.237671549-03:00","level":"error","msg":"md5 differ","object":"f3.txt","objectType":"*local.Object","source":"bisync/checkfn.go:86"}
+{"time":"2026-11-12T17:57:04.237782316-03:00","level":"notice","msg":"1 differences found","object":"Local file system at /data/b","objectType":"*local.Fs","source":"operations/check.go:252"}
+{"time":"2026-11-12T17:57:04.237809973-03:00","level":"notice","msg":"1 errors while checking","object":"Local file system at /data/b","objectType":"*local.Fs","source":"operations/check.go:254"}
+{"time":"2026-11-12T17:57:04.237826595-03:00","level":"notice","msg":"1 matching files","object":"Local file system at /data/b","objectType":"*local.Fs","source":"operations/check.go:260"}
+{"time":"2026-11-12T17:57:04.237851389-03:00","level":"notice","msg":"- WARNING           New or changed in both paths                - f1.txt","source":"bisync/deltas.go:391"}
+{"time":"2026-11-12T17:57:04.237876811-03:00","level":"notice","msg":"Skipped rename as --dry-run is set","skipped":"rename","object":"f1.txt","objectType":"string","source":"operations/operations.go:2674"}
+{"time":"2026-11-12T17:57:04.237898601-03:00","level":"notice","msg":"- Path1             Queue copy to Path2                         - /data/b/f1.txt.conflict1","source":"bisync/resolve.go:329"}
+{"time":"2026-11-12T17:57:04.237914874-03:00","level":"notice","msg":"Skipped rename as --dry-run is set","skipped":"rename","object":"f1.txt","objectType":"string","source":"operations/operations.go:2674"}
+{"time":"2026-11-12T17:57:04.237948607-03:00","level":"notice","msg":"- Path2             Queue copy to Path1                         - /data/a/f1.txt.conflict2","source":"bisync/resolve.go:329"}
+{"time":"2026-11-12T17:57:04.237968092-03:00","level":"notice","msg":"- WARNING           New or changed in both paths                - f2.txt","source":"bisync/deltas.go:391"}
+{"time":"2026-11-12T17:57:04.237986251-03:00","level":"notice","msg":"- WARNING           New or changed in both paths                - f3.txt","source":"bisync/deltas.go:391"}
+{"time":"2026-11-12T17:57:04.238007692-03:00","level":"notice","msg":"Skipped rename as --dry-run is set","skipped":"rename","object":"f3.txt","objectType":"string","source":"operations/operations.go:2674"}
+{"time":"2026-11-12T17:57:04.2380262-03:00","level":"notice","msg":"- Path1             Queue copy to Path2                         - /data/b/f3.txt.conflict1","source":"bisync/resolve.go:329"}
+{"time":"2026-11-12T17:57:04.238041565-03:00","level":"notice","msg":"Skipped rename as --dry-run is set","skipped":"rename","object":"f3.txt","objectType":"string","source":"operations/operations.go:2674"}
+{"time":"2026-11-12T17:57:04.238059165-03:00","level":"notice","msg":"- Path2             Queue copy to Path1                         - /data/a/f3.txt.conflict2","source":"bisync/resolve.go:329"}
+{"time":"2026-11-12T17:57:04.238075438-03:00","level":"notice","msg":"- Path2             Do queued copies to                         - Path1","source":"bisync/deltas.go:487"}
+{"time":"2026-11-12T17:57:04.23850426-03:00","level":"notice","msg":"- Path1             Do queued copies to                         - Path2","source":"bisync/deltas.go:503"}
+{"time":"2026-11-12T17:57:04.239562626-03:00","level":"notice","msg":"\nTransferred:   \t          0 B / 0 B, -, 0 B/s, ETA -\nChecks:                10 / 10, 100%, Listed 24\nElapsed time:         0.0s\n\n","stats":{"bytes":0,"checks":10,"deletedDirs":0,"deletes":0,"elapsedTime":0.002649826,"errors":0,"eta":null,"fatalError":false,"listed":24,"renames":0,"retryError":false,"serverSideCopies":0,"serverSideCopyBytes":0,"serverSideMoveBytes":0,"serverSideMoves":0,"speed":0,"totalBytes":0,"totalChecks":10,"totalTransfers":0,"transferTime":0.000237111,"transfers":0},"source":"accounting/stats.go:549"}

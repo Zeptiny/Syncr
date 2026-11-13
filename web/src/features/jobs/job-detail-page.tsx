@@ -58,15 +58,22 @@ import {
 } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
+import {
+  bisyncOf,
+  bisyncOptionSummary,
+  conflictsSummary,
+  withoutOneShot,
+} from "./bisync-definition";
+import { BisyncRecovery } from "./bisync-recovery";
 import { isEditableKind } from "./definition";
 import { HookRunsPanel } from "./hook-runs";
 import { hookSummary, hooksState } from "./hooks";
 import { JobOutputCards, ResticBand } from "./job-output";
 import { ScheduleChip, WaitingChip } from "./jobs-table";
 import {
-  endpoint,
   jobElapsed,
   jobProgress,
+  jobRoute,
   jobTitle,
   transferOf,
   type EndpointLabel,
@@ -113,8 +120,9 @@ function EndpointCard({ label, e, worker }: { label: string; e: EndpointLabel; w
 }
 
 /**
- * RouteBand is the job's source and destination joined by its progress:
- * the one place the page shows movement while a job runs.
+ * RouteBand is the job's two locations (a transfer's source and
+ * destination, a two-way sync's folders) joined by its progress: the one
+ * place the page shows movement while a job runs.
  */
 function RouteBand({
   job,
@@ -125,7 +133,7 @@ function RouteBand({
   worker?: string;
   p: ReturnType<typeof jobProgress>;
 }) {
-  const t = transferOf(job);
+  const route = jobRoute(job);
   const pct = job.status === JobStatus.SUCCEEDED ? 100 : percent(p.bytes, p.total);
   const running = job.status === JobStatus.RUNNING;
   const tone =
@@ -138,18 +146,16 @@ function RouteBand({
           : running || job.status === JobStatus.DISPATCHED
             ? "bg-live"
             : "bg-neutral";
-  if (!t) return null;
+  if (!route) return null;
   return (
     <div className="grid items-center gap-3 md:grid-cols-[minmax(0,1fr)_minmax(9rem,1.1fr)_minmax(0,1fr)]">
-      <EndpointCard label="From" e={endpoint(job, t.source)} worker={worker} />
+      <EndpointCard label={route.aLabel} e={route.a} worker={worker} />
       <div
         className="flex flex-col items-center gap-1.5 px-1"
         aria-label={pct === undefined ? "Progress unknown" : `${Math.round(pct)}% transferred`}
       >
         <span className="tabular text-xs text-muted-foreground">
-          {pct === undefined
-            ? transferModeLabel(t.mode)
-            : `${transferModeLabel(t.mode)}, ${Math.floor(pct)}%`}
+          {pct === undefined ? route.mode : `${route.mode}, ${Math.floor(pct)}%`}
         </span>
         <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-border">
           <div
@@ -168,7 +174,7 @@ function RouteBand({
           {p.total > 0 && ` of ${formatBytes(p.total)}`}
         </span>
       </div>
-      <EndpointCard label="To" e={endpoint(job, t.destination)} worker={worker} />
+      <EndpointCard label={route.bLabel} e={route.b} worker={worker} />
     </div>
   );
 }
@@ -277,6 +283,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
 
   const terminal = isTerminal(job.status);
   const transfer = transferOf(job);
+  const bisync = bisyncOf(job.definition);
   const worker = workers.data?.workers.find((w) => w.id === job.workerId);
   // Progress messages carry fresher counters than the last job message.
   const latest = terminal ? undefined : watch.samples.at(-1);
@@ -299,7 +306,11 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
   const hooks = hookSummary(hooksState(job.definition));
 
   const runAgain = async () => {
-    const res = await rerun.mutateAsync({ workerId: job.workerId, definition: job.definition });
+    // A two-way sync's resync or force was for its one run: run the pair normally.
+    const res = await rerun.mutateAsync({
+      workerId: job.workerId,
+      definition: withoutOneShot(job.definition),
+    });
     await invalidateService(queryClient, JobService);
     // A restic job changes its repository's state (running jobs, snapshots).
     if (isResticKind(job.kind)) await invalidateService(queryClient, ResticService);
@@ -384,9 +395,15 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
 
         <StatGrid>
           <StatCard
-            label={transfer ? "Transferred" : "Processed"}
+            label={transfer || bisync ? "Transferred" : "Processed"}
             value={formatBytes(p.bytes)}
-            sub={p.total > 0 ? `of ${formatBytes(p.total)}` : "Total not known yet"}
+            sub={
+              p.total > 0
+                ? `of ${formatBytes(p.total)}`
+                : terminal
+                  ? undefined
+                  : "Total not known yet"
+            }
           />
           <StatCard
             label="Files"
@@ -459,6 +476,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
               <p className="mt-0.5 font-mono text-[12.5px] leading-5 break-words">
                 {job.error.message}
               </p>
+              <BisyncRecovery job={job} canRun={!foreign} workers={workers.data?.workers} />
             </div>
           </div>
         )}
@@ -546,19 +564,38 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
                       { label: "Mode", value: transferModeLabel(transfer.mode) },
                       { label: "Options", value: optionSummary(job) },
                     ]
-                  : [
-                      { label: "Kind", value: kindLabel(job.kind) },
-                      ...(job.repository
-                        ? [
-                            {
-                              label: "Repository",
-                              value: job.repository.deleted
-                                ? `${job.repository.name} (removed)`
-                                : job.repository.name,
-                            },
-                          ]
-                        : []),
-                    ]),
+                  : bisync
+                    ? [
+                        { label: "Kind", value: kindLabel(job.kind) },
+                        ...(bisync.resync || bisync.force
+                          ? [
+                              {
+                                label: "This run",
+                                value: [
+                                  bisync.resync && "Resync",
+                                  bisync.force && "Delete limit ignored",
+                                ]
+                                  .filter(Boolean)
+                                  .join(", "),
+                              },
+                            ]
+                          : []),
+                        { label: "Options", value: bisyncOptionSummary(bisync) },
+                        { label: "Conflicts", value: conflictsSummary(bisync) },
+                      ]
+                    : [
+                        { label: "Kind", value: kindLabel(job.kind) },
+                        ...(job.repository
+                          ? [
+                              {
+                                label: "Repository",
+                                value: job.repository.deleted
+                                  ? `${job.repository.name} (removed)`
+                                  : job.repository.name,
+                              },
+                            ]
+                          : []),
+                      ]),
                 ...(job.stats
                   ? [
                       {

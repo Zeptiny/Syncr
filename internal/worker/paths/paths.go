@@ -124,6 +124,11 @@ func ScratchDir(dataDir string) string { return filepath.Join(dataDir, "scratch"
 // kept between jobs, such as restic's repository cache.
 func CacheDir(dataDir string) string { return filepath.Join(dataDir, "cache") }
 
+// BisyncDir returns the directory under dataDir that holds the state of
+// two-way syncs between their runs (internal/worker/bisyncstate). Unlike
+// the scratch directory it survives restarts.
+func BisyncDir(dataDir string) string { return filepath.Join(dataDir, "bisync") }
+
 // ConfigFileName is the name of the worker's configuration file.
 const ConfigFileName = "worker.yaml"
 

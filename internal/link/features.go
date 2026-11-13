@@ -10,10 +10,10 @@ import (
 // controller sends a worker only what its features allow: probes to a worker
 // with FeatureProbe, restic jobs to one with FeatureResticV2 (and, for
 // restic_delete_data, FeatureResticDelete), a job with a time limit to one
-// with FeatureJobTimeLimit, a job with hooks to one with FeatureJobHooks. A
-// worker that reports no features is a
-// Milestone 4 worker: it ignores the Milestone 5 restic spec fields and acks
-// probe commands without running them.
+// with FeatureJobTimeLimit, a job with hooks to one with FeatureJobHooks, a
+// two-way sync to one with FeatureRcloneBisync. A worker that reports no
+// features is a Milestone 4 worker: it ignores the Milestone 5 restic spec
+// fields and acks probe commands without running them.
 const (
 	// FeatureProbe: the worker runs probes (Command.run_probe in active
 	// mode, WorkerLinkService.Probe in passive mode).
@@ -36,12 +36,19 @@ const (
 	// field and run the operation alone, so the controller does not send it
 	// a job with hooks.
 	FeatureJobHooks = "job.hooks"
+	// FeatureRcloneBisync: the worker runs the rclone_bisync job kind
+	// (two-way sync, docs/adr/0018-two-way-sync.md): it keeps each pair's
+	// state in its data directory under RcloneBisync.state_key, resyncs a
+	// pair it has no state for, and reports RESYNC_REQUIRED,
+	// SAFETY_ABORT and SIDE_UNAVAILABLE. The kind requires it, so a job of
+	// it fails with WORKER_OUTDATED on a worker without it.
+	FeatureRcloneBisync = "rclone.bisync"
 )
 
 // Features returns every link feature this build defines, in a fixed order.
 // An up-to-date worker reports all of them.
 func Features() []string {
-	return []string{FeatureProbe, FeatureResticV2, FeatureResticDelete, FeatureJobTimeLimit, FeatureJobHooks}
+	return []string{FeatureProbe, FeatureResticV2, FeatureResticDelete, FeatureJobTimeLimit, FeatureJobHooks, FeatureRcloneBisync}
 }
 
 // probeOneof is the ProbeSpec oneof whose set field names the probe op.

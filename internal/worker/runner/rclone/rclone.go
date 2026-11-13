@@ -1,6 +1,8 @@
 // Package rclone implements the "rclone_transfer" job kind: rclone copy,
 // sync and move between two locations, each a remote defined in the job spec
-// or a local path inside the worker's local_roots.
+// or a local path inside the worker's local_roots; and the "rclone_bisync"
+// job kind (BisyncRunner, bisync.go): a two-way sync of two such locations,
+// whose state lives in the worker's two-way sync state store.
 //
 // The runner never builds a connection string or a free-form flag:
 //
@@ -22,8 +24,8 @@
 // scrubbed.
 //
 // Allowed dependencies: the standard library, the generated protobuf code,
-// internal/worker/proc, internal/worker/runner, internal/worker/runner/scrub
-// and internal/worker/rcloneenv.
+// internal/worker/proc, internal/worker/runner, internal/worker/runner/scrub,
+// internal/worker/rcloneenv and internal/worker/bisyncstate.
 package rclone
 
 import (

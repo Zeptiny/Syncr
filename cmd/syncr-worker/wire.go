@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Zeptiny/Syncr/internal/worker/bisyncstate"
 	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
 	"github.com/Zeptiny/Syncr/internal/worker/hooks"
 	"github.com/Zeptiny/Syncr/internal/worker/localfs"
@@ -65,13 +66,17 @@ type worker struct {
 	// hooks are the commands of the configuration that jobs may run
 	// around their operation, by name. Never nil; it may be empty.
 	hooks *hooks.Set
+	// bisync is the state of two-way syncs (<data_dir>/bisync), shared by
+	// their runner and the pruner (startBackground).
+	bisync *bisyncstate.Store
 	// dataDir, scratchDir and cacheDir are the directories in use.
 	dataDir, scratchDir, cacheDir string
 }
 
 // buildWorker wires the worker from cfg: it resolves the pinned tools,
 // builds the local_roots policy and the process supervisor, and registers
-// the rclone runner and the restic runners, and builds the probe executor
+// the rclone runners (transfers and two-way syncs) and the restic runners,
+// and builds the probe executor
 // over the same tools and the configured hooks over the same supervisor. It
 // creates the data, scratch and
 // cache directories. Every failure is returned with an explanation an
@@ -252,11 +257,13 @@ func (e *toolsUnavailableError) Error() string {
 
 func (e *toolsUnavailableError) Unwrap() error { return e.err }
 
-// registerRunners builds the rclone runner and the restic runners and
-// registers them, and builds the probe executor (w.probes) from the same
-// configurations. The rcloneenv builder is both engines' remote definition
-// port and the localfs policy their path port, so every remote and every
-// local path a job or a probe names is validated by the same code.
+// registerRunners builds the rclone runners (transfers, and two-way syncs
+// over the state store in <data_dir>/bisync, w.bisync) and the restic
+// runners and registers them, and builds the probe executor (w.probes)
+// from the same configurations. The rcloneenv builder is both engines'
+// remote definition port and the localfs policy their path port, so every
+// remote and every local path a job or a probe names is validated by the
+// same code.
 func registerRunners(w *worker, resticCache string, log *slog.Logger) error {
 	remotes := rcloneenv.NewBuilder(w.policy)
 	rcloneBin, resticBin := w.tools[toolRclone].Path, w.tools[toolRestic].Path
@@ -273,6 +280,14 @@ func registerRunners(w *worker, resticCache string, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("set up the rclone runner: %w", err)
 	}
+	w.bisync, err = bisyncstate.New(bisyncstate.Config{Root: paths.BisyncDir(w.dataDir)})
+	if err != nil {
+		return fmt.Errorf("set up the two-way sync state: %w", err)
+	}
+	bisyncRunner, err := rclone.NewBisync(rcloneCfg, w.bisync)
+	if err != nil {
+		return fmt.Errorf("set up the two-way sync runner: %w", err)
+	}
 	resticCfg := restic.Config{
 		ResticPath:  resticBin,
 		RclonePath:  rcloneBin,
@@ -287,7 +302,7 @@ func registerRunners(w *worker, resticCache string, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("set up the restic runners: %w", err)
 	}
-	if err := w.registry.Register(append([]runner.Runner{rcloneRunner}, resticRunners...)...); err != nil {
+	if err := w.registry.Register(append([]runner.Runner{rcloneRunner, bisyncRunner}, resticRunners...)...); err != nil {
 		return fmt.Errorf("register runners: %w", err)
 	}
 
@@ -307,4 +322,26 @@ func registerRunners(w *worker, resticCache string, log *slog.Logger) error {
 		return fmt.Errorf("set up the probes: %w", err)
 	}
 	return nil
+}
+
+// startBackground starts the worker's housekeeping beside the link: it
+// removes the state of two-way syncs that have not run for
+// bisyncstate.Retention, once now (before the link starts, so before any
+// job) and then every bisyncstate.PruneInterval in the background. The
+// returned stop function ends the background work and waits until it has;
+// `run` calls it before it releases the data directory. It also stops when
+// ctx ends.
+func (w *worker) startBackground(ctx context.Context, log *slog.Logger) (stop func()) {
+	log = log.With("component", "bisync")
+	w.bisync.PruneStale(ctx, log)
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.bisync.RunPruner(ctx, bisyncstate.PruneInterval, log)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }

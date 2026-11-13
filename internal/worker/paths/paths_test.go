@@ -89,6 +89,9 @@ func TestToolsDirAndString(t *testing.T) {
 	if got, want := CacheDir(data), filepath.Join(data, "cache"); got != want {
 		t.Errorf("CacheDir = %q, want %q", got, want)
 	}
+	if got, want := BisyncDir(data), filepath.Join(data, "bisync"); got != want {
+		t.Errorf("BisyncDir = %q, want %q", got, want)
+	}
 	if ModeUser.String() != "user" || ModeSystem.String() != "system" {
 		t.Error("unexpected Mode.String")
 	}

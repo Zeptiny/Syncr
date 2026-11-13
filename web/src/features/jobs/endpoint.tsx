@@ -1,8 +1,8 @@
-import { HardDrive } from "lucide-react";
+import { ArrowLeftRight, ArrowRight, HardDrive } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-import type { EndpointLabel } from "./model";
+import type { EndpointLabel, JobRoute } from "./model";
 
 /** Endpoint renders a job location: remote name and path, or a local path. */
 export function Endpoint({ e, className }: { e: EndpointLabel; className?: string }) {
@@ -28,5 +28,32 @@ export function Endpoint({ e, className }: { e: EndpointLabel; className?: strin
         <span className="truncate font-mono text-[12px] text-muted-foreground">{e.path}</span>
       )}
     </span>
+  );
+}
+
+/**
+ * RouteEndpoints renders a route's two locations joined by its direction:
+ * an arrow for a transfer, a two-way arrow for a two-way sync.
+ * endpointClassName styles each location (e.g. a maximum width).
+ */
+export function RouteEndpoints({
+  route,
+  className,
+  endpointClassName,
+}: {
+  route: JobRoute;
+  className?: string;
+  endpointClassName?: string;
+}) {
+  const Arrow = route.twoWay ? ArrowLeftRight : ArrowRight;
+  return (
+    <div className={cn("flex min-w-0 items-center gap-2", className)}>
+      <Endpoint e={route.a} className={endpointClassName} />
+      <Arrow
+        className="size-3.5 shrink-0 text-muted-foreground"
+        aria-label={route.twoWay ? "and" : "to"}
+      />
+      <Endpoint e={route.b} className={endpointClassName} />
+    </div>
   );
 }

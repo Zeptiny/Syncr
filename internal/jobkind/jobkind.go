@@ -31,6 +31,10 @@
 //     sharing a key run one at a time, oldest first. Restic kinds use
 //     ResticRepoKey.
 //   - Unschedulable: its definitions cannot be scheduled (restores).
+//   - OneShot: some fields of its definitions are for a single run, so a
+//     schedule may not set them (a two-way sync's resync and force).
+//   - SingleWorker: its jobs keep state on the worker that ran them, so a
+//     schedule must target a worker, not a label (two-way sync).
 //   - SystemOnly: only the controller creates its jobs, never RunJob or a
 //     schedule (restic_delete_data).
 //   - Requirer: the link features a worker must report to run it.
@@ -39,13 +43,15 @@
 //   - Labeled: a short label for people ("Backup").
 //   - Summarizer: display details of a finished job's output.
 //
-// The Registry answers these per kind name (Schedulable, UserStartable,
-// RequiredFeatures, Label, Summarize) or definition (RequiredOS), with
-// neutral answers for kinds that do not implement them. The worker
-// requirements (Requirer, OSBound) apply wherever a worker is chosen or
-// checked: the API and the scheduler refuse a chosen worker on another
-// operating system, the scheduler picks a label's worker by both, and the
-// dispatcher checks both, finally, when it sends the job.
+// The Registry answers these per kind name (Schedulable,
+// LabelTargetAllowed, UserStartable, RequiredFeatures, Label, Summarize)
+// or definition (CheckSchedulable, RequiredOS), with neutral answers for
+// kinds that do not implement them. Schedules ask Schedulable,
+// CheckSchedulable and LabelTargetAllowed; RunJob asks none of them. The
+// worker requirements (Requirer, OSBound) apply wherever a worker is
+// chosen or checked: the API and the scheduler refuse a chosen worker on
+// another operating system, the scheduler picks a label's worker by both,
+// and the dispatcher checks both, finally, when it sends the job.
 //
 // # Time limits (Milestone 6)
 //
@@ -211,6 +217,30 @@ type Unschedulable interface {
 	Unschedulable() string
 }
 
+// OneShot is implemented by kinds whose definitions have fields meant for a
+// single run, such as "resync now": a schedule would repeat them on every
+// run. RunJob accepts them; schedules refuse a definition that sets one
+// (Registry.CheckSchedulable).
+type OneShot interface {
+	// OneShotFields returns a field error for each one-shot field that the
+	// checked definition def sets, with the full field path and a message
+	// for people, e.g. {"definition.rclone_bisync.resync", "can only be
+	// set for a single run"}; none when it sets none.
+	OneShotFields(def *syncrv1.JobDefinition) []domain.FieldError
+}
+
+// SingleWorker is implemented by kinds whose jobs keep state on the worker
+// that ran them, so that all runs of a definition belong on one worker. A
+// schedule of such a kind must target a worker, not a label
+// (Registry.LabelTargetAllowed): a label would spread its runs over
+// workers that each keep their own state. RunJob always names a worker.
+type SingleWorker interface {
+	// SingleWorker returns why, for people (a field error message on the
+	// schedule's "target.worker_label"), e.g. "a two-way sync keeps its
+	// state on one worker; choose a worker".
+	SingleWorker() string
+}
+
 // SystemOnly is implemented by kinds whose jobs only the controller itself
 // creates: RunJob and schedules never accept them.
 type SystemOnly interface {
@@ -300,9 +330,9 @@ type Summarizer interface {
 	Summarize(def *syncrv1.JobDefinition, out *syncrv1.JobOutput) []Detail
 }
 
-// Builtin returns the built-in kinds: the rclone transfer (Transfer),
-// followed by the restic kinds (ResticKinds).
-func Builtin() []Kind { return append([]Kind{Transfer{}}, ResticKinds()...) }
+// Builtin returns the built-in kinds: the rclone transfer (Transfer) and
+// two-way sync (Bisync), followed by the restic kinds (ResticKinds).
+func Builtin() []Kind { return append([]Kind{Transfer{}, Bisync{}}, ResticKinds()...) }
 
 // Registry is an immutable set of kinds, keyed by name. It is safe for
 // concurrent use.
@@ -434,6 +464,44 @@ func (r *Registry) Schedulable(kind string) (ok bool, reason string) {
 	}
 	if u, is := k.(Unschedulable); is {
 		return false, u.Unschedulable()
+	}
+	return true, ""
+}
+
+// CheckSchedulable checks what Schedulable cannot answer for the kind as a
+// whole: whether a schedule may run def as it is, without its one-shot
+// fields (OneShot). It returns a *domain.ValidationError with a field error
+// for each one-shot field def sets, and nil when def sets none or its kind
+// has none. A definition without an operation, or of an unregistered kind,
+// cannot be scheduled, as Schedulable says: the error is then the one
+// Check gives it, on "definition.operation". Callers ask Schedulable for
+// the kind too.
+func (r *Registry) CheckSchedulable(def *syncrv1.JobDefinition) error {
+	k, err := r.kindOf(def)
+	if err != nil {
+		return err
+	}
+	o, ok := k.(OneShot)
+	if !ok {
+		return nil
+	}
+	if fields := o.OneShotFields(def); len(fields) > 0 {
+		return &domain.ValidationError{Fields: slices.Clone(fields)}
+	}
+	return nil
+}
+
+// LabelTargetAllowed reports whether a schedule of kind may target a
+// worker label, and if not why (for people): an unregistered kind, as for
+// Schedulable, or a SingleWorker one. A schedule that targets one worker
+// needs no such check.
+func (r *Registry) LabelTargetAllowed(kind string) (ok bool, reason string) {
+	k, found := r.kinds[kind]
+	if !found {
+		return false, fmt.Sprintf("job kind %q is not supported", kind)
+	}
+	if s, is := k.(SingleWorker); is {
+		return false, s.SingleWorker()
 	}
 	return true, ""
 }

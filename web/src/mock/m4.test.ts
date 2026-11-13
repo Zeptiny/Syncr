@@ -29,6 +29,7 @@ describe("mock transport, milestone 4", () => {
       "Office documents backup",
       "Offsite mirror",
       "Old laptop weekly backup",
+      "Shared folder ⇄ R2",
       "Weekly archive",
       "Weekly retention: photos",
     ]);

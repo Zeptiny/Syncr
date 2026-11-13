@@ -521,7 +521,21 @@ linters:
             - pkg: github.com/Zeptiny/Syncr/cmd
               desc: link e2e tests wire the packages themselves
 
+        # The state of two-way syncs on the worker (ADR 0018): the layout of
+        # a pair's state directory, its lock and the pruning of old state. A
+        # leaf that knows no wire types, runners or processes; the rclone
+        # runner (deny rules only, below) and the worker's wiring use it.
+        worker-bisyncstate:
+          list-mode: strict
+          files: ["**/internal/worker/bisyncstate/**"]
+          allow:
+            - $gostd
+            - github.com/Zeptiny/Syncr/internal/worker/filelock
+            - github.com/Zeptiny/Syncr/internal/worker/bisyncstate
+
         # Sibling implementations of one extension point stay independent.
+        # The rclone runner may use the two-way sync state
+        # (internal/worker/bisyncstate).
         runner-rclone:
           files: ["**/internal/worker/runner/rclone/**"]
           deny:

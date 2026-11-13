@@ -39,3 +39,12 @@ export function bucketSplits(xs: number[], width: number, minSpace: number): num
 export const byteIncrs: number[] = Array.from({ length: 6 }, (_, p) =>
   [1, 2, 5, 10, 20, 50, 100, 200, 500].map((m) => m * 1024 ** p),
 ).flat();
+
+/**
+ * secondIncrs are tick steps for time axes in whole seconds, so a short job
+ * does not repeat the same second under several ticks.
+ */
+export const secondIncrs: number[] = [
+  1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800,
+  604800,
+];

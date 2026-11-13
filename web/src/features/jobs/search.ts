@@ -45,6 +45,7 @@ export function validateJobsSearch(s: Record<string, unknown>): JobsSearch {
 /** The kinds a form can create; a restore or a data deletion is never among them. */
 const formKinds = [
   "rclone_transfer",
+  "rclone_bisync",
   "restic_backup",
   "restic_forget",
   "restic_check",

@@ -14,13 +14,15 @@ log:
   level: info                # SYNCR_LOG_LEVEL: debug, info, warn, error
   format: text               # SYNCR_LOG_FORMAT: text or json
 
-# Where scratch space, the restic cache and managed tools live.
+# Where scratch space, the restic cache, managed tools and the state of
+# two-way syncs (<data_dir>/bisync) live.
 # Default: /var/lib/syncr (Linux, root), ~/.local/share/syncr (Linux, user),
 # %ProgramData%\Syncr (Windows service), %LocalAppData%\Syncr (Windows user).
 data_dir: /var/lib/syncr     # SYNCR_DATA_DIR
 
 # Directories jobs may read and write locally: backup sources, restore
-# targets, local repositories and local transfer endpoints. Symlinks (and
+# targets, local repositories, local transfer endpoints and two-way sync
+# folders. Symlinks (and
 # Windows junctions) are resolved before the check. An empty list denies all
 # local access; the worker logs a warning at startup. In the environment the
 # list is comma-separated.
@@ -235,6 +237,24 @@ warns about a hook whose program it cannot find. Restart the worker after
 changing them. The phases, the `SYNCR_*` variables a hook receives,
 examples for databases and Docker, and the limits are in
 [hooks](hooks.md).
+
+## Two-way sync state
+
+A [two-way sync](bisync.md) keeps the state of each pair it ran on this
+worker in `<data_dir>/bisync/<key>/`: rclone's listings of both folders
+(about 100 to 150 bytes per file, up to six listing files per pair), its
+work files and the pair's filters. The folder is created with mode `0700`;
+startup's clean-up of the scratch space leaves it alone. Moving `data_dir`
+or wiping it makes every pair's next run on this worker a resync (a union
+of both folders that deletes nothing; a pair whose folder on this worker
+is empty stops and asks for one instead). A two-way sync may not use this
+folder, a folder inside it or one that holds it as a side
+(`path_not_allowed`), even when `local_roots` covers the data directory.
+
+At startup and then once a day, the worker deletes the state of pairs that
+have not run for 180 days (not a setting); a pair that runs again later
+starts with a resync. Only one run of a pair uses its state at a time,
+also across processes.
 
 ## Child process limits
 

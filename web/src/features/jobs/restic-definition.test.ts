@@ -2,7 +2,15 @@ import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { describe, expect, it } from "vitest";
 
 import { JobDefinitionSchema, ValidationErrorSchema } from "@/gen/syncr/v1/api_pb";
-import { RcloneTransferMode, ResticRestoreOverwrite } from "@/gen/syncr/v1/link_pb";
+import {
+  BisyncCompare,
+  BisyncConflictLoser,
+  BisyncConflictResolve,
+  BisyncResyncMode,
+  FilterAction,
+  RcloneTransferMode,
+  ResticRestoreOverwrite,
+} from "@/gen/syncr/v1/link_pb";
 
 import {
   definitionError,
@@ -116,6 +124,49 @@ const cases: [string, Init][] = [
     "restic_prune",
     { operation: { case: "resticPrune", value: { repositoryId: "repo-1", dryRun: true } } },
   ],
+  // Two-way syncs last: tests above pick cases by index.
+  [
+    "rclone_bisync",
+    {
+      operation: {
+        case: "rcloneBisync",
+        value: {
+          path1: { remoteId: "", path: "/srv/shared" },
+          path2: { remoteId: "r1", path: "shared" },
+          options: {
+            createEmptySrcDirs: true,
+            filters: [{ action: FilterAction.EXCLUDE, pattern: "*.tmp" }],
+          },
+        },
+      },
+    },
+  ],
+  [
+    "rclone_bisync",
+    {
+      operation: {
+        case: "rcloneBisync",
+        value: {
+          path1: { remoteId: "r2", path: "a" },
+          path2: { remoteId: "r1", path: "b/c" },
+          options: {
+            transfers: 8,
+            checkers: 16,
+            bandwidthLimitBytesPerSecond: 3n * 1024n * 1024n,
+            lowLevelRetries: 0,
+            dryRun: true,
+            compare: [BisyncCompare.SIZE, BisyncCompare.CHECKSUM],
+            conflictResolve: BisyncConflictResolve.PATH2,
+            conflictLoser: BisyncConflictLoser.PATHNAME,
+            conflictSuffix: "laptop,desktop",
+            maxDeletePercent: 25,
+            checkAccess: true,
+            resyncMode: BisyncResyncMode.OLDER,
+          },
+        },
+      },
+    },
+  ],
 ];
 
 describe("JobDefinitionState", () => {
@@ -161,7 +212,7 @@ describe("JobDefinitionState", () => {
       const s = emptyDefinition(kind, "repo-9");
       expect(s.kind).toBe(kind);
       const def = toDefinition(s);
-      if (kind !== "rclone_transfer")
+      if (kind !== "rclone_transfer" && kind !== "rclone_bisync")
         expect(def.operation?.value).toMatchObject({ repositoryId: "repo-9" });
     }
     const retention = emptyDefinition("restic_forget");

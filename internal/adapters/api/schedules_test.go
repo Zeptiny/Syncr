@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -616,4 +617,122 @@ func lateScheduleEnv(t *testing.T, e *testEnv, late *lateSchedules) *scheduleEnv
 	}
 	late.ScheduleService = svc
 	return &scheduleEnv{testEnv: e, contacts: fc, svc: svc}
+}
+
+// twoWayDefinition keeps the worker's /data/shared and path on remote in
+// step (rclone_bisync); resync and force are its one-shot fields.
+func twoWayDefinition(remote domain.RemoteID, path string, resync, force bool) *syncrv1.JobDefinition {
+	return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_RcloneBisync{RcloneBisync: &syncrv1.RcloneBisyncDefinition{
+		Path1:  &syncrv1.JobLocation{Path: "/data/shared"},
+		Path2:  &syncrv1.JobLocation{RemoteId: remote.String(), Path: path},
+		Resync: resync,
+		Force:  force,
+	}}}
+}
+
+// TestScheduleTwoWaySync: a two-way sync's schedule targets one worker,
+// never a label, and never sets the fields meant for a single run (resync,
+// force), when it is created or updated; RunJob accepts those fields and
+// gives the job a concurrency key per side.
+func TestScheduleTwoWaySync(t *testing.T) {
+	t.Parallel()
+	e := newScheduleEnv(t)
+	ctx := t.Context()
+	c := e.schedulesFor(testUser)
+	r2 := e.addRemote(testUser, "R2", "s3")
+	const labelWhy = "a two-way sync keeps its state on one worker; choose a worker"
+	const once = "can only be set for a single run"
+
+	in := e.scheduleInput("Shared folder")
+	in.Definition = twoWayDefinition(r2, "shared", false, false)
+	sc := e.createSchedule(testUser, in)
+	if !proto.Equal(sc.GetDefinition(), in.GetDefinition()) || sc.GetTarget().GetWorkerId() != e.worker.String() ||
+		len(sc.GetRemotes()) != 1 || sc.GetRemotes()[0].GetName() != "R2" {
+		t.Errorf("CreateSchedule(two-way sync) = %v", sc)
+	}
+
+	onLabel := func(in *syncrv1.ScheduleInput) {
+		in.Target = &syncrv1.ScheduleTarget{Target: &syncrv1.ScheduleTarget_WorkerLabel{WorkerLabel: "desktop"}}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*syncrv1.ScheduleInput)
+		want   map[string]string
+	}{
+		{"on a label", onLabel, map[string]string{"target.worker_label": labelWhy}},
+		{"resync", func(in *syncrv1.ScheduleInput) { in.Definition = twoWayDefinition(r2, "shared", true, false) },
+			map[string]string{"definition.rclone_bisync.resync": once}},
+		{"force", func(in *syncrv1.ScheduleInput) { in.Definition = twoWayDefinition(r2, "shared", false, true) },
+			map[string]string{"definition.rclone_bisync.force": once}},
+		{"all at once", func(in *syncrv1.ScheduleInput) {
+			onLabel(in)
+			in.Definition = twoWayDefinition(r2, "shared", true, true)
+		}, map[string]string{"target.worker_label": labelWhy, "definition.rclone_bisync.resync": once, "definition.rclone_bisync.force": once}},
+		// The kind's own checks come first; the schedule rules need a
+		// definition it accepts.
+		{"invalid definition on a label", func(in *syncrv1.ScheduleInput) {
+			onLabel(in)
+			in.Definition = twoWayDefinition(r2, "shared", true, false)
+			in.Definition.GetRcloneBisync().Path1.Path = "relative"
+		}, map[string]string{"definition.rclone_bisync.path1.path": `must be an absolute path on the worker, e.g. "/srv/data" or "C:\Data"`}},
+	}
+	for _, tt := range tests {
+		check := func(op string, err error) {
+			t.Helper()
+			if codeOf(t, err) != connect.CodeInvalidArgument {
+				t.Errorf("%s %s: %v, want InvalidArgument", op, tt.name, err)
+				return
+			}
+			got := map[string]string{}
+			for _, v := range violations(t, err) {
+				got[v.GetField()] = v.GetMessage()
+			}
+			if !maps.Equal(got, tt.want) {
+				t.Errorf("%s %s: violations %v, want %v", op, tt.name, got, tt.want)
+			}
+		}
+		in := e.scheduleInput("Another")
+		in.Definition = twoWayDefinition(r2, "shared", false, false)
+		tt.mutate(in)
+		_, err := c.CreateSchedule(ctx, connect.NewRequest(&syncrv1.CreateScheduleRequest{Input: in}))
+		check("create", err)
+		upd := e.scheduleInput("Shared folder")
+		upd.Definition = twoWayDefinition(r2, "shared", false, false)
+		tt.mutate(upd)
+		_, err = c.UpdateSchedule(ctx, connect.NewRequest(&syncrv1.UpdateScheduleRequest{ScheduleId: sc.GetId(), Version: sc.GetVersion(), Input: upd}))
+		check("update", err)
+	}
+
+	// A transfer may still run on a label, and a schedule may become a
+	// two-way sync on its worker.
+	lab := e.scheduleInput("Copy by label")
+	onLabel(lab)
+	byLabel := e.createSchedule(testUser, lab)
+	upd := e.scheduleInput("Copy by label")
+	upd.Definition = twoWayDefinition(r2, "other", false, false)
+	got, err := c.UpdateSchedule(ctx, connect.NewRequest(&syncrv1.UpdateScheduleRequest{ScheduleId: byLabel.GetId(), Version: byLabel.GetVersion(), Input: upd}))
+	if err != nil || got.Msg.GetSchedule().GetDefinition().GetRcloneBisync() == nil || got.Msg.GetSchedule().GetTarget().GetWorkerId() != e.worker.String() {
+		t.Errorf("UpdateSchedule(to a two-way sync on a worker) = %v, %v", got, err)
+	}
+
+	// RunJob: the one-shot fields are accepted and kept with the job.
+	for _, oneShot := range [][2]bool{{true, false}, {false, true}} {
+		def := twoWayDefinition(r2, "shared", oneShot[0], oneShot[1])
+		j, err := e.runAs(testUser, def)
+		if err != nil {
+			t.Fatalf("RunJob(resync %v, force %v) = %v", oneShot[0], oneShot[1], err)
+		}
+		if j.GetKind() != "rclone_bisync" || !proto.Equal(j.GetDefinition(), def) {
+			t.Errorf("RunJob = %v", j)
+		}
+		stored, err := e.store.GetJob(ctx, e.jobID(j))
+		if err != nil || len(stored.ConcurrencyKeys) != 2 || !strings.HasPrefix(stored.ConcurrencyKeys[0], "bisync:") ||
+			!slices.Equal(stored.RemoteIDs, []domain.RemoteID{r2}) {
+			t.Errorf("stored job = %+v (%v), want two location keys and the remote", stored, err)
+		}
+	}
+	// Another user's remote is not found, as for transfers.
+	if _, err := e.runAs(testOther, twoWayDefinition(r2, "shared", false, false)); codeOf(t, err) != connect.CodeNotFound {
+		t.Errorf("RunJob on another user's remote = %v, want NotFound", err)
+	}
 }

@@ -87,6 +87,10 @@ type tracker struct {
 	sc       *scrub.Scrubber
 	progress runner.Progress
 	diag     []string
+	// observe, if set, sees every JSON log line after the tracker took its
+	// stats and diagnostics (the two-way sync runner reads rclone bisync's
+	// conflicts and abort messages there).
+	observe func(logLine)
 }
 
 func newTracker(emit runner.EmitFunc, sc *scrub.Scrubber) *tracker {
@@ -117,6 +121,9 @@ func (t *tracker) line(l proc.Line) {
 			msg = ll.Object + ": " + msg
 		}
 		t.note(msg)
+	}
+	if t.observe != nil {
+		t.observe(ll)
 	}
 }
 

@@ -276,7 +276,7 @@ func workerTree(start time.Time) tree {
 		{"/mnt/disk2/nextcloud/data.tar.1", 5 * gib},
 		{"/backup/nextcloud-photos/2026-10.tar", 6 * gib},
 		{"/backup/restore-test/photos/2024/IMG_0001.jpg", 4 * mib},
-	})
+	}, sharedFiles(sharedLocal))
 	return newTree(start, files, "/srv/restore", "/mnt/disk2/media", "/backup/restores")
 }
 
@@ -330,7 +330,7 @@ func resticLayout(root string) []demoFile {
 // demoRemoteRoots are the roots rclone joins to a path on the demo remotes
 // (the bucket, the SFTP folder), longest first.
 func demoRemoteRoots() []string {
-	return []string{"home/backups", "syncr-offsite", "alice-backup", "archive"}
+	return []string{"home/backups", "syncr-offsite", "alice-backup", sharedBucket, "archive"}
 }
 
 // remoteRel returns a location's path relative to its demo remote's root.
@@ -348,10 +348,14 @@ func remoteRel(loc *syncrv1.Location) string {
 }
 
 // backendOf is the rclone backend of the remote a probe addresses ("" if
-// it names none).
+// it names none), or "r2" for an S3 remote on Cloudflare R2 (the shared
+// folder's bucket), which has content of its own.
 func backendOf(remotes []*syncrv1.RemoteDefinition) string {
 	if len(remotes) == 0 {
 		return ""
+	}
+	if r := remotes[0]; r.GetBackendType() == "s3" && r.GetOptions()["provider"] == "Cloudflare" {
+		return "r2"
 	}
 	return remotes[0].GetBackendType()
 }
@@ -382,6 +386,8 @@ func remoteTree(backend string, start time.Time) (tree, error) {
 			{"calendar/ada.ics", 96 * kib},
 			{"laptop/projects/syncr.tar.zst", 220 * mib},
 		})), nil
+	case "r2":
+		return newTree(start, sharedFiles(sharedRemotePath)), nil
 	case "webdav":
 		return nil, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED,
 			"couldn't list the folder: Propfind \"https://cloud.example.com/remote.php/dav/files/ada/\": dial tcp 203.0.113.20:443: connect: connection refused")

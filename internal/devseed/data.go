@@ -57,7 +57,8 @@ func tools() []workers.Tool {
 // current build: they report every link feature and probe operation.
 // old-nas reported none before it was removed; attic-nas is online but
 // runs a build from before Milestone 6 (no link.FeatureJobTimeLimit, no
-// link.FeatureJobHooks, no sftp_host_keys probe), so the UI shows it
+// link.FeatureJobHooks, no sftp_host_keys probe, no two-way sync: neither
+// link.FeatureRcloneBisync nor the rclone_bisync kind), so the UI shows it
 // outdated with the command that upgrades it. nas-01's operator defined
 // hooks (demoHooks), which the backups of its documents run.
 func demoWorkers() []demoWorker {
@@ -106,12 +107,13 @@ func demoWorkers() []demoWorker {
 		{
 			name: wAtticNAS, mode: domain.WorkerActive, status: domain.WorkerOnline,
 			info: workers.Info{
-				Version: "2.0.0-dev", OS: "linux", Arch: "amd64", Hostname: "attic-nas", Tools: tools(), JobKinds: link.Kinds(),
+				Version: "2.0.0-dev", OS: "linux", Arch: "amd64", Hostname: "attic-nas", Tools: tools(),
 				MaxConcurrentJobs: 1, LocalRoots: []string{"/volume1"},
 				// Built before Milestone 6: no time limits, no hooks, no
-				// host-key probe.
+				// host-key probe, no two-way sync.
+				JobKinds: slices.DeleteFunc(link.Kinds(), func(k string) bool { return k == "rclone_bisync" }),
 				Features: slices.DeleteFunc(slices.Clone(features), func(f string) bool {
-					return f == link.FeatureJobTimeLimit || f == link.FeatureJobHooks
+					return f == link.FeatureJobTimeLimit || f == link.FeatureJobHooks || f == link.FeatureRcloneBisync
 				}),
 				ProbeOps: slices.DeleteFunc(slices.Clone(ops), func(op string) bool { return op == "sftp_host_keys" }),
 			},
@@ -149,6 +151,7 @@ const (
 	rAliceDocs = "Alice's documents"
 	rAliceB2   = "Alice's B2"
 	rOffsite   = "Offsite SSH"
+	rR2        = "Cloudflare R2"
 )
 
 // demoHostKeys are the SSH host keys of the demo SSH servers: an Ed25519
@@ -199,6 +202,12 @@ func demoRemotes() []demoRemote {
 			Options: map[string]string{"host": "backup.example.net", "user": "syncr", "path": "/srv/backup",
 				"host_keys": strings.Join(demoHostKeys(), "\n")},
 			Secrets: map[string]string{"pass": "syncr-demo-offsite-password"}}},
+		// The R2 bucket that the shared folder's two-way sync keeps in step
+		// with nas-01 (bisync_data.go).
+		{owner: ownerAdmin, input: remotes.Input{Name: rR2, Type: "s3",
+			Options: map[string]string{"provider": "Cloudflare", "endpoint": "https://4f0c1e2d3b4a59687766554433221100.r2.cloudflarestorage.com",
+				"region": "auto", "access_key_id": "syncr-demo-r2", "bucket": sharedBucket},
+			Secrets: map[string]string{"secret_access_key": "syncr-demo-r2-secret"}}},
 	}
 }
 

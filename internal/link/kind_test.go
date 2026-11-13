@@ -16,6 +16,7 @@ func TestKindOf(t *testing.T) {
 		{spec: nil, want: ""},
 		{spec: &syncrv1.JobSpec{}, want: ""},
 		{spec: &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransfer{}}}, want: "rclone_transfer"},
+		{spec: &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_RcloneBisync{RcloneBisync: &syncrv1.RcloneBisync{}}}, want: "rclone_bisync"},
 		{spec: &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_ResticInit{ResticInit: &syncrv1.ResticInit{}}}, want: "restic_init"},
 		{spec: &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_ResticBackup{ResticBackup: &syncrv1.ResticBackup{}}}, want: "restic_backup"},
 		{spec: &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_ResticForget{ResticForget: &syncrv1.ResticForget{}}}, want: "restic_forget"},
@@ -35,7 +36,7 @@ func TestKindOf(t *testing.T) {
 func TestKinds(t *testing.T) {
 	t.Parallel()
 	want := []string{
-		"rclone_transfer",
+		"rclone_transfer", "rclone_bisync",
 		"restic_init", "restic_backup", "restic_forget", "restic_prune",
 		"restic_check", "restic_restore", "restic_snapshots", "restic_delete_data",
 	}
@@ -47,7 +48,7 @@ func TestKinds(t *testing.T) {
 			t.Errorf("IsKind(%q) = false", k)
 		}
 	}
-	for _, k := range []string{"", "remotes", "max_runtime", "operation", "rclone", "RcloneTransfer"} {
+	for _, k := range []string{"", "remotes", "max_runtime", "operation", "rclone", "RcloneTransfer", "bisync"} {
 		if IsKind(k) {
 			t.Errorf("IsKind(%q) = true", k)
 		}

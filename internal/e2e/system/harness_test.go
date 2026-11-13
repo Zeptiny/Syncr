@@ -611,8 +611,16 @@ type worker struct {
 }
 
 // setupWorker runs `syncr-worker setup --no-service` against c, enrolling
-// with a token from the admin API (passive: listening on a free port).
+// with a token from the admin API (passive: listening on a free port). The
+// worker is named after the test.
 func setupWorker(t *testing.T, c *controller, bin, rclone, restic string, passive bool) *worker {
+	t.Helper()
+	return setupNamedWorker(t, c, bin, rclone, restic, t.Name(), passive)
+}
+
+// setupNamedWorker is setupWorker for a worker named name, for tests with
+// more than one worker.
+func setupNamedWorker(t *testing.T, c *controller, bin, rclone, restic, name string, passive bool) *worker {
 	t.Helper()
 	dir := t.TempDir()
 	w := &worker{
@@ -625,7 +633,7 @@ func setupWorker(t *testing.T, c *controller, bin, rclone, restic string, passiv
 	args := []string{
 		"setup", "--no-service", "--controller", c.base, "--token", c.token(),
 		"--data-dir", filepath.Join(dir, "state"), "--local-root", w.root, "--config", w.config,
-		"--name", t.Name(),
+		"--name", name,
 	}
 	if passive {
 		port := freePort(t)

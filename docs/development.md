@@ -108,8 +108,9 @@ SYNCR_TEST_RESTIC=.cache/tools/restic/<version>/<os>-<arch>/restic \
   through the API, enrolls workers with `syncr-worker setup --no-service` in
   both link modes, runs rclone jobs over stored remotes (local and MinIO)
   through the API, kills and restarts the controller and the worker
-  mid-job, and runs a schedule every minute into MinIO with a signed webhook
-  notification, across a worker outage. It needs the go toolchain, Docker
+  mid-job, runs a schedule every minute into MinIO with a signed webhook
+  notification, across a worker outage, and keeps a folder of two workers
+  in step through MinIO with two-way syncs. It needs the go toolchain, Docker
   and both tool variables.
 - CI runs both flavors: `integration-linux` (with Docker) and
   `integration-windows` (local-only).
@@ -162,7 +163,8 @@ Design records: [architecture](adr/0001-architecture.md),
 [job time limits and retention](adr/0014-job-time-limits-retention.md),
 [one controller per database](adr/0015-single-controller-guard.md),
 [releases and versioning](adr/0016-releases-versioning.md),
-[job hooks](adr/0017-job-hooks.md).
+[job hooks](adr/0017-job-hooks.md),
+[two-way sync](adr/0018-two-way-sync.md).
 
 ## Repository layout
 
@@ -214,6 +216,7 @@ internal/worker/service/  systemd / Windows Service / per-user service managemen
 internal/worker/tlscert/  self-signed certificate of a passive worker
 internal/worker/proc/     child-process supervisor (env allowlist, line streaming, cancellation)
 internal/worker/runner/   Runner contract and registry; runner/rclone and runner/restic implement it
+internal/worker/bisyncstate/ two-way sync state per pair (lock, rclone work dir, filters, retention)
 internal/worker/tools/    pinned rclone/restic provisioning (configured, bundled, managed download, PATH)
 internal/worker/localfs/  local_roots policy for local paths
 internal/worker/rcloneenv/ env-defined rclone remotes (RCLONE_CONFIG_*), secrets handling

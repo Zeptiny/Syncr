@@ -132,7 +132,7 @@ func TestRunBlocksUntilCancelled(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("run did not stop after cancellation")
 	}
-	for _, want := range []string{`"msg":"worker ready"`, `"job_kinds":["rclone_transfer"`, `"msg":"worker stopped"`} {
+	for _, want := range []string{`"msg":"worker ready"`, `"job_kinds":["rclone_bisync","rclone_transfer"`, `"msg":"worker stopped"`} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("logs lack %s:\n%s", want, stderr)
 		}

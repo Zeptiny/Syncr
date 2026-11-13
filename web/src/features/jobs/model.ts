@@ -8,8 +8,9 @@ import type {
 import { ResticRestoreOverwrite } from "@/gen/syncr/v1/link_pb";
 import { durationSeconds, toNumber, tsDate } from "@/lib/format";
 import { describeRetention } from "@/lib/retention";
-import { isTerminal } from "@/lib/status";
+import { isTerminal, transferModeLabel } from "@/lib/status";
 
+import { bisyncOf } from "./bisync-definition";
 import { retentionState } from "./restic-definition";
 
 /** transferOf returns the job's transfer definition, if it is one. */
@@ -47,6 +48,51 @@ export function endpoint(job: Job, loc: JobLocation | undefined): EndpointLabel 
     deleted: ref?.deleted ?? false,
     local: false,
   };
+}
+
+/**
+ * JobRoute is the two locations of a transfer or a two-way sync, ready for
+ * display: from and to of a transfer, Folder A and Folder B of a two-way
+ * sync.
+ */
+export interface JobRoute {
+  a: EndpointLabel;
+  b: EndpointLabel;
+  aLabel: string;
+  bLabel: string;
+  /** twoWay marks a two-way sync, whose changes go both ways. */
+  twoWay: boolean;
+  /** mode names the operation: "Copy", "Sync", "Move" or "Two-way sync". */
+  mode: string;
+}
+
+/**
+ * jobRoute returns the locations of a transfer or a two-way sync, or
+ * undefined for other kinds. It takes a job, or a schedule shaped as one
+ * (its definition and remotes).
+ */
+export function jobRoute(job: Job): JobRoute | undefined {
+  const t = transferOf(job);
+  if (t)
+    return {
+      a: endpoint(job, t.source),
+      b: endpoint(job, t.destination),
+      aLabel: "From",
+      bLabel: "To",
+      twoWay: false,
+      mode: transferModeLabel(t.mode),
+    };
+  const b = bisyncOf(job.definition);
+  if (b)
+    return {
+      a: endpoint(job, b.path1),
+      b: endpoint(job, b.path2),
+      aLabel: "Folder A",
+      bLabel: "Folder B",
+      twoWay: true,
+      mode: "Two-way sync",
+    };
+  return undefined;
 }
 
 /** ResticSummary describes a restic definition in two short lines. */

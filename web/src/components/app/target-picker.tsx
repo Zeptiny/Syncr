@@ -1,4 +1,4 @@
-import { AlertTriangle, Server, Tag } from "lucide-react";
+import { AlertTriangle, Info, Server, Tag } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { WorkerStatus, type Worker } from "@/gen/syncr/v1/api_pb";
@@ -22,6 +22,12 @@ export interface TargetPickerProps {
   onChange: (t: Target) => void;
   workers: Worker[];
   error?: string;
+  /**
+   * labelDisabled, when set, is why the job cannot run on a label (e.g. a
+   * two-way sync keeps its state on one worker): the label choice is
+   * disabled and the reason shown.
+   */
+  labelDisabled?: string;
 }
 
 /**
@@ -29,7 +35,14 @@ export interface TargetPickerProps {
  * the least busy online worker with a label. For a label it shows which
  * workers have it, and warns when none does yet.
  */
-export function TargetPicker({ id, value, onChange, workers, error }: TargetPickerProps) {
+export function TargetPicker({
+  id,
+  value,
+  onChange,
+  workers,
+  error,
+  labelDisabled,
+}: TargetPickerProps) {
   const allLabels = [...new Set(workers.flatMap((w) => w.labels))].sort();
   const matching = labelledWorkers(workers, value.label);
   const online = matching.filter((w) => w.status === WorkerStatus.ONLINE);
@@ -50,18 +63,21 @@ export function TargetPicker({ id, value, onChange, workers, error }: TargetPick
       >
         {tabs.map((t) => {
           const on = value.kind === t.kind;
+          const disabled = t.kind === "label" && !!labelDisabled;
           return (
             <button
               key={t.kind}
               type="button"
               role="radio"
               aria-checked={on}
+              disabled={disabled}
+              aria-describedby={disabled ? `${id}-label-disabled` : undefined}
               onClick={() => onChange({ ...value, kind: t.kind })}
               className={cn(
-                "inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-medium whitespace-nowrap transition-colors sm:flex-none",
+                "inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-medium whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none",
                 on
                   ? "bg-card text-foreground shadow-xs"
-                  : "text-muted-foreground hover:text-foreground",
+                  : "text-muted-foreground enabled:hover:text-foreground",
               )}
             >
               <t.icon className="size-3.5" aria-hidden />
@@ -70,6 +86,16 @@ export function TargetPicker({ id, value, onChange, workers, error }: TargetPick
           );
         })}
       </div>
+
+      {labelDisabled && (
+        <p
+          id={`${id}-label-disabled`}
+          className="-mt-1 flex items-start gap-1.5 text-xs leading-5 text-muted-foreground"
+        >
+          <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+          {labelDisabled}
+        </p>
+      )}
 
       {value.kind === "worker" ? (
         <FieldShell

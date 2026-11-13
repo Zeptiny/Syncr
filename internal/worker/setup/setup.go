@@ -96,6 +96,17 @@ type System struct {
 	// Executable is the absolute path of the worker binary the service will
 	// run.
 	Executable func() (string, error)
+	// Stat looks up a file, as os.Stat does (nil means os.Stat). Setup uses
+	// it to find an earlier setup's config file.
+	Stat func(name string) (fs.FileInfo, error)
+}
+
+// stat is System.Stat, or os.Stat.
+func (s System) stat(name string) (fs.FileInfo, error) {
+	if s.Stat != nil {
+		return s.Stat(name)
+	}
+	return os.Stat(name)
 }
 
 // ToolStatus is one provisioned tool.
@@ -418,7 +429,7 @@ func probeAddr(listen string) string {
 // detectExisting finds an earlier setup and refuses to touch it without
 // --force.
 func (s *Setup) detectExisting(ctx context.Context, p *plan) error {
-	if _, err := os.Stat(p.configPath); err == nil {
+	if _, err := s.System.stat(p.configPath); err == nil {
 		p.existingConfig = true
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("check for an existing setup at %s: %w", p.configPath, err)

@@ -170,10 +170,24 @@ func optionFlags(mode syncrv1.RcloneTransferMode, opts *syncrv1.RcloneTransferOp
 // order. The "=" form keeps a rule starting with "-" from being read as a
 // flag.
 func filterFlags(rules []*syncrv1.FilterRule) ([]string, error) {
+	lines, err := filterLines(rules)
+	if err != nil {
+		return nil, err
+	}
+	for i, l := range lines {
+		lines[i] = "--filter=" + l
+	}
+	return lines, nil
+}
+
+// filterLines checks filter rules and returns them as rclone filter lines
+// ("+ pattern" or "- pattern"), in order: the values of --filter, and the
+// lines of a two-way sync's filters file.
+func filterLines(rules []*syncrv1.FilterRule) ([]string, error) {
 	if len(rules) > maxFilters {
 		return nil, fmt.Errorf("at most %d filter rules are allowed", maxFilters)
 	}
-	flags := make([]string, 0, len(rules))
+	lines := make([]string, 0, len(rules))
 	for i, r := range rules {
 		var sign string
 		switch r.GetAction() {
@@ -193,7 +207,7 @@ func filterFlags(rules []*syncrv1.FilterRule) ([]string, error) {
 		case strings.ContainsAny(p, "\x00\r\n"):
 			return nil, fmt.Errorf("filter rule %d: pattern contains a line break or NUL byte", i)
 		}
-		flags = append(flags, "--filter="+sign+" "+p)
+		lines = append(lines, sign+" "+p)
 	}
-	return flags, nil
+	return lines, nil
 }

@@ -218,6 +218,60 @@ func TestResolveSymlinkedRoot(t *testing.T) {
 	}
 }
 
+func TestOverlap(t *testing.T) {
+	t.Parallel()
+	base := realTempDir(t)
+	state := filepath.Join(base, "data", "bisync")
+	mkdirs(t, filepath.Join(state, "key", "work"), filepath.Join(base, "shared"))
+
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"same folder", state, state, true},
+		{"inside", filepath.Join(state, "key", "work"), state, true},
+		{"holds it", filepath.Join(base, "data"), state, true},
+		{"holds it, the other way round", state, base, true},
+		{"not there yet, inside", filepath.Join(state, "new", "dir"), state, true},
+		{"beside it", filepath.Join(base, "shared"), state, false},
+		{"a name that starts the same", filepath.Join(base, "data", "bisync2"), state, false},
+		{"lexically inside", filepath.Join(base, "shared", "..", "data", "bisync", "x"), state, true},
+	}
+	if runtime.GOOS == "windows" {
+		tests = append(tests, struct {
+			name string
+			a, b string
+			want bool
+		}{"another case", filepath.Join(base, "DATA", "BiSync", "key"), state, true})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got, err := Overlap(tt.a, tt.b); err != nil || got != tt.want {
+				t.Errorf("Overlap(%q, %q) = %v, %v; want %v", tt.a, tt.b, got, err, tt.want)
+			}
+		})
+	}
+
+	t.Run("through a link", func(t *testing.T) {
+		t.Parallel()
+		link := filepath.Join(base, "shared", "into-state")
+		symlink(t, filepath.Join(state, "key"), link)
+		for _, p := range []string{link, filepath.Join(link, "work")} {
+			if got, err := Overlap(p, state); err != nil || !got {
+				t.Errorf("Overlap(%q) = %v, %v; want true", p, got, err)
+			}
+		}
+	})
+
+	for _, bad := range [][2]string{{"relative", state}, {state, ""}} {
+		if _, err := Overlap(bad[0], bad[1]); !errors.Is(err, ErrInvalidPath) {
+			t.Errorf("Overlap(%q, %q) err = %v, want ErrInvalidPath", bad[0], bad[1], err)
+		}
+	}
+}
+
 func TestResolveDotDotIsLexical(t *testing.T) {
 	t.Parallel()
 	// root/link/.. would be "outside/.." -> base if resolved physically; the
