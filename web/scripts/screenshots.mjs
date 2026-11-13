@@ -709,11 +709,14 @@ async function bisyncForm(page, filled) {
   await settle(page, 300);
 }
 
-// The two-way sync shots. They expect the dev seed (see the step B
-// report): the schedule "Shared folder ⇄ R2" on nas-01 between /srv/shared
-// and the remote "Cloudflare R2", with a run that kept two conflicts, runs
-// that failed with RESYNC_REQUIRED, SIDE_UNAVAILABLE and (the newest)
-// SAFETY_ABORT.
+// The two-way sync shots. They expect the dev seed
+// (internal/devseed/bisync_data.go): the schedule "Shared folder ⇄ R2" on
+// nas-01 between /srv/shared and the remote "Cloudflare R2", with a run
+// that kept two conflicts, runs that failed with RESYNC_REQUIRED,
+// SIDE_UNAVAILABLE and (the newest) SAFETY_ABORT, and the newest
+// RESYNC_REQUIRED: the first run of a new pair on backup-host whose folder
+// is empty. The recovery actions show only on a pair's newest run, so 05
+// and 06 open those.
 const bisyncShots = [
   [
     "01-editor",

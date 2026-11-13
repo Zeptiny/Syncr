@@ -203,6 +203,80 @@ func TestFresh(t *testing.T) {
 	}
 }
 
+func TestResumable(t *testing.T) {
+	t.Parallel()
+	const (
+		header = "# bisync listing v1 from 2026-11-12T20:52:35.936556785+0000\n"
+		entry  = `-        7 - - 2026-11-12T20:52:35.871428015+0000 "f1.txt"` + "\n"
+		ses    = "data_a..data_b"
+	)
+	// both returns the two sides' listings of ses with suffix and content.
+	both := func(suffix, content string) map[string]string {
+		return map[string]string{ses + ".path1.lst" + suffix: content, ses + ".path2.lst" + suffix: content}
+	}
+	join := func(ms ...map[string]string) map[string]string {
+		out := map[string]string{}
+		for _, m := range ms {
+			for k, v := range m {
+				out[k] = v
+			}
+		}
+		return out
+	}
+	tests := []struct {
+		name      string
+		files     map[string]string
+		dirs      []string
+		resumable bool
+	}{
+		{"empty work dir", nil, nil, false},
+		{"current listings", both("", header+entry), nil, true},
+		{"current listings, one without entries", map[string]string{ses + ".path1.lst": header, ses + ".path2.lst": header + entry}, nil, false},
+		// rclone uses the current listings when both are there, even with
+		// previous ones beside them.
+		{"empty current listings beside previous ones", join(both("", header), both("-old", header+entry)), nil, false},
+		// After a critical error: the current listings were renamed.
+		{"previous listings after a critical error", join(both("-err", header+entry), both("-old", header+entry), both("-new", entry)), nil, true},
+		{"previous listings and one current one", join(both("-old", header+entry), map[string]string{ses + ".path1.lst": header + entry}), nil, true},
+		{"previous listings without entries", join(both("-err", header+entry), both("-old", header)), nil, false},
+		{"one previous listing", join(both("-err", header+entry), map[string]string{ses + ".path1.lst-old": header + entry}), nil, false},
+		// A critical error on the first run after a resync: no previous
+		// listings yet.
+		{"renamed listings only", join(both("-err", header+entry), both("-new", header+entry)), nil, false},
+		{"dry-run listings only", join(both("-dry", header+entry), both("-dry-old", header+entry)), nil, false},
+		{"listings of two sessions", map[string]string{ses + ".path1.lst": header + entry, "other..x.path2.lst": header + entry}, nil, false},
+		{"a directory named like a listing", map[string]string{ses + ".path1.lst": header + entry}, []string{ses + ".path2.lst"}, false},
+		{"session name containing the suffix", both("", header+entry), []string{"x.path1.lst_y..z"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := open(t, newStore(t), keyA)
+			for name, content := range tt.files {
+				writeFile(t, filepath.Join(p.WorkDir(), name), content)
+			}
+			for _, d := range tt.dirs {
+				if err := os.Mkdir(filepath.Join(p.WorkDir(), d), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := p.Resumable()
+			if err != nil || got != tt.resumable {
+				t.Errorf("Resumable() = %v, %v; want %v", got, err, tt.resumable)
+			}
+		})
+	}
+
+	// A work directory that cannot be read.
+	p := open(t, newStore(t), keyB)
+	if err := os.RemoveAll(p.WorkDir()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Resumable(); err == nil {
+		t.Error("Resumable() without a work directory succeeded")
+	}
+}
+
 func TestClearStaleLocks(t *testing.T) {
 	t.Parallel()
 	p := open(t, newStore(t), keyA)

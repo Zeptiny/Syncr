@@ -22,8 +22,11 @@ const (
 	sharedRemote   = "Cloudflare R2"
 	sharedTitle    = "Two-way sync /srv/shared ⇄ Cloudflare R2"
 	msgSide        = "Folder A (path1) is empty; refusing to sync it with the other side (is the drive mounted and the path right?)"
-	msgResync      = "a resync is required: failed to open source object: open /srv/shared/scans/2026-11-contract.pdf: permission denied; " +
-		"run it once with resync to rebuild the pair's state from both sides as they are now"
+	msgResync      = "a resync is required: filters file has changed; run it once with resync to rebuild the pair's state from both sides as they are now"
+	msgCritical    = "the two-way sync stopped with a critical error: failed to open source object: open /srv/shared/scans/2026-11-contract.pdf: " +
+		"permission denied; fix the cause and run it again: the next run goes on from the pair's last good state, without a resync"
+	msgEmpty = "Folder A (path1) is empty; a first run does not fill an empty folder on its own (a drive that is not mounted looks the same). " +
+		"If this is a new machine, run it once with resync to fill it from Folder B (path2); if the folder is on a drive, mount it first"
 	msgSafety = `safety check stopped the two-way sync: too many deletes (>50%, 731 of 1268) on Path1 "/srv/shared/"; ` +
 		"if these changes are intended, run it once with force"
 	msgConflicts = `2 files changed on both sides; both versions were kept, renamed with the suffix "conflict"`
@@ -105,6 +108,7 @@ func TestSeedTwoWaySync(t *testing.T) {
 			}{
 				link.ErrorCodeName(syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE): {msgSide, 7},
 				link.ErrorCodeName(syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED):  {msgResync, 7},
+				link.ErrorCodeName(syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED): {msgCritical, 7},
 				link.ErrorCodeName(syncrv1.JobErrorCode_JOB_ERROR_CODE_SAFETY_ABORT):     {msgSafety, 1},
 			}[j.Error.Code]
 			if want.msg == "" || j.Error.Message != want.msg || j.ExitCode != want.exit {
@@ -127,7 +131,7 @@ func TestSeedTwoWaySync(t *testing.T) {
 		}
 	}
 	if counts["first_run"] != 1 || counts["conflicts"] != 1 || counts["side_unavailable"] != 1 || counts["resync_required"] != 1 ||
-		counts["safety_abort"] < 1 || counts["safety_abort"] > 2 {
+		counts["execution_failed"] != 1 || counts["safety_abort"] < 1 || counts["safety_abort"] > 2 {
 		t.Errorf("runs by state = %v", counts)
 	}
 	if last := runs[len(runs)-1]; last.Error.Code != "safety_abort" {
@@ -137,7 +141,9 @@ func TestSeedTwoWaySync(t *testing.T) {
 		t.Errorf("the first run's details = %+v", got)
 	}
 
-	// The resync run by hand: after the run that needed it, before the next.
+	// The jobs run by hand, newest first: the new pair's first run on
+	// backup-host, refused because its folder is empty, and the resync
+	// after the run that needed it, before the next.
 	all, err := e.deps.Jobs.List(ctx, s.Admin, jobs.ListFilter{Kinds: []string{"rclone_bisync"}, Limit: jobs.MaxPageSize})
 	if err != nil {
 		t.Fatal(err)
@@ -148,10 +154,18 @@ func TestSeedTwoWaySync(t *testing.T) {
 			manual = append(manual, j)
 		}
 	}
-	if len(manual) != 1 {
-		t.Fatalf("%d two-way sync jobs run by hand, want 1", len(manual))
+	if len(manual) != 2 {
+		t.Fatalf("%d two-way sync jobs run by hand, want 2", len(manual))
 	}
-	resync := manual[0]
+	fresh := manual[0]
+	fdef, err := jobkind.Unmarshal(fresh.Definition)
+	if err != nil || fresh.WorkerID != s.Workers["backup-host"] || fresh.Status != domain.JobFailed ||
+		fresh.Error.Code != "resync_required" || fresh.Error.Message != msgEmpty || fresh.ExitCode != -1 ||
+		fdef.GetRcloneBisync().GetPath1().GetPath() != "/backup/shared" || fdef.GetRcloneBisync().GetResync() ||
+		!slices.Contains(fresh.ConcurrencyKeys, keys[1]) || slices.Contains(fresh.ConcurrencyKeys, keys[0]) {
+		t.Errorf("the new pair's first run = %+v (%v)", fresh, err)
+	}
+	resync := manual[1]
 	mdef, err := jobkind.Unmarshal(resync.Definition)
 	if err != nil || !mdef.GetRcloneBisync().GetResync() || mdef.GetRcloneBisync().GetForce() || resync.Status != domain.JobSucceeded ||
 		bisyncOutput(t, resync).GetResyncReason() != syncrv1.BisyncResyncReason_BISYNC_RESYNC_REASON_REQUESTED ||

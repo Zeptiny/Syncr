@@ -138,6 +138,34 @@ func (p *Policy) Resolve(path string) (string, error) {
 	return "", &PathError{Path: path, Err: ErrNotAllowed}
 }
 
+// Overlap reports whether the absolute paths a and b are the same location
+// or one is inside the other, compared component-wise as Resolve compares
+// (case-insensitively on Windows), both as written and resolved as Resolve
+// resolves them (symbolic links, junctions, through the deepest existing
+// ancestor). Errors are *PathError values, as from Resolve.
+func Overlap(a, b string) (bool, error) {
+	ca, err := cleanAbs(a)
+	if err != nil {
+		return false, err
+	}
+	cb, err := cleanAbs(b)
+	if err != nil {
+		return false, err
+	}
+	if within(ca, cb) || within(cb, ca) {
+		return true, nil
+	}
+	ra, err := resolve(ca)
+	if err != nil {
+		return false, err
+	}
+	rb, err := resolve(cb)
+	if err != nil {
+		return false, err
+	}
+	return within(ra, rb) || within(rb, ra), nil
+}
+
 // cleanAbs validates path and returns it cleaned.
 func cleanAbs(path string) (string, error) {
 	switch {

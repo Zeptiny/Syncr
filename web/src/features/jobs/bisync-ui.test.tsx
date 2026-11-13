@@ -1,16 +1,25 @@
+import { create } from "@bufbuild/protobuf";
+import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import { JobStatus, type RunJobRequest } from "@/gen/syncr/v1/api_pb";
-import { BisyncConflictLoser, JobErrorCode } from "@/gen/syncr/v1/link_pb";
-import type { CreateScheduleRequest } from "@/gen/syncr/v1/schedules_pb";
+import { JobSchema, JobStatus, type RunJobRequest } from "@/gen/syncr/v1/api_pb";
+import {
+  BisyncConflictLoser,
+  BisyncResyncReason,
+  FilterAction,
+  FilterRuleSchema,
+  JobErrorCode,
+  JobErrorSchema,
+} from "@/gen/syncr/v1/link_pb";
+import { ScheduleTargetSchema, type CreateScheduleRequest } from "@/gen/syncr/v1/schedules_pb";
 import * as bisyncMock from "@/mock/bisync";
 import { bisyncApi } from "@/test/bisync-api";
 import * as fx from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
-import { emptyBisync } from "./bisync-definition";
+import { bisyncOf, emptyBisync } from "./bisync-definition";
 import { emptyDefinition } from "./definition";
 import { emptySchedule, validateSchedule } from "../schedules/model";
 
@@ -22,26 +31,68 @@ describe("two-way sync pages", { timeout: 30_000 }, () => {
   it("offers Resync now after RESYNC_REQUIRED and runs a resync on the same worker", async () => {
     const user = userEvent.setup();
     const api = bisyncApi(now);
+    // The newest: the new pair's first run, whose folder was empty.
     const failed = api.failed(JobErrorCode.RESYNC_REQUIRED);
+    expect(failed.error?.message).toBe(bisyncMock.messages.emptyFolder);
     const { router } = renderApp(`/jobs/${failed.id}`, api.transport);
 
     expect(await screen.findByText("Resync required")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run once anyway" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Resync now" }));
+    await user.click(await screen.findByRole("button", { name: "Resync now" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("nothing is deleted");
     expect(dialog).toHaveTextContent("the newer copy is kept");
-    expect(dialog).toHaveTextContent("on nas-01");
+    expect(dialog).toHaveTextContent("on backup-host with this job's settings");
+    expect(dialog).toHaveTextContent(
+      "If a folder is on a drive or a mount point, make sure it is mounted first",
+    );
     await user.click(within(dialog).getByRole("button", { name: "Resync now" }));
 
     await waitFor(() => expect(api.of<RunJobRequest>("RunJob")).toHaveLength(1));
     const req = api.of<RunJobRequest>("RunJob")[0];
-    expect(req.workerId).toBe(fx.ids.nas);
+    expect(req.workerId).toBe(fx.ids.backupHost);
     expect(req.definition?.operation).toMatchObject({
       case: "rcloneBisync",
-      value: { resync: true, force: false, path1: { path: bisyncMock.LOCAL_PATH } },
+      value: { resync: true, force: false, path1: { path: bisyncMock.NEW_PATH } },
     });
     await waitFor(() => expect(router.state.location.pathname).toBe(`/jobs/${api.jobs[0].id}`));
+  });
+
+  it("offers no action on a run that a newer run of the pair superseded", async () => {
+    const api = bisyncApi(now);
+    // The run that needed a resync after the filters changed: the resync
+    // and later runs followed it.
+    const old = api.jobs.find(
+      (j) =>
+        j.error?.code === JobErrorCode.RESYNC_REQUIRED && j.scheduleId === bisyncMock.ids.schedule,
+    )!;
+    renderApp(`/jobs/${old.id}`, api.transport);
+    expect(
+      await screen.findByText(/A newer run of this pair exists on this worker/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "open it" })).toHaveAttribute(
+      "href",
+      `/jobs/${api.schedule.lastRun?.jobId}`,
+    );
+    expect(screen.queryByRole("button", { name: "Resync now" })).not.toBeInTheDocument();
+  });
+
+  it("sends the job page of a run whose schedule changed to the schedule", async () => {
+    const api = bisyncApi(now);
+    const newest = api.failed(JobErrorCode.SAFETY_ABORT);
+    expect(newest.id).toBe(api.schedule.lastRun?.jobId);
+    bisyncOf(api.schedule.definition)!.options!.filters.push(
+      create(FilterRuleSchema, { action: FilterAction.EXCLUDE, pattern: "/photos/**" }),
+    );
+    renderApp(`/jobs/${newest.id}`, api.transport);
+    expect(
+      await screen.findByText(/Its schedule has other settings or another worker/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "the schedule's page" })).toHaveAttribute(
+      "href",
+      `/schedules/${bisyncMock.ids.schedule}`,
+    );
+    expect(screen.queryByRole("button", { name: "Run once anyway" })).not.toBeInTheDocument();
   });
 
   it("offers Run once anyway after SAFETY_ABORT, repeating the worker's counts", async () => {
@@ -52,7 +103,7 @@ describe("two-way sync pages", { timeout: 30_000 }, () => {
 
     expect(await screen.findByText("Safety check stopped the sync")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Resync now" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Run once anyway" }));
+    await user.click(await screen.findByRole("button", { name: "Run once anyway" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("731 of 1268");
     expect(dialog).toHaveTextContent("deletions included");
@@ -93,6 +144,33 @@ describe("two-way sync pages", { timeout: 30_000 }, () => {
     ).toEqual(bisyncMock.conflicts);
     expect(screen.getAllByText(/both versions kept, renamed/).length).toBeGreaterThan(0);
     expect(screen.getAllByText("Folder A").length).toBeGreaterThan(0);
+    // The result card has the count; no Summary repeats it.
+    expect(screen.getByRole("heading", { name: "Two-way sync result" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Summary" })).not.toBeInTheDocument();
+  });
+
+  it("words a dry run's resync as what it would do", async () => {
+    const api = bisyncApi(now);
+    const first = api.jobs.find(
+      (j) =>
+        j.output?.output.case === "rcloneBisync" &&
+        j.output.output.value.resyncReason === BisyncResyncReason.FIRST_RUN,
+    )!;
+    if (first.output?.output.case === "rcloneBisync") first.output.output.value.dryRun = true;
+    renderApp(`/jobs/${first.id}`, api.transport);
+    expect(
+      await screen.findByText(
+        /As a dry run, it only found what a resync would do: merge both folders/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/It merged both folders/)).not.toBeInTheDocument();
+  });
+
+  it("does not wait for a total on a finished job", async () => {
+    const api = bisyncApi(now);
+    renderApp(`/jobs/${api.failed(JobErrorCode.SIDE_UNAVAILABLE).id}`, api.transport);
+    expect(await screen.findByText("A folder looked unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Total not known yet")).not.toBeInTheDocument();
   });
 
   it("offers the same actions on the schedule page for its last run", async () => {
@@ -100,17 +178,85 @@ describe("two-way sync pages", { timeout: 30_000 }, () => {
     const api = bisyncApi(now);
     renderApp(`/schedules/${bisyncMock.ids.schedule}`, api.transport);
     expect(await screen.findByText("Last run: Safety check stopped the sync")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Run once anyway" }));
-    await user.click(
-      within(await screen.findByRole("alertdialog")).getByRole("button", {
-        name: "Run once anyway",
-      }),
-    );
+    await user.click(await screen.findByRole("button", { name: "Run once anyway" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("on nas-01 with the schedule's current settings");
+    expect(dialog).toHaveTextContent("731 of 1268");
+    await user.click(within(dialog).getByRole("button", { name: "Run once anyway" }));
     await waitFor(() => expect(api.of<RunJobRequest>("RunJob")).toHaveLength(1));
     expect(api.of<RunJobRequest>("RunJob")[0]).toMatchObject({
       workerId: fx.ids.nas,
       definition: { operation: { value: { force: true } } },
     });
+  });
+
+  it("resyncs the schedule's current settings on its current worker from the schedule page", async () => {
+    const user = userEvent.setup();
+    const api = bisyncApi(now);
+    // The last run needed a resync; since then the schedule got a filter
+    // and moved to backup-host.
+    const last = api.jobs.find((j) => j.id === api.schedule.lastRun?.jobId)!;
+    last.error = create(JobErrorSchema, {
+      code: JobErrorCode.RESYNC_REQUIRED,
+      message: bisyncMock.messages.resyncRequired,
+    });
+    bisyncOf(api.schedule.definition)!.options!.filters.push(
+      create(FilterRuleSchema, { action: FilterAction.EXCLUDE, pattern: "/photos/**" }),
+    );
+    api.schedule.target = create(ScheduleTargetSchema, {
+      target: { case: "workerId", value: fx.ids.backupHost },
+    });
+    renderApp(`/schedules/${bisyncMock.ids.schedule}`, api.transport);
+    expect(await screen.findByText("Last run: Resync required")).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Resync now" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("on backup-host with the schedule's current settings");
+    expect(dialog).toHaveTextContent("make sure it is mounted first");
+    await user.click(within(dialog).getByRole("button", { name: "Resync now" }));
+    await waitFor(() => expect(api.of<RunJobRequest>("RunJob")).toHaveLength(1));
+    const req = api.of<RunJobRequest>("RunJob")[0];
+    expect(req.workerId).toBe(fx.ids.backupHost);
+    const b = req.definition?.operation;
+    expect(b).toMatchObject({ case: "rcloneBisync", value: { resync: true, force: false } });
+    expect(
+      b?.case === "rcloneBisync" ? b.value.options?.filters?.map((f) => f.pattern) : [],
+    ).toEqual(["*.tmp", ".~lock.*#", "/photos/**"]);
+  });
+
+  it("does not run past the safety check on the schedule page after its settings changed", async () => {
+    const api = bisyncApi(now);
+    bisyncOf(api.schedule.definition)!.options!.filters.push(
+      create(FilterRuleSchema, { action: FilterAction.EXCLUDE, pattern: "/photos/**" }),
+    );
+    renderApp(`/schedules/${bisyncMock.ids.schedule}`, api.transport);
+    expect(await screen.findByText("Last run: Safety check stopped the sync")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/The schedule's settings changed after this run/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run once anyway" })).not.toBeInTheDocument();
+  });
+
+  it("does not offer the schedule's actions again once a newer run of the pair exists", async () => {
+    const api = bisyncApi(now);
+    const last = api.jobs.find((j) => j.id === api.schedule.lastRun?.jobId)!;
+    api.jobs.unshift(
+      create(JobSchema, {
+        ...last,
+        id: "job-forced",
+        createdAt: timestampFromMs(now),
+        definition: bisyncMock.definition("force"),
+        status: JobStatus.QUEUED,
+        error: undefined,
+        scheduleId: "",
+      }),
+    );
+    renderApp(`/schedules/${bisyncMock.ids.schedule}`, api.transport);
+    expect(await screen.findByText(/A newer run of this pair exists/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "open it" })).toHaveAttribute(
+      "href",
+      "/jobs/job-forced",
+    );
+    expect(screen.queryByRole("button", { name: "Run once anyway" })).not.toBeInTheDocument();
   });
 
   it("runs a two-way sync from the form, with conflicts kept by side", async () => {
@@ -215,6 +361,14 @@ describe("two-way sync pages", { timeout: 30_000 }, () => {
     expect(screen.getByRole("status", { name: "" })).toHaveTextContent(
       "the pair's next run will stop with “Resync required”",
     );
+    // Saved, the toast says where Resync now will be: the schedule's page
+    // offers it once that run stopped.
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(
+      await screen.findByText(
+        /its next run stops with “Resync required”. The schedule's page then offers Resync now/,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("marks a queued two-way sync that waits for an older one on the same folder", async () => {

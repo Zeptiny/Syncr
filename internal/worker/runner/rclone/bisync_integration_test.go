@@ -129,6 +129,16 @@ func (it *bisyncITest) sync(t *testing.T, spec *syncrv1.JobSpec) (*syncrv1.Rclon
 	return bisyncOutput(t, res), res
 }
 
+// start makes the pair's state with a resync someone asked for: the
+// first run of a pair whose Folder B starts empty, which an automatic
+// first run refuses to fill.
+func (it *bisyncITest) start(t *testing.T) {
+	t.Helper()
+	if out, _ := it.sync(t, it.spec(nil, func(op *syncrv1.RcloneBisync) { op.Resync = true })); out.GetResyncReason() != reasonRequested {
+		t.Fatalf("the first resync: %v", out)
+	}
+}
+
 // fail runs a two-way sync that must fail with code and a message
 // containing want.
 func (it *bisyncITest) fail(t *testing.T, spec *syncrv1.JobSpec, code syncrv1.JobErrorCode, want string) {
@@ -263,7 +273,7 @@ func TestIntegrationBisyncDeleteLimit(t *testing.T) {
 		files["f"+string(rune('1'+i))+".txt"] = "file"
 	}
 	put(t, it.a, files)
-	it.sync(t, it.spec(nil))
+	it.start(t)
 
 	remove(t, it.a, "f1.txt", "f2.txt", "f3.txt", "f4.txt", "f5.txt")
 	it.fail(t, it.spec(nil), syncrv1.JobErrorCode_JOB_ERROR_CODE_SAFETY_ABORT, "too many deletes (>50%, 5 of 8)")
@@ -286,7 +296,7 @@ func TestIntegrationBisyncDeleteLimit(t *testing.T) {
 func TestIntegrationBisyncFilterChange(t *testing.T) {
 	it := newBisyncITest(t)
 	put(t, it.a, map[string]string{"doc.txt": "d", "k1.txt": "1", "k2.txt": "2"})
-	it.sync(t, it.spec(nil))
+	it.start(t)
 
 	filtered := &syncrv1.RcloneBisyncOptions{Filters: []*syncrv1.FilterRule{exclude("*.tmp")}}
 	put(t, it.a, map[string]string{"scratch.tmp": "t", "new.txt": "n"})
@@ -316,7 +326,7 @@ func TestIntegrationBisyncFilterChange(t *testing.T) {
 func TestIntegrationBisyncSideUnavailable(t *testing.T) {
 	it := newBisyncITest(t)
 	put(t, it.a, map[string]string{"k1.txt": "1", "k2.txt": "2"})
-	it.sync(t, it.spec(nil))
+	it.start(t)
 
 	// An empty side (an unmounted drive's mount point) stops the run, even
 	// with force; the state is kept, so the run after the fix is normal.
@@ -363,35 +373,237 @@ func TestIntegrationBisyncCheckAccessFirstRun(t *testing.T) {
 	// "Must run --resync", but the missing file is the problem, so the
 	// code is SIDE_UNAVAILABLE, and the pair stays fresh.
 	put(t, it.a, map[string]string{"RCLONE_TEST": "", "k1.txt": "1"})
+	put(t, it.b, map[string]string{"k2.txt": "2"})
 	access := &syncrv1.RcloneBisyncOptions{CheckAccess: true}
 	it.fail(t, it.spec(access), syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE, "RCLONE_TEST files not found")
 	put(t, it.b, map[string]string{"RCLONE_TEST": ""})
 	if out, _ := it.sync(t, it.spec(access)); out.GetResyncReason() != reasonFirstRun {
 		t.Errorf("run once both files are there: %v", out)
 	}
-	if got := it.inStep(t); len(got) != 2 {
+	if got := it.inStep(t); len(got) != 3 {
 		t.Errorf("in step: %v", got)
 	}
 }
 
 func TestIntegrationBisyncEmptyStart(t *testing.T) {
 	it := newBisyncITest(t)
-	// Two empty folders: the first run resyncs nothing. rclone cannot sync
-	// against its empty listings, so the pair counts as fresh until it has
-	// files.
+	// Two empty folders: there is nothing to fill, so the first run
+	// resyncs (nothing). rclone cannot sync against its empty listings, so
+	// the pair counts as fresh until it has files.
 	if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != reasonFirstRun {
 		t.Errorf("first run: %v", out)
 	}
+	// Files on one side: the next run is a first run again, which does not
+	// fill the empty side on its own; a resync someone asks for does.
 	put(t, it.b, map[string]string{"first.txt": "1", "second.txt": "2"})
-	if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != reasonFirstRun {
-		t.Errorf("run after the first files: %v", out)
-	}
+	it.fail(t, it.spec(nil), syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED, "Folder A (path1) is empty")
+	it.start(t)
 	put(t, it.a, map[string]string{"third.txt": "3"})
 	if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != reasonNone {
 		t.Errorf("run with a baseline: %v", out)
 	}
 	if got := it.inStep(t); len(got) != 3 {
 		t.Errorf("files = %v", got)
+	}
+}
+
+// TestIntegrationBisyncFirstRunEmptyFolder: an automatic first run never
+// fills an empty local folder (an unmounted drive's mount point looks the
+// same), and leaves both sides and the pair's state as they were; a folder
+// with files resyncs on its own, and a resync someone asks for fills an
+// empty one. A missing folder is not created.
+func TestIntegrationBisyncFirstRunEmptyFolder(t *testing.T) {
+	it := newBisyncITest(t)
+	put(t, it.b, map[string]string{"k1.txt": "1", "sub/k2.txt": "2"})
+	before := tree(t, it.b)
+	noState := func() {
+		t.Helper()
+		if l, _ := filepath.Glob(filepath.Join(it.workDir(), "*.lst*")); len(l) != 0 {
+			t.Errorf("listings after the refusal: %v", l)
+		}
+	}
+
+	// The drive behind Folder A is not mounted: its mount point is empty.
+	want := "Folder A (path1) is empty; a first run does not fill an empty folder on its own"
+	for range 2 {
+		it.fail(t, it.spec(nil), syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED, want)
+	}
+	sameTree(t, tree(t, it.b), before)
+	if got := names(t, it.a); len(got) != 0 {
+		t.Errorf("Folder A was filled: %v", got)
+	}
+	noState()
+
+	// A folder that does not exist is not created either, not even by a
+	// resync someone asked for.
+	missing := filepath.Join(it.root, "missing")
+	for _, resync := range []bool{false, true} {
+		it.fail(t, it.spec(nil, func(op *syncrv1.RcloneBisync) { op.Path1, op.Resync = local(missing), resync }),
+			syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "Folder A (path1) does not exist")
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the missing folder: %v", err)
+	}
+
+	// The drive is mounted: Folder A has files, and the first run resyncs
+	// on its own (a union).
+	put(t, it.a, map[string]string{"k3.txt": "3"})
+	if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != reasonFirstRun {
+		t.Errorf("first run with files: %v", out)
+	}
+	if got := it.inStep(t); !slices.Equal(got, []string{"k1.txt", "k3.txt", "sub/k2.txt"}) {
+		t.Errorf("after the first run: %v", got)
+	}
+
+	// A new machine: an empty folder against a remote (a union over a
+	// folder, standing in for the bucket). Asked for, a resync fills it.
+	laptop, readOnly := filepath.Join(it.root, "laptop"), filepath.Join(it.root, "ro")
+	for _, d := range []string{laptop, readOnly} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	remote := func(op *syncrv1.RcloneBisync) {
+		op.Path1, op.Path2 = local(laptop), &syncrv1.Location{Remote: "r1", Path: "b"}
+		op.StateKey = strings.Repeat("cd", 32)
+	}
+	spec := func(mutate ...func(*syncrv1.RcloneBisync)) *syncrv1.JobSpec {
+		s := it.spec(nil, append([]func(*syncrv1.RcloneBisync){remote}, mutate...)...)
+		s.Remotes = []*syncrv1.RemoteDefinition{{Alias: "r1", BackendType: "union", UnionUpstreams: []*syncrv1.UnionUpstream{
+			{Location: local(it.root)},
+			{Location: local(readOnly), Mode: syncrv1.UnionUpstreamMode_UNION_UPSTREAM_MODE_READ_ONLY},
+		}}}
+		return s
+	}
+	it.fail(t, spec(), syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED, "If this is a new machine, run it once with resync to fill it from Folder B (path2)")
+	if out, _ := it.sync(t, spec(func(op *syncrv1.RcloneBisync) { op.Resync = true })); out.GetResyncReason() != reasonRequested {
+		t.Errorf("the resync: %v", out)
+	}
+	if got := names(t, laptop); !slices.Equal(got, []string{"k1.txt", "k3.txt", "sub/k2.txt"}) {
+		t.Errorf("the laptop's folder after the resync: %v", got)
+	}
+	if out, _ := it.sync(t, spec()); out.GetResyncReason() != reasonNone {
+		t.Errorf("the run after the resync: %v", out)
+	}
+
+	// With check_access, a resync someone asks for does not fill a folder
+	// whose drive is not mounted either.
+	access := &syncrv1.RcloneBisyncOptions{CheckAccess: true}
+	put(t, it.a, map[string]string{"RCLONE_TEST": ""})
+	put(t, it.b, map[string]string{"RCLONE_TEST": ""})
+	it.sync(t, it.spec(access))
+	hidden := filepath.Join(it.base, "hidden")
+	if err := os.Rename(it.a, hidden); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(it.a, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	it.fail(t, it.spec(access, func(op *syncrv1.RcloneBisync) { op.Resync = true }),
+		syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE, "RCLONE_TEST files not found")
+	if got := names(t, it.a); len(got) != 0 {
+		t.Errorf("Folder A was filled: %v", got)
+	}
+}
+
+// unreadable writes the file name below dir without read permission, and
+// returns the function that makes it readable again. It skips the test
+// where permissions do not stop the file's owner (Windows, root).
+func unreadable(t *testing.T, dir, name string) func() {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes do not make a file unreadable on Windows")
+	}
+	p := filepath.Join(dir, name)
+	put(t, dir, map[string]string{name: "cannot be read"})
+	if err := os.Chmod(p, 0); err != nil {
+		t.Fatal(err)
+	}
+	fix := func() {
+		if err := os.Chmod(p, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(fix)
+	if f, err := os.Open(p); err == nil {
+		_ = f.Close()
+		t.Skip("this user reads files without read permission")
+	}
+	return fix
+}
+
+// TestIntegrationBisyncCriticalErrorRecovers: an unreadable file stops a
+// run with a critical error; rclone asks for a resync, but with --recover
+// the next normal run goes on from the previous listings, so the job says
+// to fix the cause and run again (EXECUTION_FAILED), and once the file can
+// be read a normal run succeeds, without a resync.
+func TestIntegrationBisyncCriticalErrorRecovers(t *testing.T) {
+	it := newBisyncITest(t)
+	put(t, it.a, map[string]string{"k1.txt": "1", "k2.txt": "2", "k3.txt": "3", "k4.txt": "4"})
+	it.start(t)
+	put(t, it.a, map[string]string{"new.txt": "n"})
+	it.sync(t, it.spec(nil)) // a normal run keeps the listings before it
+
+	fix := unreadable(t, it.a, "locked.txt")
+	put(t, it.b, map[string]string{"from-b.txt": "b", "k2.txt": "2 changed on b"})
+	want := "permission denied; fix the cause and run it again: the next run goes on from the pair's last good state, without a resync"
+	for range 2 {
+		it.fail(t, it.spec(nil), syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, want)
+	}
+	if errs, _ := filepath.Glob(filepath.Join(it.workDir(), "*.lst-err")); len(errs) != 2 {
+		t.Errorf("listings after the critical errors: %v", errs)
+	}
+
+	fix()
+	out, _ := it.sync(t, it.spec(nil))
+	if out.GetResyncReason() != reasonNone || out.GetConflicts() != 0 {
+		t.Errorf("run after the fix: %v", out)
+	}
+	if got := it.inStep(t); !slices.Equal(got, []string{"from-b.txt", "k1.txt", "k2.txt", "k3.txt", "k4.txt", "locked.txt", "new.txt"}) {
+		t.Errorf("after the fix: %v", got)
+	}
+	if got := string(tree(t, it.a)["k2.txt"]); got != "2 changed on b" {
+		t.Errorf("k2.txt on a = %q", got)
+	}
+	// Deletions spread again.
+	remove(t, it.b, "k4.txt")
+	if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != reasonNone || slices.Contains(it.inStep(t), "k4.txt") {
+		t.Errorf("run after that: %v, files %v", out, names(t, it.a))
+	}
+}
+
+// TestIntegrationBisyncCriticalErrorNeedsResync: the same error on the
+// first run after a resync, before rclone kept previous listings: only a
+// resync helps, once the cause is fixed (RESYNC_REQUIRED, which says so).
+// On a first run's resync, the pair keeps no baseline, so the run after
+// the fix resyncs on its own.
+func TestIntegrationBisyncCriticalErrorNeedsResync(t *testing.T) {
+	it := newBisyncITest(t)
+	put(t, it.a, map[string]string{"k1.txt": "1", "k2.txt": "2"})
+	it.start(t)
+	fix := unreadable(t, it.a, "locked.txt")
+	it.fail(t, it.spec(nil), syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED,
+		"permission denied, and the pair has no earlier state to go on from; fix the cause first")
+	it.fail(t, it.spec(nil), syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED, "cannot find prior Path1 or Path2 listings")
+	fix()
+	if out, _ := it.sync(t, it.spec(nil, func(op *syncrv1.RcloneBisync) { op.Resync = true })); out.GetResyncReason() != reasonRequested {
+		t.Errorf("the resync: %v", out)
+	}
+	if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != reasonNone || len(it.inStep(t)) != 3 {
+		t.Errorf("run after the resync: %v", out)
+	}
+
+	// A first run (a resync) that stops on the file.
+	other := filepath.Join(it.root, "c")
+	put(t, other, map[string]string{"c.txt": "c"})
+	fix = unreadable(t, other, "locked-too.txt")
+	first := it.spec(nil, func(op *syncrv1.RcloneBisync) { op.Path1, op.StateKey = local(other), strings.Repeat("ef", 32) })
+	it.fail(t, first, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED,
+		"the resync stopped with a critical error: failed to open source object")
+	it.fail(t, first, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "the pair has no state on this worker yet, so its next run resyncs")
+	fix()
+	if out, _ := it.sync(t, first); out.GetResyncReason() != reasonFirstRun {
+		t.Errorf("first run after the fix: %v", out)
 	}
 }
 
@@ -466,7 +678,7 @@ func TestIntegrationBisyncLongPaths(t *testing.T) {
 	}
 	put(t, a, map[string]string{"x.txt": "x"})
 	spec := it.spec(nil, func(op *syncrv1.RcloneBisync) { op.Path1, op.Path2 = local(a), local(b) })
-	it.sync(t, spec)
+	it.sync(t, it.spec(nil, func(op *syncrv1.RcloneBisync) { op.Path1, op.Path2, op.Resync = local(a), local(b), true }))
 	put(t, b, map[string]string{"y.txt": "y"})
 	if out, _ := it.sync(t, spec); out.GetResyncReason() != reasonNone {
 		t.Errorf("second run: %v", out)
@@ -525,10 +737,10 @@ func TestIntegrationBisyncRemoteSide(t *testing.T) {
 // period. The margin to the end of the transfer matters: when SIGINT
 // arrives just as a file's transfer ends, rclone's clean-up removes the
 // ".partial" file it is still setting the time of, and it reports that as
-// a critical error ("Must run --resync"), so the run after it needs a
-// resync. That race is a real, rare effect of a cancel (docs/bisync.md),
-// not what these tests are about; a 6 MiB file left too little margin on a
-// loaded machine.
+// a critical error ("Must run --resync"): the run after it goes on from the
+// previous listings, or, right after a resync, needs one. That race is a
+// real, rare effect of a cancel (docs/bisync.md), not what these tests are
+// about; a 6 MiB file left too little margin on a loaded machine.
 func startBig(t *testing.T, it *bisyncITest, size int) *syncrv1.RcloneBisyncOptions {
 	t.Helper()
 	writeFiles(t, it.a, map[string]int{"big.bin": size})
@@ -576,7 +788,7 @@ func TestIntegrationBisyncInterrupted(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			it := newBisyncITest(t)
 			put(t, it.a, map[string]string{"k1.txt": "1", "k2.txt": "2", "k3.txt": "3"})
-			it.sync(t, it.spec(nil))
+			it.start(t)
 
 			opts := startBig(t, it, 12<<20)
 			cfg := it.cfg
@@ -640,7 +852,7 @@ func TestIntegrationBisyncFirstRunInterrupted(t *testing.T) {
 func TestIntegrationBisyncStaleRcloneLock(t *testing.T) {
 	it := newBisyncITest(t)
 	put(t, it.a, map[string]string{"k1.txt": "1"})
-	it.sync(t, it.spec(nil))
+	it.start(t)
 	work := it.workDir()
 	entries, err := os.ReadDir(work)
 	if err != nil {

@@ -780,8 +780,9 @@ func checkSeededMilestone4(t *testing.T, s *seeded, admin *http.Client) {
 		}
 		if d.GetJobId() != "" && d.GetScheduleId() == "" {
 			manual++
-			// A transfer names both ends; a restic job its repository.
-			if !strings.Contains(d.GetTitle(), " → ") && !strings.Contains(d.GetTitle(), "Photos vault") {
+			// A transfer names both ends, a two-way sync both sides; a
+			// restic job its repository.
+			if !strings.Contains(d.GetTitle(), " → ") && !strings.Contains(d.GetTitle(), " ⇄ ") && !strings.Contains(d.GetTitle(), "Photos vault") {
 				t.Errorf("manual job delivery title %q has no description", d.GetTitle())
 			}
 			// The title starts with the kind's label, as people read it.

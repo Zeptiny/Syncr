@@ -20,6 +20,12 @@ const (
 // check them against output recorded from that version
 // (testdata/bisync_*.jsonl), so a tool upgrade that changes them fails the
 // tests instead of mislabelling jobs.
+//
+// rclone puts file names into many of its messages, so each phrase is
+// matched where rclone itself puts it (at the start of its message, or in
+// the message part of a line about one file, see indented), never anywhere
+// in a line: a file named "must run --resync" must not change a job's
+// outcome.
 const (
 	// rclone logs this for every file new or changed on both sides, at
 	// NOTICE: "- WARNING  New or changed in both paths  - <path>". It then
@@ -28,26 +34,53 @@ const (
 	// msgSkippedRename).
 	msgConflict      = "New or changed in both paths"
 	msgRenaming      = "Renaming Path"     // "Renaming Path1 copy": a loser renamed
-	msgNotRenaming   = "renaming Path"     // "Not renaming Path2 copy, as it was determined the winner"
+	msgNotRenaming   = "Not renaming Path" // "Not renaming Path2 copy, as it was determined the winner"
 	msgSkippedRename = "Skipped rename as" // the rename of a dry run
 	// msgCritical starts the message of an error that ends the run.
 	msgCritical = "Bisync critical error: "
-	// The run's state needs a resync: in the critical error ("filters file
-	// has changed (must run --resync)") or after it ("Bisync aborted. Must
-	// run --resync to recover."); rclone omits the latter under --resilient
-	// even where a plain retry cannot help.
-	msgMustResync  = "must run --resync"
-	msgNoListings  = "cannot find prior Path1 or Path2 listings"
-	msgEmptyPrior  = "Empty prior Path"
-	msgTooMany     = "too many deletes ("
-	msgSafetyAbort = "Safety abort: "
-	msgForceSuffix = ". Run with --force if desired."
-	msgEmptySide   = "Empty current Path" // "Empty current Path1 listing. Cannot sync to an empty directory: ..."
-	msgAccess      = "Access test failed: "
-	msgRootMissing = "error reading source root directory: "
-	msgDirNotFound = "directory not found"
-	msgPriorLock   = "prior lock file found"
+	// msgAbortedResync follows a critical error after which rclone renamed
+	// the pair's current listings ("-err"). It says a resync is needed, but
+	// with --recover the next normal run falls back to the previous
+	// listings when they are there (bisyncstate.Pair.Resumable).
+	msgAbortedResync = "Bisync aborted. Must run --resync to recover."
+	// msgResyncCause ends the first part ("<cause> (must run --resync):
+	// <path>") of a critical error that only a resync recovers from: the
+	// filters changed, or their hash is missing. rclone does not rename the
+	// listings then (--resilient), and every run fails the same way.
+	msgResyncCause = " (must run --resync)"
+	// The critical errors of a run that finds no listings to compare
+	// against (msgNoListings) or an empty one (the critical error and the
+	// line before it).
+	msgNoListings    = "cannot find prior Path1 or Path2 listings"
+	msgEmptyPrior    = "Empty prior Path"
+	msgEmptyPriorErr = "empty prior Path"
+	msgTooMany       = "too many deletes ("
+	msgSafetyAbort   = "Safety abort: "
+	msgForceSuffix   = ". Run with --force if desired."
+	msgEmptySide     = "Empty current Path" // "Empty current Path1 listing. Cannot sync to an empty directory: ..."
+	msgAccess        = "Access test failed: "
+	msgRootMissing   = "error reading source root directory: "
+	msgDirNotFound   = "directory not found"
+	// msgPriorLock is rclone's final message when it found the lock file of
+	// another run: "Failed to bisync: prior lock file found: <path> ...".
+	msgPriorLock = "Failed to bisync: prior lock file found"
 )
+
+// indentTagWidth is the width of the tag in a line about one file.
+const indentTagWidth = 18
+
+// indented splits a line that rclone bisync logs about one file, written
+// as "- %-18s%-43s - %s" (a tag such as "WARNING" or "Path1", the message,
+// the file), into its message and file. ok is false for any other line.
+// The file is "" when the line has none.
+func indented(msg string) (text, file string, ok bool) {
+	rest, ok := strings.CutPrefix(msg, "- ")
+	if !ok || len(rest) < indentTagWidth || strings.Contains(strings.TrimRight(rest[:indentTagWidth], " "), " ") {
+		return "", "", false
+	}
+	text, file, _ = strings.Cut(rest[indentTagWidth:], " - ")
+	return strings.TrimSpace(text), file, true
+}
 
 // bisyncLog reads rclone bisync's log lines (through tracker.observe, on
 // the Run goroutine): the conflicts of a run and the messages that say why
@@ -67,8 +100,15 @@ type bisyncLog struct {
 
 	// critical is the last critical error, first line only.
 	critical string
-	// resync: rclone said only a resync recovers.
-	resync bool
+	// stateUnusable: the critical error says only a resync recovers,
+	// whatever the listings (msgResyncCause, an empty prior listing).
+	stateUnusable bool
+	// noListings: rclone found no listings to compare against
+	// (msgNoListings).
+	noListings bool
+	// aborted: rclone renamed the listings after a critical error
+	// (msgAbortedResync).
+	aborted bool
 	// safety are the delete-limit and "all files changed" messages.
 	safety []string
 	// emptySide is the side ("Path1", "Path2") with an empty listing.
@@ -86,11 +126,13 @@ type bisyncLog struct {
 // line handles one JSON log line of rclone.
 func (l *bisyncLog) line(ll logLine) {
 	msg := ll.Msg
+	text, file, isFileLine := indented(msg)
 	switch {
-	case strings.Contains(msg, msgConflict):
+	case isFileLine && text == msgConflict:
 		// A pending file that got no resolution had equal versions.
-		l.pending, l.hasPending = conflictPath(msg), true
-	case strings.Contains(msg, msgRenaming), strings.Contains(msg, msgNotRenaming), strings.HasPrefix(msg, msgSkippedRename):
+		l.pending, l.hasPending = conflictPath(file), true
+	case isFileLine && (strings.HasPrefix(text, msgRenaming) || strings.HasPrefix(text, msgNotRenaming)),
+		strings.HasPrefix(msg, msgSkippedRename):
 		if l.hasPending {
 			l.addConflict(l.pending)
 			l.hasPending = false
@@ -99,6 +141,17 @@ func (l *bisyncLog) line(ll logLine) {
 		l.critical, _, _ = strings.Cut(strings.TrimPrefix(msg, msgCritical), "\n")
 		l.critical = strings.TrimSpace(l.critical)
 		l.dirNotFound = l.dirNotFound || l.critical == msgDirNotFound
+		cause, _, _ := strings.Cut(l.critical, ": ")
+		switch {
+		case strings.HasSuffix(cause, msgResyncCause), strings.HasPrefix(l.critical, msgEmptyPriorErr):
+			l.stateUnusable = true
+		case strings.HasPrefix(l.critical, msgNoListings):
+			l.noListings = true
+		}
+	case msg == msgAbortedResync:
+		l.aborted = true
+	case strings.HasPrefix(msg, msgEmptyPrior):
+		l.stateUnusable = true
 	case strings.HasPrefix(msg, msgTooMany), strings.HasPrefix(msg, msgSafetyAbort):
 		l.safety = append(l.safety, strings.TrimSuffix(strings.TrimPrefix(msg, msgSafetyAbort), msgForceSuffix))
 	case strings.HasPrefix(msg, msgEmptySide):
@@ -114,11 +167,7 @@ func (l *bisyncLog) line(ll logLine) {
 		if ll.Object != "" {
 			l.rootMissing = ll.Object + ": " + msg
 		}
-	}
-	if strings.Contains(strings.ToLower(msg), msgMustResync) || strings.Contains(msg, msgNoListings) || strings.HasPrefix(msg, msgEmptyPrior) {
-		l.resync = true
-	}
-	if strings.Contains(msg, msgPriorLock) {
+	case strings.HasPrefix(msg, msgPriorLock):
 		l.priorLock = true
 	}
 }
@@ -132,22 +181,16 @@ func (l *bisyncLog) addConflict(path string) {
 	}
 }
 
-// conflictPath returns the path of a msgConflict line: the text after the
-// " - " that follows the message (the path itself may contain " - "),
-// unquoted when rclone quoted it (names with quotes or control characters).
-// It returns "" if the line has no path.
-func conflictPath(msg string) string {
-	_, rest, _ := strings.Cut(msg, msgConflict)
-	_, p, ok := strings.Cut(rest, " - ")
-	if !ok {
-		return ""
-	}
-	if strings.HasPrefix(p, `"`) {
-		if u, err := strconv.Unquote(p); err == nil {
-			p = u
+// conflictPath returns the path of a msgConflict line from the file part
+// of the line (indented), unquoted when rclone quoted it (names with quotes
+// or control characters).
+func conflictPath(file string) string {
+	if strings.HasPrefix(file, `"`) {
+		if u, err := strconv.Unquote(file); err == nil {
+			return u
 		}
 	}
-	return p
+	return file
 }
 
 // clipText shortens valid UTF-8 text to at most n bytes on a rune
@@ -175,22 +218,52 @@ func sideName(side string) string {
 	return ""
 }
 
+// pairNext is what a pair's state on the worker lets its next run do, read
+// after a run that rclone stopped with a critical error.
+type pairNext int
+
+const (
+	// nextNeedsResync: no listings to go on from; only a resync helps.
+	nextNeedsResync pairNext = iota
+	// nextResyncs: no baseline (bisyncstate.Pair.Fresh), so the next run
+	// resyncs on its own.
+	nextResyncs
+	// nextContinues: listings a normal run goes on from
+	// (bisyncstate.Pair.Resumable), the previous ones after a critical
+	// error.
+	nextContinues
+)
+
+// failedRun is what failure needs to know of a failed run besides rclone's
+// messages.
+type failedRun struct {
+	// next is what the pair's state lets the next run do.
+	next pairNext
+	// resync and dryRun say whether the run was a resync and a dry run.
+	resync, dryRun bool
+}
+
 // failure returns the job error that the messages of a failed run call
 // for, scrubbed, and false when they call for none (the exit code decides
 // then). Checked in this order:
 //
 //   - a lock file of another run: INTERNAL (Syncr removes stale ones);
 //   - the access test failed: SIDE_UNAVAILABLE, which force does not
-//     override. It comes before RESYNC_REQUIRED because a resync that
+//     override. It comes before the resync cases because a resync that
 //     fails it also says "Must run --resync", which cannot help: the
 //     RCLONE_TEST files are missing (a fresh pair stays fresh, so its next
 //     run resyncs again once they are there);
-//   - only a resync recovers: RESYNC_REQUIRED;
+//   - the filters changed or a prior listing is empty: RESYNC_REQUIRED;
+//   - rclone found no listings, or renamed them after a critical error
+//     ("Must run --resync to recover"): what the pair's state allows
+//     (run.next). If the next run can go on from listings rclone kept, or
+//     resyncs on its own, the failure is EXECUTION_FAILED with what to
+//     fix; only without either is it RESYNC_REQUIRED;
 //   - a side is empty: SIDE_UNAVAILABLE;
 //   - a side does not exist: NOT_FOUND;
 //   - the delete limit or "all files changed": SAFETY_ABORT, which force
 //     overrides.
-func (l *bisyncLog) failure() (syncrv1.JobErrorCode, string, bool) {
+func (l *bisyncLog) failure(run failedRun) (syncrv1.JobErrorCode, string, bool) {
 	var code syncrv1.JobErrorCode
 	var msg string
 	switch {
@@ -201,10 +274,11 @@ func (l *bisyncLog) failure() (syncrv1.JobErrorCode, string, bool) {
 	case l.access != "":
 		code = syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE
 		msg = "check_access failed: RCLONE_TEST files not found on both sides (" + l.access + "); is the drive mounted?"
-	case l.resync:
+	case l.stateUnusable:
 		code = syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED
-		msg = "a resync is required: " + l.resyncReason() +
-			"; run it once with resync to rebuild the pair's state from both sides as they are now"
+		msg = "a resync is required: " + l.resyncReason() + "; " + resyncTail
+	case l.noListings || l.aborted:
+		code, msg = l.criticalFailure(run)
 	case l.emptySide != "":
 		code = syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE
 		side := sideName(l.emptySide)
@@ -228,6 +302,46 @@ func (l *bisyncLog) failure() (syncrv1.JobErrorCode, string, bool) {
 	return code, l.sc.Line(msg, maxBisyncMessageBytes), true
 }
 
+// resyncTail ends the message of RESYNC_REQUIRED.
+const resyncTail = "run it once with resync to rebuild the pair's state from both sides as they are now"
+
+// criticalFailure is the failure of a run after which rclone asks for a
+// resync because it found no listings or renamed them (critical error):
+// with --recover, a normal run goes on from the previous listings when
+// they are there, and a pair without a baseline resyncs on its own, so a
+// resync is required only without either. Whatever stopped the run (an
+// unreadable file, say) stops a resync too, so every message says to fix
+// it first.
+func (l *bisyncLog) criticalFailure(run failedRun) (syncrv1.JobErrorCode, string) {
+	reason := l.resyncReason()
+	what := "the two-way sync"
+	if run.resync {
+		what = "the resync"
+	}
+	failed := syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED
+	switch {
+	case run.next == nextContinues && l.noListings && run.dryRun:
+		// A dry run looks for listings of its own (".lst-dry"), which a
+		// critical error leaves behind only when an earlier dry run
+		// made them; a normal run falls back to the previous listings.
+		return failed, "the dry run stopped: " + reason +
+			"; a dry run cannot go on from the state rclone kept after an earlier critical error, but a normal run can: " +
+			"fix what made the earlier run fail, then run it once without dry run"
+	case run.next == nextContinues:
+		return failed, what + " stopped with a critical error: " + reason +
+			"; fix the cause and run it again: the next run goes on from the pair's last good state, without a resync"
+	case run.next == nextResyncs:
+		return failed, what + " stopped with a critical error: " + reason +
+			"; fix the cause and run it again: the pair has no state on this worker yet, so its next run resyncs"
+	case l.noListings:
+		return syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED, "a resync is required: " + reason +
+			"; fix what made the earlier run fail first (a resync stops at the same error), then " + resyncTail
+	default:
+		return syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED, "a resync is required: " + reason +
+			", and the pair has no earlier state to go on from; fix the cause first (a resync stops at the same error), then " + resyncTail
+	}
+}
+
 // maxBisyncMessageBytes bounds a failure message built from rclone's
 // messages (the agent clips error messages at 4 KiB).
 const maxBisyncMessageBytes = 1000
@@ -236,8 +350,9 @@ const maxBisyncMessageBytes = 1000
 // flag and without a path in the pair's state directory, or a generic text.
 func (l *bisyncLog) resyncReason() string {
 	r := l.critical
-	if i := strings.Index(strings.ToLower(r), " ("+msgMustResync+")"); i >= 0 {
-		r = r[:i]
+	if cause, _, _ := strings.Cut(r, ": "); strings.HasSuffix(cause, msgResyncCause) {
+		// What follows is the filters file, in the pair's state directory.
+		r = strings.TrimSuffix(cause, msgResyncCause)
 	}
 	if l.stateDir != "" {
 		if i := strings.Index(r, ": "+l.stateDir); i >= 0 {

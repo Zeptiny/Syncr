@@ -44,7 +44,8 @@ The state lives **on the worker that ran the pair** (see
   The schedule form disables the label choice for this kind, and the API
   refuses it.
 - You may run the same pair on another worker by hand. It is a new pair
-  there, and its first run is a resync.
+  there, and its first run is a resync (or, if its folder there is empty,
+  asks for one: see [the first runs](#example-a-desktop-and-a-laptop-through-cloudflare-r2)).
 
 **Runs that share a folder wait for each other.** Two pairs with a folder
 in common (the desktop's and the laptop's pairs, which share the bucket
@@ -111,16 +112,35 @@ do, one waits for the other.
 
 **4. The first runs.** A pair's first run on a worker is a **resync**: a
 union of both folders, done on its own (the job's result says *Resync:
-first run*). The desktop's first run uploads its folder to the bucket. The
-laptop's first run downloads what it lacks and uploads what only it has;
-the desktop picks those files up at its next run. From then on, every run
-spreads new files, changes and deletions both ways.
+first run*). The desktop's first run uploads its folder to the bucket. If
+the laptop's folder already holds files, its first run downloads what it
+lacks and uploads what only it has; the desktop picks those files up at
+its next run. From then on, every run spreads new files, changes and
+deletions both ways.
+
+**A first run never fills an empty folder on its own.** An empty folder on
+the worker looks the same as the mount point of a drive that is not
+mounted, and filling that from the bucket would make every file of the
+drive look deleted once it is back: the next run would delete them from
+the bucket and the other machine. So if the laptop's folder is empty (a new
+machine), its first run stops with **Resync required** before it changes
+anything: "Folder A (path1) is empty; a first run does not fill an empty
+folder on its own". Check that it is the right folder, and that its drive
+is mounted if it is on one, then **Resync now** on that job's page or the
+schedule's: it downloads the bucket's files.
+
+- *Empty* means no entry at all. A hidden file counts as content, and so
+  does a file the filters exclude.
+- When both sides are worker folders and both are empty, there is nothing
+  to fill, and the first run goes ahead (and copies nothing).
+- A worker folder that does not exist fails the run with `not_found`, a
+  resync included: rclone would create it.
 
 A resync never deletes. Where a file exists on both sides with different
 content, it keeps the **newer** version and overwrites the other, without
 a conflict copy. If both machines already hold different versions of the
 same files, back them up before the first runs, or start the second
-machine with an empty folder.
+machine with an empty folder and resync it from the bucket.
 
 ## Conflicts
 
@@ -173,6 +193,12 @@ fails:
 - **An empty side:** a folder that is empty now, although it held files at
   the last run, stops the run with **A folder looked unavailable**
   (`side_unavailable`). An empty mount point is the usual cause.
+- **Resyncs:** rclone does not check for an empty side during a resync.
+  The automatic first run checks worker folders itself and never fills an
+  empty one (see [the first runs](#example-a-desktop-and-a-laptop-through-cloudflare-r2)),
+  but **Resync now** fills an empty folder on purpose: mount the drive
+  first (its dialog says so). For folders on drives, mount points and
+  network shares, turn on **Check access**: it stops a resync too.
 - **Check access** (off by default): a run goes ahead only if both
   folders hold the same `RCLONE_TEST` files, the first run included. If a
   drive is not mounted, its file is missing and the run stops with **A
@@ -194,7 +220,8 @@ resync.
 |---|---|---|
 | **Safety check stopped the sync** (`safety_abort`) | The delete limit, or every file changed. | If you deleted or changed those files on purpose, **Run once anyway** on the job's or the schedule's page: one run that skips these two checks. If not, put the files back or fix the path; the next run checks again. |
 | **A folder looked unavailable** (`side_unavailable`) | A side is empty, or the `RCLONE_TEST` files are missing. | Mount the drive, fix the path, or create the `RCLONE_TEST` files. Nothing overrides this check; the next run goes ahead once both folders are there. |
-| **Resync required** (`resync_required`) | rclone cannot trust the pair's state: the filters changed, a file could not be read, or an earlier run ended in a critical error. | Fix the cause (a file's permissions, for example), then **Resync now** on the job's or the schedule's page. |
+| **Resync required** (`resync_required`) | Only a resync lets the pair go on: the filters changed, a worker folder was empty on the pair's first run, or a critical error left no earlier state to go back to (see below). | Fix what the message names first (mount the drive, a file's permissions): a resync stops at the same error. Then **Resync now** on the job's or the schedule's page. |
+| **Failed** (`execution_failed`) with "stopped with a critical error" | A critical error, such as a file the worker cannot read, after the pair has a good state to go back to. | Fix the cause the message names. The next run goes on from the pair's last good state, without a resync; until then each run fails the same way. |
 
 ![Run once anyway repeats the counts of the check that stopped the run](screenshots/bisync/06-job-safety-abort-dialog.png)
 
@@ -202,18 +229,43 @@ resync.
 they are now, each gets the files it lacks, nothing is deleted, and a file
 that differs keeps the newer version (or what **Resync mode** says).
 Files deleted on one side since the last good run come back from the
-other. Neither action changes the schedule: its next runs are normal
-again.
+other, and an empty folder is filled. Neither action changes the schedule:
+its next runs are normal again.
+
+Which settings the actions run:
+
+- **On the schedule's page**, the schedule's current settings, on the
+  worker it targets now. **Run once anyway** is offered there only while
+  the schedule has the settings the stopped run had, since its dialog
+  repeats that run's counts; after a change, the next run checks again
+  (**Run now** starts it at once).
+- **On a job's page**, that job's settings, on its worker, and only while
+  it is the pair's newest run there and its schedule, if any, has not
+  changed since. Otherwise the page points to the newer run or to the
+  schedule.
+- **Resync now** always runs for real, also from a dry-run definition: a
+  dry run cannot rebuild the pair's state. **Run once anyway** keeps a dry
+  run dry: it then reports what it would change past the check.
 
 Things that make a run fail with **Resync required**:
 
 - **Changed filters** (see below).
-- **A file that cannot be read**, for example one without read permission
-  for the worker's account: rclone retries it three times, then stops the
-  pair. Until someone fixes the file and resyncs, every run fails. One
-  unreadable file stops the whole pair.
-- Rarely, **a run stopped** (cancel, time limit, worker stop) just as a
-  file finished copying: rclone records that as a critical error.
+- **An empty worker folder on the pair's first run** (see
+  [the first runs](#example-a-desktop-and-a-laptop-through-cloudflare-r2)).
+- **A critical error before the pair has a state to go back to**, such as a
+  file that cannot be read on the first normal run after a resync. The
+  runs after it fail with "cannot find prior Path1 or Path2 listings" until
+  the cause is fixed and the pair resynced.
+
+Critical errors after that need no resync. **A file that cannot be read**,
+for example one without read permission for the worker's account, is
+retried three times, then stops the run with a critical error: the job
+fails (`execution_failed`) and names the file. rclone keeps the listings of
+the last good run, and once the file is fixed the next run goes on from
+them, with no resync. Until then every run fails the same way: one
+unreadable file stops the whole pair. Rarely, **a run stopped** (cancel,
+time limit, worker stop) just as a file finished copying is recorded as a
+critical error too; the next run goes on the same way.
 
 ## Filters and resync
 
@@ -225,7 +277,12 @@ excluded file is neither copied nor deleted.
 otherwise look deleted. So the next run after a change, including removing
 every rule, fails with **Resync required**, and so does every run after it
 until **Resync now**. The schedule form says so when you save changed
-filters. Plan filter changes for a moment when you can start the resync.
+filters; once that run has stopped, the schedule's page offers **Resync
+now** (**Run now** starts the run at once). Plan filter changes for a
+moment when you can start the resync.
+
+The pair's state, filters included, belongs to the two locations on the
+worker, not to one schedule or job: see [the limits](#limits-and-known-gaps).
 
 ## Other options
 
@@ -266,8 +323,14 @@ the path. **A pair is new**, and its next run a resync, when:
   not run for **180 days**, at startup and then daily.
 
 Such a resync is a union and deletes nothing, but deletions since the
-pair's last run come back. Deleting a pair's state folder by hand (while it
-does not run) has the same effect: the next run starts over with a resync.
+pair's last run come back; an empty worker folder makes it stop and ask
+first, as on any first run. Deleting a pair's state folder by hand (while
+it does not run) has the same effect: the next run starts over with a
+resync.
+
+A two-way sync may not use the state folder as a side, nor a folder inside
+it or one that holds it (`path_not_allowed`), even when the worker's
+`local_roots` covers its data directory.
 
 ## Limits and known gaps
 
@@ -282,6 +345,18 @@ does not run) has the same effect: the next run starts over with a resync.
   locations, and don't let a **transfer** write into a two-way folder: it
   does not wait for the pair either. Its files are picked up as changes by
   the next run.
+- **One remote per bucket.** Runs wait for each other by remote and path,
+  not by bucket. Two remotes for the same bucket path, for example one per
+  Syncr user (remotes are their owner's), do not wait for each other, so
+  the desktop's and the laptop's runs could overlap on the bucket. Keep the
+  pairs of one folder under one user, with one remote.
+- **One definition per pair of folders on a worker.** Two definitions of
+  the same two locations on one worker (two schedules, a schedule and a job
+  run by hand with other options, or two users' definitions of the same
+  two worker folders) share the pair's state. With different filters they
+  take turns stopping each other: each resync accepts its own filters, and
+  the other's next run fails with **Resync required**. Nothing is deleted
+  (rclone notices the change), but use one definition per pair.
 - **Clocks and modification times.** Change detection and "newer" rely on
   modification times. Keep the machines' clocks right; a clock or time
   zone change can stop a run with "every file changed".
@@ -300,8 +375,8 @@ does not run) has the same effect: the next run starts over with a resync.
   run is finished by the next one without a resync, but it can leave a
   partial file (`name.<hash>.partial`): the next run copies it across, and
   the run after removes it, so one extra run may be needed.
-- **One unreadable file stops the pair** with **Resync required** (see
-  above).
+- **One unreadable file stops the pair** until it is fixed (see
+  [when a run fails](#when-a-run-fails)).
 - **A folder cannot be emptied through the sync:** an empty side stops the
   run (that is the unmounted-drive check). Keep at least one file in it.
 - A run is not a snapshot: files that change while it runs are picked up

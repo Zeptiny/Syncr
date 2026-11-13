@@ -3,10 +3,13 @@
  * APIs, matching the dev seed (internal/devseed/bisync_data.go): the
  * "Cloudflare R2" remote, the schedule "Shared folder ⇄ R2" on nas-01 with
  * about three days of runs (the first run's resync, a run with two
- * conflicts, one that found Folder A empty, one that needed a resync and
- * the resync run by hand, and in the last hours runs stopped by the delete
- * limit), the workers that run two-way syncs, and the controller's checks
- * of a two-way sync (RunJob and schedules).
+ * conflicts, one that found Folder A empty, one stopped by an unreadable
+ * file that the next run went on from, one that needed a resync after the
+ * filters changed and the resync run by hand, and in the last hours runs
+ * stopped by the delete limit), the first run of a new pair on
+ * backup-host whose folder is empty (it asks for a resync), the workers
+ * that run two-way syncs, and the controller's checks of a two-way sync
+ * (RunJob and schedules).
  */
 import { create } from "@bufbuild/protobuf";
 import { durationFromMs, timestampFromMs } from "@bufbuild/protobuf/wkt";
@@ -70,6 +73,9 @@ export const LOCAL_PATH = "/srv/shared";
 export const REMOTE_NAME = "Cloudflare R2";
 export const REMOTE_PATH = "shared";
 export const TITLE = `Two-way sync ${LOCAL_PATH} ⇄ ${REMOTE_NAME}`;
+/** NEW_PATH is the empty folder of the new pair on backup-host (with the same R2 path). */
+export const NEW_PATH = "/backup/shared";
+export const NEW_TITLE = `Two-way sync ${NEW_PATH} ⇄ ${REMOTE_NAME}`;
 const CRON = "0 */2 * * *";
 const TIMEZONE = "Europe/Berlin";
 const FILES = 1268;
@@ -78,7 +84,11 @@ const FILES = 1268;
 export const messages = {
   sideUnavailable:
     "Folder A (path1) is empty; refusing to sync it with the other side (is the drive mounted and the path right?)",
-  resyncRequired: `a resync is required: failed to open source object: open ${LOCAL_PATH}/scans/2026-11-contract.pdf: permission denied; run it once with resync to rebuild the pair's state from both sides as they are now`,
+  resyncRequired:
+    "a resync is required: filters file has changed; run it once with resync to rebuild the pair's state from both sides as they are now",
+  criticalError: `the two-way sync stopped with a critical error: failed to open source object: open ${LOCAL_PATH}/scans/2026-11-contract.pdf: permission denied; fix the cause and run it again: the next run goes on from the pair's last good state, without a resync`,
+  emptyFolder:
+    "Folder A (path1) is empty; a first run does not fill an empty folder on its own (a drive that is not mounted looks the same). If this is a new machine, run it once with resync to fill it from Folder B (path2); if the folder is on a drive, mount it first",
   safetyAbort: `safety check stopped the two-way sync: too many deletes (>50%, 731 of 1268) on Path1 "${LOCAL_PATH}/"; if these changes are intended, run it once with force`,
   conflictWarning:
     '2 files changed on both sides; both versions were kept, renamed with the suffix "conflict"',
@@ -142,13 +152,16 @@ export function applyWorkers(workers: Worker[]): void {
   }
 }
 
-/** definition is the demo pair's definition; oneShot sets resync or force for one run. */
-export function definition(oneShot?: "resync" | "force"): JobDefinition {
+/**
+ * definition is the demo pair's definition; oneShot sets resync or force
+ * for one run, and path1 another Folder A (the new pair's).
+ */
+export function definition(oneShot?: "resync" | "force", path1 = LOCAL_PATH): JobDefinition {
   return create(JobDefinitionSchema, {
     operation: {
       case: "rcloneBisync",
       value: {
-        path1: { remoteId: "", path: LOCAL_PATH },
+        path1: { remoteId: "", path: path1 },
         path2: { remoteId: ids.r2, path: REMOTE_PATH },
         options: {
           createEmptySrcDirs: true,
@@ -312,10 +325,14 @@ function hexId(prefix: number, n: number, tail: string): string {
  * history returns the schedule "Shared folder ⇄ R2" with about three days
  * of runs every two hours, as the dev seed: the first run's resync, quiet
  * runs, a run with two conflicts, one that found Folder A empty
- * (SIDE_UNAVAILABLE), the last one at or before 7 hours ago needing a
- * resync (RESYNC_REQUIRED) followed 25 minutes later by the resync run by
+ * (SIDE_UNAVAILABLE), one stopped by an unreadable file
+ * (EXECUTION_FAILED; the next run went on from the last good state), the
+ * last one at or before 7 hours ago needing a resync after the filters
+ * changed (RESYNC_REQUIRED) followed 25 minutes later by the resync run by
  * hand, and in the last 4 hours runs stopped by the delete limit
- * (SAFETY_ABORT), the newest among them.
+ * (SAFETY_ABORT), the newest among them. Besides, 40 minutes ago, the
+ * first run of a new pair on backup-host, run by hand, found its folder
+ * empty and asks for a resync (RESYNC_REQUIRED, rclone not started).
  */
 export function history(now: number): History {
   const expr = parseCron(CRON, TIMEZONE);
@@ -337,37 +354,41 @@ export function history(now: number): History {
       out?: RcloneBisyncOutput;
       warnings?: string[];
       oneShot?: "resync";
+      /** newPair: the new pair's first run on backup-host, run by hand. */
+      newPair?: boolean;
     },
   ): Job => {
     const started = at + 4 * SEC;
+    const manual = !!o.oneShot || !!o.newPair;
     const j = create(JobSchema, {
       ...base,
       id: hexId(0xb15c0000, n, "8a6b-4c5d-8e9f"),
-      title: o.oneShot ? `${TITLE} · Resync` : TITLE,
+      workerId: o.newPair ? fx.ids.backupHost : base.workerId,
+      title: o.newPair ? NEW_TITLE : o.oneShot ? `${TITLE} · Resync` : TITLE,
       status: o.status,
       createdAt: timestampFromMs(at + SEC),
       dispatchedAt: timestampFromMs(started - 500),
       startedAt: timestampFromMs(started),
       finishedAt: timestampFromMs(started + o.runMs),
-      exitCode: o.error ? o.error[2] : 0,
+      exitCode: o.error && o.error[2] >= 0 ? o.error[2] : o.error ? undefined : 0,
       stats: {
         bytes: BigInt(Math.round(o.bytes)),
         totalBytes: BigInt(Math.round(o.bytes)),
         files: BigInt(o.files),
-        totalFiles: o.error ? BigInt(FILES) : BigInt(o.files),
-        checks: BigInt(o.error?.[0] === JobErrorCode.SIDE_UNAVAILABLE ? 0 : 2 * FILES),
+        totalFiles: o.newPair ? 0n : o.error ? BigInt(FILES) : BigInt(o.files),
+        checks: BigInt(o.newPair || o.error?.[0] === JobErrorCode.SIDE_UNAVAILABLE ? 0 : 2 * FILES),
         deletes: o.error ? 0n : BigInt(n % 4),
-        errors: o.error ? 1n : 0n,
+        errors: o.error && !o.newPair ? 1n : 0n,
         elapsed: durationFromMs(o.runMs),
       },
       error: o.error ? { code: o.error[0], message: o.error[1] } : undefined,
       warnings: o.warnings ?? [],
-      definition: definition(o.oneShot),
+      definition: definition(o.oneShot, o.newPair ? NEW_PATH : LOCAL_PATH),
       remotes: [r2Ref()],
       output: o.out ? { output: { case: "rcloneBisync", value: o.out } } : undefined,
       details: o.out ? details(o.out) : [],
-      scheduleId: o.oneShot ? "" : ids.schedule,
-      schedule: o.oneShot ? undefined : { id: ids.schedule, name: SCHEDULE_NAME },
+      scheduleId: manual ? "" : ids.schedule,
+      schedule: manual ? undefined : { id: ids.schedule, name: SCHEDULE_NAME },
     });
     jobs.push(j);
     return j;
@@ -415,6 +436,14 @@ export function history(now: number): History {
         files: 0,
         error: [JobErrorCode.SIDE_UNAVAILABLE, messages.sideUnavailable, 7],
       });
+    } else if (n === 20) {
+      j = job(n, at, {
+        runMs: 27 * SEC,
+        status: JobStatus.FAILED,
+        bytes: 0,
+        files: 0,
+        error: [JobErrorCode.EXECUTION_FAILED, messages.criticalError, 7],
+      });
     } else {
       j = job(n, at, {
         runMs: (18 + ((n * 37) % 77)) * SEC,
@@ -440,7 +469,7 @@ export function history(now: number): History {
       }),
     );
   });
-  // The resync run by hand, once the unreadable file was fixed.
+  // The resync run by hand, accepting the new filters.
   job(fires.length, resyncAt + 25 * MIN, {
     runMs: 2 * MIN + 47 * SEC,
     status: JobStatus.SUCCEEDED,
@@ -448,6 +477,15 @@ export function history(now: number): History {
     files: 1,
     out: output(BisyncResyncReason.REQUESTED),
     oneShot: "resync",
+  });
+  // The new pair's first run, refused before rclone started.
+  job(fires.length + 1, now - 40 * MIN, {
+    runMs: 0,
+    status: JobStatus.FAILED,
+    bytes: 0,
+    files: 0,
+    error: [JobErrorCode.RESYNC_REQUIRED, messages.emptyFolder, -1],
+    newPair: true,
   });
   runs.reverse();
   jobs.sort((a, b) => Number((b.createdAt?.seconds ?? 0n) - (a.createdAt?.seconds ?? 0n)));

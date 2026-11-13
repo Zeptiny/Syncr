@@ -397,7 +397,13 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
           <StatCard
             label={transfer || bisync ? "Transferred" : "Processed"}
             value={formatBytes(p.bytes)}
-            sub={p.total > 0 ? `of ${formatBytes(p.total)}` : "Total not known yet"}
+            sub={
+              p.total > 0
+                ? `of ${formatBytes(p.total)}`
+                : terminal
+                  ? undefined
+                  : "Total not known yet"
+            }
           />
           <StatCard
             label="Files"
@@ -470,7 +476,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
               <p className="mt-0.5 font-mono text-[12.5px] leading-5 break-words">
                 {job.error.message}
               </p>
-              <BisyncRecovery job={job} canRun={!foreign} workerName={worker?.name} />
+              <BisyncRecovery job={job} canRun={!foreign} workers={workers.data?.workers} />
             </div>
           </div>
         )}

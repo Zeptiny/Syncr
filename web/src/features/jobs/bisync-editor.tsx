@@ -292,8 +292,8 @@ export function BisyncEditor({
                 role="status"
                 className="rounded-md bg-warning-soft px-3 py-2 text-[13px] leading-5 text-warning"
               >
-                The filters changed, so the pair's next run will stop with “Resync required”. Run
-                Resync now from that job or the schedule page to accept the new filters.
+                The filters changed, so the pair's next run will stop with “Resync required”. Then
+                Resync now, on that job's page or the schedule's, accepts the new filters.
               </p>
             )
           }
