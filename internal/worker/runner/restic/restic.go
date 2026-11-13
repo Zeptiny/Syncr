@@ -243,7 +243,7 @@ func (e *engine) exec(ctx context.Context, x execution) (runner.Result, *session
 		Dir:    e.cfg.ScratchRoot,
 		Env:    env,
 		Stdout: s.stdout,
-		Stderr: s.line,
+		Stderr: s.stderr,
 	})
 	res.ExitCode = pres.ExitCode
 	res.Stats = s.stats()

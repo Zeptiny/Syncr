@@ -24,7 +24,10 @@ const (
 	maxFailureDetail  = 1000
 	maxTailLines      = 4
 	maxTailLineBytes  = 400
-	maxItemErrors     = runner.MaxWarnings - 1 // plus the summary warning
+	// maxRcloneErrors bounds the error lines of restic's rclone process that
+	// a failure message repeats.
+	maxRcloneErrors = 2
+	maxItemErrors   = runner.MaxWarnings - 1 // plus the summary warning
 	// maxErrItems bounds the failing paths a backup or restore remembers to
 	// count each one once; a run over a tree with millions of unreadable
 	// files must not keep all their names.
