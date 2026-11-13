@@ -736,13 +736,8 @@ const bisyncShots = [
       await scrollTo(p, p.getByRole("heading", { name: "Safety" }));
     },
   ],
-  [
-    "04-job-conflicts",
-    async (p) => {
-      await bisyncJob(p, "conflicts");
-      await scrollTo(p, p.getByRole("heading", { name: "Two-way sync result" }), 260);
-    },
-  ],
+  // The top of the page holds the folders, the warning and the result.
+  ["04-job-conflicts", async (p) => bisyncJob(p, "conflicts")],
   [
     "05-job-resync-dialog",
     async (p) => {

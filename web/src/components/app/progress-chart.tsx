@@ -8,7 +8,7 @@ import { formatBytes, formatDateTime, formatRate, rateBetween } from "@/lib/form
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-import { cssVar, withAlpha } from "./charts/uplot-theme";
+import { byteIncrs, cssVar, secondIncrs, withAlpha } from "./charts/uplot-theme";
 
 /** chartData turns cumulative samples into [time, throughput, bytes]. */
 function chartData(samples: JobSample[]): [number[], (number | null)[], number[]] {
@@ -121,6 +121,7 @@ export function ProgressChart({
           grid: { show: false },
           size: 30,
           space: 70,
+          incrs: secondIncrs,
           values: (_u, splits, _axis, _space, incr) =>
             splits.map((s) => (incr < 60 ? hms : hm).format(new Date(s * 1000))),
         },
@@ -128,6 +129,7 @@ export function ProgressChart({
           ...axisBase,
           scale: "rate",
           size: 76,
+          incrs: byteIncrs,
           values: (_u, vals) => vals.map((v) => formatRate(v)),
         },
         {
@@ -136,6 +138,7 @@ export function ProgressChart({
           side: 1,
           size: 72,
           grid: { show: false },
+          incrs: byteIncrs,
           values: (_u, vals) => vals.map((v) => formatBytes(v)),
         },
       ],
