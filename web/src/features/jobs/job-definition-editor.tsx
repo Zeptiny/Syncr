@@ -34,17 +34,25 @@ export interface JobDefinitionEditorProps {
   worker?: Worker;
   /**
    * browseWorker stands in for worker when the job runs on a label: the
-   * first online worker with it. browseNote tells the user so.
+   * first online worker with it. browseNote replaces the help under local
+   * paths when there is no worker: which worker Browse uses, or why none.
    */
   browseWorker?: Worker;
   browseNote?: string;
   /**
-   * hooksTarget is where the job runs, as far as hooks go: the workers it
-   * may run on (one, or a label's) that have reported in. Default: worker.
+   * runTarget is where the job may run: the workers (one, or a label's)
+   * that have reported in. The hooks are checked against them, and local
+   * paths against their allowed folders. Default: worker.
    */
-  hooksTarget?: HooksTarget;
+  runTarget?: HooksTarget;
   /** how renders next to the kind's first fields, e.g. the worker picker of "Run a job". */
   how?: React.ReactNode;
+  /**
+   * where renders as its own "Where it runs" panel right after the kind,
+   * before any path, for a picker too wide to sit next to the kind's
+   * first fields (the schedule form's target picker).
+   */
+  where?: React.ReactNode;
   /** idPrefix keeps input IDs unique when two editors share a page. */
   idPrefix?: string;
   /** kinds limits the kinds offered (default: every editable kind). */
@@ -75,14 +83,27 @@ export function JobDefinitionEditor({
   worker,
   browseWorker,
   browseNote,
-  hooksTarget,
+  runTarget,
   how,
+  where,
   idPrefix = "run",
   kinds = editableKinds,
   onKindChange,
   saved,
 }: JobDefinitionEditorProps) {
   const restic = { errors, repositories, idPrefix: `${idPrefix}-${s.kind}` };
+  const target = runTarget ?? { workers: worker?.info ? [worker] : [] };
+  // Local paths: browsed on the job's worker or a label's stand-in, and
+  // checked against the folders of every worker that may run the job.
+  const local = {
+    worker: worker ?? browseWorker,
+    workerNote: worker ? undefined : browseNote,
+    runsOn: target.workers,
+  };
+  const whereNote =
+    s.kind === "rclone_bisync"
+      ? "A two-way sync keeps its state on the worker that runs it. Its first run on a worker is a resync: it merges both folders and deletes nothing."
+      : undefined;
   return (
     <>
       <Panel title="What kind of job">
@@ -98,6 +119,11 @@ export function JobDefinitionEditor({
           }}
         />
       </Panel>
+      {where !== undefined && (
+        <Panel title="Where it runs" description={whereNote}>
+          {where}
+        </Panel>
+      )}
       {s.kind === "rclone_transfer" ? (
         <TransferEditor
           value={s.transfer}
@@ -105,21 +131,14 @@ export function JobDefinitionEditor({
           errors={errors}
           remotes={remotes}
           backends={backends}
-          worker={worker}
+          {...local}
           how={how}
           idPrefix={idPrefix}
         />
       ) : (
         <>
           {how !== undefined && (
-            <Panel
-              title="Where it runs"
-              description={
-                s.kind === "rclone_bisync"
-                  ? "A two-way sync keeps its state on the worker that runs it. Its first run on a worker is a resync: it merges both folders and deletes nothing."
-                  : undefined
-              }
-            >
+            <Panel title="Where it runs" description={whereNote}>
               <div className="max-w-md">{how}</div>
             </Panel>
           )}
@@ -130,7 +149,7 @@ export function JobDefinitionEditor({
               errors={errors}
               remotes={remotes}
               backends={backends}
-              worker={worker}
+              {...local}
               filtersNeedResync={
                 saved?.kind === "rclone_bisync" && filtersNeedResync(saved.bisync, s.bisync)
               }
@@ -142,8 +161,7 @@ export function JobDefinitionEditor({
               {...restic}
               value={s.backup}
               onChange={(backup) => onChange({ ...s, backup })}
-              worker={worker ?? browseWorker}
-              workerNote={worker ? undefined : browseNote}
+              {...local}
             />
           )}
           {s.kind === "restic_forget" && (
@@ -173,7 +191,7 @@ export function JobDefinitionEditor({
         idPrefix={idPrefix}
         value={s.hooks}
         onChange={(hooks) => onChange({ ...s, hooks })}
-        target={hooksTarget ?? { workers: worker?.info ? [worker] : [] }}
+        target={target}
         error={errors.hooks}
       />
       <Panel title="Time limit">

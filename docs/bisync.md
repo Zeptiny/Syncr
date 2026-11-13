@@ -97,10 +97,12 @@ empty bucket.
 **3. One schedule per machine.** Under **Schedules, New schedule**, choose
 **Two-way sync**:
 
-- **Folder A:** *On the worker*, `/home/ada/Shared` (the desktop's folder;
-  **Browse** picks it).
+- **Where it runs:** *A specific worker*, the desktop's. Choose it before
+  the folders: **Browse** shows the folders of the chosen worker while it
+  is online, and the form warns about a path outside its allowed folders.
+- **Folder A:** *Worker filesystem*, `/home/ada/Shared` (the desktop's
+  folder; **Browse** picks it).
 - **Folder B:** the R2 remote, path `shared`.
-- **Where it runs:** *A specific worker*, the desktop's.
 - **When:** every 15 minutes, for example `*/15 * * * *`.
 
 Then the same for the laptop: Folder A `C:\Users\ada\Shared`, Folder B the

@@ -99,9 +99,16 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
           (w) => w.status === WorkerStatus.ONLINE,
         )
       : undefined;
-  // The workers a run may go to, for the hooks they offer: the chosen one,
-  // or every worker with the label that has reported in.
-  const hooksTarget =
+  const label = s.target.kind === "label" ? s.target.label.trim().toLowerCase() : "";
+  const browseNote = !label
+    ? undefined
+    : labelWorker
+      ? `Absolute paths on the workers labelled ${label}. Browse shows ${labelWorker.name}, the first one online.`
+      : `No worker labelled ${label} is online, so folders cannot be browsed now. Type absolute paths inside the allowed folders of the workers with the label.`;
+  // The workers a run may go to, for the hooks they offer and the folders
+  // they allow: the chosen one, or every worker with the label that has
+  // reported in.
+  const runTarget =
     s.target.kind === "label"
       ? {
           workers: labelledWorkers(workerList, s.target.label).filter((w) => w.info),
@@ -224,28 +231,23 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
           kinds={scheduleKinds}
           worker={worker}
           browseWorker={labelWorker}
-          hooksTarget={hooksTarget}
-          browseNote={
-            labelWorker
-              ? `Absolute paths on the workers labelled ${s.target.label}. Browse shows ${labelWorker.name}, the first one online.`
-              : undefined
+          browseNote={browseNote}
+          runTarget={runTarget}
+          where={
+            <TargetPicker
+              id="sched-target"
+              value={s.target}
+              onChange={(v) => set("target", v)}
+              workers={workerList}
+              error={errors.target}
+              labelDisabled={
+                labelTargetAllowed(s.definition.kind)
+                  ? undefined
+                  : `${SINGLE_WORKER_REASON}, so its schedule runs on a specific worker, not on any worker with a label.`
+              }
+            />
           }
         />
-
-        <Panel title="Where it runs">
-          <TargetPicker
-            id="sched-target"
-            value={s.target}
-            onChange={(v) => set("target", v)}
-            workers={workerList}
-            error={errors.target}
-            labelDisabled={
-              labelTargetAllowed(s.definition.kind)
-                ? undefined
-                : `${SINGLE_WORKER_REASON}, so its schedule runs on a specific worker, not on any worker with a label.`
-            }
-          />
-        </Panel>
 
         <Panel title="When a run can't start on time">
           <PolicyFields

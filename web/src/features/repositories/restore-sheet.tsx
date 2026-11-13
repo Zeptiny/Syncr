@@ -1,11 +1,12 @@
 import { useMutation } from "@connectrpc/connect-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { TriangleAlert, Undo2 } from "lucide-react";
+import { Undo2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
 import { FieldShell } from "@/components/app/descriptor-form";
+import { FieldWarning } from "@/components/app/field-warning";
 import { OverwriteChoice } from "@/components/app/overwrite-choice";
 import { PathBrowserDialog } from "@/components/app/path-browser";
 import { PathInput } from "@/components/app/path-input";
@@ -271,11 +272,10 @@ function Body({
             onBrowse={worker && isOnline(worker) ? () => setBrowsing(true) : undefined}
           />
           {outside && (
-            <p className="inline-flex w-fit items-center gap-1.5 rounded-md bg-warning-soft px-2 py-1 text-xs text-warning">
-              <TriangleAlert className="size-3.5" aria-hidden />
+            <FieldWarning>
               Not inside {worker?.name ?? "the worker"}'s allowed folders ({roots.join(", ")}). The
               worker will refuse it.
-            </p>
+            </FieldWarning>
           )}
           {original !== undefined && (
             <div>

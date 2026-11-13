@@ -37,8 +37,18 @@ export interface BisyncEditorProps {
   errors: BisyncErrors;
   remotes: Remote[];
   backends: Map<string, Backend>;
-  /** worker offers its allowed folders for local paths. */
+  /**
+   * worker is whose folders local paths are browsed on and suggested
+   * from: the job's worker, or for a label target its stand-in.
+   */
   worker?: Worker;
+  /** workerNote replaces the help under local paths (see allowedFoldersHelp). */
+  workerNote?: string;
+  /**
+   * runsOn are the workers the job may run on that have reported in: a
+   * warning names local paths outside their allowed folders. Default: worker.
+   */
+  runsOn?: Worker[];
   /**
    * filtersNeedResync says that the filters differ from the saved ones of
    * the same pair, so its next run needs a resync.
@@ -69,6 +79,8 @@ export function BisyncEditor({
   remotes,
   backends,
   worker,
+  workerNote,
+  runsOn,
   filtersNeedResync,
   idPrefix = "run",
 }: BisyncEditorProps) {
@@ -89,6 +101,8 @@ export function BisyncEditor({
             remotes={remotes}
             backends={backends}
             worker={worker}
+            workerNote={workerNote}
+            runsOn={runsOn}
             errors={{ remote: errors.path1Remote, path: errors.path1Path }}
           />
           <div className="flex justify-center text-muted-foreground md:pt-14" aria-hidden>
@@ -103,6 +117,8 @@ export function BisyncEditor({
             remotes={remotes}
             backends={backends}
             worker={worker}
+            workerNote={workerNote}
+            runsOn={runsOn}
             errors={{ remote: errors.path2Remote, path: errors.path2Path }}
           />
         </div>
