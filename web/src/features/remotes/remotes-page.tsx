@@ -190,8 +190,8 @@ export function RemotesPage() {
           source={{ kind: "remote", remoteId: browsing.id }}
           title={`Browse ${browsing.name}`}
           rootLabel={browsing.name}
-          description="Look around the remote. Selecting a folder copies its path."
-          mode="dir"
+          description="Look around the remote. Selecting an entry copies its path."
+          mode="any"
           onSelect={([path]) => {
             if (path === undefined) return;
             void copyText(path).then(
