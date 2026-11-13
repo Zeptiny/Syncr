@@ -11,9 +11,11 @@
 // service, both behind small ports (ports.go). Nothing about commands is
 // stored separately: commands are derived from job state on every request.
 // The only in-memory state is a per-worker session (cancel acks of the
-// current epoch, jobs to cancel from the latest snapshot), which the
-// worker's next requests rebuild after a controller restart; a lost session
-// at worst re-sends a CancelJob, which workers treat as a no-op.
+// current epoch, jobs to cancel from the latest snapshot, whether the
+// epoch is shutting down), which the worker's next requests rebuild after a
+// controller restart; a lost session at worst re-sends a CancelJob, which
+// workers treat as a no-op, or lets a late start ack dispatch a job to a
+// worker process that is shutting down (see Shutdown).
 //
 // # Request handling
 //
@@ -67,12 +69,14 @@
 // no start time: nothing ran, so it goes back to the queue like a job of a
 // restarted worker (see the epoch rules) and the worker's next process
 // receives it. A shutting-down worker does not acknowledge StartJob, so a
-// job sent to it meanwhile stays queued.
+// job sent to it meanwhile stays queued; see Shutdown for what else
+// changes once a worker process says it is shutting down.
 //
 // # Acks
 //
 //	Ack            Effect
-//	start:<job>    queued -> dispatched by the acking epoch; otherwise nothing
+//	start:<job>    queued -> dispatched by the acking epoch, unless it is
+//	                 stopping (see Shutdown); otherwise nothing
 //	cancel:<job>   that CancelJob is not sent again in this epoch
 //	probe:<probe>  that RunProbe is not sent again (see Probes)
 //	probe-cancel:<probe>  that CancelProbe is not sent again
@@ -84,9 +88,10 @@
 //
 //	Job state (this worker)                                   Command
 //	queued, not waiting on a concurrency key, the Hello of
-//	  the current epoch stored                                StartJob{job_id, spec}, id "start:<job>"
+//	  the current epoch stored, the epoch not stopping        StartJob{job_id, spec}, id "start:<job>"
 //	queued, an older unfinished job shares one of its keys    none (see Concurrency keys)
 //	queued, no Hello of the current epoch yet                 none (see below)
+//	queued, the current epoch is stopping                     none (see Shutdown)
 //	dispatched/running in the current epoch, cancel requested,
 //	  CancelJob not acked in this epoch                        CancelJob, id "cancel:<job>"
 //	listed by the latest snapshot but finished, unknown or
@@ -202,12 +207,36 @@
 //
 //	Condition                         Job (this worker)                    Effect
 //	snapSeq > 0 and snapSeq < cursor  -                                    stale snapshot: ignored
-//	listed                            queued                               dispatched by this epoch (implicit ack)
+//	listed                            queued                               dispatched by this epoch (implicit ack),
+//	                                                                       unless it is stopping (see Shutdown)
 //	listed                            finished, unknown, another worker's  orphan: CancelJob until acked or no longer listed
 //	listed                            dispatched/running in this epoch     consistent, nothing
 //	not listed, snapSeq == cursor     running in this epoch                interrupted, worker_lost (notifier called)
 //	not listed                        dispatched in this epoch             nothing (the snapshot may predate the acceptance)
 //	not listed, snapSeq unknown       running in this epoch                nothing (cannot tell a stale snapshot)
+//
+// # Shutdown
+//
+// A worker process that shuts down stops its jobs without a cancel request,
+// reports each of them CANCELLED with code WORKER_SHUTDOWN (see Events) and
+// never takes a job again. The first such result marks its epoch as
+// stopping in the session. From then on the epoch gets no StartJob, and
+// its start acks and the queued jobs its snapshots list are ignored.
+//
+// They can only be late: the worker gives up on its in-flight Report and
+// Poll when it begins shutting down, but the controller may still serve
+// them after the Report that carries the shutdown results, and the acks
+// they carry would dispatch a job that went back to the queue to the
+// process that gave it back. Ignoring them loses nothing: a job the process
+// started has a JobStarted before its result, and one it accepted but
+// never started comes back with a result of its own, which dispatches it
+// implicitly and queues it again.
+//
+// The mark lives in memory and only for the epoch. After a controller
+// restart the process's next WORKER_SHUTDOWN result sets it again; a job
+// dispatched to the stopping process before that goes back to the queue
+// when the worker's next process arrives (epoch rules) or ends
+// worker_lost after LostAfter (Timeouts).
 //
 // # Timeouts
 //

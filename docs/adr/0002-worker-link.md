@@ -76,7 +76,12 @@ The same holds without a restart when a worker shuts down gracefully: a
 CANCELLED result nobody asked for (`WORKER_SHUTDOWN`) interrupts a job that
 started, but a job that never started (no `JobStarted` before its result)
 goes back to `queued`, without a notification, for the worker's next
-process.
+process. The first such result also tells the controller that the process
+is stopping: until its epoch is replaced it gets no `StartJob`, and its
+start acks and snapshots no longer mark queued jobs as accepted. Those can
+only be late (a Report or Poll the worker gave up on when it began
+shutting down, served after its results), and they would hand a job it
+gave back to the process that is going away.
 
 The full rule tables live in the package documentation of
 `internal/controller/dispatch`. A job that stays queued longer than the

@@ -593,6 +593,72 @@ func TestShutdownGivesBackUnstartedJobs(t *testing.T) {
 	}
 }
 
+// TestShuttingDownWorkerGetsNoJobBack: requests a worker sent before it began
+// shutting down can reach the controller after the results of its shutdown
+// (the worker gives up on its in-flight Report and Poll, but the controller
+// may still serve them). Their start acks and job list must not hand a job
+// the shutdown gave back to the stopping process, and that process gets no
+// StartJob for it either: the job waits for the worker's next process.
+func TestShuttingDownWorkerGetsNoJobBack(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	wid := e.enroll("w")
+	waiting := e.run(wid)
+	w := e.newFakeWorker(wid)
+	w.report()
+	w.poll()
+	lateReport := w.reportRequest() // carries the start ack; still in flight
+	latePoll := slices.Clone(w.acks)
+	w.report()
+	if got := e.job(waiting.ID); got.Status != domain.JobDispatched {
+		t.Fatalf("job = %s, want dispatched", got.Status)
+	}
+
+	w.finish(waiting.ID.String(), syncrv1.JobResultStatus_JOB_RESULT_STATUS_CANCELLED,
+		&syncrv1.JobError{Code: syncrv1.JobErrorCode_JOB_ERROR_CODE_WORKER_SHUTDOWN, Message: "job cancelled because the worker is shutting down"})
+	w.report()
+	want := e.job(waiting.ID)
+	if want.Status != domain.JobQueued || want.Requeues != 1 {
+		t.Fatalf("job after the shutdown = %s requeues %d, want queued requeues 1", want.Status, want.Requeues)
+	}
+
+	// The late requests: a Report, a Poll, and a job list that does not say
+	// what it accounts for (no last_seq, no events).
+	if _, err := e.disp.Report(ctx, wid, lateReport); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.disp.Ack(ctx, wid, w.epoch, latePoll); err != nil {
+		t.Fatal(err)
+	}
+	unknown := &syncrv1.WorkerState{Jobs: []*syncrv1.ActiveJob{{JobId: waiting.ID.String()}}}
+	if _, err := e.disp.Ingest(ctx, wid, w.epoch, nil, unknown); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.job(waiting.ID); got.Status != domain.JobQueued || got.Epoch != "" || got.Version != want.Version {
+		t.Errorf("job after the late requests = %s by %q v%d, want queued v%d", got.Status, got.Epoch, got.Version, want.Version)
+	}
+	cmds, err := e.disp.Commands(ctx, wid, w.epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmds) > 0 {
+		t.Errorf("commands for the stopping process = %v, want none", cmds)
+	}
+
+	// The worker's next process receives it.
+	w.restart()
+	w.report()
+	cmds = w.poll()
+	if len(cmds) != 1 || cmds[0].GetStartJob().GetJobId() != waiting.ID.String() {
+		t.Fatalf("commands for the next process = %v", cmds)
+	}
+	w.report()
+	if got := e.job(waiting.ID); got.Status != domain.JobDispatched || got.Epoch != w.epoch || got.Requeues != 1 {
+		t.Errorf("job = %s by %q requeues %d, want dispatched by %q requeues 1", got.Status, got.Epoch, got.Requeues, w.epoch)
+	}
+}
+
 func TestStaleEpochIsRejected(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

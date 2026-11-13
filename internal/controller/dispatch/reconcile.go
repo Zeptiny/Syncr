@@ -90,8 +90,9 @@ func (s *Service) reconcileSnapshot(ctx context.Context, sess *session, workerID
 		case !ok:
 			// Finished, unknown or another worker's job: stop it.
 			orphans = append(orphans, id)
-		case j.Status == domain.JobQueued:
-			// The worker holds it, so it accepted it: an implicit ack.
+		case j.Status == domain.JobQueued && !sess.stopping:
+			// The worker holds it, so it accepted it: an implicit ack (but
+			// not from a stopping process, like a start ack).
 			if _, _, err := s.jobs.MarkDispatched(ctx, workerID, j.ID, epoch); err != nil {
 				errs = append(errs, err)
 			}
