@@ -1,14 +1,15 @@
 // The editable form of a two-way sync (rclone bisync, the "rclone_bisync"
 // kind), its checks and its one-shot runs. definition.ts joins it with the
 // other kinds into JobDefinitionState.
-import type { MessageInitShape } from "@bufbuild/protobuf";
+import { create, equals, type MessageInitShape } from "@bufbuild/protobuf";
 
-import type {
-  FieldViolation,
-  JobDefinition,
+import {
   JobDefinitionSchema,
-  RcloneBisyncDefinition,
-  RcloneBisyncDefinitionSchema,
+  type FieldViolation,
+  type Job,
+  type JobDefinition,
+  type RcloneBisyncDefinition,
+  type RcloneBisyncDefinitionSchema,
 } from "@/gen/syncr/v1/api_pb";
 import {
   BisyncCompare,
@@ -345,11 +346,6 @@ export function bisyncError(v: FieldViolation): BisyncErrorKey | undefined {
   return "options";
 }
 
-/** isBisyncDryRun reports whether the form only reports what it would do. */
-export function isBisyncDryRun(s: BisyncState): boolean {
-  return s.dryRun;
-}
-
 /**
  * filtersNeedResync reports whether saving after changes from saved to
  * now makes the pair's next run fail with RESYNC_REQUIRED: the same two
@@ -374,7 +370,11 @@ export type OneShot = "resync" | "force";
 /**
  * withOneShot returns a copy of a two-way sync's definition for one run
  * with resync or force set (and the other cleared), or undefined if the
- * definition is not a two-way sync.
+ * definition is not a two-way sync. A resync always runs for real, even
+ * from a dry-run definition: a dry run cannot rebuild the pair's state,
+ * and the pair would still need its resync. A run past the safety check
+ * keeps the definition's dry run: it then reports what it would change,
+ * and never deletes for real what was only ever tried dry.
  */
 export function withOneShot(
   def: JobDefinition | undefined,
@@ -382,13 +382,173 @@ export function withOneShot(
 ): MessageInitShape<typeof JobDefinitionSchema> | undefined {
   const b = bisyncOf(def);
   if (!def || !b) return undefined;
+  const options = b.options && what === "resync" ? { ...b.options, dryRun: false } : b.options;
   return {
     ...def,
     operation: {
       case: "rcloneBisync",
-      value: { ...b, resync: what === "resync", force: what === "force" },
+      value: { ...b, options, resync: what === "resync", force: what === "force" },
     },
   };
+}
+
+/** sameLocation compares two sides of two-way syncs: the remote and the path. */
+function sameLocation(a: Location | undefined, b: Location | undefined): boolean {
+  const path = (p = "") => {
+    const t = p.trim();
+    return t.length > 1 ? t.replace(/[\\/]+$/, "") : t;
+  };
+  return (a?.remoteId ?? "") === (b?.remoteId ?? "") && path(a?.path) === path(b?.path);
+}
+
+/**
+ * samePair reports whether two definitions are two-way syncs of the same
+ * two locations, Folder A and Folder B in the same order: the same pair on
+ * a worker, whatever their options.
+ */
+export function samePair(a: JobDefinition | undefined, b: JobDefinition | undefined): boolean {
+  const x = bisyncOf(a);
+  const y = bisyncOf(b);
+  return !!x && !!y && sameLocation(x.path1, y.path1) && sameLocation(x.path2, y.path2);
+}
+
+/** sameSettings reports whether two definitions are equal, ignoring a two-way sync's resync and force. */
+export function sameSettings(a: JobDefinition | undefined, b: JobDefinition | undefined): boolean {
+  if (!a || !b) return false;
+  const plain = (d: JobDefinition) => {
+    const x = bisyncOf(d);
+    return x
+      ? create(JobDefinitionSchema, {
+          ...d,
+          operation: { case: "rcloneBisync", value: { ...x, resync: false, force: false } },
+        })
+      : d;
+  };
+  return equals(JobDefinitionSchema, plain(a), plain(b));
+}
+
+/** ScheduleLike is what planRecovery reads of a schedule. */
+export interface ScheduleLike {
+  id: string;
+  definition?: JobDefinition;
+  target?: { target: { case: string | undefined; value?: unknown } };
+}
+
+/** scheduleWorker returns the worker a schedule targets, or "" for a label. */
+export function scheduleWorker(s: ScheduleLike | undefined): string {
+  const t = s?.target?.target;
+  return t?.case === "workerId" && typeof t.value === "string" ? t.value : "";
+}
+
+/**
+ * RecoveryBlock says why a failed two-way sync offers no action:
+ *
+ * - newer: a newer job of the same pair exists on the worker (jobId, when
+ *   it was found), so that job's outcome is the one to act on;
+ * - scheduleChanged: on the job's page, its schedule now has other
+ *   settings or another worker, so the schedule's page decides;
+ * - settingsChanged: on the schedule's page, Run once anyway after a run
+ *   with other settings than the schedule's now: its counts are not
+ *   those of the settings that would run;
+ * - pending: not known yet (loading).
+ */
+export type RecoveryBlock =
+  | { why: "newer"; jobId?: string }
+  | { why: "scheduleChanged"; scheduleId: string }
+  | { why: "settingsChanged" }
+  | { why: "pending" };
+
+/** RecoveryRun is what a recovery action runs: a definition, once, on a worker. */
+export interface RecoveryRun {
+  definition: JobDefinition;
+  workerId: string;
+  /** from says whose settings they are: the failed job's or its schedule's. */
+  from: "job" | "schedule";
+}
+
+/** RecoveryPlan is what a failed two-way sync offers, and what its action would run. */
+export interface RecoveryPlan {
+  recovery: Recovery;
+  /** run is set when the action is offered. */
+  run?: RecoveryRun;
+  /** block says why it is not, for resync and force. */
+  block?: RecoveryBlock;
+}
+
+/** RecoveryInput is what planRecovery decides from. */
+export interface RecoveryInput {
+  /** job is the failed run. */
+  job: Job;
+  /** from is the page that asks: the job's or its schedule's. */
+  from: "job" | "schedule";
+  /**
+   * schedule is the job's schedule: the page's on the schedule page; on the
+   * job page the one the job came from, when it still exists.
+   */
+  schedule?: ScheduleLike;
+  /**
+   * newer are the two-way sync jobs created on the worker the action would
+   * run on since job (as ListJobs returns them, newest first), and
+   * complete whether that is all of them; undefined while not known.
+   */
+  newer?: { jobs: Job[]; complete: boolean };
+}
+
+const createdMs = (j: Job) =>
+  Number(j.createdAt?.seconds ?? 0n) * 1000 + Math.floor((j.createdAt?.nanos ?? 0) / 1e6);
+
+/**
+ * planRecovery decides what a failed two-way sync offers (recoveryFor) and
+ * which definition on which worker its action runs, so that an action
+ * never runs settings that a newer run or a changed schedule superseded:
+ *
+ * - On the schedule's page, the action runs the schedule's current
+ *   definition on the worker it targets now. Resync now is safe with any
+ *   settings (a merge); Run once anyway only when the failed run had those
+ *   same settings on that worker, since the dialog quotes its counts.
+ * - On a job's page, the action runs that job's definition on its worker,
+ *   and only while it is current: a scheduled job only while its schedule
+ *   still has the same settings and worker (else the schedule's page
+ *   decides); a job whose schedule was deleted, or one run by hand, as it
+ *   is.
+ * - Either way, not when a newer job of the same pair exists on that
+ *   worker (one created after the failed run, the pair's resync included):
+ *   its outcome is the one that counts.
+ *
+ * It returns undefined for a job that offers nothing (not a failed two-way
+ * sync with one of the codes of recoveryFor).
+ */
+export function planRecovery(i: RecoveryInput): RecoveryPlan | undefined {
+  const recovery = bisyncOf(i.job.definition) ? recoveryFor(i.job.error?.code) : undefined;
+  if (!recovery) return undefined;
+  if (recovery === "hint") return { recovery };
+  const target = scheduleWorker(i.schedule);
+  const current =
+    !!i.schedule &&
+    sameSettings(i.job.definition, i.schedule.definition) &&
+    i.job.workerId === target;
+  let run: RecoveryRun;
+  if (i.from === "schedule") {
+    if (!i.schedule?.definition || !target || !bisyncOf(i.schedule.definition)) return { recovery };
+    if (recovery === "force" && !current) return { recovery, block: { why: "settingsChanged" } };
+    run = { definition: i.schedule.definition, workerId: target, from: "schedule" };
+  } else {
+    if (i.schedule && !current)
+      return { recovery, block: { why: "scheduleChanged", scheduleId: i.schedule.id } };
+    run = { definition: i.job.definition!, workerId: i.job.workerId, from: "job" };
+  }
+  if (!i.newer) return { recovery, block: { why: "pending" } };
+  const since = createdMs(i.job);
+  const newer = i.newer.jobs.find(
+    (j) =>
+      j.id !== i.job.id &&
+      j.workerId === run.workerId &&
+      createdMs(j) > since &&
+      samePair(j.definition, run.definition),
+  );
+  if (newer) return { recovery, block: { why: "newer", jobId: newer.id } };
+  if (!i.newer.complete) return { recovery, block: { why: "newer" } };
+  return { recovery, run };
 }
 
 /**

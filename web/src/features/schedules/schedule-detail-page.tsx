@@ -99,8 +99,9 @@ function JobSummary({ schedule }: { schedule: Schedule }) {
 /**
  * LastRunProblem shows what went wrong in the schedule's last run when it
  * was a two-way sync that needs a decision (a resync, or a run past the
- * safety check) or a fix (a folder that looked unavailable), with the
- * same actions as the job page.
+ * safety check) or a fix (a folder that looked unavailable). Its actions
+ * run the schedule's current settings on the worker it targets now, not
+ * the failed job's (BisyncRecovery with the schedule).
  */
 function LastRunProblem({
   schedule,
@@ -139,7 +140,7 @@ function LastRunProblem({
           </Link>
         </div>
         <p className="mt-0.5 font-mono text-[12.5px] leading-5 break-words">{job.error?.message}</p>
-        <BisyncRecovery job={job} canRun workerName={workers.get(job.workerId)?.name} />
+        <BisyncRecovery job={job} canRun schedule={schedule} workers={[...workers.values()]} />
       </div>
     </div>
   );

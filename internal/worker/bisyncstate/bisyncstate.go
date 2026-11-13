@@ -17,7 +17,9 @@
 // and records the time in last-run. Holding the lock, it removes the .lck
 // files a killed rclone left behind (Pair.ClearStaleLocks), decides whether
 // the pair has a baseline to compare against (Pair.Fresh), writes the filter
-// rules (Pair.WriteFilters) and runs rclone, then closes the pair. Prune
+// rules (Pair.WriteFilters) and runs rclone, then closes the pair. After a
+// run that rclone stopped with a critical error, Pair.Resumable tells
+// whether the next normal run can go on from the listings rclone kept. Prune
 // removes pairs that have not run for Retention and whose lock is free; Open
 // and Prune are serialized, so a pair is never removed while a run takes it.
 //
@@ -263,6 +265,75 @@ func listingSuffix(name string) (string, bool) {
 		return "", false
 	}
 	return name[i+len(".path1.lst"):], true
+}
+
+// Resumable reports whether a normal run can go on from the pair's
+// listings, without a resync, the way rclone looks for them: both current
+// listings of a session ("<session>.path1.lst" and "<session>.path2.lst"),
+// or, when one of them is missing, both previous ones ("-old"). rclone
+// keeps the previous listings, the state before the last good run, when a
+// critical error renames the current ones ("-err"), and its --recover
+// falls back to them. The listings it would use must each have an entry:
+// rclone refuses to sync against an empty one ("Empty prior PathN
+// listing").
+//
+// It tells only what the listings allow. A run asks after rclone stopped
+// with "Must run --resync"; changed filters need a resync whatever the
+// listings are.
+func (p *Pair) Resumable() (bool, error) {
+	entries, err := os.ReadDir(p.WorkDir())
+	if err != nil {
+		return false, fmt.Errorf("read the work directory: %w", err)
+	}
+	// side is what the work directory holds of one side's listing.
+	type side struct{ exists, entries bool }
+	type session struct{ current, previous [2]side }
+	sessions := map[string]*session{}
+	for _, e := range entries {
+		name, n, suffix, ok := parseListing(e.Name())
+		if !ok || !e.Type().IsRegular() || (suffix != "" && suffix != "-old") {
+			continue
+		}
+		has, err := hasEntries(filepath.Join(p.WorkDir(), e.Name()))
+		if err != nil {
+			return false, fmt.Errorf("read a listing: %w", err)
+		}
+		s := sessions[name]
+		if s == nil {
+			s = &session{}
+			sessions[name] = s
+		}
+		l := &s.current
+		if suffix == "-old" {
+			l = &s.previous
+		}
+		l[n] = side{exists: true, entries: has}
+	}
+	for _, s := range sessions {
+		use := s.current
+		if !use[0].exists || !use[1].exists {
+			use = s.previous
+		}
+		if use[0].entries && use[1].entries {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// parseListing splits the name of a listing into rclone's session, the
+// side (0 for path1, 1 for path2) and the suffix after ".pathN.lst", or
+// reports that name is not a listing.
+func parseListing(name string) (session string, n int, suffix string, ok bool) {
+	i1, i2 := strings.LastIndex(name, ".path1.lst"), strings.LastIndex(name, ".path2.lst")
+	i := max(i1, i2)
+	if i < 0 {
+		return "", 0, "", false
+	}
+	if i == i2 {
+		n = 1
+	}
+	return name[:i], n, name[i+len(".path1.lst"):], true
 }
 
 // hasEntries reports whether the listing at path has a line that is

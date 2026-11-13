@@ -1801,8 +1801,15 @@ export const FilterRuleSchema: GenMessage<FilterRule> = /*@__PURE__*/
  * or a resync of two empty sides (listings without entries). Dry-run
  * listings never count as a baseline (rclone keeps them apart), and
  * listings renamed after a critical error ("-err") always do: after a
- * critical error the worker never resyncs on its own, and the job fails
- * with RESYNC_REQUIRED.
+ * critical error the worker never resyncs on its own.
+ *
+ * rclone checks neither side during --resync, so before any resync the
+ * worker checks the local sides itself: a local side that does not exist
+ * fails the job with NOT_FOUND (rclone would create it), and the
+ * automatic first run never fills an empty local side (no entry at all;
+ * a drive that is not mounted looks the same): it fails with
+ * RESYNC_REQUIRED without running rclone, unless every side is local and
+ * empty (nothing to fill). A run with resync set fills it.
  *
  * @generated from message syncr.v1.RcloneBisync
  */
@@ -4611,12 +4618,17 @@ export enum JobErrorCode {
   HOOK_FAILED = 28,
 
   /**
-   * Set by workers (rclone_bisync): rclone stopped with a critical error
-   * that only a resync of the pair recovers from ("Must run --resync to
-   * recover"), e.g. because the filters changed since the pair's state was
-   * made, or an earlier critical error left its listings unusable. Status
-   * FAILED. The worker never resyncs on its own after such an error: a job
-   * with RcloneBisync.resync set does, deliberately.
+   * Set by workers (rclone_bisync): only a resync of the pair lets it sync
+   * again, and the worker does not start one on its own. Status FAILED.
+   * The cases: the filters changed since the pair's state was made (or
+   * their hash is missing); a critical error left no listings a normal run
+   * can go on from (the pair had none before it, e.g. the first run after a
+   * resync); or the pair's automatic first run found a local side empty,
+   * which it never fills (rclone was not run). The message says which, and
+   * what to fix first: whatever stopped the run stops a resync too. A
+   * critical error after which rclone's --recover can go on from the
+   * previous listings is EXECUTION_FAILED instead, with the cause to fix.
+   * A job with RcloneBisync.resync set resyncs, deliberately.
    *
    * @generated from enum value: JOB_ERROR_CODE_RESYNC_REQUIRED = 29;
    */
@@ -5089,7 +5101,9 @@ export enum BisyncResyncReason {
    * worker, a new state_key, state removed after 180 days without a run, a
    * first resync that was cancelled or killed part-way, or a resync of two
    * empty sides). Dry-run listings never count as a baseline; listings
-   * renamed after a critical error always do (RESYNC_REQUIRED instead).
+   * renamed after a critical error always do. Such a run never fills an
+   * empty local side: the job fails with RESYNC_REQUIRED instead (see
+   * RcloneBisync).
    *
    * @generated from enum value: BISYNC_RESYNC_REASON_FIRST_RUN = 1;
    */

@@ -43,10 +43,14 @@ curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/j
 - A schedule of this kind must target a worker: `target.workerLabel` is
   refused with a field error on `target.worker_label`.
 - The worker may fail it with three codes of its own in `error.code`:
-  `JOB_ERROR_CODE_RESYNC_REQUIRED` (29), `JOB_ERROR_CODE_SAFETY_ABORT` (30,
-  what `force` overrides) and `JOB_ERROR_CODE_SIDE_UNAVAILABLE` (31). A
-  worker without the `rclone.bisync` feature (older than 2.1.0) fails it
-  with `JOB_ERROR_CODE_WORKER_OUTDATED`.
+  `JOB_ERROR_CODE_RESYNC_REQUIRED` (29: only a run with `resync` helps,
+  after changed filters, an empty worker folder on the pair's first run, or
+  a critical error that left no earlier state), `JOB_ERROR_CODE_SAFETY_ABORT`
+  (30, what `force` overrides) and `JOB_ERROR_CODE_SIDE_UNAVAILABLE` (31).
+  Other critical errors, after which the next run goes on from the pair's
+  last good state, are `JOB_ERROR_CODE_EXECUTION_FAILED` with the cause to
+  fix. A worker without the `rclone.bisync` feature (older than 2.1.0)
+  fails it with `JOB_ERROR_CODE_WORKER_OUTDATED`.
 - A successful run's `output.rcloneBisync` says whether it was a resync and
   why (`resyncReason`), and counts the conflicts (`conflicts`, with the
   first 20 in `conflictPaths`).

@@ -312,8 +312,9 @@ export function BisyncCard({ out, job }: { out: RcloneBisyncOutput; job: Job }) 
             {out.resyncReason === BisyncResyncReason.FIRST_RUN
               ? "This worker had no state for the pair yet, so the run was a resync."
               : "This run was a resync, as asked."}{" "}
-            It merged both folders: each got the files it lacked, nothing was deleted, and where a
-            file differed {keep} was kept.
+            {out.dryRun
+              ? `As a dry run, it only found what a resync would do: merge both folders, each getting the files it lacks, deleting nothing, and keeping ${keep} where a file differs.`
+              : `It merged both folders: each got the files it lacked, nothing was deleted, and where a file differed ${keep} was kept.`}
           </p>
         )}
         {out.dryRun && (
@@ -351,10 +352,13 @@ export function BisyncCard({ out, job }: { out: RcloneBisyncOutput; job: Job }) 
 
 /**
  * JobOutputCards renders what a finished job reported: the card of its
- * kind, then the controller's summary lines for any kind.
+ * kind, then the controller's summary lines for any kind. A two-way sync's
+ * card already shows each of its summary lines (resync, conflicts, dry
+ * run), so it has no Summary.
  */
 export function JobOutputCards({ job }: { job: Job }) {
   const out = job.output?.output;
+  const summary = job.details.length > 0 && out?.case !== "rcloneBisync";
   return (
     <>
       {out?.case === "rcloneBisync" && <BisyncCard out={out.value} job={job} />}
@@ -363,7 +367,7 @@ export function JobOutputCards({ job }: { job: Job }) {
       {out?.case === "resticCheck" && <CheckCard out={out.value} />}
       {out?.case === "resticRestore" && <RestoreCard out={out.value} />}
       {out?.case === "resticDeleteData" && <DeleteDataCard out={out.value} />}
-      {job.details.length > 0 && (
+      {summary && (
         <Panel title="Summary">
           <KeyValueList items={job.details.map((d) => ({ label: d.label, value: d.value }))} />
         </Panel>

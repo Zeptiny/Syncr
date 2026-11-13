@@ -133,7 +133,7 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
       if (needsResync)
         toast.success(`Saved ${input.name}`, {
           description:
-            "The filters changed: its next run stops with “Resync required”. Run Resync now from the schedule page.",
+            "The filters changed, so its next run stops with “Resync required”. The schedule's page then offers Resync now (Run now starts that run at once).",
         });
       else toast.success(schedule ? `Saved ${input.name}` : `Created ${input.name}`);
       const id = res.schedule?.id ?? schedule?.id;

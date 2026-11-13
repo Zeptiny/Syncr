@@ -1,6 +1,7 @@
 package rclone
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -28,8 +29,11 @@ import (
 //	bisync_all_changed.jsonl            the only file edited on both sides (exit 1)
 //	bisync_filters_changed.jsonl        the filters file changed since the resync (exit 7)
 //	bisync_filters_md5_missing.jsonl    the filters file's hash removed (exit 7)
-//	bisync_critical_must_resync.jsonl   an unreadable file on path1 (exit 7, listings renamed .lst-err)
+//	bisync_critical_must_resync.jsonl   an unreadable file on path1 on the first run after a resync (exit 7,
+//	                                    listings renamed .lst-err, no previous listings yet)
 //	bisync_no_prior_listings.jsonl      the run after that one (exit 7)
+//	bisync_recovered.jsonl              a later run, once the file could be read again, after the same error had
+//	                                    stopped the run before it: rclone went on from the previous listings (exit 0)
 //	bisync_empty_prior.jsonl            a file added after a resync of two empty sides (exit 7)
 //	bisync_empty_current.jsonl          path1 emptied (exit 7)
 //	bisync_missing_side.jsonl           path1 removed (exit 7)
@@ -54,6 +58,7 @@ func readBisyncLog(t *testing.T, fixture string, sc *scrub.Scrubber) (*bisyncLog
 func TestBisyncLogFixtures(t *testing.T) {
 	t.Parallel()
 	const (
+		failed   = syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED
 		resync   = syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED
 		safety   = syncrv1.JobErrorCode_JOB_ERROR_CODE_SAFETY_ABORT
 		side     = syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE
@@ -62,6 +67,7 @@ func TestBisyncLogFixtures(t *testing.T) {
 	)
 	tests := []struct {
 		fixture   string
+		run       failedRun // what the pair's state allows after the run (default: only a resync helps)
 		conflicts []string
 		code      syncrv1.JobErrorCode // UNSPECIFIED: no failure message
 		message   string               // exact, when code is set
@@ -89,13 +95,54 @@ func TestBisyncLogFixtures(t *testing.T) {
 			message: "a resync is required: filters file md5 hash not found; run it once with resync to rebuild the pair's state from both sides as they are now",
 		},
 		{
+			// The first run after a resync: no previous listings to go on
+			// from.
 			fixture: "bisync_critical_must_resync.jsonl", code: resync,
-			message: "a resync is required: failed to open source object: open /data/a/locked.txt: permission denied; run it once with resync to rebuild the pair's state from both sides as they are now",
+			message: "a resync is required: failed to open source object: open /data/a/locked.txt: permission denied, " +
+				"and the pair has no earlier state to go on from; fix the cause first (a resync stops at the same error), " +
+				"then run it once with resync to rebuild the pair's state from both sides as they are now",
+		},
+		{
+			// A later run: --recover goes on from the previous listings.
+			fixture: "bisync_critical_must_resync.jsonl", run: failedRun{next: nextContinues}, code: failed,
+			message: "the two-way sync stopped with a critical error: failed to open source object: open /data/a/locked.txt: permission denied; " +
+				"fix the cause and run it again: the next run goes on from the pair's last good state, without a resync",
+		},
+		{
+			// A requested resync that stopped the same way, the earlier
+			// listings kept.
+			fixture: "bisync_critical_must_resync.jsonl", run: failedRun{next: nextContinues, resync: true}, code: failed,
+			message: "the resync stopped with a critical error: failed to open source object: open /data/a/locked.txt: permission denied; " +
+				"fix the cause and run it again: the next run goes on from the pair's last good state, without a resync",
+		},
+		{
+			// A first run's resync: the pair still has no baseline.
+			fixture: "bisync_critical_must_resync.jsonl", run: failedRun{next: nextResyncs, resync: true}, code: failed,
+			message: "the resync stopped with a critical error: failed to open source object: open /data/a/locked.txt: permission denied; " +
+				"fix the cause and run it again: the pair has no state on this worker yet, so its next run resyncs",
 		},
 		{
 			fixture: "bisync_no_prior_listings.jsonl", code: resync,
-			message: "a resync is required: cannot find prior Path1 or Path2 listings, likely due to critical error on prior run; run it once with resync to rebuild the pair's state from both sides as they are now",
+			message: "a resync is required: cannot find prior Path1 or Path2 listings, likely due to critical error on prior run; " +
+				"fix what made the earlier run fail first (a resync stops at the same error), then run it once with resync to rebuild the pair's state from both sides as they are now",
 		},
+		{
+			// A dry run looks for dry-run listings, which a critical error
+			// left out; a normal run goes on from the previous listings.
+			fixture: "bisync_no_prior_listings.jsonl", run: failedRun{next: nextContinues, dryRun: true}, code: failed,
+			message: "the dry run stopped: cannot find prior Path1 or Path2 listings, likely due to critical error on prior run; " +
+				"a dry run cannot go on from the state rclone kept after an earlier critical error, but a normal run can: " +
+				"fix what made the earlier run fail, then run it once without dry run",
+		},
+		// Listings that are there do not matter when the filters changed.
+		{
+			fixture: "bisync_filters_changed.jsonl", run: failedRun{next: nextContinues}, code: resync,
+			message: "a resync is required: filters file has changed; run it once with resync to rebuild the pair's state from both sides as they are now",
+		},
+		// The run that went on from the previous listings once the file
+		// could be read: the files new on both sides since then were equal,
+		// so no conflict.
+		{fixture: "bisync_recovered.jsonl"},
 		{
 			fixture: "bisync_empty_prior.jsonl", code: resync,
 			message: "a resync is required: empty prior Path1 listing; run it once with resync to rebuild the pair's state from both sides as they are now",
@@ -125,13 +172,13 @@ func TestBisyncLogFixtures(t *testing.T) {
 		{fixture: "bisync_prior_lock.jsonl", code: internal, message: "prior lock file found"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.fixture, func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s %+v", tt.fixture, tt.run), func(t *testing.T) {
 			t.Parallel()
 			l, tr := readBisyncLog(t, tt.fixture, nil)
 			if l.conflicts != int64(len(tt.conflicts)) || !slices.Equal(l.conflictPaths, tt.conflicts) {
 				t.Errorf("conflicts = %d %q, want %q", l.conflicts, l.conflictPaths, tt.conflicts)
 			}
-			code, msg, ok := l.failure()
+			code, msg, ok := l.failure(tt.run)
 			switch {
 			case tt.code == 0 && ok:
 				t.Errorf("failure() = %v %q, want none", code, msg)
@@ -146,6 +193,102 @@ func TestBisyncLogFixtures(t *testing.T) {
 				t.Errorf("stats of a resync = %+v", tr.progress)
 			}
 		})
+	}
+}
+
+// TestBisyncLogPhrasesInFileNames: rclone puts file names into its
+// messages; a name that contains one of the phrases the runner acts on
+// changes nothing, wherever rclone prints it.
+func TestBisyncLogPhrasesInFileNames(t *testing.T) {
+	t.Parallel()
+	names := []string{
+		"must run --resync.txt", msgAbortedResync, "x (must run --resync): y.txt", "prior lock file found",
+		"Failed to bisync: prior lock file found", msgNoListings, "Empty prior Path1 listing", "empty prior Path2",
+		msgConflict, "Renaming Path1 copy", "Not renaming Path2 copy", msgCritical + "z", "Access test failed: ",
+	}
+	lines := func(name string) []string {
+		return []string{
+			"Failed to copy: failed to open source object: open /data/a/" + name + ": permission denied",
+			"- Path1             File was deleted                            - " + name,
+			"- Path2             Queue delete                                - /data/b/" + name,
+			"- Path1             Queue copy to Path2                         - /data/b/" + name,
+			"Skipped delete as --dry-run is set (size 7): " + name,
+		}
+	}
+
+	// A run that the delete limit stopped stays SAFETY_ABORT, with no
+	// conflict.
+	l := &bisyncLog{stateDir: "/data/st"}
+	tr := newTracker(nil, nil)
+	tr.observe = l.line
+	for _, n := range names {
+		for _, m := range lines(n) {
+			l.line(logLine{Level: "error", Msg: m})
+		}
+	}
+	for _, line := range fixtureLines(t, "bisync_too_many_deletes.jsonl") {
+		tr.line(proc.Line{Data: []byte(line)})
+	}
+	for _, next := range []pairNext{nextNeedsResync, nextResyncs, nextContinues} {
+		code, msg, ok := l.failure(failedRun{next: next})
+		if !ok || code != syncrv1.JobErrorCode_JOB_ERROR_CODE_SAFETY_ABORT || !strings.Contains(msg, "too many deletes (>50%, 5 of 8)") {
+			t.Errorf("next %v: failure() = %v %q %v, want SAFETY_ABORT", next, code, msg, ok)
+		}
+	}
+	if l.conflicts != 0 || l.hasPending {
+		t.Errorf("conflicts = %d (pending %v)", l.conflicts, l.hasPending)
+	}
+
+	// A critical error about such a file is that error, not changed filters.
+	for _, n := range names {
+		l := &bisyncLog{stateDir: "/data/st"}
+		l.line(logLine{Level: "error", Msg: msgCritical + "failed to open source object: open /data/a/" + n + ": permission denied"})
+		l.line(logLine{Level: "error", Msg: msgAbortedResync})
+		code, msg, ok := l.failure(failedRun{next: nextContinues})
+		if !ok || code != syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED || !strings.Contains(msg, "open /data/a/"+n+": permission denied; fix the cause") {
+			t.Errorf("%q: failure() = %v %q %v, want EXECUTION_FAILED naming the file", n, code, msg, ok)
+		}
+	}
+
+	// The phrases where rclone puts them still count.
+	for _, tt := range []struct {
+		msg  string
+		code syncrv1.JobErrorCode
+	}{
+		{msgCritical + "filters file has changed (must run --resync): /data/st/filters.txt", syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED},
+		{msgCritical + "empty prior Path2 listing: /data/st/work/s.path2.lst", syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED},
+		{"Empty prior Path1 listing. Cannot sync to an empty directory: /data/st/work/s.path1.lst", syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED},
+		{msgCritical + msgNoListings + ", likely due to critical error on prior run ", syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED},
+		{"Failed to bisync: prior lock file found: /data/st/work/s.lck", syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL},
+	} {
+		l := &bisyncLog{}
+		l.line(logLine{Level: "error", Msg: tt.msg})
+		if code, msg, ok := l.failure(failedRun{}); !ok || code != tt.code {
+			t.Errorf("%q: failure() = %v %q %v, want %v", tt.msg, code, msg, ok, tt.code)
+		}
+	}
+}
+
+func TestIndented(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		msg, text, file string
+		ok              bool
+	}{
+		{"- WARNING           New or changed in both paths                - x - y.txt", msgConflict, "x - y.txt", true},
+		{"- Path2             Not renaming Path2 copy, as it was determined the winner - /data/b/f1.txt",
+			"Not renaming Path2 copy, as it was determined the winner", "/data/b/f1.txt", true},
+		{"-                   Access test failed: Path1 file not found in Path2 - RCLONE_TEST",
+			"Access test failed: Path1 file not found in Path2", "RCLONE_TEST", true},
+		{"- WARNING           New or changed in both paths", msgConflict, "", true},
+		{"- WARNING New or changed in both paths - f.txt", "", "", false}, // not rclone's layout
+		{"Failed to copy: New or changed in both paths - f.txt", "", "", false},
+		{"- short", "", "", false},
+	} {
+		text, file, ok := indented(tt.msg)
+		if text != tt.text || file != tt.file || ok != tt.ok {
+			t.Errorf("indented(%q) = %q, %q, %v; want %q, %q, %v", tt.msg, text, file, ok, tt.text, tt.file, tt.ok)
+		}
 	}
 }
 
@@ -169,7 +312,7 @@ func TestBisyncLogConflictLines(t *testing.T) {
 	l = &bisyncLog{}
 	for _, p := range []string{`"half.txt`, ""} {
 		if p == "" {
-			l.line(logLine{Msg: "- WARNING New or changed in both paths"})
+			l.line(logLine{Msg: "- WARNING           New or changed in both paths"})
 		} else {
 			l.line(warning(p))
 		}
@@ -198,8 +341,8 @@ func TestBisyncLogConflictBounds(t *testing.T) {
 	const secret = "s3cr3t-Pa55"
 	l := &bisyncLog{sc: scrub.New([]string{secret})}
 	resolve := func(path string) {
-		l.line(logLine{Msg: "- WARNING New or changed in both paths - " + path})
-		l.line(logLine{Msg: "- Path1 Renaming Path1 copy - x"})
+		l.line(logLine{Msg: "- WARNING           New or changed in both paths                - " + path})
+		l.line(logLine{Msg: "- Path1             Renaming Path1 copy                         - x"})
 	}
 	resolve(strings.Repeat("é", 400)) // 800 bytes
 	resolve("notes-" + secret + ".txt")
@@ -224,7 +367,7 @@ func TestBisyncLogMessagesAreScrubbed(t *testing.T) {
 	l := &bisyncLog{sc: scrub.New([]string{secret})}
 	l.line(logLine{Level: "error", Msg: "Bisync critical error: login as " + secret + " failed"})
 	l.line(logLine{Level: "error", Msg: "Bisync aborted. Must run --resync to recover."})
-	code, msg, ok := l.failure()
+	code, msg, ok := l.failure(failedRun{})
 	if !ok || code != syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED || strings.Contains(msg, secret) || !strings.Contains(msg, "login as [redacted] failed") {
 		t.Errorf("failure() = %v %q %v", code, msg, ok)
 	}
@@ -240,7 +383,7 @@ func TestBisyncLogWithoutKnownMessages(t *testing.T) {
 	} {
 		l.line(logLine{Level: "error", Msg: m})
 	}
-	if code, msg, ok := l.failure(); ok {
+	if code, msg, ok := l.failure(failedRun{}); ok {
 		t.Errorf("failure() = %v %q, want none (the exit code decides)", code, msg)
 	}
 	if l.resyncReason() != "something new" {

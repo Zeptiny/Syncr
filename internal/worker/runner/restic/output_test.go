@@ -275,6 +275,81 @@ func TestCheckFixtureAndFailure(t *testing.T) {
 	}
 }
 
+func TestDetailAddsRcloneErrors(t *testing.T) {
+	t.Parallel()
+	const (
+		fatal  = `{"message_type":"exit_error","code":1,"message":"Fatal: create repository at rclone:r1:b failed: unexpected HTTP response (500): 500 Internal Server Error"}`
+		headed = "Fatal: create repository at rclone:r1:b failed: unexpected HTTP response (500): 500 Internal Server Error"
+	)
+	tests := []struct {
+		name   string
+		stdout []string
+		stderr []string
+		want   string
+	}{
+		{"error without its timestamp", nil, []string{
+			"rclone: 2026/11/13 03:02:24 ERROR : Create repo failed to Mkdir: operation error S3: CreateBucket, https response error StatusCode: 403, api error AccessDenied: Access Denied.",
+			fatal,
+		}, headed + "; rclone: Create repo failed to Mkdir: operation error S3: CreateBucket, https response error StatusCode: 403, api error AccessDenied: Access Denied."},
+		{"critical, fractional seconds, no timestamp, CRLF", nil, []string{
+			`rclone: 2026/11/13 03:07:17 CRITICAL: Failed to create file system for "r1:b": didn't find backend called "nope"` + "\r",
+			"rclone: 2026/11/13 03:07:17.123456 ERROR : a: second",
+			"rclone: ERROR : third",
+			fatal,
+		}, headed + "; rclone: a: second; rclone: third"},
+		{"other levels and restic's own lines", nil, []string{
+			"rclone: 2026/11/13 03:02:24 NOTICE: Config file \"\" not found - using defaults",
+			"rclone: 2026/11/13 03:02:24 INFO  : copied",
+			"rclone: 2026/11/13 03:02:24 DEBUG : head config",
+			"ERROR : not from rclone",
+			"Save(<data/ab>) returned error, retrying after 1s: unexpected HTTP response (500)",
+			fatal,
+		}, headed},
+		{"retries are named once", nil, []string{
+			"rclone: 2026/11/13 03:02:24 ERROR : data/ab: put: 403",
+			"rclone: 2026/11/13 03:02:25 ERROR : data/ab: put: 403",
+			"rclone: 2026/11/13 03:02:27 ERROR : data/ab: put: 403",
+			fatal,
+		}, headed + "; rclone: data/ab: put: 403"},
+		{"standard output is not rclone's", []string{
+			"rclone: 2026/11/13 03:02:24 ERROR : on stdout",
+		}, []string{fatal}, headed},
+		{"without an exit_error the diagnostic lines already hold them", nil, []string{
+			"rclone: 2026/11/13 03:02:24 ERROR : once",
+		}, "rclone: 2026/11/13 03:02:24 ERROR : once"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSession(kindInit, func(runner.Progress) {}, nil)
+			for _, l := range tc.stdout {
+				s.stdout(proc.Line{Data: []byte(l)})
+			}
+			for _, l := range tc.stderr {
+				s.stderr(proc.Line{Data: []byte(l)})
+			}
+			if got := s.detail(); got != tc.want {
+				t.Errorf("detail =\n%q\nwant\n%q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRcloneErrorsAreBounded(t *testing.T) {
+	t.Parallel()
+	s := newSession(kindInit, func(runner.Progress) {}, nil)
+	for i := range maxRcloneErrors + 3 {
+		s.stderr(proc.Line{Data: fmt.Appendf(nil, "rclone: 2026/11/13 03:02:24 ERROR : error %d", i)})
+	}
+	want := make([]string, 0, maxRcloneErrors)
+	for i := 3; i < maxRcloneErrors+3; i++ {
+		want = append(want, fmt.Sprintf("rclone: error %d", i))
+	}
+	if !slices.Equal(s.rcloneErrors, want) {
+		t.Errorf("rcloneErrors = %q, want the last %d: %q", s.rcloneErrors, maxRcloneErrors, want)
+	}
+}
+
 func TestInitAndPruneFixturesAreAccepted(t *testing.T) {
 	t.Parallel()
 	s, snaps := replay(t, kindInit, "init.out")

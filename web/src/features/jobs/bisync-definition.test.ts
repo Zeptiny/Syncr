@@ -1,12 +1,22 @@
-import { create } from "@bufbuild/protobuf";
+import { clone, create } from "@bufbuild/protobuf";
+import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import { describe, expect, it } from "vitest";
 
-import { FieldViolationSchema, JobDefinitionSchema } from "@/gen/syncr/v1/api_pb";
+import {
+  FieldViolationSchema,
+  JobDefinitionSchema,
+  JobSchema,
+  JobStatus,
+  type Job,
+  type JobDefinition,
+} from "@/gen/syncr/v1/api_pb";
+import { ScheduleSchema } from "@/gen/syncr/v1/schedules_pb";
 import {
   BisyncConflictLoser,
   BisyncConflictResolve,
   BisyncResyncMode,
   FilterAction,
+  FilterRuleSchema,
   JobErrorCode,
 } from "@/gen/syncr/v1/link_pb";
 import { errorCodeLabel, jobKinds, kindLabel } from "@/lib/status";
@@ -19,7 +29,10 @@ import {
   conflictsSummary,
   emptyBisync,
   filtersNeedResync,
+  planRecovery,
   recoveryFor,
+  samePair,
+  sameSettings,
   sidesOverlap,
   validateBisync,
   withOneShot,
@@ -239,6 +252,148 @@ describe("two-way sync form", () => {
   });
 });
 
+describe("recovery plan", () => {
+  const MIN = 60_000;
+  const now = Date.UTC(2026, 10, 12, 12);
+  const NAS = "nas";
+  const at = (ms: number) => timestampFromMs(ms);
+  const failed = (code: JobErrorCode, over: { scheduleId?: string } = {}): Job =>
+    create(JobSchema, {
+      id: "failed",
+      workerId: NAS,
+      kind: "rclone_bisync",
+      status: JobStatus.FAILED,
+      createdAt: at(now - 60 * MIN),
+      definition: bisyncMock.definition(),
+      error: { code, message: "too many deletes (>50%, 731 of 1268)" },
+      ...over,
+    });
+  const later = (id: string, def: JobDefinition, minutesAgo: number, workerId = NAS) =>
+    create(JobSchema, {
+      id,
+      workerId,
+      kind: "rclone_bisync",
+      createdAt: at(now - minutesAgo * MIN),
+      definition: def,
+    });
+  const schedule = (def: JobDefinition = bisyncMock.definition(), workerId = NAS) =>
+    create(ScheduleSchema, {
+      id: "s1",
+      definition: def,
+      target: { target: { case: "workerId", value: workerId } },
+    });
+  const withFilter = () => {
+    const d = bisyncMock.definition();
+    bisyncOf(d)!.options!.filters.push(
+      create(FilterRuleSchema, { action: FilterAction.EXCLUDE, pattern: "/photos/**" }),
+    );
+    return d;
+  };
+  const none = { jobs: [] as Job[], complete: true };
+
+  it("compares pairs by their two locations and settings without the one-shot fields", () => {
+    expect(samePair(bisyncMock.definition(), withFilter())).toBe(true);
+    expect(
+      samePair(bisyncMock.definition(), bisyncMock.definition(undefined, "/srv/shared/")),
+    ).toBe(true);
+    expect(samePair(bisyncMock.definition(), bisyncMock.definition(undefined, "/srv/other"))).toBe(
+      false,
+    );
+    expect(samePair(bisyncMock.definition(), create(JobDefinitionSchema, {}))).toBe(false);
+    expect(sameSettings(bisyncMock.definition("force"), bisyncMock.definition())).toBe(true);
+    expect(sameSettings(bisyncMock.definition(), withFilter())).toBe(false);
+  });
+
+  it("runs a manual job's own settings on its worker while it is the pair's newest", () => {
+    const job = failed(JobErrorCode.RESYNC_REQUIRED);
+    expect(planRecovery({ job, from: "job", newer: none })).toEqual({
+      recovery: "resync",
+      run: { definition: job.definition, workerId: NAS, from: "job" },
+    });
+    // Not known yet: no action.
+    expect(planRecovery({ job, from: "job" })).toMatchObject({ block: { why: "pending" } });
+    // Newer jobs of other pairs, or of the pair elsewhere, do not count;
+    // one of the pair on this worker does, a resync included.
+    const others = [
+      later("other-pair", bisyncMock.definition(undefined, "/srv/other"), 10),
+      later("elsewhere", bisyncMock.definition(), 10, "office"),
+      later("older", bisyncMock.definition(), 90),
+    ];
+    expect(
+      planRecovery({ job, from: "job", newer: { jobs: others, complete: true } })?.run,
+    ).toBeDefined();
+    const resync = later("resync", bisyncMock.definition("resync"), 30);
+    expect(
+      planRecovery({ job, from: "job", newer: { jobs: [...others, resync], complete: true } }),
+    ).toEqual({ recovery: "resync", block: { why: "newer", jobId: "resync" } });
+    // More newer jobs than one page: not known to be the newest.
+    expect(planRecovery({ job, from: "job", newer: { jobs: others, complete: false } })).toEqual({
+      recovery: "resync",
+      block: { why: "newer" },
+    });
+  });
+
+  it("acts on a scheduled job only while its schedule still has its settings and worker", () => {
+    const job = failed(JobErrorCode.SAFETY_ABORT, { scheduleId: "s1" });
+    expect(planRecovery({ job, from: "job", schedule: schedule(), newer: none })?.run).toEqual({
+      definition: job.definition,
+      workerId: NAS,
+      from: "job",
+    });
+    for (const s of [schedule(withFilter()), schedule(bisyncMock.definition(), "office")])
+      expect(planRecovery({ job, from: "job", schedule: s, newer: none })).toEqual({
+        recovery: "force",
+        block: { why: "scheduleChanged", scheduleId: "s1" },
+      });
+    // A deleted schedule leaves the job on its own.
+    expect(planRecovery({ job, from: "job", newer: none })?.run?.from).toBe("job");
+  });
+
+  it("runs the schedule's current settings on its current worker from the schedule's page", () => {
+    const job = failed(JobErrorCode.RESYNC_REQUIRED, { scheduleId: "s1" });
+    const s = schedule(withFilter(), "office");
+    expect(planRecovery({ job, from: "schedule", schedule: s, newer: none })).toEqual({
+      recovery: "resync",
+      run: { definition: s.definition, workerId: "office", from: "schedule" },
+    });
+    // A newer job of the schedule's pair on its worker supersedes the run.
+    const resync = later("resync", clone(JobDefinitionSchema, s.definition!), 5, "office");
+    expect(
+      planRecovery({
+        job,
+        from: "schedule",
+        schedule: s,
+        newer: { jobs: [resync], complete: true },
+      })?.block,
+    ).toEqual({ why: "newer", jobId: "resync" });
+  });
+
+  it("runs past the safety check from the schedule's page only with the settings that stopped", () => {
+    const job = failed(JobErrorCode.SAFETY_ABORT, { scheduleId: "s1" });
+    expect(planRecovery({ job, from: "schedule", schedule: schedule(), newer: none })?.run).toEqual(
+      {
+        definition: schedule().definition,
+        workerId: NAS,
+        from: "schedule",
+      },
+    );
+    for (const s of [schedule(withFilter()), schedule(bisyncMock.definition(), "office")])
+      expect(planRecovery({ job, from: "schedule", schedule: s, newer: none })).toEqual({
+        recovery: "force",
+        block: { why: "settingsChanged" },
+      });
+  });
+
+  it("offers only a hint after SIDE_UNAVAILABLE, and nothing for other failures", () => {
+    expect(planRecovery({ job: failed(JobErrorCode.SIDE_UNAVAILABLE), from: "job" })).toEqual({
+      recovery: "hint",
+    });
+    expect(
+      planRecovery({ job: failed(JobErrorCode.EXECUTION_FAILED), from: "job" }),
+    ).toBeUndefined();
+  });
+});
+
 describe("one-shot runs", () => {
   it("sets resync or force for one run, never both", () => {
     const def = bisyncMock.definition();
@@ -251,6 +406,19 @@ describe("one-shot runs", () => {
     );
     expect(forced).toMatchObject({ resync: false, force: true, path1: { path: "/srv/shared" } });
     expect(withOneShot(create(JobDefinitionSchema, {}), "resync")).toBeUndefined();
+  });
+
+  it("resyncs for real from a dry-run definition, and keeps a forced run dry", () => {
+    const dry = bisyncMock.definition();
+    bisyncOf(dry)!.options!.dryRun = true;
+    const resync = bisyncOf(create(JobDefinitionSchema, withOneShot(dry, "resync")));
+    expect(resync?.options).toMatchObject({ dryRun: false, createEmptySrcDirs: true });
+    expect(resync?.options?.filters).toHaveLength(2);
+    expect(bisyncOf(create(JobDefinitionSchema, withOneShot(dry, "force")))?.options?.dryRun).toBe(
+      true,
+    );
+    // The definition it came from is left alone.
+    expect(bisyncOf(dry)?.options?.dryRun).toBe(true);
   });
 
   it("runs a one-shot job again as a normal run", () => {

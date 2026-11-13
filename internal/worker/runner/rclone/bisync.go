@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/worker/bisyncstate"
+	"github.com/Zeptiny/Syncr/internal/worker/localfs"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
@@ -30,15 +34,23 @@ const BisyncKind = "rclone_bisync"
 // file. A run:
 //
 //  1. checks the spec: the state key's format, the options, both
-//     locations, and the two rclone paths together at most 200 bytes;
+//     locations (neither may be the state store's folder, inside it or
+//     hold it), and the two rclone paths together at most 200 bytes;
 //  2. opens the pair (its lock; TEMPORARY if another run holds it) and
 //     removes rclone lock files a killed run left;
 //  3. resyncs when the spec asks (reason REQUESTED) or the pair has no
-//     baseline (Pair.Fresh; reason FIRST_RUN), with --resync-mode;
+//     baseline (Pair.Fresh; reason FIRST_RUN), with --resync-mode. Before
+//     a resync it checks the local sides, which rclone does not: one that
+//     does not exist is NOT_FOUND, and an automatic first run never fills
+//     an empty one (RESYNC_REQUIRED, see checkResyncSides);
 //  4. writes the filters file and runs rclone bisync;
 //  5. reports the conflicts (output and a warning), or maps rclone's
 //     final messages to an error code: RESYNC_REQUIRED, SAFETY_ABORT,
 //     SIDE_UNAVAILABLE, NOT_FOUND, else the exit code as for transfers.
+//     After a critical error that rclone says needs a resync, it reads the
+//     pair's state: when the next run can go on from the listings rclone
+//     kept (--recover), the job fails with EXECUTION_FAILED and says to fix
+//     the cause and run again; only otherwise with RESYNC_REQUIRED.
 //
 // A cancel, time limit or shutdown stops rclone as for transfers; the next
 // run removes the lock file a kill leaves and rclone's --recover finishes
@@ -112,6 +124,11 @@ func (b *BisyncRunner) Run(ctx context.Context, job runner.Job, emit runner.Emit
 	if err := checkPair(path1, path2); err != nil {
 		return res, runner.Fail(syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, err)
 	}
+	for _, side := range [...][2]string{{"path1", path1}, {"path2", path2}} {
+		if err := b.outsideState(side[0], side[1]); err != nil {
+			return res, err
+		}
+	}
 
 	pair, err := b.states.Open(spec.GetStateKey())
 	switch {
@@ -128,6 +145,9 @@ func (b *BisyncRunner) Run(ctx context.Context, job runner.Job, emit runner.Emit
 	reason, err := b.prepare(pair, spec, filters, job.ID)
 	if err != nil {
 		return res, runner.Fail(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, err)
+	}
+	if err := checkResyncSides(reason, path1, path2); err != nil {
+		return res, err
 	}
 	args, err := bisyncArgs(opts, bisyncState{
 		workDir:     pair.WorkDir(),
@@ -154,7 +174,7 @@ func (b *BisyncRunner) Run(ctx context.Context, job runner.Job, emit runner.Emit
 	res.ExitCode = pres.ExitCode
 	res.Stats = t.progress
 	res.Stats.Elapsed = max(res.Stats.Elapsed, pres.Duration)
-	if err := b.outcome(err, pres, t, log, reason); err != nil {
+	if err := b.outcome(err, pres, t, log, reason, pair, opts.GetDryRun()); err != nil {
 		return res, err
 	}
 	res.Output = &syncrv1.JobOutput{Output: &syncrv1.JobOutput_RcloneBisync{RcloneBisync: &syncrv1.RcloneBisyncOutput{
@@ -194,13 +214,21 @@ func (b *BisyncRunner) prepare(pair *bisyncstate.Pair, spec *syncrv1.RcloneBisyn
 }
 
 // outcome maps the supervisor's result to the runner's error: rclone's
-// final messages first (bisyncLog.failure), then as for transfers.
-func (b *BisyncRunner) outcome(err error, pres proc.Result, t *tracker, log *bisyncLog, reason syncrv1.BisyncResyncReason) error {
+// final messages first (bisyncLog.failure, told what the pair's state now
+// allows), then as for transfers.
+func (b *BisyncRunner) outcome(err error, pres proc.Result, t *tracker, log *bisyncLog,
+	reason syncrv1.BisyncResyncReason, pair *bisyncstate.Pair, dryRun bool,
+) error {
 	if err == nil {
 		return nil
 	}
 	if _, ok := errors.AsType[*proc.ExitError](err); ok {
-		if code, msg, ok := log.failure(); ok {
+		run := failedRun{
+			next:   b.next(pair),
+			resync: reason != syncrv1.BisyncResyncReason_BISYNC_RESYNC_REASON_UNSPECIFIED,
+			dryRun: dryRun,
+		}
+		if code, msg, ok := log.failure(run); ok {
 			return runner.Fail(code, &exitError{msg: msg, err: err})
 		}
 	}
@@ -212,6 +240,120 @@ func (b *BisyncRunner) outcome(err error, pres proc.Result, t *tracker, log *bis
 		cmd = "bisync --resync"
 	}
 	return b.r.outcome(err, pres, t, cmd)
+}
+
+// next reads, after a failed run, what the pair's state lets its next run
+// do; when the work directory cannot be read, it assumes only a resync
+// helps.
+func (b *BisyncRunner) next(pair *bisyncstate.Pair) pairNext {
+	fresh, err := pair.Fresh()
+	if err == nil && fresh {
+		return nextResyncs
+	}
+	var resumable bool
+	if err == nil {
+		resumable, err = pair.Resumable()
+	}
+	if err != nil {
+		b.r.cfg.Logger.Warn("cannot read the state of a two-way sync after a failed run", "error", err.Error())
+	}
+	if resumable {
+		return nextContinues
+	}
+	return nextNeedsResync
+}
+
+// outsideState refuses (PATH_NOT_ALLOWED) a local side that is the folder
+// of the two-way sync state store, is inside it, or holds it, also through
+// a symbolic link: a run there would sync rclone's own listings, and let
+// the job read or change the state of other pairs. local_roots may cover
+// the worker's data directory; this keeps the pairs' state out of reach
+// anyway. path is a side's rclone path; remotes are not checked.
+func (b *BisyncRunner) outsideState(role, path string) error {
+	if !filepath.IsAbs(path) {
+		return nil
+	}
+	overlap, err := localfs.Overlap(path, b.states.Root())
+	if err != nil {
+		return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED, "%s: %w", role, err)
+	}
+	if overlap {
+		return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
+			"%s: %s is, holds or is inside the folder where the worker keeps the state of two-way syncs (%s)", role, path, b.states.Root())
+	}
+	return nil
+}
+
+// checkResyncSides checks the local sides of a resync (reason set) before
+// rclone runs, because rclone checks them only in a normal run: during
+// --resync it creates a side that does not exist and fills an empty one.
+//
+//   - A local side that does not exist fails the run with NOT_FOUND, as in
+//     a normal run.
+//   - An automatic first run (FIRST_RUN) never fills an empty local side:
+//     it fails with RESYNC_REQUIRED, without running rclone. An empty
+//     mount point (a drive that is not mounted) looks the same as a new
+//     folder; filled from the other side and recorded as the pair's
+//     baseline, it would make every file of the drive look deleted once the
+//     drive is mounted again, and the next normal run would delete those
+//     files on the other side. A resync someone asked for (REQUESTED)
+//     fills it; the UI warns about drives first.
+//
+// Empty means no entry at all, hidden files included; the filters are not
+// applied, so a folder that holds only excluded files is not empty. When
+// every side is local and empty there is nothing to fill, and the run goes
+// ahead. A side that cannot be read is left to rclone.
+func checkResyncSides(reason syncrv1.BisyncResyncReason, path1, path2 string) error {
+	if reason == syncrv1.BisyncResyncReason_BISYNC_RESYNC_REASON_UNSPECIFIED {
+		return nil
+	}
+	sides := [...]struct {
+		name, path string
+		local      bool
+		empty      bool
+	}{{name: "Path1", path: path1}, {name: "Path2", path: path2}}
+	for i := range sides {
+		s := &sides[i]
+		if s.local = filepath.IsAbs(s.path); !s.local {
+			continue
+		}
+		empty, err := emptyDir(s.path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND,
+				"%s does not exist: %s; a resync would create it and fill it from the other side, "+
+					"so create the folder (or mount its drive) first", sideName(s.name), s.path)
+		}
+		s.empty = err == nil && empty
+	}
+	if reason != syncrv1.BisyncResyncReason_BISYNC_RESYNC_REASON_FIRST_RUN ||
+		(sides[0].local && sides[0].empty && sides[1].local && sides[1].empty) {
+		return nil
+	}
+	for i, s := range sides {
+		if s.empty {
+			other := sideName(sides[1-i].name)
+			return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED,
+				"%s is empty; a first run does not fill an empty folder on its own (a drive that is not mounted looks the same). "+
+					"If this is a new machine, run it once with resync to fill it from %s; if the folder is on a drive, mount it first",
+				sideName(s.name), other)
+		}
+	}
+	return nil
+}
+
+// emptyDir reports whether the directory path has no entries.
+func emptyDir(path string) (bool, error) {
+	f, err := os.Open(path) //nolint:gosec // a side the path policy accepted
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.ReadDir(1); errors.Is(err, io.EOF) {
+		return true, nil
+	} else if err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // checkPair refuses two rclone paths that are too long together for

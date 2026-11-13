@@ -30,12 +30,28 @@ rclone (1.75.2) that has it. Running it showed what shapes the design:
   `--max-delete` (for bisync, a percentage; default 50), every file
   changed on both sides, an empty side, missing `RCLONE_TEST` files with
   `--check-access`. `--force` runs past the first two. The state is kept.
-- Some errors are **critical**, and only a resync recovers from them.
-  Changing the filters is one: rclone keeps an MD5 of the filters file
-  next to it, and with `--resilient` every later run fails with "(must run
-  --resync)" while the listings stay as they were. Others, such as a file
-  that still cannot be read after three tries, rename the listings to
-  `.lst-err` ("Must run --resync to recover").
+- Some errors are **critical**. Changing the filters is one only a resync
+  recovers from: rclone keeps an MD5 of the filters file next to it, and
+  with `--resilient` every later run fails with "(must run --resync)"
+  while the listings stay as they were. Others, such as a file that still
+  cannot be read after three tries, rename the listings to `.lst-err` and
+  say "Must run --resync to recover", but that is not the whole story:
+  rclone keeps a copy of the listings from before the last good run
+  (`.lst-old`), and with `--recover` the next run falls back to it ("Listings
+  not found. Reverting to prior backup"). Once the cause is fixed, that
+  normal run succeeds; a resync started before the fix stops at the same
+  error. Only without `.lst-old` (a critical error on the first normal run
+  after a resync) does the next run fail with "cannot find prior Path1 or
+  Path2 listings", which only a resync fixes.
+- **A resync skips the empty-side check.** rclone refuses a normal run when
+  a side's listing is empty, but not a `--resync`, which fills the empty
+  side from the other (and creates a side that does not exist). A resync
+  into the empty mount point of a drive that is not mounted becomes the
+  pair's baseline; once the drive is mounted again, the next normal run
+  takes every file the drive lacks as deleted, deletes it on the other
+  side, and lets the drive's older versions overwrite newer ones, without
+  a conflict copy and with exit code 0. `--check-access` does stop a
+  resync.
 - A killed run leaves its `.lck` file behind; the next run with `--recover`
   finishes without a resync once the lock is gone. A kill during a
   transfer can also leave a `.partial` file on the receiving side, which
@@ -123,12 +139,38 @@ on its own and reports the reason `FIRST_RUN`. A resync is a union: what one sid
 from the other and nothing is deleted. A file that differs keeps the newer
 version by default (`resync_mode`; rclone's own default is Path1).
 
-After a critical error the worker never resyncs on its own: the job fails
-with `RESYNC_REQUIRED`, and a person starts a job with `resync` set
-("Resync now"). A critical error means something unexpected happened, and a
-resync can overwrite a version. Changing the filters is the common case:
-the worker always passes the filters as a file, empty without rules, so
-that rclone notices every change, including removing all rules.
+**An automatic first run never fills an empty local folder** (decided by
+the user after the review; it amends "the first run resyncs on its own").
+rclone skips its empty-side check during `--resync` (see Context), and an
+empty folder on the worker cannot be told from the mount point of a drive
+that is not mounted. So before a `FIRST_RUN` the worker looks at each local
+side: when one has no entry at all, the job fails with `RESYNC_REQUIRED`
+without running rclone, and says to resync if the machine is new or to
+mount the drive first. "Empty" is the simple rule: no entry at all, hidden
+files and files the filters exclude counting as content, so that it never
+depends on how rclone would filter. When every side is local and empty
+there is nothing to fill, and the run goes ahead. A side on a remote is not
+checked (listing a bucket costs a request, and a remote is rarely the
+side that is "not mounted"). A resync someone asks for ("Resync now")
+fills an empty folder; the UI's dialog asks to mount the drive first, and
+`check_access` stops it when the drive is missing. Before any resync, a
+local side that does not exist fails with `NOT_FOUND`, because rclone
+would create it and fill it.
+
+After a critical error the worker never resyncs on its own. What the job
+says depends on what the pair's state allows, which the worker reads after
+rclone stopped (`bisyncstate.Pair.Resumable`, `Pair.Fresh`): when rclone's
+`--recover` can go on from the previous listings at the next run, or the
+pair has no baseline yet (so its next run resyncs anyway), the job fails
+with `EXECUTION_FAILED` and a message that names the cause and says to fix
+it and run again. Only otherwise is it `RESYNC_REQUIRED`, and a person
+starts a job with `resync` set ("Resync now") once the cause is fixed. A
+critical error means something unexpected happened, and a resync can
+overwrite a version, so the worker does not resync, and does not steer
+people to a resync that the next normal run makes unnecessary. Changing
+the filters is the common case of `RESYNC_REQUIRED`: the worker always
+passes the filters as a file, empty without rules, so that rclone notices
+every change, including removing all rules.
 
 ### One-shot fields
 
@@ -138,7 +180,15 @@ every time, so schedules refuse a definition that sets them
 `Schedulable`). RunJob accepts them, and the job keeps them in its stored
 definition, so its page says "Resync" or "Delete limit ignored". The UI
 offers them as actions on a failed job: "Resync now" after
-`RESYNC_REQUIRED`, "Run once anyway" after `SAFETY_ABORT`.
+`RESYNC_REQUIRED`, "Run once anyway" after `SAFETY_ABORT`. They must never
+run settings that something newer superseded: on a schedule's page they
+run the schedule's current definition on the worker it targets now ("Run
+once anyway" only while it equals the stopped run's, whose counts the
+dialog repeats); on a job's page they run the job's definition, and only
+while no newer job of the same pair exists on that worker and its
+schedule, if any, still has that definition and worker. A resync always
+runs for real (a dry-run resync would leave the pair needing one); a
+forced run keeps a definition's dry run.
 
 ### Two codes for the safety checks
 
@@ -169,6 +219,8 @@ next run resyncs again once the files are there.
 | Risk | What stops it |
 |---|---|
 | An unmounted drive or a wrong path makes everything look deleted | rclone's empty-side check and optional `check_access`: `SIDE_UNAVAILABLE`, fixed at the location; `max_delete_percent` (default 50) and the "every file changed" check: `SAFETY_ABORT`, overridden only by a deliberate `force` run |
+| A resync fills an unmounted drive's empty mount point, so the drive's files look deleted once it is back | rclone does not check during `--resync`; the worker's own check before an automatic first run (`RESYNC_REQUIRED`, rclone not run) and a missing local side (`NOT_FOUND`); for a requested resync, the dialog's warning and `check_access` |
+| A side that is the worker's own state | a local side that is, holds or is inside `<data_dir>/bisync` is `PATH_NOT_ALLOWED`, even when `local_roots` covers it |
 | Old state compared against a different place | a new state key, so a resync (a union) |
 | Filters changed, so newly excluded files look deleted | rclone's MD5 of the filters file: `RESYNC_REQUIRED` and a deliberate resync |
 | Two runs on one location at once | concurrency keys per location |
@@ -217,14 +269,20 @@ reach rclone's misleading error.
 ### Outcome
 
 The worker classifies a failed run by rclone's messages, then by its exit
-code: a failed access check is `SIDE_UNAVAILABLE`; "must run --resync"
-anywhere, missing prior listings and empty prior listings are
-`RESYNC_REQUIRED`; an empty side is `SIDE_UNAVAILABLE`; a missing side
-while listing is `NOT_FOUND`; the delete limit and "all files were
-changed" are `SAFETY_ABORT`, with rclone's counts in the message; anything
-else is mapped as for transfers. The messages come from the pinned rclone
-and are tested against its recorded output, so a tool upgrade that changes
-them fails the tests instead of mislabelling jobs. A successful run
+code: a failed access check is `SIDE_UNAVAILABLE`; changed filters and an
+empty prior listing are `RESYNC_REQUIRED`; missing prior listings and a
+critical error after which rclone renamed the listings are
+`EXECUTION_FAILED` or `RESYNC_REQUIRED` as the pair's state allows (see
+above); an empty side is `SIDE_UNAVAILABLE`; a missing side while listing
+is `NOT_FOUND`; the delete limit and "all files were changed" are
+`SAFETY_ABORT`, with rclone's counts in the message; anything else is
+mapped as for transfers. rclone puts file names into its messages, so each
+phrase is matched where rclone puts it (the start of its message, or the
+message part of a line about one file), never anywhere in a line: a file
+named "must run --resync" cannot change a job's outcome. The messages come
+from the pinned rclone and are tested against its recorded output, so a
+tool upgrade that changes them fails the tests instead of mislabelling
+jobs. A successful run
 reports `RcloneBisyncOutput`: whether it was a resync and why, and the
 conflicts (a count and the first 20 paths), also as a warning. A conflict
 counts only when rclone renamed a version or picked a winner.
@@ -245,9 +303,17 @@ constant, not a setting. A pruned pair resyncs on its next run.
   newer version of each differing file.
 - A resync can overwrite the older version of a file that differs. It runs
   on its own only for a fresh pair, where there is nothing to compare
-  against anyway.
-- Changing a two-way sync's filters stops it until someone resyncs, and so
-  does one file that cannot be read: a critical error stops the whole pair.
+  against anyway, and never into an empty local folder.
+- A new machine whose folder is empty needs one deliberate resync before
+  its pair runs: its first run stops with `RESYNC_REQUIRED` and says so.
+- Changing a two-way sync's filters stops it until someone resyncs. One
+  file that cannot be read stops the whole pair until it is fixed; then the
+  next run goes on from the last good state (only right after a resync
+  does it need one).
+- Two definitions of the same two locations on a worker share one state,
+  so different filters on them make each other fail with
+  `RESYNC_REQUIRED`; two remote objects for one bucket do not share a
+  concurrency key. Both are documented, not solved.
 - Rotating an S3 or R2 token (a new access key ID), or changing any other
   non-secret option of a remote, makes the next run of its pairs a resync.
 - Small folders can hit "every file changed": a folder of one file edited
@@ -271,8 +337,8 @@ constant, not a setting. A pruned pair resyncs on its next run.
   10 seconds; a transfer that needs longer is killed, and the next run
   finishes it with `--recover` (one more run may be needed to remove a
   `.partial` file). On Windows every cancel is a kill. Rarely, a cancel
-  just as a transfer ends leaves a pair that needs a resync (an rclone
-  race).
+  just as a transfer ends is recorded as a critical error (an rclone
+  race); the next run goes on from the last good state.
 - Interrupt delivery and long work-directory paths on Windows can only be
   verified in CI.
 
@@ -292,6 +358,15 @@ constant, not a setting. A pruned pair resyncs on its next run.
 - **Resync automatically after critical errors, or when the filters
   change.** It would hide a real problem, such as a wrong path or newly
   excluded files, behind a resync that can overwrite versions.
+- **Fill an empty local folder on the first run, as rclone does.** It is
+  what a new machine wants, but it is also what an unmounted drive gets,
+  and then the next run deletes on the other side what the drive lacks.
+  Asking once on a new machine costs one click; the alternative can cost
+  the other side's files.
+- **Apply the filters to "empty"** (a folder that holds only excluded files
+  would count as empty). It would follow rclone's view more closely, but
+  makes the rule depend on the filters and harder to explain; the unmounted
+  mount point it protects against has no entries at all.
 - **rclone's default work directory.** It is inside the per-job scratch
   directory, which is deleted after every job.
 - **`--max-lock` instead of clearing stale locks.** It waits for a lock

@@ -257,7 +257,7 @@ func (e *engine) exec(ctx context.Context, x execution) (runner.Result, *session
 		Dir:          e.cfg.ScratchRoot,
 		Env:          env,
 		Stdout:       stdout,
-		Stderr:       s.line,
+		Stderr:       s.stderr,
 		StdoutChunks: x.chunks,
 		GracePeriod:  x.grace,
 	})

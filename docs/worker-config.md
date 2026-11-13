@@ -246,7 +246,10 @@ worker in `<data_dir>/bisync/<key>/`: rclone's listings of both folders
 work files and the pair's filters. The folder is created with mode `0700`;
 startup's clean-up of the scratch space leaves it alone. Moving `data_dir`
 or wiping it makes every pair's next run on this worker a resync (a union
-of both folders that deletes nothing).
+of both folders that deletes nothing; a pair whose folder on this worker
+is empty stops and asks for one instead). A two-way sync may not use this
+folder, a folder inside it or one that holds it as a side
+(`path_not_allowed`), even when `local_roots` covers the data directory.
 
 At startup and then once a day, the worker deletes the state of pairs that
 have not run for 180 days (not a setting); a pair that runs again later

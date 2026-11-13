@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	pathpkg "path"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -130,6 +131,10 @@ type session struct {
 	arrayTruncated bool
 
 	tail []string // recent non-JSON lines, for diagnostics
+	// rcloneErrors are the last maxRcloneErrors distinct errors logged by
+	// the rclone process of an "rclone:" repository, for the failure
+	// message.
+	rcloneErrors []string
 }
 
 func newSession(kind string, emit runner.EmitFunc, sc *scrub.Scrubber) *session {
@@ -146,6 +151,43 @@ func (s *session) stdout(l proc.Line) {
 		}
 	}
 	s.line(l)
+}
+
+// stderr handles one line of restic's standard error, which also carries
+// the standard error of the rclone process restic starts for an "rclone:"
+// repository, each line prefixed with "rclone: ".
+func (s *session) stderr(l proc.Line) {
+	s.rcloneLine(l.Data)
+	s.line(l)
+}
+
+// rcloneLog matches an rclone log line at level ERROR or CRITICAL as restic
+// copies it ("rclone: 2026/11/13 03:02:24 ERROR : <message>"); the
+// submatch is the message.
+var rcloneLog = regexp.MustCompile(`^rclone: (?:\d{4}/\d\d/\d\d \d\d:\d\d:\d\d(?:\.\d+)? )?(?:ERROR|CRITICAL) ?: (.+)$`)
+
+// rcloneLine keeps an error logged by restic's rclone process. restic
+// reports a failure of its rclone backend only by an HTTP status
+// ("unexpected HTTP response (500)") or by rclone's exit status ("error
+// talking HTTP to rclone: exit status 1"); the reason is in rclone's log,
+// e.g. the bucket creation an S3 key may not perform.
+func (s *session) rcloneLine(data []byte) {
+	data = bytes.TrimSpace(data)
+	if !bytes.HasPrefix(data, []byte("rclone: ")) {
+		return
+	}
+	m := rcloneLog.FindSubmatch(data)
+	if m == nil {
+		return
+	}
+	line := s.sc.Clip("rclone: "+string(m[1]), maxTailLineBytes)
+	if slices.Contains(s.rcloneErrors, line) {
+		return // restic retries, and rclone logs each attempt
+	}
+	if len(s.rcloneErrors) == maxRcloneErrors {
+		s.rcloneErrors = slices.Delete(s.rcloneErrors, 0, 1)
+	}
+	s.rcloneErrors = append(s.rcloneErrors, line)
 }
 
 // line handles one line of restic output from either stream.
@@ -293,13 +335,17 @@ func (s *session) stats() runner.Progress {
 	return p
 }
 
-// detail is restic's explanation of a failure: its exit_error message, or
-// the recent diagnostic lines.
+// detail is restic's explanation of a failure: its exit_error message
+// followed by the errors its rclone process logged, or else the recent
+// diagnostic lines (which include rclone's).
 func (s *session) detail() string {
 	var msg string
 	switch {
 	case s.exit != nil && s.exit.Message != "":
 		msg = s.exit.Message
+		if len(s.rcloneErrors) > 0 {
+			msg += "; " + joinLines(s.rcloneErrors)
+		}
 	case len(s.tail) > 0:
 		msg = joinLines(s.tail)
 	}

@@ -13,7 +13,8 @@ import (
 )
 
 // The two-way sync of the demo: nas-01's shared folder and a folder on
-// Cloudflare R2, kept in step every two hours (docs/adr/0018-two-way-sync.md).
+// Cloudflare R2, kept in step every two hours (docs/adr/0018-two-way-sync.md),
+// and a new pair on backup-host whose first run found its folder empty.
 const (
 	// sShared is the schedule's name.
 	sShared = "Shared folder ⇄ R2"
@@ -23,6 +24,14 @@ const (
 	sharedRemotePath = "shared"
 	// sharedBucket is rR2's bucket (its root).
 	sharedBucket = "ada-shared"
+	// newPairLocal is Folder A of the new pair on newPairWorker, with
+	// Folder B the same R2 folder: an empty folder, so its first run asks
+	// for a resync.
+	newPairLocal  = "/backup/shared"
+	newPairWorker = "backup-host"
+	// newPairAgo is how long before the seed the new pair's first run was
+	// started by hand.
+	newPairAgo = 40 * time.Minute
 )
 
 // The schedule's expression and time zone.
@@ -31,15 +40,19 @@ const (
 	sharedTimezone = "Europe/Berlin"
 )
 
-// The two-way sync's history, counted back from the seed: the last run at
-// or before sharedResyncAgo hit an unreadable file (RESYNC_REQUIRED), and
-// the resync run by hand sharedResyncAfter later fixed it
+// The two-way sync's history, counted back from the seed: the run
+// sharedCriticalRun hit an unreadable file (EXECUTION_FAILED; the next run
+// went on from the last good state once it was fixed); the last run at or
+// before sharedResyncAgo found the filters changed (RESYNC_REQUIRED), and
+// the resync run by hand sharedResyncAfter later accepted them
 // (sharedResyncRun); in the last sharedSafetyWindow its runs stop at the
 // delete limit (SAFETY_ABORT), waiting for someone to decide.
 const (
 	sharedResyncAgo    = 7 * time.Hour
 	sharedResyncAfter  = 25 * time.Minute
 	sharedSafetyWindow = 4 * time.Hour
+	// sharedCriticalRun is the n-th run (0 is the oldest).
+	sharedCriticalRun = 20
 )
 
 // sharedResyncRun is when the run that needed a resync was due: the
@@ -61,8 +74,12 @@ func sharedResyncRun(seed time.Time) time.Time {
 // (internal/worker/runner/rclone, bisync_log.go) from rclone 1.75.2's.
 const (
 	sharedSideUnavailable = "Folder A (path1) is empty; refusing to sync it with the other side (is the drive mounted and the path right?)"
-	sharedResyncRequired  = "a resync is required: failed to open source object: open " + sharedLocal + "/scans/2026-11-contract.pdf: permission denied; " +
-		"run it once with resync to rebuild the pair's state from both sides as they are now"
+	sharedCriticalError   = "the two-way sync stopped with a critical error: failed to open source object: open " + sharedLocal +
+		"/scans/2026-11-contract.pdf: permission denied; fix the cause and run it again: the next run goes on from the pair's last good state, without a resync"
+	sharedResyncRequired = "a resync is required: filters file has changed; run it once with resync to rebuild the pair's state from both sides as they are now"
+	// newPairEmpty is the refusal of the new pair's first run.
+	newPairEmpty = "Folder A (path1) is empty; a first run does not fill an empty folder on its own (a drive that is not mounted looks the same). " +
+		"If this is a new machine, run it once with resync to fill it from Folder B (path2); if the folder is on a drive, mount it first"
 	sharedSafetyAbort = `safety check stopped the two-way sync: too many deletes (>50%, 731 of 1268) on Path1 "` + sharedLocal + `/"; ` +
 		"if these changes are intended, run it once with force"
 	// sharedConflictWarning is the warning of the run with conflicts.
@@ -94,12 +111,12 @@ func sharedFiles(root string) []demoFile {
 }
 
 // sharedDef is the two-way sync's definition (with resync, the run by
-// hand that rebuilds its state).
-func sharedDef(resync bool) defFunc {
+// hand that rebuilds its state); local is Folder A.
+func sharedDef(local string, resync bool) defFunc {
 	return func(s *Seed) (*syncrv1.JobDefinition, error) {
 		id, err := s.remoteID(rR2)
 		return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_RcloneBisync{RcloneBisync: &syncrv1.RcloneBisyncDefinition{
-			Path1: &syncrv1.JobLocation{Path: sharedLocal},
+			Path1: &syncrv1.JobLocation{Path: local},
 			Path2: &syncrv1.JobLocation{RemoteId: id, Path: sharedRemotePath},
 			Options: &syncrv1.RcloneBisyncOptions{
 				CreateEmptySrcDirs: true,
@@ -132,10 +149,11 @@ func sharedFailed(run time.Duration, code syncrv1.JobErrorCode, msg string, exit
 // demoBisyncSchedules are the two-way sync's schedule: every two hours on
 // nas-01, with about three days of runs that show each of the kind's
 // states: the first run, a resync (FIRST_RUN); quiet runs; a run with two
-// conflicts; a run that found Folder A empty (SIDE_UNAVAILABLE); a run that
-// needs a resync (RESYNC_REQUIRED), followed by the resync run by hand
-// (demoBisyncJobs); and, in the last hours, runs stopped by the delete
-// limit (SAFETY_ABORT).
+// conflicts; a run that found Folder A empty (SIDE_UNAVAILABLE); a run
+// stopped by an unreadable file (EXECUTION_FAILED, which the next run went
+// on from); a run that needs a resync because the filters changed
+// (RESYNC_REQUIRED), followed by the resync run by hand (demoBisyncJobs);
+// and, in the last hours, runs stopped by the delete limit (SAFETY_ABORT).
 func demoBisyncSchedules(seed time.Time) []demoSchedule {
 	h, m, s, d := time.Hour, time.Minute, time.Second, 24*time.Hour
 	resyncRun := sharedResyncRun(seed)
@@ -144,7 +162,7 @@ func demoBisyncSchedules(seed time.Time) []demoSchedule {
 		cron: sharedCron, timezone: sharedTimezone, worker: "nas-01",
 		missed: schedules.MissedPolicy{Action: schedules.MissedRunLate, MaxDelay: h}, overlap: schedules.OverlapSkip,
 		links: []demoLink{{cDiscord, []domain.NotificationEvent{domain.EventFailed, domain.EventMissed}}},
-		job:   demoJob{owner: ownerAdmin, def: sharedDef(false)},
+		job:   demoJob{owner: ownerAdmin, def: sharedDef(sharedLocal, false)},
 		age:   3*d + 4*h,
 		outcome: func(n int, at time.Time) runOutcome {
 			switch {
@@ -155,8 +173,9 @@ func demoBisyncSchedules(seed time.Time) []demoSchedule {
 				return sharedFailed(14*s, syncrv1.JobErrorCode_JOB_ERROR_CODE_SAFETY_ABORT, sharedSafetyAbort, 1, 2*sharedFileCount)
 			case !at.Before(resyncRun) && at.Before(resyncRun.Add(m)):
 				// The run before the resync run by hand (launched within a
-				// few seconds of its fire, after other schedules' runs).
-				return sharedFailed(38*s, syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED, sharedResyncRequired, 7, 2*sharedFileCount)
+				// few seconds of its fire, after other schedules' runs):
+				// the schedule's filters had just been changed.
+				return sharedFailed(6*s, syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED, sharedResyncRequired, 7, 0)
 			case n == 0:
 				// The pair's first run on nas-01: a resync, which uploads
 				// the folder (a union of both sides).
@@ -171,6 +190,11 @@ func demoBisyncSchedules(seed time.Time) []demoSchedule {
 			case n == 13:
 				// The USB drive behind the shared folder was not mounted.
 				return sharedFailed(6*s, syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE, sharedSideUnavailable, 7, 0)
+			case n == sharedCriticalRun:
+				// A scan the worker could not read; once its permissions
+				// were fixed, the next run went on from the last good
+				// state.
+				return sharedFailed(27*s, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, sharedCriticalError, 7, 2*sharedFileCount)
 			}
 			o := succeeded(time.Duration(varied(n, 18, 95))*s, varied(n, 1, 60)*mib+varied(n+2, 0, 900)*kib, varied(n, 0, 24), 2*sharedFileCount)
 			o.stats.Deletes = varied(n+1, 0, 4)
@@ -180,16 +204,22 @@ func demoBisyncSchedules(seed time.Time) []demoSchedule {
 	}}
 }
 
-// demoBisyncJobs are the two-way sync's jobs run by hand: the resync that
-// followed its RESYNC_REQUIRED run, once the unreadable file was fixed.
+// demoBisyncJobs are the two-way sync jobs run by hand: the resync that
+// followed the shared folder's RESYNC_REQUIRED run, accepting the new
+// filters, and the first run of the new pair on backup-host, which the
+// worker refused before rclone started because the folder was empty.
 // seed is the seed's start.
 func demoBisyncJobs(seed time.Time) []demoJob {
 	m, s := time.Minute, time.Second
 	return []demoJob{
-		{owner: ownerAdmin, worker: "nas-01", def: sharedDef(true),
+		{owner: ownerAdmin, worker: "nas-01", def: sharedDef(sharedLocal, true),
 			status: domain.JobSucceeded, created: seed.Sub(sharedResyncRun(seed).Add(sharedResyncAfter)), queue: 2 * s, run: 2*m + 47*s, samples: 12,
 			stats:  done(2*mib+300*kib, 1, 2*sharedFileCount),
 			output: sharedOutput(syncrv1.BisyncResyncReason_BISYNC_RESYNC_REASON_REQUESTED, nil)},
+		{owner: ownerAdmin, worker: newPairWorker, def: sharedDef(newPairLocal, false),
+			status: domain.JobFailed, created: newPairAgo, queue: 2 * s, run: s, samples: 1,
+			err:      jobs.JobError{Code: link.ErrorCodeName(syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED), Message: newPairEmpty},
+			exitCode: -1},
 	}
 }
 
