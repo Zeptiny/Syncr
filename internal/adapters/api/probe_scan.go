@@ -6,6 +6,7 @@ import (
 	"connectrpc.com/connect"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
 )
 
 // Milestone 7: measuring a worker's folder or a remote's, and a remote's
@@ -15,38 +16,55 @@ import (
 // option); GetRemoteUsage reads only and accepts GET.
 
 // MeasureWorkerFolder measures a folder of a worker's filesystem. Any user
-// may measure any worker's folders. Not implemented yet: a well-formed
-// request is Unimplemented.
-func (h *probeHandler) MeasureWorkerFolder(_ context.Context, req *connect.Request[syncrv1.MeasureWorkerFolderRequest]) (*connect.Response[syncrv1.MeasureWorkerFolderResponse], error) {
+// may measure any worker's folders.
+func (h *probeHandler) MeasureWorkerFolder(ctx context.Context, req *connect.Request[syncrv1.MeasureWorkerFolderRequest]) (*connect.Response[syncrv1.MeasureWorkerFolderResponse], error) {
+	actor, _ := ActorFrom(ctx)
 	if req.Msg.GetWorkerId() == "" {
 		return nil, invalidField("worker_id", "is required")
 	}
-	if _, err := optionalWorkerID(req.Msg.GetWorkerId()); err != nil {
+	workerID, err := optionalWorkerID(req.Msg.GetWorkerId())
+	if err != nil {
 		return nil, err
 	}
-	return nil, notAvailable("measuring folders")
+	out, err := h.probes.MeasureWorkerFolder(ctx, actor, workerID, req.Msg.GetPath())
+	if err != nil {
+		return nil, h.fail(ctx, syncrv1connect.ProbeServiceMeasureWorkerFolderProcedure, "worker", err)
+	}
+	return connect.NewResponse(out), nil
 }
 
 // MeasureRemoteFolder measures a folder of one of the caller's remotes.
-// Not implemented yet: a well-formed request is Unimplemented.
-func (h *probeHandler) MeasureRemoteFolder(_ context.Context, req *connect.Request[syncrv1.MeasureRemoteFolderRequest]) (*connect.Response[syncrv1.MeasureRemoteFolderResponse], error) {
-	if _, err := parseRemoteID("remote_id", req.Msg.GetRemoteId()); err != nil {
+func (h *probeHandler) MeasureRemoteFolder(ctx context.Context, req *connect.Request[syncrv1.MeasureRemoteFolderRequest]) (*connect.Response[syncrv1.MeasureRemoteFolderResponse], error) {
+	actor, _ := ActorFrom(ctx)
+	remoteID, err := parseRemoteID("remote_id", req.Msg.GetRemoteId())
+	if err != nil {
 		return nil, err
 	}
-	if _, err := optionalWorkerID(req.Msg.GetWorkerId()); err != nil {
+	workerID, err := optionalWorkerID(req.Msg.GetWorkerId())
+	if err != nil {
 		return nil, err
 	}
-	return nil, notAvailable("measuring folders")
+	out, err := h.probes.MeasureRemoteFolder(ctx, actor, remoteID, req.Msg.GetPath(), workerID)
+	if err != nil {
+		return nil, h.fail(ctx, syncrv1connect.ProbeServiceMeasureRemoteFolderProcedure, "remote or worker", err)
+	}
+	return connect.NewResponse(out), nil
 }
 
-// GetRemoteUsage asks one of the caller's remotes for its usage. Not
-// implemented yet: a well-formed request is Unimplemented.
-func (h *probeHandler) GetRemoteUsage(_ context.Context, req *connect.Request[syncrv1.GetRemoteUsageRequest]) (*connect.Response[syncrv1.GetRemoteUsageResponse], error) {
-	if _, err := parseRemoteID("remote_id", req.Msg.GetRemoteId()); err != nil {
+// GetRemoteUsage asks one of the caller's remotes for its usage.
+func (h *probeHandler) GetRemoteUsage(ctx context.Context, req *connect.Request[syncrv1.GetRemoteUsageRequest]) (*connect.Response[syncrv1.GetRemoteUsageResponse], error) {
+	actor, _ := ActorFrom(ctx)
+	remoteID, err := parseRemoteID("remote_id", req.Msg.GetRemoteId())
+	if err != nil {
 		return nil, err
 	}
-	if _, err := optionalWorkerID(req.Msg.GetWorkerId()); err != nil {
+	workerID, err := optionalWorkerID(req.Msg.GetWorkerId())
+	if err != nil {
 		return nil, err
 	}
-	return nil, notAvailable("a remote's usage")
+	out, err := h.probes.RemoteUsage(ctx, actor, remoteID, workerID)
+	if err != nil {
+		return nil, h.fail(ctx, syncrv1connect.ProbeServiceGetRemoteUsageProcedure, "remote or worker", err)
+	}
+	return connect.NewResponse(out), nil
 }

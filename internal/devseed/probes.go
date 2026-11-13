@@ -24,8 +24,10 @@ import (
 // the demo workers do not exist, so nothing could answer them. It stands
 // in for the controller's probe broker (the transport of its probe
 // runner): folder listings of the demo workers and remotes, remote usage,
-// and restic's init, config, snapshot and tree listings for the demo
-// repositories and for repositories created while the demo runs.
+// restic's init, config, snapshot and tree listings for the demo
+// repositories and for repositories created while the demo runs, and
+// (Milestone 7, scans.go) folder sizes, searches and comparisons computed
+// from the same trees and snapshots.
 //
 // The answers are fixed apart from times, which count back from the seed's
 // start. No probe leaves the process and nothing is stored but the
@@ -128,10 +130,31 @@ func (p *Probes) Probe(ctx context.Context, workerID domain.WorkerID, run *syncr
 		if k, err = hostKeys(op.SftpHostKeys); err == nil {
 			res.Output = &syncrv1.ProbeResult_SftpHostKeys{SftpHostKeys: k}
 		}
-	case *syncrv1.ProbeSpec_MeasureLocal, *syncrv1.ProbeSpec_MeasureRemote, *syncrv1.ProbeSpec_ResticMeasure,
-		*syncrv1.ProbeSpec_ResticFind, *syncrv1.ProbeSpec_ResticDiff:
-		// Milestone 7's scans have no canned answers yet.
-		err = failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSUPPORTED_KIND, "the demo has no folder sizes, searches or comparisons yet")
+	case *syncrv1.ProbeSpec_MeasureLocal:
+		var m *syncrv1.ProbeMeasurement
+		if m, err = p.measureLocal(workerID, op.MeasureLocal); err == nil {
+			res.Output, res.Elapsed = &syncrv1.ProbeResult_Measurement{Measurement: m}, scanElapsed(run, m.GetComplete())
+		}
+	case *syncrv1.ProbeSpec_MeasureRemote:
+		var m *syncrv1.ProbeMeasurement
+		if m, err = p.measureRemote(spec.GetRemotes(), op.MeasureRemote); err == nil {
+			res.Output, res.Elapsed = &syncrv1.ProbeResult_Measurement{Measurement: m}, scanElapsed(run, m.GetComplete())
+		}
+	case *syncrv1.ProbeSpec_ResticMeasure:
+		var m *syncrv1.ProbeMeasurement
+		if m, err = p.resticMeasure(spec.GetRemotes(), op.ResticMeasure); err == nil {
+			res.Output, res.Elapsed = &syncrv1.ProbeResult_Measurement{Measurement: m}, scanElapsed(run, true)
+		}
+	case *syncrv1.ProbeSpec_ResticFind:
+		var f *syncrv1.ResticFindOutput
+		if f, err = p.resticFind(spec.GetRemotes(), op.ResticFind); err == nil {
+			res.Output, res.Elapsed = &syncrv1.ProbeResult_Find{Find: f}, scanElapsed(run, true)
+		}
+	case *syncrv1.ProbeSpec_ResticDiff:
+		var d *syncrv1.ResticDiffOutput
+		if d, err = p.resticDiff(spec.GetRemotes(), op.ResticDiff); err == nil {
+			res.Output, res.Elapsed = &syncrv1.ProbeResult_Diff{Diff: d}, scanElapsed(run, true)
+		}
 	default:
 		err = failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSUPPORTED_KIND, "the demo does not answer this probe")
 	}
@@ -155,6 +178,15 @@ type demoFile struct {
 	size int64
 }
 
+// treeFile is a file of a demo tree with what a snapshot may change: mod,
+// if set, is its modification time (otherwise a fixed age before the
+// seed's start); link makes it a symbolic link (size 0).
+type treeFile struct {
+	demoFile
+	mod  time.Time
+	link bool
+}
+
 // tree is a file tree: the direct children of every folder, by folder
 // path. Paths are absolute and slash-separated ("/" is the top).
 type tree map[string][]*syncrv1.ProbeEntry
@@ -162,6 +194,15 @@ type tree map[string][]*syncrv1.ProbeEntry
 // newTree builds the tree of files, with every folder above them, plus the
 // empty folders dirs. Modification times count back from start.
 func newTree(start time.Time, files []demoFile, dirs ...string) tree {
+	fs := make([]treeFile, len(files))
+	for i, f := range files {
+		fs[i] = treeFile{demoFile: f}
+	}
+	return buildTree(start, fs, dirs...)
+}
+
+// buildTree is newTree for files with their own times and types.
+func buildTree(start time.Time, files []treeFile, dirs ...string) tree {
 	t := tree{"/": nil}
 	var addDir func(dir string)
 	addDir = func(dir string) {
@@ -183,10 +224,17 @@ func newTree(start time.Time, files []demoFile, dirs ...string) tree {
 		full := pathpkg.Clean("/" + f.path)
 		dir := pathpkg.Dir(full)
 		addDir(dir)
-		t[dir] = append(t[dir], &syncrv1.ProbeEntry{
+		e := &syncrv1.ProbeEntry{
 			Name: pathpkg.Base(full), Path: full, Type: syncrv1.ProbeEntryType_PROBE_ENTRY_TYPE_FILE, Size: f.size, Mode: "-rw-r--r--",
 			ModTime: timestamppb.New(start.Add(-age(full))),
-		})
+		}
+		if !f.mod.IsZero() {
+			e.ModTime = timestamppb.New(f.mod)
+		}
+		if f.link {
+			e.Type, e.Size, e.Mode = syncrv1.ProbeEntryType_PROBE_ENTRY_TYPE_SYMLINK, 0, "Lrwxrwxrwx"
+		}
+		t[dir] = append(t[dir], e)
 	}
 	for dir := range t {
 		slices.SortFunc(t[dir], func(a, b *syncrv1.ProbeEntry) int {
@@ -551,13 +599,11 @@ func (p *Probes) resticLs(remotes []*syncrv1.RemoteDefinition, op *syncrv1.Probe
 		return nil, err
 	}
 	start := p.seedStart()
-	known := r.demo != nil && slices.ContainsFunc(r.demo.snapshots(start), func(s restic.Snapshot) bool {
-		return s.ID == op.GetSnapshotId() || strings.HasPrefix(s.ID, op.GetSnapshotId()) && len(op.GetSnapshotId()) >= 8
-	})
-	if !known {
+	snap, ok := r.snapshot(start, op.GetSnapshotId())
+	if !ok {
 		return nil, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "no snapshot %s in the repository", op.GetSnapshotId())
 	}
-	l, ok := newTree(start, r.demo.files()).list(op.GetPath(), int(op.GetMaxEntries()), false)
+	l, ok := r.demo.treeAt(start, snap).list(op.GetPath(), int(op.GetMaxEntries()), false)
 	if !ok {
 		return nil, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "%s: no such folder in the snapshot", op.GetPath())
 	}

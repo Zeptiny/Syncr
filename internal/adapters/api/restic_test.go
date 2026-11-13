@@ -67,6 +67,12 @@ type apiProber struct {
 	snapshots []restic.Snapshot
 	listing   restic.Listing
 	targets   []restic.Target
+	// measurement, found and comparison answer the scans; scans records
+	// their arguments other than the target.
+	measurement restic.Measurement
+	found       restic.FindResult
+	comparison  restic.Comparison
+	scans       []string
 }
 
 func (p *apiProber) fail(err error) {
@@ -128,18 +134,55 @@ func (p *apiProber) List(_ context.Context, _ domain.UserID, t restic.Target, _,
 	return l, nil
 }
 
-// Measure, Find and Diff are not called by the handlers yet.
-
-func (p *apiProber) Measure(context.Context, domain.UserID, restic.Target, string, string) (restic.Measurement, error) {
-	return restic.Measurement{}, errors.ErrUnsupported
+// scan records a scan of t described by what.
+func (p *apiProber) scan(t restic.Target, what string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.targets = append(p.targets, t)
+	p.scans = append(p.scans, what)
+	return p.err
 }
 
-func (p *apiProber) Find(context.Context, domain.UserID, restic.Target, restic.FindQuery) (restic.FindResult, error) {
-	return restic.FindResult{}, errors.ErrUnsupported
+func (p *apiProber) lastScan() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.scans) == 0 {
+		return ""
+	}
+	return p.scans[len(p.scans)-1]
 }
 
-func (p *apiProber) Diff(context.Context, domain.UserID, restic.Target, string, string, string) (restic.Comparison, error) {
-	return restic.Comparison{}, errors.ErrUnsupported
+func (p *apiProber) Measure(_ context.Context, _ domain.UserID, t restic.Target, snapshot, path string) (restic.Measurement, error) {
+	if err := p.scan(t, "measure "+snapshot+" "+path); err != nil {
+		return restic.Measurement{}, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	m := p.measurement
+	m.WorkerID, m.WorkerName = p.worker, "worker"
+	return m, nil
+}
+
+func (p *apiProber) Find(_ context.Context, _ domain.UserID, t restic.Target, q restic.FindQuery) (restic.FindResult, error) {
+	if err := p.scan(t, fmt.Sprintf("find %q %v %q", q.Patterns, q.IgnoreCase, q.SnapshotIDs)); err != nil {
+		return restic.FindResult{}, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	f := p.found
+	f.WorkerID, f.WorkerName = p.worker, "worker"
+	return f, nil
+}
+
+func (p *apiProber) Diff(_ context.Context, _ domain.UserID, t restic.Target, from, to, path string) (restic.Comparison, error) {
+	if err := p.scan(t, "diff "+from+" "+to+" "+path); err != nil {
+		return restic.Comparison{}, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	c := p.comparison
+	c.WorkerID, c.WorkerName = p.worker, "worker"
+	return c, nil
 }
 
 // apiDeletions is the restic.Deletions of the API tests: it picks the

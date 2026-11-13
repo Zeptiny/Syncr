@@ -72,6 +72,16 @@
 //	Snapshots(ctx, actor domain.Actor, id domain.ResticRepoID, o SnapshotsOptions) (SnapshotList, error)
 //	// Browse lists one directory of a snapshot (Prober.List).
 //	Browse(ctx, actor domain.Actor, id domain.ResticRepoID, snapshotID, path string, workerID domain.WorkerID) (Listing, error)
+//	// Measure, Find and Compare (Milestone 7, scan.go) measure a snapshot
+//	// folder, search the snapshots and compare two snapshots
+//	// (Prober.Measure, Find, Diff): owner-only like Browse, with their
+//	// input checked as field errors matching the worker's own checks, and
+//	// the worker's NOT_FOUND of a snapshot or folder mapped to the field
+//	// that named it. Results that stopped early (Complete false) are
+//	// successes.
+//	Measure(ctx, actor domain.Actor, id domain.ResticRepoID, snapshotID, path string, workerID domain.WorkerID) (Measurement, error)
+//	Find(ctx, actor domain.Actor, id domain.ResticRepoID, q FindQuery, workerID domain.WorkerID) (FindResult, error)
+//	Compare(ctx, actor domain.Actor, id domain.ResticRepoID, fromID, toID, path string, workerID domain.WorkerID) (Comparison, error)
 //
 // and, for other use cases, with plain values (app packages cannot import
 // each other):

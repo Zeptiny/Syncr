@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,45 +76,262 @@ func validIDs() map[string]string {
 	}
 }
 
-// TestScanCallsAreNotAvailableYet: every signed-in user gets past the
-// guard; a missing or malformed ID is InvalidArgument on its field (the
-// first field is required), anything else Unimplemented until the use
-// cases land.
-func TestScanCallsAreNotAvailableYet(t *testing.T) {
+// TestScanCallsCheckTheirIDs: every signed-in user gets past the guard to
+// the use cases; a missing or malformed ID is InvalidArgument on its field
+// (the first field is required) and reaches nothing; without worker_id the
+// controller chooses one.
+func TestScanCallsCheckTheirIDs(t *testing.T) {
 	t.Parallel()
 	f := &fakeProbes{}
-	e := newEnv(t, func(d *Deps) { d.Probes, d.Restic = f, stubRestic{} })
+	e := newResticEnv(t, func(d *Deps) { d.Probes = f })
+	repo := e.createRepo("Photos vault")
 	ctx := context.Background()
+	ids := func() map[string]string {
+		m := validIDs()
+		m["repository_id"] = repo.GetId()
+		return m
+	}
 	for _, c := range scanCalls() {
 		for _, a := range []domain.Actor{testUser, testAdmin} {
-			err := c.call(ctx, e, a, validIDs())
+			err := c.call(ctx, e.testEnv, a, ids())
 			wantPastGuard(t, err)
-			if codeOf(t, err) != connect.CodeUnimplemented {
-				t.Errorf("%s as %v: %v, want Unimplemented", c.name, a.Role, err)
+			// The admin's request reaches the use cases, which do not find
+			// testUser's repository for them.
+			if a == testUser && err != nil || a == testAdmin && err != nil && codeOf(t, err) != connect.CodeNotFound {
+				t.Errorf("%s as %v: %v", c.name, a.Role, err)
 			}
 		}
+		probes, scans := f.count(), e.prober.calls()
 		for _, field := range c.fields {
-			ids := validIDs()
-			ids[field] = "nope"
-			if err := c.call(ctx, e, testUser, ids); codeOf(t, err) != connect.CodeInvalidArgument || violation(err, field) == "" {
+			m := ids()
+			m[field] = "nope"
+			if err := c.call(ctx, e.testEnv, testUser, m); codeOf(t, err) != connect.CodeInvalidArgument || violation(err, field) == "" {
 				t.Errorf("%s with a malformed %s: %v, want InvalidArgument on it", c.name, field, err)
 			}
 		}
-		ids := validIDs()
-		ids[c.fields[0]] = ""
-		if err := c.call(ctx, e, testUser, ids); codeOf(t, err) != connect.CodeInvalidArgument || violation(err, c.fields[0]) == "" {
+		m := ids()
+		m[c.fields[0]] = ""
+		if err := c.call(ctx, e.testEnv, testUser, m); codeOf(t, err) != connect.CodeInvalidArgument || violation(err, c.fields[0]) != "is required" {
 			t.Errorf("%s without %s: %v, want InvalidArgument on it", c.name, c.fields[0], err)
 		}
-		ids = validIDs()
-		ids["worker_id"] = ""
+		if f.count() != probes || e.prober.calls() != scans {
+			t.Errorf("%s: a malformed request reached the use cases", c.name)
+		}
 		if c.fields[0] != "worker_id" {
-			if err := c.call(ctx, e, testUser, ids); codeOf(t, err) != connect.CodeUnimplemented {
+			m = ids()
+			m["worker_id"] = ""
+			if err := c.call(ctx, e.testEnv, testUser, m); err != nil {
 				t.Errorf("%s without a worker: %v, want the controller to choose one", c.name, err)
 			}
 		}
 	}
-	if f.count() != 0 {
-		t.Error("a call reached the probe service")
+}
+
+// TestProbeScans: the probe service's scans pass the caller and their
+// arguments on and return the use cases' answers, partial ones included;
+// their errors map like the other probes'.
+func TestProbeScans(t *testing.T) {
+	t.Parallel()
+	e, f := probeEnv(t)
+	ctx := context.Background()
+	cl := e.probesFor(testUser)
+	worker, remote := domain.NewWorkerID(), domain.NewRemoteID()
+
+	// Any signed-in user may measure a worker's folder.
+	for _, a := range []domain.Actor{testUser, testAdmin} {
+		resp, err := e.probesFor(a).MeasureWorkerFolder(ctx, connect.NewRequest(&syncrv1.MeasureWorkerFolderRequest{WorkerId: worker.String(), Path: "/srv/photos"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := resp.Msg.GetMeasurement()
+		if m.GetPath() != "/srv/photos" || m.GetComplete() || m.GetUnreadable() != 2 || len(m.GetChildren()) != 1 || resp.Msg.GetWorker().GetName() != "nas" ||
+			resp.Msg.GetElapsed().AsDuration() != 2*time.Second {
+			t.Errorf("MeasureWorkerFolder = %v", resp.Msg)
+		}
+		if c := f.last(t); c.actor != a || c.worker != worker || c.path != "/srv/photos" {
+			t.Errorf("call = %+v", c)
+		}
+	}
+	resp, err := cl.MeasureRemoteFolder(ctx, connect.NewRequest(&syncrv1.MeasureRemoteFolderRequest{RemoteId: remote.String(), Path: "photos", WorkerId: worker.String()}))
+	if err != nil || resp.Msg.GetMeasurement().GetPath() != "photos" || resp.Msg.GetMeasurement().GetComplete() {
+		t.Errorf("MeasureRemoteFolder = %v, %v", resp, err)
+	}
+	if c := f.last(t); c.remote != remote || c.worker != worker || c.path != "photos" {
+		t.Errorf("call = %+v", c)
+	}
+	usage, err := cl.GetRemoteUsage(ctx, connect.NewRequest(&syncrv1.GetRemoteUsageRequest{RemoteId: remote.String()}))
+	if err != nil || !usage.Msg.GetUsage().GetUnsupported() || usage.Msg.GetWorker().GetName() != "nas" {
+		t.Errorf("GetRemoteUsage = %v, %v", usage, err)
+	}
+	if c := f.last(t); c.remote != remote || !c.worker.IsZero() {
+		t.Errorf("call = %+v", c)
+	}
+
+	// Errors keep their class; people's messages pass.
+	measure := func() error {
+		_, err := cl.MeasureRemoteFolder(ctx, connect.NewRequest(&syncrv1.MeasureRemoteFolderRequest{RemoteId: remote.String()}))
+		return err
+	}
+	usageOf := func() error {
+		_, err := cl.GetRemoteUsage(ctx, connect.NewRequest(&syncrv1.GetRemoteUsageRequest{RemoteId: remote.String()}))
+		return err
+	}
+	for _, tt := range []struct {
+		name  string
+		err   error
+		code  connect.Code
+		field string
+		msg   string
+	}{
+		{"another user's remote", fmt.Errorf("remote %s: %w", remote, domain.ErrNotFound), connect.CodeNotFound, "", "remote or worker not found"},
+		{"busy", fmt.Errorf("measure the remote's folder: %w: worker \"nas\" is already measuring or searching; try again in a moment", domain.ErrUnavailable),
+			connect.CodeUnavailable, "", "is already measuring or searching; try again in a moment"},
+		{"a local remote without a worker", &domain.ValidationError{Fields: []domain.FieldError{{Field: "worker_id", Message: "choose the worker whose disk holds this remote"}}},
+			connect.CodeInvalidArgument, "worker_id", "choose the worker whose disk holds this remote"},
+		{"a missing folder", &domain.ValidationError{Fields: []domain.FieldError{{Field: "path", Message: "does not exist"}}},
+			connect.CodeInvalidArgument, "path", "does not exist"},
+		{"no worker", fmt.Errorf("%w: no worker can run this request; upgrade a worker", domain.ErrFailedPrecondition), connect.CodeFailedPrecondition, "", "upgrade a worker"},
+		{"rate limited", domain.ErrRateLimited, connect.CodeResourceExhausted, "", "too many attempts"},
+	} {
+		f.fail(tt.err)
+		for name, call := range map[string]func() error{"MeasureRemoteFolder": measure, "GetRemoteUsage": usageOf} {
+			err := call()
+			if codeOf(t, err) != tt.code || !strings.Contains(err.Error(), tt.msg) || tt.field != "" && violation(err, tt.field) != tt.msg {
+				t.Errorf("%s %s: %v, want %v with %q", name, tt.name, err, tt.code, tt.msg)
+			}
+		}
+	}
+}
+
+// TestResticScans: the restic scans go through the restic use cases, which
+// keep repositories owner-only and check the input, and return what the
+// worker found, partial results included.
+func TestResticScans(t *testing.T) {
+	t.Parallel()
+	e := newResticEnv(t)
+	ctx := t.Context()
+	c := e.resticFor(testUser)
+	r := e.createRepo("Photos vault")
+	full := strings.Repeat("ab", 32)
+	at := e.clock.Now().Add(-time.Hour)
+	e.prober.measurement = restic.Measurement{Path: "/srv", Bytes: 30, Files: 3, Dirs: 1, Complete: false, Elapsed: 40 * time.Second,
+		Children: []restic.ChildMeasurement{{Name: "photos", Bytes: 30, Files: 3}}}
+	e.prober.found = restic.FindResult{Truncated: true, Complete: false, SnapshotsSearched: 12,
+		Matches: []restic.Match{{SnapshotID: full, Entry: restic.Entry{Name: "a.jpg", Path: "/srv/a.jpg", Type: restic.EntryFile, Size: 5, ModTime: at}}}}
+	e.prober.comparison = restic.Comparison{Truncated: true, Complete: true,
+		Changes: []restic.Change{{Path: "/srv/new/", Modifier: restic.DiffAdded}, {Path: "/srv/link", Modifier: restic.DiffType}},
+		Stats:   &restic.DiffStats{AddedDirs: 1, AddedFiles: 2, AddedBytes: 300}}
+
+	m, err := c.MeasureSnapshotFolder(ctx, connect.NewRequest(&syncrv1.MeasureSnapshotFolderRequest{RepositoryId: r.GetId(), SnapshotId: "1a2b3c4d", Path: "/srv", WorkerId: e.worker.String()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mm := m.Msg.GetMeasurement(); mm.GetPath() != "/srv" || mm.GetBytes() != 30 || mm.GetComplete() || len(mm.GetChildren()) != 1 ||
+		m.Msg.GetWorker().GetId() != e.worker.String() || m.Msg.GetElapsed().AsDuration() != 40*time.Second {
+		t.Errorf("MeasureSnapshotFolder = %v", m.Msg)
+	}
+	if got := e.prober.lastScan(); got != "measure 1a2b3c4d /srv" || e.prober.lastTarget().WorkerID != e.worker || e.prober.lastTarget().Password != repoPassword {
+		t.Errorf("measure call = %q", got)
+	}
+	noPassword(t, "MeasureSnapshotFolderResponse", m.Msg)
+
+	f, err := c.FindInRepository(ctx, connect.NewRequest(&syncrv1.FindInRepositoryRequest{RepositoryId: r.GetId(), Patterns: []string{"*.jpg"}, IgnoreCase: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.Msg.GetTruncated() || f.Msg.GetComplete() || f.Msg.GetSnapshotsSearched() != 12 || len(f.Msg.GetMatches()) != 1 ||
+		f.Msg.GetMatches()[0].GetSnapshotId() != full || f.Msg.GetMatches()[0].GetEntry().GetPath() != "/srv/a.jpg" || f.Msg.GetWorker().GetName() != "worker" {
+		t.Errorf("FindInRepository = %v", f.Msg)
+	}
+	if got := e.prober.lastScan(); got != `find ["*.jpg"] true []` {
+		t.Errorf("find call = %s", got)
+	}
+
+	d, err := c.CompareSnapshots(ctx, connect.NewRequest(&syncrv1.CompareSnapshotsRequest{RepositoryId: r.GetId(), FromSnapshotId: "1a2b3c4d", ToSnapshotId: full}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Msg.GetTruncated() || !d.Msg.GetComplete() || d.Msg.GetStats().GetAddedBytes() != 300 || len(d.Msg.GetChanges()) != 2 ||
+		d.Msg.GetChanges()[1].GetModifier() != syncrv1.ResticDiffModifier_RESTIC_DIFF_MODIFIER_TYPE {
+		t.Errorf("CompareSnapshots = %v", d.Msg)
+	}
+	if got := e.prober.lastScan(); got != "diff 1a2b3c4d "+full+" /" {
+		t.Errorf("diff call = %s", got)
+	}
+
+	// Owner-only, admins included: nothing reaches a worker.
+	before := e.prober.calls()
+	for _, a := range []domain.Actor{testOther, testAdmin} {
+		oc := e.resticFor(a)
+		checks := map[string]error{}
+		_, checks["MeasureSnapshotFolder"] = oc.MeasureSnapshotFolder(ctx, connect.NewRequest(&syncrv1.MeasureSnapshotFolderRequest{RepositoryId: r.GetId(), SnapshotId: "1a2b3c4d"}))
+		_, checks["FindInRepository"] = oc.FindInRepository(ctx, connect.NewRequest(&syncrv1.FindInRepositoryRequest{RepositoryId: r.GetId(), Patterns: []string{"x"}}))
+		_, checks["CompareSnapshots"] = oc.CompareSnapshots(ctx, connect.NewRequest(&syncrv1.CompareSnapshotsRequest{RepositoryId: r.GetId(), FromSnapshotId: "1a2b3c4d", ToSnapshotId: "5e6f7a8b"}))
+		for what, err := range checks {
+			if codeOf(t, err) != connect.CodeNotFound {
+				t.Errorf("%s as %s = %v, want NotFound", what, a.Role, err)
+			}
+		}
+	}
+
+	// Validation errors name their field.
+	for _, tt := range []struct {
+		name  string
+		call  func() error
+		field string
+	}{
+		{"measure latest", func() error {
+			_, err := c.MeasureSnapshotFolder(ctx, connect.NewRequest(&syncrv1.MeasureSnapshotFolderRequest{RepositoryId: r.GetId(), SnapshotId: "latest"}))
+			return err
+		}, "snapshot_id"},
+		{"measure a relative path", func() error {
+			_, err := c.MeasureSnapshotFolder(ctx, connect.NewRequest(&syncrv1.MeasureSnapshotFolderRequest{RepositoryId: r.GetId(), SnapshotId: "1a2b3c4d", Path: "srv"}))
+			return err
+		}, "path"},
+		{"find nothing", func() error {
+			_, err := c.FindInRepository(ctx, connect.NewRequest(&syncrv1.FindInRepositoryRequest{RepositoryId: r.GetId()}))
+			return err
+		}, "patterns"},
+		{"find with a line break", func() error {
+			_, err := c.FindInRepository(ctx, connect.NewRequest(&syncrv1.FindInRepositoryRequest{RepositoryId: r.GetId(), Patterns: []string{"a\nb"}}))
+			return err
+		}, "patterns"},
+		{"find in a bad snapshot", func() error {
+			_, err := c.FindInRepository(ctx, connect.NewRequest(&syncrv1.FindInRepositoryRequest{RepositoryId: r.GetId(), Patterns: []string{"x"}, SnapshotIds: []string{"latest"}}))
+			return err
+		}, "snapshot_ids"},
+		{"compare latest", func() error {
+			_, err := c.CompareSnapshots(ctx, connect.NewRequest(&syncrv1.CompareSnapshotsRequest{RepositoryId: r.GetId(), FromSnapshotId: "latest", ToSnapshotId: "5e6f7a8b"}))
+			return err
+		}, "from_snapshot_id"},
+		{"compare with itself", func() error {
+			_, err := c.CompareSnapshots(ctx, connect.NewRequest(&syncrv1.CompareSnapshotsRequest{RepositoryId: r.GetId(), FromSnapshotId: "5e6f7a8b", ToSnapshotId: "5e6f7a8b"}))
+			return err
+		}, "to_snapshot_id"},
+		{"compare a folder with ..", func() error {
+			_, err := c.CompareSnapshots(ctx, connect.NewRequest(&syncrv1.CompareSnapshotsRequest{RepositoryId: r.GetId(), FromSnapshotId: "1a2b3c4d", ToSnapshotId: "5e6f7a8b", Path: "/a/../b"}))
+			return err
+		}, "path"},
+	} {
+		if err := tt.call(); codeOf(t, err) != connect.CodeInvalidArgument || violation(err, tt.field) == "" {
+			t.Errorf("%s: %v, want InvalidArgument on %s", tt.name, err, tt.field)
+		}
+	}
+	if e.prober.calls() != before {
+		t.Error("a refused request reached a worker")
+	}
+
+	// The worker's answers: busy, and a snapshot it does not have.
+	e.prober.fail(fmt.Errorf("compare the snapshots: %w: worker \"worker\" is already measuring or searching; try again in a moment", domain.ErrUnavailable))
+	_, err = c.CompareSnapshots(ctx, connect.NewRequest(&syncrv1.CompareSnapshotsRequest{RepositoryId: r.GetId(), FromSnapshotId: "1a2b3c4d", ToSnapshotId: "5e6f7a8b"}))
+	if codeOf(t, err) != connect.CodeUnavailable || !strings.Contains(err.Error(), "already measuring or searching") {
+		t.Errorf("busy: %v", err)
+	}
+	e.prober.fail(errors.Join(&domain.ValidationError{Fields: []domain.FieldError{{Field: "path", Message: "does not exist"}}},
+		&restic.ProbeError{Code: "not_found", Message: `restic ls: failed (exit code 1): no matching ID found for prefix "1a2b3c4d"`}))
+	_, err = c.MeasureSnapshotFolder(ctx, connect.NewRequest(&syncrv1.MeasureSnapshotFolderRequest{RepositoryId: r.GetId(), SnapshotId: "1a2b3c4d"}))
+	if codeOf(t, err) != connect.CodeInvalidArgument || violation(err, "snapshot_id") != "is not a snapshot of this repository" || violation(err, "path") != "" {
+		t.Errorf("unknown snapshot: %v", err)
 	}
 }
 

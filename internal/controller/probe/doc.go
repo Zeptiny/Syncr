@@ -11,12 +11,20 @@
 //     through a Transport (*dispatch.ProbeBroker) and maps the outcome. It
 //     implements restic.Prober for the repository use cases.
 //   - Service is the API-facing part (api.ProbeService): browsing a
-//     worker's folders, browsing a remote, testing a remote and fetching
+//     worker's folders, browsing a remote, testing a remote, fetching
 //     an SFTP server's host keys (GetSftpHostKeys, Milestone 6: the worker
 //     only runs SSH handshakes and sends no credentials; the controller
-//     validates the address first and checks the keys it gets back). It
-//     speaks the generated response types, because the API cannot import
-//     controller packages.
+//     validates the address first and checks the keys it gets back), and
+//     (Milestone 7) measuring a worker's or a remote's folder and asking a
+//     remote for its usage. It speaks the generated response types,
+//     because the API cannot import controller packages.
+//   - The heavy probes (Milestone 7, link.HeavyProbeOps, scan.go):
+//     measure_local and measure_remote (Service), restic_measure,
+//     restic_find and restic_diff (Runner, for the repository use cases).
+//     They run with Config.ScanTimeout; the worker stops them at a soft
+//     deadline before it and answers OK with what it found
+//     (complete=false), which is passed through as a success. A worker
+//     runs one at a time and refuses another as BUSY.
 //   - DataDeleter starts a repository's restic_delete_data job
 //     (restic.Deletions). It is here because it shares the worker pick and
 //     needs the job kinds and the job service, which app packages cannot
@@ -36,7 +44,9 @@
 //     takes an online worker that can run the operation, preferring the
 //     worker of the repository's newest succeeded job, then the least busy
 //     one.
-//  4. The probe is sent with a fresh ID and the configured timeout.
+//  4. The probe is sent with a fresh ID and the configured timeout:
+//     Config.Timeout for listings and usage, ResticTimeout for the other
+//     restic operations, ScanTimeout for the heavy ones.
 //  5. Every message that leaves this package is scrubbed of the spec's
 //     secrets (redact.Scrub), although workers scrub theirs too.
 //  6. Failures are mapped to domain errors (see failure).
@@ -52,6 +62,12 @@
 //	WRONG_PASSWORD                                    domain.ErrFailedPrecondition
 //	REPOSITORY_NOT_FOUND                              domain.ErrFailedPrecondition
 //	TIMEOUT, BUSY, cancelled, no answer, offline      domain.ErrUnavailable
+//	BUSY of a heavy probe                             domain.ErrUnavailable ("is already measuring
+//	                                                    or searching; try again in a moment")
+//	an OK answer without the operation's output       domain.ErrUnavailable
+//	a remote on a worker's disk without a worker      *domain.ValidationError on "worker_id"
+//	measuring a worker's folder without worker or
+//	  path                                            *domain.ValidationError on "worker_id", "path"
 //	an outdated worker, no usable worker              domain.ErrFailedPrecondition
 //	any other failure the worker reports              domain.ErrFailedPrecondition (scrubbed, clipped)
 //	host keys: unreachable, not SSH, no answer in
@@ -61,7 +77,12 @@
 //
 // A failure the worker reported also carries a *restic.ProbeError (code
 // and scrubbed message; errors.As), which the repository use cases turn
-// into field errors.
+// into field errors (a NOT_FOUND of a missing snapshot becomes an error on
+// the snapshot's field there, not on "path").
+//
+// GetRemoteUsage of a remote on a worker's disk validates the chosen
+// worker and answers usage.unsupported without a probe: a worker reports
+// no usage for its own folders.
 //
 // Allowed dependencies: the standard library, protobuf, the generated
 // code, internal/link, internal/domain, internal/jobkind, internal/backend

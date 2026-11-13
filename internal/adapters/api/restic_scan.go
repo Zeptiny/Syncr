@@ -2,13 +2,13 @@ package api
 
 import (
 	"context"
-	"errors"
 	"slices"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
 	"github.com/Zeptiny/Syncr/internal/app/restic"
 )
 
@@ -18,48 +18,61 @@ import (
 // (probeProcedure), and none accepts GET: they have no NO_SIDE_EFFECTS
 // option, so a cross-site link cannot start a scan.
 
-// notAvailable is the answer of a call this build does not implement yet.
-func notAvailable(what string) error {
-	return connect.NewError(connect.CodeUnimplemented, errors.New(what+" is not available yet"))
-}
-
 // MeasureSnapshotFolder measures a folder of a snapshot of one of the
-// caller's repositories. Not implemented yet: a well-formed request is
-// Unimplemented.
-func (h *resticHandler) MeasureSnapshotFolder(_ context.Context, req *connect.Request[syncrv1.MeasureSnapshotFolderRequest]) (*connect.Response[syncrv1.MeasureSnapshotFolderResponse], error) {
-	if _, err := parseRepositoryID("repository_id", req.Msg.GetRepositoryId()); err != nil {
+// caller's repositories.
+func (h *resticHandler) MeasureSnapshotFolder(ctx context.Context, req *connect.Request[syncrv1.MeasureSnapshotFolderRequest]) (*connect.Response[syncrv1.MeasureSnapshotFolderResponse], error) {
+	id, err := parseRepositoryID("repository_id", req.Msg.GetRepositoryId())
+	if err != nil {
 		return nil, err
 	}
-	if _, err := optionalWorkerID(req.Msg.GetWorkerId()); err != nil {
+	workerID, err := optionalWorkerID(req.Msg.GetWorkerId())
+	if err != nil {
 		return nil, err
 	}
-	return nil, notAvailable("measuring snapshot folders")
+	actor, _ := ActorFrom(ctx)
+	m, err := h.restic.Measure(ctx, actor, id, req.Msg.GetSnapshotId(), req.Msg.GetPath(), workerID)
+	if err != nil {
+		return nil, h.fail(ctx, syncrv1connect.ResticServiceMeasureSnapshotFolderProcedure, err)
+	}
+	return connect.NewResponse(measureSnapshotFolderResponse(m)), nil
 }
 
 // FindInRepository searches the snapshots of one of the caller's
-// repositories. Not implemented yet: a well-formed request is
-// Unimplemented.
-func (h *resticHandler) FindInRepository(_ context.Context, req *connect.Request[syncrv1.FindInRepositoryRequest]) (*connect.Response[syncrv1.FindInRepositoryResponse], error) {
-	if _, err := parseRepositoryID("repository_id", req.Msg.GetRepositoryId()); err != nil {
+// repositories.
+func (h *resticHandler) FindInRepository(ctx context.Context, req *connect.Request[syncrv1.FindInRepositoryRequest]) (*connect.Response[syncrv1.FindInRepositoryResponse], error) {
+	id, err := parseRepositoryID("repository_id", req.Msg.GetRepositoryId())
+	if err != nil {
 		return nil, err
 	}
-	if _, err := optionalWorkerID(req.Msg.GetWorkerId()); err != nil {
+	workerID, err := optionalWorkerID(req.Msg.GetWorkerId())
+	if err != nil {
 		return nil, err
 	}
-	return nil, notAvailable("searching snapshots")
+	actor, _ := ActorFrom(ctx)
+	r, err := h.restic.Find(ctx, actor, id, findQueryFromProto(req.Msg), workerID)
+	if err != nil {
+		return nil, h.fail(ctx, syncrv1connect.ResticServiceFindInRepositoryProcedure, err)
+	}
+	return connect.NewResponse(findResponse(r)), nil
 }
 
 // CompareSnapshots compares two snapshots of one of the caller's
-// repositories. Not implemented yet: a well-formed request is
-// Unimplemented.
-func (h *resticHandler) CompareSnapshots(_ context.Context, req *connect.Request[syncrv1.CompareSnapshotsRequest]) (*connect.Response[syncrv1.CompareSnapshotsResponse], error) {
-	if _, err := parseRepositoryID("repository_id", req.Msg.GetRepositoryId()); err != nil {
+// repositories.
+func (h *resticHandler) CompareSnapshots(ctx context.Context, req *connect.Request[syncrv1.CompareSnapshotsRequest]) (*connect.Response[syncrv1.CompareSnapshotsResponse], error) {
+	id, err := parseRepositoryID("repository_id", req.Msg.GetRepositoryId())
+	if err != nil {
 		return nil, err
 	}
-	if _, err := optionalWorkerID(req.Msg.GetWorkerId()); err != nil {
+	workerID, err := optionalWorkerID(req.Msg.GetWorkerId())
+	if err != nil {
 		return nil, err
 	}
-	return nil, notAvailable("comparing snapshots")
+	actor, _ := ActorFrom(ctx)
+	c, err := h.restic.Compare(ctx, actor, id, req.Msg.GetFromSnapshotId(), req.Msg.GetToSnapshotId(), req.Msg.GetPath(), workerID)
+	if err != nil {
+		return nil, h.fail(ctx, syncrv1connect.ResticServiceCompareSnapshotsProcedure, err)
+	}
+	return connect.NewResponse(compareResponse(c)), nil
 }
 
 // findQueryFromProto is the search a request asks for; the restic use

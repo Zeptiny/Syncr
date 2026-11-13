@@ -4,15 +4,34 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/platform/redact"
 )
 
 // Milestone 7: measuring a snapshot folder, searching a repository's
 // snapshots and comparing two snapshots. Each runs one heavy probe on a
 // worker (Prober.Measure, Find, Diff), which stops at the controller's
-// scan timeout and then answers with what it found (Complete false).
+// scan timeout and then answers with what it found (Complete false). The
+// input checks below match the worker's own, so a request the controller
+// accepts is never refused by an up-to-date worker.
+
+// Bounds of a search (Service.Find).
+const (
+	// MaxFindPatterns is the most patterns a search takes.
+	MaxFindPatterns = 10
+	// MaxFindPatternBytes bounds each pattern, in bytes.
+	MaxFindPatternBytes = 256
+	// MaxFindSnapshots is the most snapshots a search may name (a Windows
+	// worker's command line holds them).
+	MaxFindSnapshots = 100
+)
+
+// codeNotFound is the link error code of a missing snapshot or folder.
+const codeNotFound = "not_found"
 
 // Measurement is a measured snapshot folder (Prober.Measure,
 // Service.Measure).
@@ -142,34 +161,230 @@ type Comparison struct {
 // Measure measures a folder (a snapshot tree path; "" is the root "/") of a
 // snapshot (8 to 64 hex digits) of one of actor's repositories, through the
 // given worker or, if zero, one the prober picks: its totals and each
-// child folder's. Invalid input is a *domain.ValidationError on "snapshot_id" or
-// "path"; ErrRepositoryDeleting while the repository's data is being
-// deleted.
-//
-// Not implemented yet: it fails with errors.ErrUnsupported.
-func (s *Service) Measure(_ context.Context, _ domain.Actor, id domain.ResticRepoID, _, _ string, _ domain.WorkerID) (Measurement, error) {
-	return Measurement{}, fmt.Errorf("measure snapshot folder of repository %s: %w", id, errors.ErrUnsupported)
+// child folder's. A measurement that stopped at the scan timeout is
+// returned with Complete false. Invalid input is a
+// *domain.ValidationError on "snapshot_id" or "path", as is a snapshot or
+// a folder the repository does not have; ErrRepositoryDeleting while the
+// repository's data is being deleted.
+func (s *Service) Measure(ctx context.Context, actor domain.Actor, id domain.ResticRepoID, snapshotID, path string, workerID domain.WorkerID) (Measurement, error) {
+	const op = "measure snapshot folder"
+	if path == "" {
+		path = "/"
+	}
+	t, password, err := s.scanTarget(ctx, actor, id, workerID, func(v *domain.Validation) {
+		if !snapshotIDPattern.MatchString(snapshotID) {
+			v.Add("snapshot_id", "must be a snapshot ID of 8 to 64 hex digits")
+		}
+		if msg := checkTreePath(path); msg != "" {
+			v.Add("path", msg)
+		}
+	})
+	if err != nil {
+		return Measurement{}, fmt.Errorf("%s: %w", op, err)
+	}
+	m, err := s.prober.Measure(ctx, actor.UserID, t, snapshotID, path)
+	if err != nil {
+		return Measurement{}, fmt.Errorf("%s of repository %s: %w", op, id, scanError(err, password, func(pe *ProbeError) error {
+			if missingSnapshot(pe.Message) {
+				return fieldError("snapshot_id", notASnapshot)
+			}
+			return fieldError("path", "is not a folder in this snapshot")
+		}))
+	}
+	if m.Path == "" {
+		m.Path = path
+	}
+	return m, nil
 }
 
 // Find searches the snapshots of one of actor's repositories, through the
-// given worker or, if zero, one the prober picks. Invalid input is a
-// *domain.ValidationError on "patterns" (1 to 10, each 1 to 256 bytes of
-// valid UTF-8 without NUL or line breaks) or "snapshot_ids";
+// given worker or, if zero, one the prober picks: newest snapshot first, at
+// most the prober's bound of matches (Truncated beyond it). A search that
+// stopped at the scan timeout or at the bound is returned with Complete
+// false. Invalid input is a *domain.ValidationError on "patterns" (1 to
+// MaxFindPatterns, each 1 to MaxFindPatternBytes bytes of valid UTF-8
+// without NUL or line breaks) or "snapshot_ids" (at most MaxFindSnapshots
+// IDs of 8 to 64 hex digits, also when one is not in the repository);
 // ErrRepositoryDeleting while the repository's data is being deleted.
-//
-// Not implemented yet: it fails with errors.ErrUnsupported.
-func (s *Service) Find(_ context.Context, _ domain.Actor, id domain.ResticRepoID, _ FindQuery, _ domain.WorkerID) (FindResult, error) {
-	return FindResult{}, fmt.Errorf("search repository %s: %w", id, errors.ErrUnsupported)
+func (s *Service) Find(ctx context.Context, actor domain.Actor, id domain.ResticRepoID, q FindQuery, workerID domain.WorkerID) (FindResult, error) {
+	const op = "search repository"
+	t, password, err := s.scanTarget(ctx, actor, id, workerID, func(v *domain.Validation) {
+		if msg := checkPatterns(q.Patterns); msg != "" {
+			v.Add("patterns", msg)
+		}
+		if msg := checkSnapshotIDs(q.SnapshotIDs); msg != "" {
+			v.Add("snapshot_ids", msg)
+		}
+	})
+	if err != nil {
+		return FindResult{}, fmt.Errorf("%s: %w", op, err)
+	}
+	q = FindQuery{Patterns: append([]string(nil), q.Patterns...), IgnoreCase: q.IgnoreCase, SnapshotIDs: append([]string(nil), q.SnapshotIDs...)}
+	r, err := s.prober.Find(ctx, actor.UserID, t, q)
+	if err != nil {
+		return FindResult{}, fmt.Errorf("%s %s: %w", op, id, scanError(err, password, func(pe *ProbeError) error {
+			for _, sid := range q.SnapshotIDs {
+				if strings.Contains(pe.Message, sid) {
+					return fieldError("snapshot_ids", sid+" "+notASnapshot)
+				}
+			}
+			return fieldError("snapshot_ids", "name a snapshot that is not in this repository")
+		}))
+	}
+	return r, nil
 }
 
 // Compare compares two snapshots of one of actor's repositories, the older
 // (from) with the newer (to), the whole tree or one folder (a snapshot
 // tree path; "" or "/" is the whole tree), through the given worker or, if
-// zero, one the prober picks. Invalid input is a *domain.ValidationError on "from_snapshot_id",
-// "to_snapshot_id" (also when both name the same snapshot) or "path";
+// zero, one the prober picks: at most the prober's bound of changes
+// (Truncated beyond it; the statistics still cover everything). Without
+// the statistics (Stats nil, Complete false) it stopped at the scan
+// timeout. Invalid input is a *domain.ValidationError on
+// "from_snapshot_id" or "to_snapshot_id" (8 to 64 hex digits, not
+// "latest"; the same snapshot twice; a snapshot the repository does not
+// have) or "path" (also a folder that is not in both snapshots);
 // ErrRepositoryDeleting while the repository's data is being deleted.
-//
-// Not implemented yet: it fails with errors.ErrUnsupported.
-func (s *Service) Compare(_ context.Context, _ domain.Actor, id domain.ResticRepoID, _, _, _ string, _ domain.WorkerID) (Comparison, error) {
-	return Comparison{}, fmt.Errorf("compare snapshots of repository %s: %w", id, errors.ErrUnsupported)
+func (s *Service) Compare(ctx context.Context, actor domain.Actor, id domain.ResticRepoID, fromID, toID, path string, workerID domain.WorkerID) (Comparison, error) {
+	const op = "compare snapshots"
+	if path == "" {
+		path = "/"
+	}
+	t, password, err := s.scanTarget(ctx, actor, id, workerID, func(v *domain.Validation) {
+		fromOK, toOK := snapshotIDPattern.MatchString(fromID), snapshotIDPattern.MatchString(toID)
+		if !fromOK {
+			v.Add("from_snapshot_id", "must be a snapshot ID of 8 to 64 hex digits")
+		}
+		if !toOK {
+			v.Add("to_snapshot_id", "must be a snapshot ID of 8 to 64 hex digits")
+		}
+		// A short ID that starts another names the same snapshot (or
+		// restic refuses it as ambiguous).
+		if fromOK && toOK && (strings.HasPrefix(fromID, toID) || strings.HasPrefix(toID, fromID)) {
+			v.Add("to_snapshot_id", "must be another snapshot than from_snapshot_id")
+		}
+		if msg := checkTreePath(path); msg != "" {
+			v.Add("path", msg)
+		}
+	})
+	if err != nil {
+		return Comparison{}, fmt.Errorf("%s: %w", op, err)
+	}
+	c, err := s.prober.Diff(ctx, actor.UserID, t, fromID, toID, path)
+	if err != nil {
+		return Comparison{}, fmt.Errorf("%s of repository %s: %w", op, id, scanError(err, password, func(pe *ProbeError) error {
+			if !missingSnapshot(pe.Message) {
+				return fieldError("path", "is not a folder in both snapshots")
+			}
+			from, to := strings.Contains(pe.Message, fromID), strings.Contains(pe.Message, toID)
+			switch {
+			case from && !to:
+				return fieldError("from_snapshot_id", notASnapshot)
+			case to && !from:
+				return fieldError("to_snapshot_id", notASnapshot)
+			}
+			const either = "this or the other snapshot is not in this repository"
+			return &domain.ValidationError{Fields: []domain.FieldError{
+				{Field: "from_snapshot_id", Message: either}, {Field: "to_snapshot_id", Message: either},
+			}}
+		}))
+	}
+	return c, nil
+}
+
+// notASnapshot is the message of a snapshot ID the repository does not
+// have.
+const notASnapshot = "is not a snapshot of this repository"
+
+// scanTarget loads actor's repository id and checks the input with check
+// (after the repository is found, so another user's repository is
+// ErrNotFound whatever the input), then returns the probe target through
+// workerID and the repository's password.
+func (s *Service) scanTarget(ctx context.Context, actor domain.Actor, id domain.ResticRepoID, workerID domain.WorkerID, check func(*domain.Validation)) (Target, string, error) {
+	r, err := s.owned(ctx, actor.UserID, id)
+	if err != nil {
+		return Target{}, "", err
+	}
+	var v domain.Validation
+	check(&v)
+	if err := v.Err(); err != nil {
+		return Target{}, "", err
+	}
+	if r.Deleting {
+		return Target{}, "", fmt.Errorf("repository %s: %w", id, ErrRepositoryDeleting)
+	}
+	password, err := s.open(r)
+	if err != nil {
+		return Target{}, "", fmt.Errorf("repository %s: %w", id, err)
+	}
+	return Target{RepositoryID: id, RemoteID: r.RemoteID, Path: r.Path, Password: password, WorkerID: workerID}, password, nil
+}
+
+// scanError maps an error of a scan: the worker's NOT_FOUND through
+// notFound (a missing snapshot or folder, as a field error),
+// PATH_NOT_ALLOWED to "worker_id" (the repository is outside the chosen
+// worker's folders: the request's path is a snapshot path), anything else
+// unchanged; the password never appears in the result.
+func scanError(err error, password string, notFound func(*ProbeError) error) error {
+	var pe *ProbeError
+	if errors.As(err, &pe) {
+		clean := *pe
+		clean.Message = redact.Scrub(pe.Message, password)
+		switch clean.Code {
+		case codeNotFound:
+			return notFound(&clean)
+		case codePathNotAllowed:
+			return fieldError("worker_id", "the repository is outside the worker's allowed folders")
+		}
+	}
+	return scrubError(err, password)
+}
+
+// missingSnapshot reports whether a NOT_FOUND message is about a snapshot
+// (restic's "no matching ID found", the worker's "has no snapshot"), not a
+// folder.
+func missingSnapshot(msg string) bool {
+	return strings.Contains(msg, "no matching ID") || strings.Contains(msg, "no snapshot")
+}
+
+// checkPatterns returns what is wrong with a search's patterns ("" if
+// nothing).
+func checkPatterns(ps []string) string {
+	switch {
+	case len(ps) == 0:
+		return "must have at least one pattern"
+	case len(ps) > MaxFindPatterns:
+		return fmt.Sprintf("must have at most %d patterns", MaxFindPatterns)
+	}
+	for i, p := range ps {
+		which := "" // a single pattern is the field itself
+		if len(ps) > 1 {
+			which = fmt.Sprintf("pattern %d ", i+1)
+		}
+		switch {
+		case p == "":
+			return which + "must not be empty"
+		case len(p) > MaxFindPatternBytes:
+			return fmt.Sprintf("%smust be at most %d bytes", which, MaxFindPatternBytes)
+		case !utf8.ValidString(p):
+			return which + "must be valid UTF-8"
+		case strings.ContainsAny(p, "\x00\r\n"):
+			return which + "must not contain NUL characters or line breaks"
+		}
+	}
+	return ""
+}
+
+// checkSnapshotIDs returns what is wrong with a search's snapshot IDs (""
+// if nothing; none is every snapshot).
+func checkSnapshotIDs(ids []string) string {
+	if len(ids) > MaxFindSnapshots {
+		return fmt.Sprintf("must name at most %d snapshots", MaxFindSnapshots)
+	}
+	for _, id := range ids {
+		if !snapshotIDPattern.MatchString(id) {
+			return "must be snapshot IDs of 8 to 64 hex digits"
+		}
+	}
+	return ""
 }

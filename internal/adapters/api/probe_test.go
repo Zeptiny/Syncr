@@ -7,8 +7,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
@@ -98,19 +100,36 @@ func (f *fakeProbes) GetSftpHostKeys(_ context.Context, actor domain.Actor, host
 	}, nil
 }
 
-// MeasureWorkerFolder, MeasureRemoteFolder and RemoteUsage are not called
-// by the handlers yet.
-
-func (f *fakeProbes) MeasureWorkerFolder(context.Context, domain.Actor, domain.WorkerID, string) (*syncrv1.MeasureWorkerFolderResponse, error) {
-	return nil, errors.ErrUnsupported
+// scanMeasurement is the measurement fakeProbes answers with: partial,
+// as a walk that stopped at the scan timeout.
+func scanMeasurement(path string) *syncrv1.ProbeMeasurement {
+	return &syncrv1.ProbeMeasurement{
+		Path: path, Bytes: 300, Files: 3, Dirs: 1, Complete: false, Unreadable: 2,
+		Children: []*syncrv1.ProbeChildMeasurement{{Name: "2026", Bytes: 300, Files: 3}},
+	}
 }
 
-func (f *fakeProbes) MeasureRemoteFolder(context.Context, domain.Actor, domain.RemoteID, string, domain.WorkerID) (*syncrv1.MeasureRemoteFolderResponse, error) {
-	return nil, errors.ErrUnsupported
+func (f *fakeProbes) MeasureWorkerFolder(_ context.Context, actor domain.Actor, workerID domain.WorkerID, path string) (*syncrv1.MeasureWorkerFolderResponse, error) {
+	if err := f.record(probeCall{actor: actor, worker: workerID, path: path}); err != nil {
+		return nil, err
+	}
+	return &syncrv1.MeasureWorkerFolderResponse{
+		Measurement: scanMeasurement(path), Worker: &syncrv1.ProbeWorkerRef{Id: workerID.String(), Name: "nas"}, Elapsed: durationpb.New(2 * time.Second),
+	}, nil
 }
 
-func (f *fakeProbes) RemoteUsage(context.Context, domain.Actor, domain.RemoteID, domain.WorkerID) (*syncrv1.GetRemoteUsageResponse, error) {
-	return nil, errors.ErrUnsupported
+func (f *fakeProbes) MeasureRemoteFolder(_ context.Context, actor domain.Actor, remoteID domain.RemoteID, path string, workerID domain.WorkerID) (*syncrv1.MeasureRemoteFolderResponse, error) {
+	if err := f.record(probeCall{actor: actor, worker: workerID, remote: remoteID, path: path}); err != nil {
+		return nil, err
+	}
+	return &syncrv1.MeasureRemoteFolderResponse{Measurement: scanMeasurement(path), Worker: &syncrv1.ProbeWorkerRef{Name: "nas"}}, nil
+}
+
+func (f *fakeProbes) RemoteUsage(_ context.Context, actor domain.Actor, remoteID domain.RemoteID, workerID domain.WorkerID) (*syncrv1.GetRemoteUsageResponse, error) {
+	if err := f.record(probeCall{actor: actor, worker: workerID, remote: remoteID}); err != nil {
+		return nil, err
+	}
+	return &syncrv1.GetRemoteUsageResponse{Usage: &syncrv1.ProbeUsage{Unsupported: true}, Worker: &syncrv1.ProbeWorkerRef{Name: "nas"}}, nil
 }
 
 func (e *testEnv) probesFor(a domain.Actor) syncrv1connect.ProbeServiceClient {
