@@ -45,6 +45,14 @@ func TestRestoreArgs(t *testing.T) {
 		}, []string{"--include=/srv/docs", "--include=/srv/[[]x][*][?].txt", `--include=/srv/back[\\]slash`, "--exclude=*.log", "--verify", "--", "1a2b3c4d"}},
 		{"selected paths on windows", "windows", &syncrv1.ResticRestore{SnapshotId: "1a2b3c4d", Paths: []string{"/C/Users/ada/a*b"}},
 			[]string{"--include=/C/Users/ada/a[*]b", "--", "1a2b3c4d"}},
+		{"selected paths of a subfolder", "linux", &syncrv1.ResticRestore{
+			SnapshotId: "1a2b3c4d", Subfolder: "/srv/photos/", Paths: []string{"/srv/photos/2026/01", "/srv/photos/[x]*?.txt", `/srv/photos/back\slash`}, Overwrite: never,
+		}, []string{"--overwrite=never", "--include=/2026/01", "--include=/[[]x][*][?].txt", `--include=/back[\\]slash`, "--", "1a2b3c4d:/srv/photos"}},
+		{"selected paths of the root", "linux", &syncrv1.ResticRestore{SnapshotId: "1a2b3c4d", Subfolder: "/", Paths: []string{"/srv", "/home/ada"}},
+			[]string{"--include=/srv", "--include=/home/ada", "--", "1a2b3c4d:/"}},
+		{"selected paths of a windows subfolder", "windows", &syncrv1.ResticRestore{
+			SnapshotId: "1a2b3c4d", Subfolder: "/C/Users/ada", Paths: []string{"/C/Users/ada/Documents/a*b", "/C/Users/ada/notes.txt"},
+		}, []string{"--include=/Documents/a[*]b", "--include=/notes.txt", "--", "1a2b3c4d:/C/Users/ada"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,13 +74,15 @@ func TestRestoreArgs(t *testing.T) {
 func TestRestoreRejectsBadInput(t *testing.T) {
 	t.Parallel()
 	for name, op := range map[string]*syncrv1.ResticRestore{
-		"paths with a subfolder":  {SnapshotId: "latest", Subfolder: "/srv", Paths: []string{"/srv/a"}},
-		"relative subfolder":      {SnapshotId: "latest", Subfolder: "srv"},
-		"subfolder with ..":       {SnapshotId: "latest", Subfolder: "/srv/../etc"},
-		"relative path":           {SnapshotId: "latest", Paths: []string{"a"}},
-		"path with ..":            {SnapshotId: "latest", Paths: []string{"/a/../b"}},
-		"path with a line break":  {SnapshotId: "latest", Paths: []string{"/a\nb"}},
-		"unknown overwrite value": {SnapshotId: "latest", Overwrite: 99},
+		"path outside the subfolder":         {SnapshotId: "latest", Subfolder: "/srv", Paths: []string{"/srvx/a"}},
+		"path that is the subfolder":         {SnapshotId: "latest", Subfolder: "/srv", Paths: []string{"/srv/"}},
+		"path climbing out of the subfolder": {SnapshotId: "latest", Subfolder: "/srv", Paths: []string{"/srv/../etc"}},
+		"relative subfolder":                 {SnapshotId: "latest", Subfolder: "srv"},
+		"subfolder with ..":                  {SnapshotId: "latest", Subfolder: "/srv/../etc"},
+		"relative path":                      {SnapshotId: "latest", Paths: []string{"a"}},
+		"path with ..":                       {SnapshotId: "latest", Paths: []string{"/a/../b"}},
+		"path with a line break":             {SnapshotId: "latest", Paths: []string{"/a\nb"}},
+		"unknown overwrite value":            {SnapshotId: "latest", Overwrite: 99},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -1,10 +1,12 @@
 import { useQuery } from "@connectrpc/connect-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useLocation } from "@tanstack/react-router";
+import { useMemo } from "react";
 
 import { ErrorState } from "@/components/app/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { JobService } from "@/gen/syncr/v1/api_pb";
 import { ScheduleService } from "@/gen/syncr/v1/schedules_pb";
+import { draftSchedule, readJobDraft } from "@/features/files/job-drafts";
 import { emptySchedule, scheduleFromJob, scheduleState } from "@/features/schedules/model";
 import { ScheduleFormPage } from "@/features/schedules/schedule-form-page";
 import { validateNewScheduleSearch } from "@/features/schedules/search";
@@ -16,6 +18,8 @@ export const Route = createFileRoute("/_app/schedules/new")({
 
 function NewSchedule() {
   const { from, job, kind, repository } = Route.useSearch();
+  const state = useLocation().state.jobDraft;
+  const draft = useMemo(() => readJobDraft({ jobDraft: state }), [state]);
   const src = useQuery(
     ScheduleService.method.getSchedule,
     { scheduleId: from ?? "" },
@@ -54,7 +58,7 @@ function NewSchedule() {
     <ScheduleFormPage
       title={title}
       description={description}
-      initial={emptySchedule(undefined, kind, repository)}
+      initial={draft ? draftSchedule(draft) : emptySchedule(undefined, kind, repository)}
     />
   );
 }

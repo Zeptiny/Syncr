@@ -102,4 +102,39 @@ describe("snapshot browser", () => {
       paths: ["/srv/photos/README.txt", "/srv/photos/2026"],
     });
   });
+
+  it("restores a row from its menu, also back to its original location", async () => {
+    const { api, user } = open(0);
+    const grid = await screen.findByRole("grid", { name: "Contents of /srv/photos" });
+    await user.click(await within(grid).findByRole("button", { name: "Actions for README.txt" }));
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((m) => m.textContent),
+    ).toEqual(["Restore…", "Restore to original location…", "Copy path"]);
+    await user.click(within(menu).getByRole("menuitem", { name: "Restore to original location…" }));
+    const sheet = await screen.findByRole("dialog", { name: /^Restore from snapshot/ });
+    expect(within(sheet).getByText("1 item")).toBeInTheDocument();
+    expect(within(sheet).getByLabelText("Target folder")).toHaveValue("/srv/photos");
+    await user.click(within(sheet).getByRole("button", { name: "Start restore" }));
+    await waitFor(() => expect(api.of("RunJob")).toHaveLength(1));
+    expect(api.of<RunJobRequest>("RunJob")[0].definition?.operation?.value).toMatchObject({
+      subfolder: "/srv/photos",
+      paths: ["/srv/photos/README.txt"],
+      excludes: [],
+    });
+  });
+
+  it("restores a row as an item", async () => {
+    const { user } = open(0);
+    const grid = await screen.findByRole("grid", { name: "Contents of /srv/photos" });
+    await user.click(await within(grid).findByRole("button", { name: "Actions for 2026" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Restore…" }));
+    const sheet = await screen.findByRole("dialog", { name: /^Restore from snapshot/ });
+    expect(within(sheet).getByText("/srv/photos/2026")).toBeInTheDocument();
+    expect(
+      within(sheet).getByText(/Files keep their original path under the target/),
+    ).toBeInTheDocument();
+  });
 });

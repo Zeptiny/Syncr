@@ -27,14 +27,14 @@ import {
  * NewRepositoryPage creates a restic repository in a remote, or connects
  * to one that exists. A worker does the work, so it can take a moment.
  */
-export function NewRepositoryPage({ remote }: { remote?: string }) {
+export function NewRepositoryPage({ remote, path }: { remote?: string; path?: string }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const backends = useBackendMap();
   const remotes = useQuery(RemoteService.method.listRemotes, {});
   const workers = useQuery(WorkerAdminService.method.listWorkers, {});
   const create = useMutation(ResticService.method.createRepository);
-  const [s, setS] = useState<RepositoryFormState>(() => emptyRepositoryForm(remote));
+  const [s, setS] = useState<RepositoryFormState>(() => emptyRepositoryForm(remote, path));
   const [errors, setErrors] = useState<RepositoryFormErrors>({});
   const [formError, setFormError] = useState<string | undefined>();
   const remoteList = remotes.data?.remotes ?? [];

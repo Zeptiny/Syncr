@@ -23,7 +23,8 @@ import { csrfHeader } from "@/lib/transport";
 import * as hooksMock from "@/mock/hooks";
 import * as m5 from "@/mock/m5";
 import * as m6 from "@/mock/m6";
-import { registerM7 } from "@/mock/m7";
+import { applyTransfer, registerM7 } from "@/mock/m7";
+import { isTerminal } from "@/lib/status";
 
 import { signedIn } from "./app-api";
 import * as fx from "./fixtures";
@@ -44,6 +45,12 @@ export interface M5Api {
   jobs: Job[];
   /** repo returns a demo repository's state by ID, to adjust it before rendering. */
   repo: (id: string) => m5.RepoState;
+  /**
+   * finish ends a transfer the UI started (SUCCEEDED by default): its watch
+   * stream reports the end, and a copy or move that succeeded changes the
+   * demo folders the probes list.
+   */
+  finish: (jobId: string, status?: JobStatus) => void;
 }
 
 /**
@@ -89,6 +96,17 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
     const j = jobs.find((x) => x.id === id);
     if (!j) throw new ConnectError("job not found", Code.NotFound);
     return j;
+  };
+  // Transfers started here run until the test ends them (finish): their
+  // watch stream stays open until then.
+  const running = new Map<string, { done: Promise<void>; end: () => void }>();
+  const finish = (id: string, status = JobStatus.SUCCEEDED) => {
+    const j = job(id);
+    j.status = status;
+    j.finishedAt = timestampFromMs(now);
+    if (status === JobStatus.SUCCEEDED) applyTransfer(api.files, j.workerId, j.definition);
+    running.get(id)?.end();
+    running.delete(id);
   };
   const transport = createRouterTransport(
     (router) => {
@@ -159,12 +177,26 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
             definition: req.definition,
           });
           jobs.unshift(j);
+          if (req.definition?.operation.case === "rcloneTransfer") {
+            let end = () => {};
+            const done = new Promise<void>((resolve) => (end = resolve));
+            running.set(j.id, { done, end });
+          }
           return { job: j };
         },
-        // One message, then the stream ends: enough for a status badge.
-        async *watchJob(req) {
+        // One message, then the stream ends: enough for a status badge. A
+        // running transfer's stream waits for its end (finish) first.
+        async *watchJob(req, ctx) {
           await Promise.resolve();
-          yield { update: { case: "job" as const, value: job(req.jobId) } };
+          const j = job(req.jobId);
+          yield { update: { case: "job" as const, value: j } };
+          const r = running.get(j.id);
+          if (!r || isTerminal(j.status)) return;
+          await new Promise<void>((resolve) => {
+            void r.done.then(resolve);
+            ctx.signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          if (!ctx.signal.aborted) yield { update: { case: "job" as const, value: job(j.id) } };
         },
       });
       // Milestone 6: host keys and upgrade commands (after WorkerAdminService).
@@ -194,5 +226,6 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
     data,
     jobs,
     repo: (id) => data.repositories.find((r) => r.repo.id === id)!,
+    finish,
   };
 }

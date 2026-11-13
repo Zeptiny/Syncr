@@ -9,6 +9,6 @@ export const Route = createFileRoute("/_app/repositories/new")({
 });
 
 function NewRepository() {
-  const { remote } = Route.useSearch();
-  return <NewRepositoryPage remote={remote} />;
+  const { remote, path } = Route.useSearch();
+  return <NewRepositoryPage remote={remote} path={path} />;
 }

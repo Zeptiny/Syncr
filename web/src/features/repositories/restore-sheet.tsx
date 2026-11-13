@@ -35,10 +35,14 @@ import { Toggle } from "../jobs/transfer-editor";
 import {
   defaultRestoreTarget,
   emptyRestore,
+  hostWorker,
+  loadRestoreTarget,
+  originalParent,
   pickRestoreWorker,
   restoreSummary,
   shortId,
   toRestoreRequest,
+  saveRestoreTarget,
   validateRestore,
   whatLabel,
   type RestoreErrors,
@@ -52,7 +56,10 @@ export interface RestoreSheetProps {
   repository: Repository;
   /** snapshot is the one restored from; only its ID is required. */
   snapshot: Pick<ResticSnapshot, "id"> & Partial<Pick<ResticSnapshot, "host" | "time">>;
-  /** what is restored: chosen items, one folder's contents, or everything. */
+  /**
+   * what is restored: chosen items, one folder's contents, everything, or
+   * chosen items back to their original location.
+   */
   what: RestoreWhat;
   workers: Worker[];
   /** now dates the proposed target folder (tests pin it). */
@@ -62,7 +69,9 @@ export interface RestoreSheetProps {
 /**
  * RestoreSheet starts a restore: what, onto which worker, into which
  * folder, and what happens to files already there. Existing files are kept
- * unless the user chooses otherwise.
+ * unless the user chooses otherwise. The worker and folder last used for
+ * the repository are proposed first; a restore to the original location
+ * proposes the snapshot's own machine and the items' original folder.
  */
 export function RestoreSheet(props: RestoreSheetProps) {
   return (
@@ -97,8 +106,21 @@ function Body({
   const [rest, setRest] = useState(emptyRestore);
   const [errors, setErrors] = useState<RestoreErrors>({});
   const [browsing, setBrowsing] = useState(false);
+  const [remembered] = useState(() =>
+    what.mode === "original" ? undefined : loadRestoreTarget(repo.id),
+  );
+  const toOriginal = what.mode === "original";
+  const parent = toOriginal ? originalParent(what.paths) : undefined;
 
-  const proposal = proposedWorker ?? pickRestoreWorker(workers, snapshot.host ?? "")?.id;
+  const usable = (id: string | undefined) => {
+    const w = workers.find((x) => x.id === id);
+    return w && pickRestoreWorker([w], "") ? w : undefined;
+  };
+  const proposal =
+    proposedWorker ??
+    (toOriginal
+      ? hostWorker(workers, snapshot.host ?? "")?.id
+      : (usable(remembered?.workerId)?.id ?? pickRestoreWorker(workers, snapshot.host ?? "")?.id));
   if (proposedWorker === undefined && proposal !== undefined) setProposedWorker(proposal);
   const workerId = chosenWorker ?? proposal ?? "";
   const worker = workers.find((w) => w.id === workerId);
@@ -107,7 +129,11 @@ function Body({
   const defaultTarget =
     proposedTarget?.workerId === workerId
       ? proposedTarget.target
-      : defaultRestoreTarget(roots, snapshot.id, date, os);
+      : parent !== undefined
+        ? (treeToLocal(parent, os) ?? "")
+        : remembered?.workerId === workerId
+          ? remembered.target
+          : defaultRestoreTarget(roots, snapshot.id, date, os);
   if (worker && proposedTarget?.workerId !== workerId) {
     setProposedTarget({ workerId, target: defaultTarget });
   }
@@ -118,14 +144,19 @@ function Body({
   const showHooks = hasHooks(rest.hooks) || hooksEmptyText(rest.hooks, hooksTarget) === undefined;
   const original = what.mode === "folder" ? treeToLocal(what.folder, os) : undefined;
   const outside = target.trim() !== "" && roots.length > 0 && !isWithinRoots(target, roots, os);
+  // Back to the original location only where the worker may write.
+  const blocked = toOriginal && outside;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const local = validateRestore(what, state);
+    if (blocked && !local.target)
+      local.target = "The original location is outside the worker's allowed folders.";
     setErrors(local);
     if (Object.keys(local).length) return;
     try {
       const res = await run.mutateAsync(toRestoreRequest(repo.id, snapshot, what, state));
+      if (!toOriginal) saveRestoreTarget(repo.id, { workerId, target: target.trim() });
       await Promise.all([
         invalidateService(queryClient, JobService),
         invalidateService(queryClient, ResticService),
@@ -167,7 +198,7 @@ function Body({
           </h3>
           <div className="rounded-md border bg-muted/40 px-3 py-2.5 text-[13px]">
             <div className="font-medium first-letter:uppercase">{whatLabel(what)}</div>
-            {what.mode === "items" && (
+            {(what.mode === "items" || what.mode === "original") && (
               <ul className="mt-1.5 flex max-h-28 flex-col gap-0.5 overflow-y-auto font-mono text-[12px] text-muted-foreground">
                 {what.paths.map((p) => (
                   <li key={p} className="truncate" title={p}>
@@ -179,7 +210,9 @@ function Body({
             <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
               {what.mode === "folder"
                 ? "The folder's contents go directly into the target."
-                : "Files keep their original path under the target, such as target/srv/photos/…"}
+                : what.mode === "original"
+                  ? `Back where they were: the items go into the target as they were in ${parent ?? "/"}.`
+                  : "Files keep their original path under the target, such as target/srv/photos/…"}
             </p>
           </div>
           {errors.what && <p className="text-xs text-danger">{errors.what}</p>}
@@ -192,7 +225,9 @@ function Body({
           help={
             worker && !isOnline(worker)
               ? `${worker.name} is offline: the restore waits until it is back.`
-              : "The machine that receives the files."
+              : toOriginal && !proposal
+                ? `No online worker is ${snapshot.host || "the machine this snapshot was taken on"}: choose where the files go back.`
+                : "The machine that receives the files."
           }
         >
           <WorkerPicker
@@ -306,7 +341,7 @@ function Body({
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button type="submit" disabled={run.isPending || repo.deleting}>
+          <Button type="submit" disabled={run.isPending || repo.deleting || blocked}>
             {run.isPending ? "Queuing…" : "Start restore"}
           </Button>
         </div>

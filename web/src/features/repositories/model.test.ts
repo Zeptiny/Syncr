@@ -20,6 +20,7 @@ import {
   toDeleteRequest,
   toRestoreRequest,
   validateRestore,
+  originalParent,
 } from "./model";
 import {
   validateNewRepositorySearch,
@@ -255,11 +256,42 @@ describe("repository model", () => {
     });
     expect(validateRepositorySearch({ tab: "snapshots" })).toEqual({ tab: undefined });
     expect(validateRepositorySearch({ tab: "nope" })).toEqual({ tab: undefined });
-    expect(validateNewRepositorySearch({ remote: "r1", password: "x", path: "p" })).toEqual({
+    expect(validateNewRepositorySearch({ remote: "r1", password: "x", path: "/p/q/" })).toEqual({
       remote: "r1",
+      path: "p/q",
     });
+    // A path means nothing without its remote.
+    expect(validateNewRepositorySearch({ path: "p" })).toEqual({});
     expect(validateSnapshotSearch({ path: "/srv/photos" })).toEqual({ path: "/srv/photos" });
     expect(validateSnapshotSearch({ path: "/" })).toEqual({ path: undefined });
     expect(validateSnapshotSearch({ path: "relative" })).toEqual({ path: undefined });
+  });
+});
+
+describe("restore to the original location", () => {
+  it("restores the items' common parent", () => {
+    expect(originalParent(["/srv/photos/a.jpg"])).toBe("/srv/photos");
+    expect(originalParent(["/srv/photos/2026/01", "/srv/docs/x"])).toBe("/srv");
+    expect(originalParent(["/srv", "/home"])).toBe("/");
+  });
+});
+
+describe("restore request to the original location", () => {
+  it("sends the items of their common parent", () => {
+    const req = toRestoreRequest(
+      m5.ids.photosVault,
+      { id: "1a2b3c4d" },
+      { mode: "original", paths: ["/srv/photos/2026/01", "/srv/photos/README.txt"] },
+      { ...emptyRestore(), workerId: fx.ids.nas, target: "/srv/photos", excludes: ["*.tmp"] },
+    );
+    expect(req.definition?.operation).toMatchObject({
+      case: "resticRestore",
+      value: {
+        target: "/srv/photos",
+        subfolder: "/srv/photos",
+        paths: ["/srv/photos/2026/01", "/srv/photos/README.txt"],
+        excludes: ["*.tmp"],
+      },
+    });
   });
 });

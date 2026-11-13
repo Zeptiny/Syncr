@@ -39,7 +39,7 @@ import * as hooksMock from "./hooks";
 import { registerM4 } from "./m4";
 import * as m5mock from "./m5";
 import * as m6 from "./m6";
-import { registerM7 } from "./m7";
+import { applyTransfer, registerM7 } from "./m7";
 
 const passwords: Record<string, string> = { admin: "syncr-demo-admin", alice: "syncr-demo-alice" };
 const SESSION_KEY = "syncr.mock.session";
@@ -184,6 +184,7 @@ export function createMockTransport(): Transport {
       j.status = JobStatus.SUCCEEDED;
       j.finishedAt = timestampFromMs(Date.now());
       bisyncMock.finish(j);
+      applyTransfer(m5.files, j.workerId, j.definition);
       m5.settle();
     }
   };
@@ -231,6 +232,10 @@ export function createMockTransport(): Transport {
       m5.start(j);
       return j;
     }
+    // A preview or a copy of a few selected items (the file browser) is quick.
+    const small =
+      op?.case === "rcloneTransfer" &&
+      (op.value.options?.dryRun || (op.value.options?.filters.length ?? 0) > 0);
     setTimeout(() => {
       if (j.status !== JobStatus.QUEUED) return;
       j.status = JobStatus.RUNNING;
@@ -239,7 +244,7 @@ export function createMockTransport(): Transport {
       j.stats = {
         $typeName: "syncr.v1.JobStats",
         bytes: 0n,
-        totalBytes: BigInt((twoWay ? 1.2 : 6) * 1024 ** 3),
+        totalBytes: BigInt(Math.round((twoWay ? 1.2 : small ? 0.3 : 6) * 1024 ** 3)),
         files: 0n,
         totalFiles: 1500n,
         checks: 0n,

@@ -42,14 +42,14 @@ export type RepositoryFormErrors = Partial<
   >
 >;
 
-/** emptyRepositoryForm creates a new repository in the given remote. */
-export function emptyRepositoryForm(remoteId = ""): RepositoryFormState {
+/** emptyRepositoryForm creates a new repository in the given remote, at path if given. */
+export function emptyRepositoryForm(remoteId = "", path = ""): RepositoryFormState {
   return {
     mode: RepositoryCreateMode.INIT,
     name: "",
     description: "",
     remoteId,
-    path: "",
+    path,
     password: "",
     confirm: "",
     workerId: "",

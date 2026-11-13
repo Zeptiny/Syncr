@@ -19,14 +19,18 @@ export function validateRepositorySearch(s: Record<string, unknown>): Repository
   return { tab: repositoryTabs.find((t) => t === s.tab && t !== "snapshots") };
 }
 
-/** NewRepositorySearch preselects the remote of a new repository. */
+/** NewRepositorySearch preselects the remote of a new repository and its path in it. */
 export interface NewRepositorySearch {
   remote?: string;
+  /** path is a folder in the remote (only with remote). */
+  path?: string;
 }
 
 /** validateNewRepositorySearch parses /repositories/new's search params. */
 export function validateNewRepositorySearch(s: Record<string, unknown>): NewRepositorySearch {
-  return { remote: str(s.remote) };
+  const remote = str(s.remote);
+  const path = remote ? str(s.path)?.replace(/^\/+|\/+$/g, "") : undefined;
+  return { remote, path: path || undefined };
 }
 
 /** SnapshotSearch is the folder open in the snapshot browser and its listing worker. */

@@ -1,12 +1,13 @@
 import { useQuery } from "@connectrpc/connect-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ArchiveRestore, FolderDown, ListChecks } from "lucide-react";
+import { ArchiveRestore, FolderDown, ListChecks, Undo2 } from "lucide-react";
 import { useState } from "react";
 
 import { ErrorState } from "@/components/app/error-state";
 import { FileBrowser } from "@/components/app/file-browser/file-browser";
 import { copyPathItem } from "@/components/app/file-browser/helpers";
 import { uncovered } from "@/components/app/file-browser/selection";
+import type { RowMenuItem } from "@/components/app/file-table";
 import { useBrowserSelection } from "@/components/app/file-browser/use-selection";
 import { KeyValueList } from "@/components/app/key-value-list";
 import { PageHeader } from "@/components/app/page-header";
@@ -16,6 +17,7 @@ import { ShortId } from "@/components/app/short-id";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WorkerAdminService } from "@/gen/syncr/v1/api_pb";
+import type { ProbeEntry } from "@/gen/syncr/v1/link_pb";
 import { ResticService } from "@/gen/syncr/v1/restic_pb";
 import { sourceKey, type PathSource } from "@/hooks/use-path-listing";
 import { formatBytes, formatCount, formatDateTime, formatDuration, tsDate } from "@/lib/format";
@@ -31,8 +33,10 @@ import { SnapshotSwitcher } from "./snapshot-switcher";
 
 /**
  * SnapshotBrowserPage walks one snapshot's files, a folder at a time, and
- * starts restores: of ticked items, of the open folder, or of everything.
- * The switcher moves to another snapshot and keeps the open folder.
+ * starts restores: of ticked items, of the open folder, or of everything,
+ * and of items back to their original location (each row's menu and the
+ * selection). The switcher moves to another snapshot and keeps the open
+ * folder.
  */
 export function SnapshotBrowserPage({
   repositoryId,
@@ -83,6 +87,23 @@ export function SnapshotBrowserPage({
       ? (tsDate(sum.backupEnd)!.getTime() - tsDate(sum.backupStart)!.getTime()) / 1000
       : undefined;
   const locked = repo.deleting;
+  // Each row's menu: restore it, put it back where it was, copy its path.
+  // Step E adds "Show versions" before "Copy path".
+  const rowMenu = (e: ProbeEntry): RowMenuItem[] => [
+    {
+      label: "Restore…",
+      icon: ArchiveRestore,
+      disabled: locked,
+      onSelect: () => setRestore({ mode: "items", paths: [e.path] }),
+    },
+    {
+      label: "Restore to original location…",
+      icon: Undo2,
+      disabled: locked,
+      onSelect: () => setRestore({ mode: "original", paths: [e.path] }),
+    },
+    { ...copyPathItem(e), separated: true },
+  ];
 
   return (
     <>
@@ -188,7 +209,18 @@ export function SnapshotBrowserPage({
           onSelectionChange={setSelection}
           rootLabel="Snapshot"
           driveRoot={windows}
-          rowMenu={(e) => [copyPathItem(e)]}
+          rowMenu={rowMenu}
+          selectionActions={(ctx) => (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={locked}
+              onClick={() => setRestore({ mode: "original", paths: ctx.items.map((i) => i.path) })}
+            >
+              <Undo2 aria-hidden />
+              Restore to original location…
+            </Button>
+          )}
           workerChoice={{
             workers: workers.data?.workers ?? [],
             op: "restic_ls",
