@@ -129,6 +129,64 @@ describe("schedule form", { timeout: 30_000 }, () => {
     expect(screen.getByRole("combobox", { name: "Give up after" })).toHaveTextContent("6 hours");
   });
 
+  it("asks for the worker before the folders, then browses it and warns about paths outside its folders", async () => {
+    const user = userEvent.setup();
+    const { transport } = api();
+    renderApp("/schedules/new", transport);
+    const from = await screen.findByRole("group", { name: "From" });
+    const path = within(from).getByLabelText("Path");
+    const browse = () => within(from).queryByRole("button", { name: /^Browse/ });
+    // The worker comes first, so its folders can be browsed while filling the paths.
+    expect(
+      screen.getByRole("radio", { name: "A specific worker" }).compareDocumentPosition(path) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(browse()).toBeNull();
+    expect(path).toHaveAccessibleDescription(
+      "An absolute path on the worker, inside its allowed folders. Choose a worker to browse.",
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Worker" }));
+    await user.click(await screen.findByRole("option", { name: /office-pc/ }));
+    expect(browse()).toBeNull();
+    expect(path).toHaveAccessibleDescription(
+      "office-pc is offline, so its folders cannot be browsed now. Type the path.",
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Worker" }));
+    await user.click(await screen.findByRole("option", { name: /nas-01/ }));
+    expect(browse()).toBeInTheDocument();
+    await user.type(path, "/srv/data");
+    expect(path).toHaveAccessibleDescription(
+      "An absolute path on nas-01, inside its allowed folders. This path is outside nas-01's allowed folders (/srv/photos, /mnt/media, /srv/backup). The worker refuses it, so the job fails.",
+    );
+    await user.clear(path);
+    await user.type(path, "/srv/photos/2024");
+    expect(within(from).queryByText(/outside nas-01's allowed folders/)).toBeNull();
+  });
+
+  it("browses a label's first online worker for a transfer", async () => {
+    const user = userEvent.setup();
+    const { transport } = api();
+    renderApp("/schedules/new", transport);
+    const from = await screen.findByRole("group", { name: "From" });
+    await user.click(screen.getByRole("radio", { name: "Any worker with a label" }));
+    await user.type(screen.getByLabelText("Label"), "nas");
+    expect(within(from).getByRole("button", { name: /^Browse/ })).toBeInTheDocument();
+    expect(
+      within(from).getByText(
+        "Absolute paths on the workers labelled nas. Browse shows nas-01, the first one online.",
+      ),
+    ).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Label"));
+    await user.type(screen.getByLabelText("Label"), "desktop");
+    expect(within(from).queryByRole("button", { name: /^Browse/ })).toBeNull();
+    expect(within(from).getByText(/^No worker labelled desktop is online/)).toBeInTheDocument();
+    await user.type(within(from).getByLabelText("Path"), "/srv/data");
+    expect(within(from).getByText(/outside office-pc's allowed folders/)).toBeInTheDocument();
+  });
+
   it("shows server errors on their fields", async () => {
     const user = userEvent.setup();
     const { transport } = api({

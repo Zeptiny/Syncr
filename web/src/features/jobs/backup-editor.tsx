@@ -1,10 +1,12 @@
 import { ChipsInput } from "@/components/app/chips-input";
 import { FieldShell } from "@/components/app/descriptor-form";
+import { FieldWarning } from "@/components/app/field-warning";
 import { Panel } from "@/components/app/panel";
 import { PathsEditor } from "@/components/app/paths-editor";
 import { Input } from "@/components/ui/input";
 import { WorkerStatus, type Worker } from "@/gen/syncr/v1/api_pb";
 import type { Repository } from "@/gen/syncr/v1/restic_pb";
+import { allowedFoldersHelp, allowedFoldersWarning } from "@/lib/allowed-folders";
 import { isWindowsOS } from "@/lib/restic-paths";
 
 import type { DefinitionErrors } from "./definition";
@@ -25,8 +27,13 @@ export interface BackupEditorProps {
    * folders, and its OS decides whether VSS is offered.
    */
   worker?: Worker;
-  /** workerNote says which worker Browse uses when it is not the only choice. */
+  /** workerNote replaces the help under the paths (see allowedFoldersHelp). */
   workerNote?: string;
+  /**
+   * runsOn are the workers the job may run on that have reported in: a
+   * warning names paths outside their allowed folders. Default: worker.
+   */
+  runsOn?: Worker[];
   idPrefix: string;
 }
 
@@ -38,11 +45,13 @@ export function BackupEditor({
   repositories,
   worker,
   workerNote,
+  runsOn,
   idPrefix,
 }: BackupEditorProps) {
   const set = <K extends keyof BackupState>(k: K, v: BackupState[K]) => onChange({ ...s, [k]: v });
   const windows = isWindowsOS(worker?.info?.os);
   const online = worker?.status === WorkerStatus.ONLINE;
+  const warning = allowedFoldersWarning(s.paths, runsOn ?? (worker?.info ? [worker] : []));
   return (
     <>
       <Panel title="What to back up">
@@ -58,13 +67,7 @@ export function BackupEditor({
             id={`${idPrefix}-paths`}
             label="Folders and files"
             error={errors.paths}
-            help={
-              worker
-                ? online
-                  ? (workerNote ?? `Absolute paths on ${worker.name}, inside its allowed folders.`)
-                  : `${worker.name} is offline, so its folders cannot be browsed now. Type the paths.`
-                : "Absolute paths on the worker, inside its allowed folders. Choose a worker to browse."
-            }
+            help={allowedFoldersHelp(worker, workerNote, true)}
           >
             <PathsEditor
               id={`${idPrefix}-paths`}
@@ -83,6 +86,7 @@ export function BackupEditor({
                   : undefined
               }
             />
+            {warning && <FieldWarning>{warning}</FieldWarning>}
           </FieldShell>
         </div>
       </Panel>
