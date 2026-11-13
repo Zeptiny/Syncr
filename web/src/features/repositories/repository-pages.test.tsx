@@ -257,7 +257,7 @@ describe("repository pages, on the mock", { timeout: 30_000 }, () => {
       `/repositories/${m5.ids.photosVault}/snapshots/${snap.id}?path=%2Fsrv%2Fphotos`,
       api.transport,
     );
-    const table = await screen.findByRole("table", { name: "Contents of /srv/photos" });
+    const table = await screen.findByRole("grid", { name: "Contents of /srv/photos" });
     await within(table).findByRole("button", { name: "2026" });
     // Folders first, then files.
     const names = within(table)

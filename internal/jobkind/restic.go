@@ -2,6 +2,7 @@ package jobkind
 
 import (
 	"fmt"
+	pathpkg "path"
 	"regexp"
 	"strings"
 	"unicode"
@@ -747,12 +748,13 @@ const restoreField = "definition.restic_restore"
 type ResticRestore struct{ resticBase }
 
 var (
-	_ Kind          = ResticRestore{}
-	_ Keyed         = ResticRestore{}
-	_ Requirer      = ResticRestore{}
-	_ Labeled       = ResticRestore{}
-	_ Unschedulable = ResticRestore{}
-	_ Summarizer    = ResticRestore{}
+	_ Kind               = ResticRestore{}
+	_ Keyed              = ResticRestore{}
+	_ Requirer           = ResticRestore{}
+	_ DefinitionRequirer = ResticRestore{}
+	_ Labeled            = ResticRestore{}
+	_ Unschedulable      = ResticRestore{}
+	_ Summarizer         = ResticRestore{}
 )
 
 // Name implements Kind.
@@ -777,10 +779,32 @@ var snapshotIDPattern = regexp.MustCompile(`^[0-9a-f]{8,64}$`)
 // hex digits.
 func ValidSnapshotID(s string) bool { return snapshotIDPattern.MatchString(s) }
 
+// DefinitionFeatures implements DefinitionRequirer: selected items of a
+// subfolder (subfolder together with paths) need a worker that restores
+// them relative to it (Milestone 7); an older one refuses the combination.
+func (ResticRestore) DefinitionFeatures(def *syncrv1.JobDefinition) []string {
+	op := def.GetResticRestore()
+	if op.GetSubfolder() != "" && len(op.GetPaths()) > 0 {
+		return []string{link.FeatureResticRestoreSubfolderPaths}
+	}
+	return nil
+}
+
+// insideTree reports whether the snapshot tree path p lies strictly inside
+// the folder sub (both absolute, with forward slashes).
+func insideTree(p, sub string) bool {
+	p, sub = pathpkg.Clean(p), pathpkg.Clean(sub)
+	if sub == "/" {
+		return p != "/"
+	}
+	return strings.HasPrefix(p, sub+"/")
+}
+
 // Check implements Kind: the repository ID, the snapshot ("latest" or 8
 // to 64 hex digits), the absolute local target, at most 1000 selected
-// tree paths or one subfolder (not both), the exclude patterns and the
-// overwrite behavior.
+// tree paths, one subfolder, or selected paths inside one subfolder (they
+// then land in the target as they were in the subfolder), the exclude
+// patterns and the overwrite behavior.
 func (ResticRestore) Check(def *syncrv1.JobDefinition) (Refs, error) {
 	op := def.GetResticRestore()
 	var v domain.Validation
@@ -796,12 +820,14 @@ func (ResticRestore) Check(def *syncrv1.JobDefinition) (Refs, error) {
 	switch paths := op.GetPaths(); {
 	case len(paths) > maxRestorePaths:
 		v.Add(restoreField+".paths", fmt.Sprintf("must have at most %d items", maxRestorePaths))
-	case len(paths) > 0 && op.GetSubfolder() != "":
-		v.Add(restoreField+".paths", "choose either selected items or one folder")
 	default:
+		sub := op.GetSubfolder()
+		subOK := sub == "" || treePathProblem(sub) == ""
 		for i, p := range paths {
 			if msg := treePathProblem(p); msg != "" {
 				v.Add(fmt.Sprintf("%s.paths[%d]", restoreField, i), msg)
+			} else if sub != "" && subOK && !insideTree(p, sub) {
+				v.Add(fmt.Sprintf("%s.paths[%d]", restoreField, i), "must be inside the subfolder")
 			}
 		}
 	}
@@ -858,11 +884,12 @@ func (k ResticRestore) Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.
 	return &syncrv1.JobSpec{Remotes: defs, Operation: &syncrv1.JobSpec_ResticRestore{ResticRestore: op}}, nil
 }
 
-// Describe implements Kind, in three forms: "Restore 1a2b3c4d from Photos
+// Describe implements Kind, in four forms: "Restore 1a2b3c4d from Photos
 // vault → /srv/restore" (the whole snapshot), "Restore 3 items from Photos
-// vault @ 1a2b3c4d → /srv/restore" (selected items) and "Restore
-// /srv/photos/2025 from Photos vault @ 1a2b3c4d → /srv/restore" (one
-// folder, or one selected item).
+// vault @ 1a2b3c4d → /srv/restore" (selected items), "Restore 2 items of
+// /srv/photos from Photos vault @ 1a2b3c4d → /srv/photos" (selected items
+// of a subfolder) and "Restore /srv/photos/2025 from Photos vault @
+// 1a2b3c4d → /srv/restore" (one folder, or one selected item).
 func (ResticRestore) Describe(def *syncrv1.JobDefinition, names Names) string {
 	op := def.GetResticRestore()
 	repo := repositoryName(op.GetRepositoryId(), names)
@@ -873,7 +900,9 @@ func (ResticRestore) Describe(def *syncrv1.JobDefinition, names Names) string {
 	target := op.GetTarget()
 	what := ""
 	switch paths := op.GetPaths(); {
-	case op.GetSubfolder() != "":
+	case op.GetSubfolder() != "" && len(paths) > 1:
+		what = fmt.Sprintf("%d items of %s", len(paths), op.GetSubfolder())
+	case op.GetSubfolder() != "" && len(paths) == 0:
 		what = op.GetSubfolder()
 	case len(paths) == 1:
 		what = paths[0]

@@ -2999,14 +2999,18 @@ type ResticRestoreDefinition struct {
 	// Absolute local target folder inside the worker's local_roots.
 	Target string `protobuf:"bytes,3,opt,name=target,proto3" json:"target,omitempty"`
 	// Literal snapshot tree paths to restore (selected items), at most 1000;
-	// each starts with "/". Cannot be combined with subfolder.
+	// each starts with "/". With subfolder, each path must lie strictly inside
+	// it, and the items land in target as they were in the subfolder (the
+	// subfolder's own path is left out); that needs a worker with the link
+	// feature restic.restore_subfolder_paths, and an older one fails the job
+	// with WORKER_OUTDATED.
 	Paths []string `protobuf:"bytes,4,rep,name=paths,proto3" json:"paths,omitempty"`
 	// --exclude patterns.
 	Excludes []string `protobuf:"bytes,5,rep,name=excludes,proto3" json:"excludes,omitempty"`
 	// --verify.
 	Verify bool `protobuf:"varint,6,opt,name=verify,proto3" json:"verify,omitempty"`
 	// Restore the contents of this snapshot folder (a tree path) directly
-	// into target.
+	// into target; with paths, only those items of it.
 	Subfolder string `protobuf:"bytes,7,opt,name=subfolder,proto3" json:"subfolder,omitempty"`
 	// What happens to files that exist at the target. UNSPECIFIED means
 	// NEVER: a restore never replaces files unless asked to.

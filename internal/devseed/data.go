@@ -110,12 +110,14 @@ func demoWorkers() []demoWorker {
 				Version: "2.0.0-dev", OS: "linux", Arch: "amd64", Hostname: "attic-nas", Tools: tools(),
 				MaxConcurrentJobs: 1, LocalRoots: []string{"/volume1"},
 				// Built before Milestone 6: no time limits, no hooks, no
-				// host-key probe, no two-way sync.
+				// host-key probe, no two-way sync, and none of Milestone
+				// 7's scans or restores of items of a subfolder.
 				JobKinds: slices.DeleteFunc(link.Kinds(), func(k string) bool { return k == "rclone_bisync" }),
 				Features: slices.DeleteFunc(slices.Clone(features), func(f string) bool {
-					return f == link.FeatureJobTimeLimit || f == link.FeatureJobHooks || f == link.FeatureRcloneBisync
+					return f == link.FeatureJobTimeLimit || f == link.FeatureJobHooks || f == link.FeatureRcloneBisync ||
+						f == link.FeatureResticRestoreSubfolderPaths
 				}),
-				ProbeOps: slices.DeleteFunc(slices.Clone(ops), func(op string) bool { return op == "sftp_host_keys" }),
+				ProbeOps: slices.DeleteFunc(slices.Clone(ops), func(op string) bool { return op == "sftp_host_keys" || link.IsHeavyProbeOp(op) }),
 			},
 			labels: []string{"archive"},
 		},

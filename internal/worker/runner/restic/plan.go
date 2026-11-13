@@ -262,13 +262,20 @@ func planRestore(e *engine, spec *syncrv1.JobSpec) (command, error) {
 		if err := checkTreePath("subfolder", sub); err != nil {
 			return command{}, err
 		}
-		if len(op.GetPaths()) > 0 {
-			return command{}, invalid("restore takes either paths or a subfolder, not both")
-		}
 	}
 	for _, tree := range op.GetPaths() {
 		if err := checkTreePath("path", tree); err != nil {
 			return command{}, err
+		}
+		if sub != "" {
+			// Selected items of a subfolder (link.FeatureResticRestoreSubfolderPaths):
+			// with "<id>:<subfolder>", restic matches includes against paths
+			// relative to the subfolder.
+			rel, ok := relativeTree(tree, sub)
+			if !ok {
+				return command{}, invalid("path %q is not inside the subfolder %q", tree, sub)
+			}
+			tree = rel
 		}
 		args = append(args, "--include="+includePattern(tree, e.goos))
 	}
@@ -308,6 +315,21 @@ func checkTreePath(what, tree string) error {
 		}
 	}
 	return nil
+}
+
+// relativeTree returns the snapshot tree path p relative to the folder sub,
+// as an absolute path ("/srv/photos/a" in "/srv" is "/photos/a"), and
+// whether p lies strictly inside sub.
+func relativeTree(p, sub string) (string, bool) {
+	p, sub = pathpkg.Clean(p), pathpkg.Clean(sub)
+	if sub == "/" {
+		return p, p != "/"
+	}
+	rest, ok := strings.CutPrefix(p, sub+"/")
+	if !ok || rest == "" {
+		return "", false
+	}
+	return "/" + rest, true
 }
 
 // includePattern turns a literal snapshot tree path into a restore

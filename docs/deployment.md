@@ -19,12 +19,20 @@ add `-f deploy/docker-compose.build.yml` to build the images from source.
 The controller serves the web UI and the API with plain HTTP on port 8080.
 Browsers should, and workers on other machines must, reach it over HTTPS:
 put a TLS-terminating reverse proxy in front of it (read/idle timeout above
-40 s, request bodies up to 16 MiB) and set `SYNCR_PUBLIC_URL` to its
+60 s, request bodies up to 16 MiB) and set `SYNCR_PUBLIC_URL` to its
 `https://` address, or let the controller serve TLS itself
 (`SYNCR_HTTP_TLS_CERT_FILE`, `SYNCR_HTTP_TLS_KEY_FILE`; see the comments in
 [`deploy/docker-compose.yml`](../deploy/docker-compose.yml)). Behind a proxy,
 also set `SYNCR_HTTP_CLIENT_IP_HEADER` and `SYNCR_HTTP_TRUSTED_PROXIES` so
 the login and enrollment rate limits see clients, not the proxy.
+
+The read timeout matters for more than the workers' long polls (25 s):
+folder sizes, snapshot searches and comparisons answer within
+`probe.scan_timeout` (45 s by default) plus a margin for the controller's
+own work. 60 s, nginx's default `proxy_read_timeout`, is enough for the
+defaults. If you raise `SYNCR_PROBE_SCAN_TIMEOUT`, raise the proxy's read
+timeout above it plus 15 s; otherwise the proxy cuts long scans off and the
+browser shows a gateway error instead of a partial result.
 
 ## Backups
 

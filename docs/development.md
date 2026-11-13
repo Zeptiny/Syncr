@@ -164,7 +164,8 @@ Design records: [architecture](adr/0001-architecture.md),
 [one controller per database](adr/0015-single-controller-guard.md),
 [releases and versioning](adr/0016-releases-versioning.md),
 [job hooks](adr/0017-job-hooks.md),
-[two-way sync](adr/0018-two-way-sync.md).
+[two-way sync](adr/0018-two-way-sync.md),
+[browser operations](adr/0019-browser-operations.md).
 
 ## Repository layout
 

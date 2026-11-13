@@ -11,6 +11,7 @@ import (
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
+	"github.com/Zeptiny/Syncr/internal/link"
 )
 
 const (
@@ -252,7 +253,12 @@ func TestResticCheckRejects(t *testing.T) {
 		{"relative item", restore(func(d *syncrv1.ResticRestoreDefinition) { d.Paths = []string{"/a", "b"} }), "definition.restic_restore.paths[1]"},
 		{"dot-dot item", restore(func(d *syncrv1.ResticRestoreDefinition) { d.Paths = []string{"/a/../b"} }), "definition.restic_restore.paths[0]"},
 		{"control character in an item", restore(func(d *syncrv1.ResticRestoreDefinition) { d.Paths = []string{"/a\nb"} }), "definition.restic_restore.paths[0]"},
-		{"items and a subfolder", restore(func(d *syncrv1.ResticRestoreDefinition) { d.Paths, d.Subfolder = []string{"/a"}, "/b" }), "definition.restic_restore.paths"},
+		{"item outside the subfolder", restore(func(d *syncrv1.ResticRestoreDefinition) { d.Paths, d.Subfolder = []string{"/b/x", "/a"}, "/b" }), "definition.restic_restore.paths[1]"},
+		{"item that is the subfolder", restore(func(d *syncrv1.ResticRestoreDefinition) { d.Paths, d.Subfolder = []string{"/b/"}, "/b" }), "definition.restic_restore.paths[0]"},
+		{"item beside the subfolder", restore(func(d *syncrv1.ResticRestoreDefinition) {
+			d.Paths, d.Subfolder = []string{"/srv/photos2/a"}, "/srv/photos"
+		}), "definition.restic_restore.paths[0]"},
+		{"item climbing out of the subfolder", restore(func(d *syncrv1.ResticRestoreDefinition) { d.Paths, d.Subfolder = []string{"/b/../a"}, "/b" }), "definition.restic_restore.paths[0]"},
 		{"relative subfolder", restore(func(d *syncrv1.ResticRestoreDefinition) { d.Subfolder = "srv" }), "definition.restic_restore.subfolder"},
 		{"dot-dot subfolder", restore(func(d *syncrv1.ResticRestoreDefinition) { d.Subfolder = "/srv/.." }), "definition.restic_restore.subfolder"},
 		{"bad exclude", restore(func(d *syncrv1.ResticRestoreDefinition) { d.Excludes = []string{""} }), "definition.restic_restore.excludes[0]"},
@@ -330,6 +336,12 @@ func TestResticBuild(t *testing.T) {
 		}), resolved(t, LCL, "restic/photos"), &syncrv1.JobSpec{Operation: &syncrv1.JobSpec_ResticRestore{ResticRestore: &syncrv1.ResticRestore{
 			Repository: onDisk, SnapshotId: testSnapshot, Target: "/srv/restore", Paths: []string{"/srv/a b", "/srv/[x]*?.txt"},
 			Excludes: []string{"*.tmp"}, Verify: true, Overwrite: syncrv1.ResticRestoreOverwrite_RESTIC_RESTORE_OVERWRITE_ALWAYS,
+		}}}},
+		{"restore items of a subfolder", restoreDef(func(d *syncrv1.ResticRestoreDefinition) {
+			d.Subfolder, d.Paths, d.Target = "/srv/photos", []string{"/srv/photos/2026/01", "/srv/photos/README.txt"}, "/srv/photos"
+		}), resolved(t, S3, "restic/photos"), &syncrv1.JobSpec{Remotes: s3Defs, Operation: &syncrv1.JobSpec_ResticRestore{ResticRestore: &syncrv1.ResticRestore{
+			Repository: onS3, SnapshotId: testSnapshot, Target: "/srv/photos", Subfolder: "/srv/photos",
+			Paths: []string{"/srv/photos/2026/01", "/srv/photos/README.txt"}, Overwrite: never,
 		}}}},
 		{"restore a subfolder", restoreDef(func(d *syncrv1.ResticRestoreDefinition) {
 			d.Subfolder, d.Target = "/C/Users/ada", `D:/Restore`
@@ -449,6 +461,12 @@ func TestResticDescribe(t *testing.T) {
 		{restoreDef(func(d *syncrv1.ResticRestoreDefinition) { d.Paths = []string{"/a", "/b", "/c"} }), "Restore 3 items from Photos vault @ 1a2b3c4d → /srv/restore"},
 		{restoreDef(func(d *syncrv1.ResticRestoreDefinition) { d.Paths = []string{"/srv/photos/a.jpg"} }), "Restore /srv/photos/a.jpg from Photos vault @ 1a2b3c4d → /srv/restore"},
 		{restoreDef(func(d *syncrv1.ResticRestoreDefinition) { d.Subfolder = "/srv/photos/2025" }), "Restore /srv/photos/2025 from Photos vault @ 1a2b3c4d → /srv/restore"},
+		{restoreDef(func(d *syncrv1.ResticRestoreDefinition) {
+			d.Subfolder, d.Paths, d.Target = "/srv/photos", []string{"/srv/photos/2026", "/srv/photos/README.txt"}, "/srv/photos"
+		}), "Restore 2 items of /srv/photos from Photos vault @ 1a2b3c4d → /srv/photos"},
+		{restoreDef(func(d *syncrv1.ResticRestoreDefinition) {
+			d.Subfolder, d.Paths, d.Target = "/srv/photos", []string{"/srv/photos/README.txt"}, "/srv/photos"
+		}), "Restore /srv/photos/README.txt from Photos vault @ 1a2b3c4d → /srv/photos"},
 		{deleteDataDef(), "Delete the data of Photos vault"},
 	}
 	for _, tt := range tests {
@@ -608,6 +626,34 @@ func TestPatternsAreCompiledOnce(t *testing.T) {
 		// it a few at most.
 		if allocs > 15 {
 			t.Errorf("%s allocates %.0f times per call: is a pattern compiled per call?", name, allocs)
+		}
+	}
+}
+
+// TestRestoreDefinitionFeatures: only selected items of a subfolder need
+// a worker that restores them relative to it; nothing else asks more than
+// the kind's own features.
+func TestRestoreDefinitionFeatures(t *testing.T) {
+	t.Parallel()
+	r := builtin(t)
+	items := restoreDef(func(d *syncrv1.ResticRestoreDefinition) {
+		d.Subfolder, d.Paths = "/", []string{"/srv", "/home/ada"}
+	})
+	if _, _, err := r.Check(items); err != nil {
+		t.Fatalf("Check(items of the root) = %v", err)
+	}
+	if got := r.DefinitionFeatures(items); !slices.Equal(got, []string{link.FeatureResticRestoreSubfolderPaths}) {
+		t.Errorf("DefinitionFeatures(items of a subfolder) = %q", got)
+	}
+	for name, def := range map[string]*syncrv1.JobDefinition{
+		"whole snapshot": restoreDef(),
+		"items":          restoreDef(func(d *syncrv1.ResticRestoreDefinition) { d.Paths = []string{"/srv/a"} }),
+		"subfolder":      restoreDef(func(d *syncrv1.ResticRestoreDefinition) { d.Subfolder = "/srv" }),
+		"backup":         backupDef(),
+		"no operation":   {},
+	} {
+		if got := r.DefinitionFeatures(def); got != nil {
+			t.Errorf("DefinitionFeatures(%s) = %q, want none", name, got)
 		}
 	}
 }

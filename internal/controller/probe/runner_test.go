@@ -15,6 +15,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/controller/probe"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/link"
 )
 
 func configResult(_ domain.WorkerID, p *syncrv1.RunProbe) (*syncrv1.ProbeResult, error) {
@@ -326,11 +327,13 @@ func TestNewRunnerValidates(t *testing.T) {
 		t.Error("missing dependencies accepted")
 	}
 	for name, cfg := range map[string]probe.Config{
-		"timeout too short":    {Timeout: time.Millisecond},
-		"timeout too long":     {ResticTimeout: 2 * time.Minute},
-		"too many entries":     {MaxEntries: probe.MaxListEntries + 1},
-		"negative snapshots":   {MaxSnapshots: -1},
-		"negative max entries": {MaxEntries: -5},
+		"timeout too short":      {Timeout: time.Millisecond},
+		"timeout too long":       {ResticTimeout: 2 * time.Minute},
+		"scan timeout too short": {ScanTimeout: 999 * time.Millisecond},
+		"scan timeout too long":  {ScanTimeout: link.MaxProbeTimeout + time.Second},
+		"too many entries":       {MaxEntries: probe.MaxListEntries + 1},
+		"negative snapshots":     {MaxSnapshots: -1},
+		"negative max entries":   {MaxEntries: -5},
 	} {
 		if _, err := probe.NewRunner(deps, cfg); err == nil {
 			t.Errorf("%s accepted", name)
@@ -339,7 +342,8 @@ func TestNewRunnerValidates(t *testing.T) {
 	if _, err := probe.NewRunner(deps, probe.Config{}); err != nil {
 		t.Errorf("defaults: %v", err)
 	}
-	if d := probe.DefaultConfig(); d.Timeout != 30*time.Second || d.ResticTimeout != 60*time.Second || d.MaxEntries != 2000 || d.MaxSnapshots != 5000 {
+	if d := probe.DefaultConfig(); d.Timeout != 30*time.Second || d.ResticTimeout != 60*time.Second || d.ScanTimeout != 45*time.Second ||
+		d.MaxEntries != 2000 || d.MaxSnapshots != 5000 {
 		t.Errorf("defaults = %+v", d)
 	}
 }

@@ -53,9 +53,12 @@ const localRemoteHint = "choose the worker whose disk holds this remote"
 // Config tunes a Runner. Zero fields take the DefaultConfig values.
 type Config struct {
 	// Timeout bounds listings and usage requests, ResticTimeout the restic
-	// operations; each between MinTimeout and link.MaxProbeTimeout.
+	// operations, ScanTimeout the heavy probes (link.HeavyProbeOps:
+	// measuring, searching, comparing); each between MinTimeout and
+	// link.MaxProbeTimeout.
 	Timeout       time.Duration
 	ResticTimeout time.Duration
+	ScanTimeout   time.Duration
 	// MaxEntries is the most entries a listing returns (at most
 	// MaxListEntries); MaxSnapshots the most (newest) snapshots.
 	MaxEntries   int
@@ -63,9 +66,9 @@ type Config struct {
 }
 
 // DefaultConfig returns the defaults: 30 s for listings, 60 s for restic,
-// 2000 entries and 5000 snapshots.
+// 45 s for scans, 2000 entries and 5000 snapshots.
 func DefaultConfig() Config {
-	return Config{Timeout: 30 * time.Second, ResticTimeout: 60 * time.Second, MaxEntries: 2000, MaxSnapshots: 5000}
+	return Config{Timeout: 30 * time.Second, ResticTimeout: 60 * time.Second, ScanTimeout: 45 * time.Second, MaxEntries: 2000, MaxSnapshots: 5000}
 }
 
 // Deps are a Runner's collaborators. All are required except Logger.
@@ -103,9 +106,10 @@ func NewRunner(d Deps, cfg Config) (*Runner, error) {
 	def := DefaultConfig()
 	cfg.Timeout = cmp.Or(cfg.Timeout, def.Timeout)
 	cfg.ResticTimeout = cmp.Or(cfg.ResticTimeout, def.ResticTimeout)
+	cfg.ScanTimeout = cmp.Or(cfg.ScanTimeout, def.ScanTimeout)
 	cfg.MaxEntries = cmp.Or(cfg.MaxEntries, def.MaxEntries)
 	cfg.MaxSnapshots = cmp.Or(cfg.MaxSnapshots, def.MaxSnapshots)
-	for _, t := range []time.Duration{cfg.Timeout, cfg.ResticTimeout} {
+	for _, t := range []time.Duration{cfg.Timeout, cfg.ResticTimeout, cfg.ScanTimeout} {
 		if t < MinTimeout || t > link.MaxProbeTimeout {
 			return nil, fmt.Errorf("probe: invalid config: timeout %v is not between %v and %v", t, MinTimeout, link.MaxProbeTimeout)
 		}
@@ -146,7 +150,7 @@ func (r *Runner) Verify(ctx context.Context, owner domain.UserID, t restic.Targe
 	if init {
 		spec.Op = &syncrv1.ProbeSpec_ResticInit{ResticInit: &syncrv1.ProbeResticInit{Repository: rs.repo}}
 	}
-	w, res, err := r.onRepository(ctx, owner, t, rs, op, spec)
+	w, res, err := r.onRepository(ctx, owner, t, rs, op, spec, r.cfg.ResticTimeout)
 	if err != nil {
 		return restic.VerifyResult{}, fmt.Errorf("%s: %w", what, err)
 	}
@@ -171,7 +175,7 @@ func (r *Runner) Snapshots(ctx context.Context, owner domain.UserID, t restic.Ta
 	spec := &syncrv1.ProbeSpec{Remotes: rs.defs, Op: &syncrv1.ProbeSpec_ResticSnapshots{ResticSnapshots: &syncrv1.ProbeResticSnapshots{
 		Repository: rs.repo, MaxSnapshots: int32(r.cfg.MaxSnapshots), //nolint:gosec // G115: bounded by the configuration
 	}}}
-	w, res, err := r.onRepository(ctx, owner, t, rs, opResticSnapshots, spec)
+	w, res, err := r.onRepository(ctx, owner, t, rs, opResticSnapshots, spec, r.cfg.ResticTimeout)
 	if err != nil {
 		return restic.SnapshotsResult{}, fmt.Errorf("%s: %w", what, err)
 	}
@@ -196,7 +200,7 @@ func (r *Runner) List(ctx context.Context, owner domain.UserID, t restic.Target,
 	spec := &syncrv1.ProbeSpec{Remotes: rs.defs, Op: &syncrv1.ProbeSpec_ResticLs{ResticLs: &syncrv1.ProbeResticLs{
 		Repository: rs.repo, SnapshotId: snapshotID, Path: path, MaxEntries: int32(r.cfg.MaxEntries), //nolint:gosec // G115: bounded by the configuration
 	}}}
-	w, res, err := r.onRepository(ctx, owner, t, rs, opResticLs, spec)
+	w, res, err := r.onRepository(ctx, owner, t, rs, opResticLs, spec, r.cfg.ResticTimeout)
 	if err != nil {
 		return restic.Listing{}, fmt.Errorf("%s: %w", what, err)
 	}
@@ -238,8 +242,9 @@ func (r *Runner) repository(ctx context.Context, owner domain.UserID, t restic.T
 	}, nil
 }
 
-// onRepository picks the worker of a repository probe and runs it.
-func (r *Runner) onRepository(ctx context.Context, owner domain.UserID, t restic.Target, rs resolvedRepository, op string, spec *syncrv1.ProbeSpec) (workers.Worker, *syncrv1.ProbeResult, error) {
+// onRepository picks the worker of a repository probe and runs it with
+// timeout.
+func (r *Runner) onRepository(ctx context.Context, owner domain.UserID, t restic.Target, rs resolvedRepository, op string, spec *syncrv1.ProbeSpec, timeout time.Duration) (workers.Worker, *syncrv1.ProbeResult, error) {
 	w, err := r.worker(ctx, selection{
 		owner: owner, op: op, workerID: t.WorkerID, repositoryID: t.RepositoryID,
 		explicit: cond(rs.local, "choose the worker whose disk holds this repository"),
@@ -247,7 +252,7 @@ func (r *Runner) onRepository(ctx context.Context, owner domain.UserID, t restic
 	if err != nil {
 		return workers.Worker{}, nil, err
 	}
-	res, err := r.exec(ctx, w, spec, r.cfg.ResticTimeout, rs.secrets)
+	res, err := r.exec(ctx, w, spec, timeout, rs.secrets)
 	return w, res, err
 }
 
@@ -378,7 +383,7 @@ func (r *Runner) exec(ctx context.Context, w workers.Worker, spec *syncrv1.Probe
 	if res.GetStatus() == syncrv1.ProbeStatus_PROBE_STATUS_OK {
 		return res, nil
 	}
-	f := failure(w.Name, res, secrets)
+	f := failure(w.Name, op, res, secrets)
 	r.log.InfoContext(ctx, "probe failed", "worker_id", w.ID.String(), "op", op, "probe_id", run.GetProbeId(),
 		"error_code", f.probe.Code, "error", f.probe.Message)
 	return nil, f
@@ -400,8 +405,12 @@ type workerError struct {
 func (e *workerError) Error() string   { return e.mapped.Error() }
 func (e *workerError) Unwrap() []error { return []error{e.mapped, e.probe} }
 
-// failure maps a result that is not OK (M5 design §6.7).
-func failure(workerName string, res *syncrv1.ProbeResult, secrets []string) *workerError {
+// failure maps a result of probe operation op that is not OK (M5 design
+// §6.7). A heavy operation (link.HeavyProbeOps) refused as BUSY because
+// the worker's heavy slot is taken (link.IsHeavyBusy) says why: a worker
+// runs one at a time. Refused because its normal slots are full, it says
+// the worker is busy, like any other probe.
+func failure(workerName, op string, res *syncrv1.ProbeResult, secrets []string) *workerError {
 	code := link.ErrorCodeName(res.GetError().GetCode())
 	msg := clip(redact.Scrub(res.GetError().GetMessage(), secrets...))
 	pe := &restic.ProbeError{Code: code, Message: msg}
@@ -420,6 +429,8 @@ func failure(workerName string, res *syncrv1.ProbeResult, secrets []string) *wor
 		mapped = fmt.Errorf("%w: no repository at the stored location", domain.ErrFailedPrecondition)
 	case res.GetError().GetCode() == syncrv1.JobErrorCode_JOB_ERROR_CODE_TIMEOUT:
 		mapped = fmt.Errorf("%w: worker %q did not finish in time", domain.ErrUnavailable, workerName)
+	case res.GetError().GetCode() == syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY && link.IsHeavyProbeOp(op) && link.IsHeavyBusy(res.GetError().GetMessage()):
+		mapped = fmt.Errorf("%w: worker %q is already measuring or searching; try again in a moment", domain.ErrUnavailable, workerName)
 	case res.GetError().GetCode() == syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY:
 		mapped = fmt.Errorf("%w: worker %q is busy with other requests; try again in a moment", domain.ErrUnavailable, workerName)
 	default:

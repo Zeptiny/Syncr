@@ -361,7 +361,7 @@ func newEnv(t *testing.T) *env {
 	e.runner, err = probe.NewRunner(probe.Deps{
 		Transport: e.transport, Workers: e.workers, Jobs: e.jobs, Remotes: e.remotes, Limiter: e.limiter,
 		IDs: &idgen.Sequential{}, Logger: slog.New(slog.NewTextHandler(&lockedWriter{w: e.logs}, &slog.HandlerOptions{Level: slog.LevelDebug})),
-	}, probe.Config{Timeout: 20 * time.Second, ResticTimeout: 45 * time.Second, MaxEntries: 100, MaxSnapshots: 200})
+	}, probe.Config{Timeout: 20 * time.Second, ResticTimeout: 45 * time.Second, ScanTimeout: 30 * time.Second, MaxEntries: 100, MaxSnapshots: 200})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -682,6 +682,367 @@ func (x *GetSftpHostKeysResponse) GetWorker() *ProbeWorkerRef {
 	return nil
 }
 
+// MeasureWorkerFolderRequest names the folder to measure.
+type MeasureWorkerFolderRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The worker (required).
+	WorkerId string `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	// Absolute local path inside the worker's local_roots (required).
+	Path          string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeasureWorkerFolderRequest) Reset() {
+	*x = MeasureWorkerFolderRequest{}
+	mi := &file_syncr_v1_probe_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeasureWorkerFolderRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeasureWorkerFolderRequest) ProtoMessage() {}
+
+func (x *MeasureWorkerFolderRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_probe_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeasureWorkerFolderRequest.ProtoReflect.Descriptor instead.
+func (*MeasureWorkerFolderRequest) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_probe_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *MeasureWorkerFolderRequest) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+func (x *MeasureWorkerFolderRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+// MeasureWorkerFolderResponse is the measured folder.
+type MeasureWorkerFolderResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The totals and each child folder's; measurement.path is the measured
+	// local path (normalized by the worker).
+	Measurement *ProbeMeasurement `protobuf:"bytes,1,opt,name=measurement,proto3" json:"measurement,omitempty"`
+	// The worker that measured it.
+	Worker *ProbeWorkerRef `protobuf:"bytes,2,opt,name=worker,proto3" json:"worker,omitempty"`
+	// How long the measurement ran on the worker.
+	Elapsed       *durationpb.Duration `protobuf:"bytes,3,opt,name=elapsed,proto3" json:"elapsed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeasureWorkerFolderResponse) Reset() {
+	*x = MeasureWorkerFolderResponse{}
+	mi := &file_syncr_v1_probe_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeasureWorkerFolderResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeasureWorkerFolderResponse) ProtoMessage() {}
+
+func (x *MeasureWorkerFolderResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_probe_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeasureWorkerFolderResponse.ProtoReflect.Descriptor instead.
+func (*MeasureWorkerFolderResponse) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_probe_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *MeasureWorkerFolderResponse) GetMeasurement() *ProbeMeasurement {
+	if x != nil {
+		return x.Measurement
+	}
+	return nil
+}
+
+func (x *MeasureWorkerFolderResponse) GetWorker() *ProbeWorkerRef {
+	if x != nil {
+		return x.Worker
+	}
+	return nil
+}
+
+func (x *MeasureWorkerFolderResponse) GetElapsed() *durationpb.Duration {
+	if x != nil {
+		return x.Elapsed
+	}
+	return nil
+}
+
+// MeasureRemoteFolderRequest names the folder to measure.
+type MeasureRemoteFolderRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One of the caller's remotes (required).
+	RemoteId string `protobuf:"bytes,1,opt,name=remote_id,json=remoteId,proto3" json:"remote_id,omitempty"`
+	// Path on the remote, relative to its root; empty is the root.
+	Path string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	// The worker to measure through; empty lets the controller choose
+	// (required for a remote on a worker's local filesystem).
+	WorkerId      string `protobuf:"bytes,3,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeasureRemoteFolderRequest) Reset() {
+	*x = MeasureRemoteFolderRequest{}
+	mi := &file_syncr_v1_probe_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeasureRemoteFolderRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeasureRemoteFolderRequest) ProtoMessage() {}
+
+func (x *MeasureRemoteFolderRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_probe_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeasureRemoteFolderRequest.ProtoReflect.Descriptor instead.
+func (*MeasureRemoteFolderRequest) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_probe_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *MeasureRemoteFolderRequest) GetRemoteId() string {
+	if x != nil {
+		return x.RemoteId
+	}
+	return ""
+}
+
+func (x *MeasureRemoteFolderRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *MeasureRemoteFolderRequest) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+// MeasureRemoteFolderResponse is the measured folder.
+type MeasureRemoteFolderResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The totals and each child folder's; measurement.path is the measured
+	// path relative to the remote's root.
+	Measurement *ProbeMeasurement `protobuf:"bytes,1,opt,name=measurement,proto3" json:"measurement,omitempty"`
+	// The worker that measured it.
+	Worker *ProbeWorkerRef `protobuf:"bytes,2,opt,name=worker,proto3" json:"worker,omitempty"`
+	// How long the measurement ran on the worker.
+	Elapsed       *durationpb.Duration `protobuf:"bytes,3,opt,name=elapsed,proto3" json:"elapsed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeasureRemoteFolderResponse) Reset() {
+	*x = MeasureRemoteFolderResponse{}
+	mi := &file_syncr_v1_probe_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeasureRemoteFolderResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeasureRemoteFolderResponse) ProtoMessage() {}
+
+func (x *MeasureRemoteFolderResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_probe_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeasureRemoteFolderResponse.ProtoReflect.Descriptor instead.
+func (*MeasureRemoteFolderResponse) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_probe_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *MeasureRemoteFolderResponse) GetMeasurement() *ProbeMeasurement {
+	if x != nil {
+		return x.Measurement
+	}
+	return nil
+}
+
+func (x *MeasureRemoteFolderResponse) GetWorker() *ProbeWorkerRef {
+	if x != nil {
+		return x.Worker
+	}
+	return nil
+}
+
+func (x *MeasureRemoteFolderResponse) GetElapsed() *durationpb.Duration {
+	if x != nil {
+		return x.Elapsed
+	}
+	return nil
+}
+
+// GetRemoteUsageRequest names the remote.
+type GetRemoteUsageRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One of the caller's remotes (required).
+	RemoteId string `protobuf:"bytes,1,opt,name=remote_id,json=remoteId,proto3" json:"remote_id,omitempty"`
+	// The worker to ask through; empty lets the controller choose.
+	WorkerId      string `protobuf:"bytes,2,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRemoteUsageRequest) Reset() {
+	*x = GetRemoteUsageRequest{}
+	mi := &file_syncr_v1_probe_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRemoteUsageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRemoteUsageRequest) ProtoMessage() {}
+
+func (x *GetRemoteUsageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_probe_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRemoteUsageRequest.ProtoReflect.Descriptor instead.
+func (*GetRemoteUsageRequest) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_probe_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GetRemoteUsageRequest) GetRemoteId() string {
+	if x != nil {
+		return x.RemoteId
+	}
+	return ""
+}
+
+func (x *GetRemoteUsageRequest) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+// GetRemoteUsageResponse is the remote's usage.
+type GetRemoteUsageResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Unset fields are unknown to the backend; unsupported says it cannot
+	// tell at all.
+	Usage *ProbeUsage `protobuf:"bytes,1,opt,name=usage,proto3" json:"usage,omitempty"`
+	// The worker that asked.
+	Worker        *ProbeWorkerRef `protobuf:"bytes,2,opt,name=worker,proto3" json:"worker,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRemoteUsageResponse) Reset() {
+	*x = GetRemoteUsageResponse{}
+	mi := &file_syncr_v1_probe_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRemoteUsageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRemoteUsageResponse) ProtoMessage() {}
+
+func (x *GetRemoteUsageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_probe_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRemoteUsageResponse.ProtoReflect.Descriptor instead.
+func (*GetRemoteUsageResponse) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_probe_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *GetRemoteUsageResponse) GetUsage() *ProbeUsage {
+	if x != nil {
+		return x.Usage
+	}
+	return nil
+}
+
+func (x *GetRemoteUsageResponse) GetWorker() *ProbeWorkerRef {
+	if x != nil {
+		return x.Worker
+	}
+	return nil
+}
+
 var File_syncr_v1_probe_proto protoreflect.FileDescriptor
 
 const file_syncr_v1_probe_proto_rawDesc = "" +
@@ -739,13 +1100,43 @@ const file_syncr_v1_probe_proto_rawDesc = "" +
 	"\x17GetSftpHostKeysResponse\x12)\n" +
 	"\x04keys\x18\x01 \x03(\v2\x15.syncr.v1.SftpHostKeyR\x04keys\x120\n" +
 	"\x06worker\x18\x02 \x01(\v2\x18.syncr.v1.ProbeWorkerRefR\x06workerJ\x04\b\x03\x10\n" +
-	"2\xed\x02\n" +
+	"\"S\n" +
+	"\x1aMeasureWorkerFolderRequest\x12\x1b\n" +
+	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04pathJ\x04\b\x03\x10\n" +
+	"\"\xc8\x01\n" +
+	"\x1bMeasureWorkerFolderResponse\x12<\n" +
+	"\vmeasurement\x18\x01 \x01(\v2\x1a.syncr.v1.ProbeMeasurementR\vmeasurement\x120\n" +
+	"\x06worker\x18\x02 \x01(\v2\x18.syncr.v1.ProbeWorkerRefR\x06worker\x123\n" +
+	"\aelapsed\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\aelapsedJ\x04\b\x04\x10\n" +
+	"\"p\n" +
+	"\x1aMeasureRemoteFolderRequest\x12\x1b\n" +
+	"\tremote_id\x18\x01 \x01(\tR\bremoteId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1b\n" +
+	"\tworker_id\x18\x03 \x01(\tR\bworkerIdJ\x04\b\x04\x10\n" +
+	"\"\xc8\x01\n" +
+	"\x1bMeasureRemoteFolderResponse\x12<\n" +
+	"\vmeasurement\x18\x01 \x01(\v2\x1a.syncr.v1.ProbeMeasurementR\vmeasurement\x120\n" +
+	"\x06worker\x18\x02 \x01(\v2\x18.syncr.v1.ProbeWorkerRefR\x06worker\x123\n" +
+	"\aelapsed\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\aelapsedJ\x04\b\x04\x10\n" +
+	"\"W\n" +
+	"\x15GetRemoteUsageRequest\x12\x1b\n" +
+	"\tremote_id\x18\x01 \x01(\tR\bremoteId\x12\x1b\n" +
+	"\tworker_id\x18\x02 \x01(\tR\bworkerIdJ\x04\b\x03\x10\n" +
+	"\"|\n" +
+	"\x16GetRemoteUsageResponse\x12*\n" +
+	"\x05usage\x18\x01 \x01(\v2\x14.syncr.v1.ProbeUsageR\x05usage\x120\n" +
+	"\x06worker\x18\x02 \x01(\v2\x18.syncr.v1.ProbeWorkerRefR\x06workerJ\x04\b\x03\x10\n" +
+	"2\x93\x05\n" +
 	"\fProbeService\x12[\n" +
 	"\x0fListWorkerFiles\x12 .syncr.v1.ListWorkerFilesRequest\x1a!.syncr.v1.ListWorkerFilesResponse\"\x03\x90\x02\x01\x12[\n" +
 	"\x0fListRemoteFiles\x12 .syncr.v1.ListRemoteFilesRequest\x1a!.syncr.v1.ListRemoteFilesResponse\"\x03\x90\x02\x01\x12I\n" +
 	"\n" +
 	"TestRemote\x12\x1b.syncr.v1.TestRemoteRequest\x1a\x1c.syncr.v1.TestRemoteResponse\"\x00\x12X\n" +
-	"\x0fGetSftpHostKeys\x12 .syncr.v1.GetSftpHostKeysRequest\x1a!.syncr.v1.GetSftpHostKeysResponse\"\x00B\x8d\x01\n" +
+	"\x0fGetSftpHostKeys\x12 .syncr.v1.GetSftpHostKeysRequest\x1a!.syncr.v1.GetSftpHostKeysResponse\"\x00\x12d\n" +
+	"\x13MeasureWorkerFolder\x12$.syncr.v1.MeasureWorkerFolderRequest\x1a%.syncr.v1.MeasureWorkerFolderResponse\"\x00\x12d\n" +
+	"\x13MeasureRemoteFolder\x12$.syncr.v1.MeasureRemoteFolderRequest\x1a%.syncr.v1.MeasureRemoteFolderResponse\"\x00\x12X\n" +
+	"\x0eGetRemoteUsage\x12\x1f.syncr.v1.GetRemoteUsageRequest\x1a .syncr.v1.GetRemoteUsageResponse\"\x03\x90\x02\x01B\x8d\x01\n" +
 	"\fcom.syncr.v1B\n" +
 	"ProbeProtoP\x01Z0github.com/Zeptiny/Syncr/gen/go/syncr/v1;syncrv1\xa2\x02\x03SXX\xaa\x02\bSyncr.V1\xca\x02\bSyncr\\V1\xe2\x02\x14Syncr\\V1\\GPBMetadata\xea\x02\tSyncr::V1b\x06proto3"
 
@@ -761,47 +1152,68 @@ func file_syncr_v1_probe_proto_rawDescGZIP() []byte {
 	return file_syncr_v1_probe_proto_rawDescData
 }
 
-var file_syncr_v1_probe_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_syncr_v1_probe_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_syncr_v1_probe_proto_goTypes = []any{
-	(*ProbeWorkerRef)(nil),          // 0: syncr.v1.ProbeWorkerRef
-	(*ListWorkerFilesRequest)(nil),  // 1: syncr.v1.ListWorkerFilesRequest
-	(*ListWorkerFilesResponse)(nil), // 2: syncr.v1.ListWorkerFilesResponse
-	(*ListRemoteFilesRequest)(nil),  // 3: syncr.v1.ListRemoteFilesRequest
-	(*ListRemoteFilesResponse)(nil), // 4: syncr.v1.ListRemoteFilesResponse
-	(*TestRemoteRequest)(nil),       // 5: syncr.v1.TestRemoteRequest
-	(*TestRemoteResponse)(nil),      // 6: syncr.v1.TestRemoteResponse
-	(*GetSftpHostKeysRequest)(nil),  // 7: syncr.v1.GetSftpHostKeysRequest
-	(*GetSftpHostKeysResponse)(nil), // 8: syncr.v1.GetSftpHostKeysResponse
-	(*ProbeEntry)(nil),              // 9: syncr.v1.ProbeEntry
-	(*RemoteInput)(nil),             // 10: syncr.v1.RemoteInput
-	(*durationpb.Duration)(nil),     // 11: google.protobuf.Duration
-	(*ProbeUsage)(nil),              // 12: syncr.v1.ProbeUsage
-	(*SftpHostKey)(nil),             // 13: syncr.v1.SftpHostKey
+	(*ProbeWorkerRef)(nil),              // 0: syncr.v1.ProbeWorkerRef
+	(*ListWorkerFilesRequest)(nil),      // 1: syncr.v1.ListWorkerFilesRequest
+	(*ListWorkerFilesResponse)(nil),     // 2: syncr.v1.ListWorkerFilesResponse
+	(*ListRemoteFilesRequest)(nil),      // 3: syncr.v1.ListRemoteFilesRequest
+	(*ListRemoteFilesResponse)(nil),     // 4: syncr.v1.ListRemoteFilesResponse
+	(*TestRemoteRequest)(nil),           // 5: syncr.v1.TestRemoteRequest
+	(*TestRemoteResponse)(nil),          // 6: syncr.v1.TestRemoteResponse
+	(*GetSftpHostKeysRequest)(nil),      // 7: syncr.v1.GetSftpHostKeysRequest
+	(*GetSftpHostKeysResponse)(nil),     // 8: syncr.v1.GetSftpHostKeysResponse
+	(*MeasureWorkerFolderRequest)(nil),  // 9: syncr.v1.MeasureWorkerFolderRequest
+	(*MeasureWorkerFolderResponse)(nil), // 10: syncr.v1.MeasureWorkerFolderResponse
+	(*MeasureRemoteFolderRequest)(nil),  // 11: syncr.v1.MeasureRemoteFolderRequest
+	(*MeasureRemoteFolderResponse)(nil), // 12: syncr.v1.MeasureRemoteFolderResponse
+	(*GetRemoteUsageRequest)(nil),       // 13: syncr.v1.GetRemoteUsageRequest
+	(*GetRemoteUsageResponse)(nil),      // 14: syncr.v1.GetRemoteUsageResponse
+	(*ProbeEntry)(nil),                  // 15: syncr.v1.ProbeEntry
+	(*RemoteInput)(nil),                 // 16: syncr.v1.RemoteInput
+	(*durationpb.Duration)(nil),         // 17: google.protobuf.Duration
+	(*ProbeUsage)(nil),                  // 18: syncr.v1.ProbeUsage
+	(*SftpHostKey)(nil),                 // 19: syncr.v1.SftpHostKey
+	(*ProbeMeasurement)(nil),            // 20: syncr.v1.ProbeMeasurement
 }
 var file_syncr_v1_probe_proto_depIdxs = []int32{
-	9,  // 0: syncr.v1.ListWorkerFilesResponse.entries:type_name -> syncr.v1.ProbeEntry
+	15, // 0: syncr.v1.ListWorkerFilesResponse.entries:type_name -> syncr.v1.ProbeEntry
 	0,  // 1: syncr.v1.ListWorkerFilesResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	9,  // 2: syncr.v1.ListRemoteFilesResponse.entries:type_name -> syncr.v1.ProbeEntry
+	15, // 2: syncr.v1.ListRemoteFilesResponse.entries:type_name -> syncr.v1.ProbeEntry
 	0,  // 3: syncr.v1.ListRemoteFilesResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	10, // 4: syncr.v1.TestRemoteRequest.input:type_name -> syncr.v1.RemoteInput
+	16, // 4: syncr.v1.TestRemoteRequest.input:type_name -> syncr.v1.RemoteInput
 	0,  // 5: syncr.v1.TestRemoteResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	11, // 6: syncr.v1.TestRemoteResponse.latency:type_name -> google.protobuf.Duration
-	12, // 7: syncr.v1.TestRemoteResponse.usage:type_name -> syncr.v1.ProbeUsage
-	13, // 8: syncr.v1.GetSftpHostKeysResponse.keys:type_name -> syncr.v1.SftpHostKey
+	17, // 6: syncr.v1.TestRemoteResponse.latency:type_name -> google.protobuf.Duration
+	18, // 7: syncr.v1.TestRemoteResponse.usage:type_name -> syncr.v1.ProbeUsage
+	19, // 8: syncr.v1.GetSftpHostKeysResponse.keys:type_name -> syncr.v1.SftpHostKey
 	0,  // 9: syncr.v1.GetSftpHostKeysResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	1,  // 10: syncr.v1.ProbeService.ListWorkerFiles:input_type -> syncr.v1.ListWorkerFilesRequest
-	3,  // 11: syncr.v1.ProbeService.ListRemoteFiles:input_type -> syncr.v1.ListRemoteFilesRequest
-	5,  // 12: syncr.v1.ProbeService.TestRemote:input_type -> syncr.v1.TestRemoteRequest
-	7,  // 13: syncr.v1.ProbeService.GetSftpHostKeys:input_type -> syncr.v1.GetSftpHostKeysRequest
-	2,  // 14: syncr.v1.ProbeService.ListWorkerFiles:output_type -> syncr.v1.ListWorkerFilesResponse
-	4,  // 15: syncr.v1.ProbeService.ListRemoteFiles:output_type -> syncr.v1.ListRemoteFilesResponse
-	6,  // 16: syncr.v1.ProbeService.TestRemote:output_type -> syncr.v1.TestRemoteResponse
-	8,  // 17: syncr.v1.ProbeService.GetSftpHostKeys:output_type -> syncr.v1.GetSftpHostKeysResponse
-	14, // [14:18] is the sub-list for method output_type
-	10, // [10:14] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	20, // 10: syncr.v1.MeasureWorkerFolderResponse.measurement:type_name -> syncr.v1.ProbeMeasurement
+	0,  // 11: syncr.v1.MeasureWorkerFolderResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	17, // 12: syncr.v1.MeasureWorkerFolderResponse.elapsed:type_name -> google.protobuf.Duration
+	20, // 13: syncr.v1.MeasureRemoteFolderResponse.measurement:type_name -> syncr.v1.ProbeMeasurement
+	0,  // 14: syncr.v1.MeasureRemoteFolderResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	17, // 15: syncr.v1.MeasureRemoteFolderResponse.elapsed:type_name -> google.protobuf.Duration
+	18, // 16: syncr.v1.GetRemoteUsageResponse.usage:type_name -> syncr.v1.ProbeUsage
+	0,  // 17: syncr.v1.GetRemoteUsageResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	1,  // 18: syncr.v1.ProbeService.ListWorkerFiles:input_type -> syncr.v1.ListWorkerFilesRequest
+	3,  // 19: syncr.v1.ProbeService.ListRemoteFiles:input_type -> syncr.v1.ListRemoteFilesRequest
+	5,  // 20: syncr.v1.ProbeService.TestRemote:input_type -> syncr.v1.TestRemoteRequest
+	7,  // 21: syncr.v1.ProbeService.GetSftpHostKeys:input_type -> syncr.v1.GetSftpHostKeysRequest
+	9,  // 22: syncr.v1.ProbeService.MeasureWorkerFolder:input_type -> syncr.v1.MeasureWorkerFolderRequest
+	11, // 23: syncr.v1.ProbeService.MeasureRemoteFolder:input_type -> syncr.v1.MeasureRemoteFolderRequest
+	13, // 24: syncr.v1.ProbeService.GetRemoteUsage:input_type -> syncr.v1.GetRemoteUsageRequest
+	2,  // 25: syncr.v1.ProbeService.ListWorkerFiles:output_type -> syncr.v1.ListWorkerFilesResponse
+	4,  // 26: syncr.v1.ProbeService.ListRemoteFiles:output_type -> syncr.v1.ListRemoteFilesResponse
+	6,  // 27: syncr.v1.ProbeService.TestRemote:output_type -> syncr.v1.TestRemoteResponse
+	8,  // 28: syncr.v1.ProbeService.GetSftpHostKeys:output_type -> syncr.v1.GetSftpHostKeysResponse
+	10, // 29: syncr.v1.ProbeService.MeasureWorkerFolder:output_type -> syncr.v1.MeasureWorkerFolderResponse
+	12, // 30: syncr.v1.ProbeService.MeasureRemoteFolder:output_type -> syncr.v1.MeasureRemoteFolderResponse
+	14, // 31: syncr.v1.ProbeService.GetRemoteUsage:output_type -> syncr.v1.GetRemoteUsageResponse
+	25, // [25:32] is the sub-list for method output_type
+	18, // [18:25] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_syncr_v1_probe_proto_init() }
@@ -817,7 +1229,7 @@ func file_syncr_v1_probe_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_syncr_v1_probe_proto_rawDesc), len(file_syncr_v1_probe_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

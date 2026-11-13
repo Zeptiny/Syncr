@@ -43,12 +43,24 @@ const (
 	// SAFETY_ABORT and SIDE_UNAVAILABLE. The kind requires it, so a job of
 	// it fails with WORKER_OUTDATED on a worker without it.
 	FeatureRcloneBisync = "rclone.bisync"
+	// FeatureResticRestoreSubfolderPaths (Milestone 7): the worker restores
+	// selected items of a subfolder (ResticRestore.subfolder together with
+	// paths): it runs "<snapshot>:<subfolder>" with the paths as includes
+	// relative to the subfolder, so the items land in the target as they
+	// were in the subfolder ("restore to the original location"). An older
+	// worker refuses that combination as an invalid spec, so the controller
+	// sends it only to a worker with this feature (jobkind
+	// DefinitionFeatures) and fails the job with WORKER_OUTDATED otherwise.
+	FeatureResticRestoreSubfolderPaths = "restic.restore_subfolder_paths"
 )
 
 // Features returns every link feature this build defines, in a fixed order.
 // An up-to-date worker reports all of them.
 func Features() []string {
-	return []string{FeatureProbe, FeatureResticV2, FeatureResticDelete, FeatureJobTimeLimit, FeatureJobHooks, FeatureRcloneBisync}
+	return []string{
+		FeatureProbe, FeatureResticV2, FeatureResticDelete, FeatureJobTimeLimit, FeatureJobHooks,
+		FeatureRcloneBisync, FeatureResticRestoreSubfolderPaths,
+	}
 }
 
 // probeOneof is the ProbeSpec oneof whose set field names the probe op.

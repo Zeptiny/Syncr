@@ -52,6 +52,23 @@ type fakeProber struct {
 	verifies  []verifyCall
 	snapCalls []restic.Target
 	listCalls []listCall
+
+	// scanErr fails the next scans (Measure, Find, Diff); measurement,
+	// found and comparison are their results; scans records them.
+	scanErr     error
+	measurement restic.Measurement
+	found       restic.FindResult
+	comparison  restic.Comparison
+	scans       []scanCall
+}
+
+// scanCall is one Measure, Find or Diff call.
+type scanCall struct {
+	op             string
+	target         restic.Target
+	snapshot, path string
+	query          restic.FindQuery
+	from, to       string
 }
 
 type verifyCall struct {
@@ -96,6 +113,34 @@ func (p *fakeProber) List(_ context.Context, _ domain.UserID, t restic.Target, s
 		return restic.Listing{}, p.listErr
 	}
 	return p.listing, nil
+}
+
+func (p *fakeProber) scan(c scanCall) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.scans = append(p.scans, c)
+	return p.scanErr
+}
+
+func (p *fakeProber) Measure(_ context.Context, _ domain.UserID, t restic.Target, snapshot, path string) (restic.Measurement, error) {
+	if err := p.scan(scanCall{op: "measure", target: t, snapshot: snapshot, path: path}); err != nil {
+		return restic.Measurement{}, err
+	}
+	return p.measurement, nil
+}
+
+func (p *fakeProber) Find(_ context.Context, _ domain.UserID, t restic.Target, q restic.FindQuery) (restic.FindResult, error) {
+	if err := p.scan(scanCall{op: "find", target: t, query: q}); err != nil {
+		return restic.FindResult{}, err
+	}
+	return p.found, nil
+}
+
+func (p *fakeProber) Diff(_ context.Context, _ domain.UserID, t restic.Target, from, to, path string) (restic.Comparison, error) {
+	if err := p.scan(scanCall{op: "diff", target: t, from: from, to: to, path: path}); err != nil {
+		return restic.Comparison{}, err
+	}
+	return p.comparison, nil
 }
 
 // fakeDeletions is a restic.Deletions recording its calls.
@@ -797,6 +842,9 @@ func TestDeleteWithData(t *testing.T) {
 		"Update":            second(e.svc.Update(ctx, e.alice, r.ID, got.Version, restic.Update{Name: "X"})),
 		"Snapshots refresh": second(e.svc.Snapshots(ctx, e.alice, r.ID, restic.SnapshotsOptions{Refresh: true})),
 		"Browse":            second(e.svc.Browse(ctx, e.alice, r.ID, "1a2b3c4d", "/", domain.WorkerID{})),
+		"Measure":           second(e.svc.Measure(ctx, e.alice, r.ID, "1a2b3c4d", "/", domain.WorkerID{})),
+		"Find":              second(e.svc.Find(ctx, e.alice, r.ID, restic.FindQuery{Patterns: []string{"*.jpg"}}, domain.WorkerID{})),
+		"Compare":           second(e.svc.Compare(ctx, e.alice, r.ID, "1a2b3c4d", "5e6f7a8b", "/", domain.WorkerID{})),
 		"forget only":       second(e.svc.Delete(ctx, e.alice, r.ID, restic.DeleteOptions{})),
 	}
 	for what, err := range blocked {

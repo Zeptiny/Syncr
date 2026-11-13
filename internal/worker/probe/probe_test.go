@@ -124,6 +124,38 @@ func (f *fakeTools) HostKeys(ctx context.Context, host string, port int) ([]*syn
 	}, nil
 }
 
+func (f *fakeTools) Measure(ctx context.Context, _ string, _ []*syncrv1.RemoteDefinition, op *syncrv1.ProbeResticMeasure, maxChildren int) (*syncrv1.ProbeMeasurement, error) {
+	if err := f.wait(ctx, "restic_measure", maxChildren); err != nil {
+		return nil, err
+	}
+	return &syncrv1.ProbeMeasurement{Path: op.GetPath(), Complete: true}, nil
+}
+
+func (f *fakeTools) Find(ctx context.Context, _ string, _ []*syncrv1.RemoteDefinition, op *syncrv1.ProbeResticFind) (*syncrv1.ResticFindOutput, error) {
+	if err := f.wait(ctx, "restic_find", int(op.GetMaxMatches())); err != nil {
+		return nil, err
+	}
+	return &syncrv1.ResticFindOutput{Complete: true}, nil
+}
+
+func (f *fakeTools) Diff(ctx context.Context, _ string, _ []*syncrv1.RemoteDefinition, op *syncrv1.ProbeResticDiff) (*syncrv1.ResticDiffOutput, error) {
+	if err := f.wait(ctx, "restic_diff", int(op.GetMaxChanges())); err != nil {
+		return nil, err
+	}
+	return &syncrv1.ResticDiffOutput{Complete: true, Stats: &syncrv1.ResticDiffStats{}}, nil
+}
+
+// fakeRclone is fakeTools as the Rclone tool: its Measure is rclone's
+// (fakeTools' own is restic's).
+type fakeRclone struct{ *fakeTools }
+
+func (f fakeRclone) Measure(ctx context.Context, _ string, _ []*syncrv1.RemoteDefinition, op *syncrv1.ProbeMeasureRemote, maxChildren int) (*syncrv1.ProbeMeasurement, error) {
+	if err := f.wait(ctx, "measure_remote", maxChildren); err != nil {
+		return nil, err
+	}
+	return &syncrv1.ProbeMeasurement{Path: op.GetLocation().GetPath(), Complete: true}, nil
+}
+
 // fakeLocal implements Local.
 type fakeLocal struct {
 	listing localfs.Listing
@@ -139,11 +171,16 @@ func (f *fakeLocal) List(_ context.Context, path string, limit int, dirsOnly boo
 	return l, f.err
 }
 
+func (f *fakeLocal) Measure(_ context.Context, path string, maxChildren int) (localfs.Measurement, error) {
+	f.limit = maxChildren
+	return localfs.Measurement{Path: path, Complete: true}, f.err
+}
+
 func newExecutor(t *testing.T, tools *fakeTools, local Local, mutate ...func(*Config)) *Executor {
 	t.Helper()
 	cfg := Config{Local: local}
 	if tools != nil {
-		cfg.Restic, cfg.Rclone, cfg.HostKeys = tools, tools, tools
+		cfg.Restic, cfg.Rclone, cfg.HostKeys = tools, fakeRclone{tools}, tools
 	}
 	for _, m := range mutate {
 		m(&cfg)
@@ -176,6 +213,18 @@ func specOf(op string, limit int32) *syncrv1.ProbeSpec {
 		s.Op = &syncrv1.ProbeSpec_ResticConfig{ResticConfig: &syncrv1.ProbeResticConfig{Repository: repo}}
 	case "sftp_host_keys":
 		s.Op = &syncrv1.ProbeSpec_SftpHostKeys{SftpHostKeys: &syncrv1.ProbeSftpHostKeys{Host: "sftp.example.com", Port: 22}}
+	case "measure_local":
+		s.Op = &syncrv1.ProbeSpec_MeasureLocal{MeasureLocal: &syncrv1.ProbeMeasureLocal{Path: "/srv"}}
+	case "measure_remote":
+		s.Op = &syncrv1.ProbeSpec_MeasureRemote{MeasureRemote: &syncrv1.ProbeMeasureRemote{Location: loc}}
+	case "restic_measure":
+		s.Op = &syncrv1.ProbeSpec_ResticMeasure{ResticMeasure: &syncrv1.ProbeResticMeasure{Repository: repo, SnapshotId: "1a2b3c4d", Path: "/"}}
+	case "restic_find":
+		s.Op = &syncrv1.ProbeSpec_ResticFind{ResticFind: &syncrv1.ProbeResticFind{Repository: repo, Patterns: []string{"*.jpg"}, MaxMatches: limit}}
+	case "restic_diff":
+		s.Op = &syncrv1.ProbeSpec_ResticDiff{ResticDiff: &syncrv1.ProbeResticDiff{
+			Repository: repo, FromSnapshotId: "1a2b3c4d", ToSnapshotId: "5e6f7a8b", MaxChanges: limit,
+		}}
 	}
 	return s
 }
@@ -224,6 +273,16 @@ func TestEveryOpIsDispatched(t *testing.T) {
 		case "sftp_host_keys":
 			keys := res.GetSftpHostKeys().GetKeys()
 			ok = len(keys) == 2 && keys[0].GetKey() == "AAAAsftp.example.com" && tools.bound == 22
+		case "measure_local":
+			ok = res.GetMeasurement().GetPath() == "/srv" && res.GetMeasurement().GetComplete() && local.limit == DefaultMaxEntries
+		case "measure_remote":
+			ok = res.GetMeasurement().GetPath() == "bucket" && res.GetMeasurement().GetComplete() && tools.bound == DefaultMaxEntries
+		case "restic_measure":
+			ok = res.GetMeasurement().GetPath() == "/" && res.GetMeasurement().GetComplete() && tools.bound == DefaultMaxEntries
+		case "restic_find":
+			ok = res.GetFind().GetComplete() && tools.bound == DefaultMatches
+		case "restic_diff":
+			ok = res.GetDiff().GetComplete() && res.GetDiff().GetStats() != nil && tools.bound == DefaultChanges
 		}
 		if !ok {
 			t.Errorf("%s: output = %v", op, res.GetOutput())
@@ -245,9 +304,12 @@ func TestOpsFollowTheAvailableTools(t *testing.T) {
 		want []string
 	}{
 		{"nothing", Config{}, []string{"sftp_host_keys"}},
-		{"local only", Config{Local: &fakeLocal{}}, []string{"list_local", "sftp_host_keys"}},
-		{"rclone only", Config{Rclone: tools}, []string{"list_remote", "about", "sftp_host_keys"}},
-		{"restic only", Config{Restic: tools}, []string{"restic_snapshots", "restic_ls", "restic_init", "restic_config", "sftp_host_keys"}},
+		{"local only", Config{Local: &fakeLocal{}}, []string{"list_local", "sftp_host_keys", "measure_local"}},
+		{"rclone only", Config{Rclone: fakeRclone{tools}}, []string{"list_remote", "about", "sftp_host_keys", "measure_remote"}},
+		{"restic only", Config{Restic: tools}, []string{
+			"restic_snapshots", "restic_ls", "restic_init", "restic_config", "sftp_host_keys",
+			"restic_measure", "restic_find", "restic_diff",
+		}},
 	}
 	for _, tc := range tests {
 		tc.cfg.HostKeys = hostKeys
@@ -449,10 +511,14 @@ func TestTimeoutCancelAndBusy(t *testing.T) {
 	})
 }
 
-// panicLocal panics in List.
+// panicLocal panics in List and Measure.
 type panicLocal struct{}
 
 func (panicLocal) List(context.Context, string, int, bool) (localfs.Listing, error) {
+	panic("boom with a secret")
+}
+
+func (panicLocal) Measure(context.Context, string, int) (localfs.Measurement, error) {
 	panic("boom with a secret")
 }
 
@@ -514,10 +580,22 @@ func TestLocalListingConversion(t *testing.T) {
 
 func TestNewRejectsNegativeLimits(t *testing.T) {
 	t.Parallel()
-	for _, cfg := range []Config{{MaxConcurrent: -1}, {MaxEntries: -1}, {MaxSnapshots: -1}, {MaxResultBytes: -1}, {DefaultTimeout: -1}, {MaxTimeout: -1}, {MaxTimeout: link.MaxProbeTimeout + 1}} {
+	for _, cfg := range []Config{{MaxConcurrent: -1}, {MaxHeavy: -1}, {MaxEntries: -1}, {MaxSnapshots: -1}, {MaxResultBytes: -1}, {DefaultTimeout: -1}, {MaxTimeout: -1}, {MaxTimeout: link.MaxProbeTimeout + 1}} {
 		if _, err := New(cfg); err == nil {
 			t.Errorf("New(%+v) succeeded", cfg)
 		}
+	}
+}
+
+func TestNewDefaults(t *testing.T) {
+	t.Parallel()
+	e := newExecutor(t, nil, nil)
+	if e.cfg.MaxConcurrent != DefaultMaxConcurrent || e.cfg.MaxHeavy != DefaultMaxHeavy || DefaultMaxHeavy != 1 {
+		t.Errorf("MaxConcurrent = %d, MaxHeavy = %d, want %d and 1", e.cfg.MaxConcurrent, e.cfg.MaxHeavy, DefaultMaxConcurrent)
+	}
+	e = newExecutor(t, nil, nil, func(c *Config) { c.MaxHeavy = 3 })
+	if e.cfg.MaxHeavy != 3 {
+		t.Errorf("MaxHeavy = %d, want 3", e.cfg.MaxHeavy)
 	}
 }
 
@@ -539,6 +617,10 @@ func (l *stuckLocal) List(context.Context, string, int, bool) (localfs.Listing, 
 	l.running--
 	l.mu.Unlock()
 	return localfs.Listing{}, nil
+}
+
+func (l *stuckLocal) Measure(context.Context, string, int) (localfs.Measurement, error) {
+	return localfs.Measurement{}, errors.ErrUnsupported
 }
 
 func (l *stuckLocal) inFlight() int {
@@ -617,4 +699,8 @@ type localFunc func(ctx context.Context) (localfs.Listing, error)
 
 func (f localFunc) List(ctx context.Context, _ string, _ int, _ bool) (localfs.Listing, error) {
 	return f(ctx)
+}
+
+func (f localFunc) Measure(context.Context, string, int) (localfs.Measurement, error) {
+	return localfs.Measurement{}, errors.ErrUnsupported
 }

@@ -1,0 +1,8 @@
+[
+{"Path":"a.txt","Name":"a.txt","Size":4,"ModTime":"","IsDir":false},
+{"Path":"docs","Name":"docs","Size":-1,"ModTime":"","IsDir":true},
+{"Path":"locked","Name":"locked","Size":-1,"ModTime":"","IsDir":true},
+{"Path":"private","Name":"private","Size":-1,"ModTime":"","IsDir":true},
+{"Path":"docs/deep","Name":"deep","Size":-1,"ModTime":"","IsDir":true},
+{"Path":"docs/readme.md","Name":"readme.md","Size":5,"ModTime":"","IsDir":false},
+{"Path":"docs/deep/e.txt","Name":"e.txt","Size":5,"ModTime":"","IsDir":false}

@@ -79,7 +79,10 @@ type controller struct {
 	disp    *dispatch.Service
 	// probes is the controller's probe use cases over its probe broker
 	// (dispatch.ProbeBroker), as the API's ProbeService calls them.
-	probes   *probe.Service
+	probes *probe.Service
+	// runner is the probe runner under probes, the restic.Prober of the
+	// repository use cases.
+	runner   *probe.Runner
 	wake     chan struct{}
 	stop     context.CancelFunc
 	running  sync.WaitGroup
@@ -166,11 +169,11 @@ func (c *controller) start() {
 	}
 	runner, err := probe.NewRunner(probe.Deps{
 		Transport: broker, Workers: c.workers, Jobs: c.jobs, Remotes: c.remotes, Limiter: allowAll{}, IDs: c.ids, Logger: log,
-	}, probe.Config{Timeout: probeTimeout, ResticTimeout: probeTimeout})
+	}, probe.Config{Timeout: probeTimeout, ResticTimeout: probeTimeout, ScanTimeout: scanTimeout})
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	c.probes = probe.NewService(runner)
+	c.probes, c.runner = probe.NewService(runner), runner
 	ctx, cancel := context.WithCancel(context.Background())
 	c.stop = cancel
 	link, err := cactive.New(cactive.Options{
@@ -237,10 +240,19 @@ func (c *controller) probeService() *probe.Service {
 	return c.probes
 }
 
-// The probe timings of the tests: a listing may take probeTimeout, and the
-// controller waits probeGrace longer for the worker's answer.
+// probeRunner returns the current probe runner.
+func (c *controller) probeRunner() *probe.Runner {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.runner
+}
+
+// The probe timings of the tests: a listing may take probeTimeout, a scan
+// (measuring, searching, comparing, with the real tools too) scanTimeout,
+// and the controller waits probeGrace longer for the worker's answer.
 const (
 	probeTimeout = time.Second
+	scanTimeout  = 30 * time.Second
 	probeGrace   = 200 * time.Millisecond
 )
 

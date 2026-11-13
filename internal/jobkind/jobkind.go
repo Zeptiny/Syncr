@@ -256,6 +256,15 @@ type Requirer interface {
 	RequiredFeatures() []string
 }
 
+// DefinitionRequirer is implemented by kinds some of whose definitions
+// need link features beyond the kind's own (Requirer): an option an older
+// worker would refuse or misread.
+type DefinitionRequirer interface {
+	// DefinitionFeatures returns the features a worker must report to run
+	// a checked definition, beyond RequiredFeatures; nil when none.
+	DefinitionFeatures(def *syncrv1.JobDefinition) []string
+}
+
 // OSBound is implemented by kinds whose definitions may need a worker that
 // runs a particular operating system.
 type OSBound interface {
@@ -526,6 +535,21 @@ func (r *Registry) UserStartable(kind string) (ok bool, reason string) {
 func (r *Registry) RequiredFeatures(kind string) []string {
 	if req, ok := r.kinds[kind].(Requirer); ok {
 		return slices.Clone(req.RequiredFeatures())
+	}
+	return nil
+}
+
+// DefinitionFeatures returns the link features a worker must report to run
+// def beyond those of its kind (DefinitionRequirer), as a new slice; nil
+// for definitions that need none and for definitions of no registered
+// kind.
+func (r *Registry) DefinitionFeatures(def *syncrv1.JobDefinition) []string {
+	k, err := r.kindOf(def)
+	if err != nil {
+		return nil
+	}
+	if d, ok := k.(DefinitionRequirer); ok {
+		return slices.Clone(d.DefinitionFeatures(def))
 	}
 	return nil
 }

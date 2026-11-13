@@ -9,6 +9,7 @@ package syncrv1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	durationpb "google.golang.org/protobuf/types/known/durationpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -1453,11 +1454,486 @@ func (x *BrowseSnapshotResponse) GetWorker() *ProbeWorkerRef {
 	return nil
 }
 
+// MeasureSnapshotFolderRequest names the snapshot folder to measure.
+type MeasureSnapshotFolderRequest struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	RepositoryId string                 `protobuf:"bytes,1,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
+	// Snapshot ID: 8 to 64 hex digits.
+	SnapshotId string `protobuf:"bytes,2,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
+	// Snapshot tree path of the folder: "/" (or empty) is the root, always
+	// forward slashes.
+	Path string `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
+	// The worker to measure through; empty lets the controller choose.
+	WorkerId      string `protobuf:"bytes,4,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeasureSnapshotFolderRequest) Reset() {
+	*x = MeasureSnapshotFolderRequest{}
+	mi := &file_syncr_v1_restic_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeasureSnapshotFolderRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeasureSnapshotFolderRequest) ProtoMessage() {}
+
+func (x *MeasureSnapshotFolderRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_restic_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeasureSnapshotFolderRequest.ProtoReflect.Descriptor instead.
+func (*MeasureSnapshotFolderRequest) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_restic_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *MeasureSnapshotFolderRequest) GetRepositoryId() string {
+	if x != nil {
+		return x.RepositoryId
+	}
+	return ""
+}
+
+func (x *MeasureSnapshotFolderRequest) GetSnapshotId() string {
+	if x != nil {
+		return x.SnapshotId
+	}
+	return ""
+}
+
+func (x *MeasureSnapshotFolderRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *MeasureSnapshotFolderRequest) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+// MeasureSnapshotFolderResponse is the measured folder.
+type MeasureSnapshotFolderResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The totals and each child folder's; measurement.path is the measured
+	// tree path.
+	Measurement *ProbeMeasurement `protobuf:"bytes,1,opt,name=measurement,proto3" json:"measurement,omitempty"`
+	// The worker that measured it.
+	Worker *ProbeWorkerRef `protobuf:"bytes,2,opt,name=worker,proto3" json:"worker,omitempty"`
+	// How long the measurement ran on the worker.
+	Elapsed       *durationpb.Duration `protobuf:"bytes,3,opt,name=elapsed,proto3" json:"elapsed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeasureSnapshotFolderResponse) Reset() {
+	*x = MeasureSnapshotFolderResponse{}
+	mi := &file_syncr_v1_restic_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeasureSnapshotFolderResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeasureSnapshotFolderResponse) ProtoMessage() {}
+
+func (x *MeasureSnapshotFolderResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_restic_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeasureSnapshotFolderResponse.ProtoReflect.Descriptor instead.
+func (*MeasureSnapshotFolderResponse) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_restic_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *MeasureSnapshotFolderResponse) GetMeasurement() *ProbeMeasurement {
+	if x != nil {
+		return x.Measurement
+	}
+	return nil
+}
+
+func (x *MeasureSnapshotFolderResponse) GetWorker() *ProbeWorkerRef {
+	if x != nil {
+		return x.Worker
+	}
+	return nil
+}
+
+func (x *MeasureSnapshotFolderResponse) GetElapsed() *durationpb.Duration {
+	if x != nil {
+		return x.Elapsed
+	}
+	return nil
+}
+
+// FindInRepositoryRequest is a search of a repository's snapshots.
+type FindInRepositoryRequest struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	RepositoryId string                 `protobuf:"bytes,1,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
+	// Glob patterns as restic find takes them. A pattern without "/" matches
+	// any name in a path; one with "/" matches the path's trailing folders
+	// and name ("data/a.txt" matches "/srv/data/a.txt"), and a leading "/"
+	// anchors it at the root. A match on a folder matches everything below
+	// it. "**" spans folders; a character class such as "[*]" matches a glob
+	// character literally. 1 to 10, each 1 to 256 bytes of valid UTF-8
+	// without NUL or line breaks.
+	Patterns []string `protobuf:"bytes,2,rep,name=patterns,proto3" json:"patterns,omitempty"`
+	// Match case-insensitively.
+	IgnoreCase bool `protobuf:"varint,3,opt,name=ignore_case,json=ignoreCase,proto3" json:"ignore_case,omitempty"`
+	// Only these snapshots (8 to 64 hex digits each); empty searches all of
+	// them.
+	SnapshotIds []string `protobuf:"bytes,4,rep,name=snapshot_ids,json=snapshotIds,proto3" json:"snapshot_ids,omitempty"`
+	// The worker to search through; empty lets the controller choose.
+	WorkerId      string `protobuf:"bytes,5,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FindInRepositoryRequest) Reset() {
+	*x = FindInRepositoryRequest{}
+	mi := &file_syncr_v1_restic_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FindInRepositoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FindInRepositoryRequest) ProtoMessage() {}
+
+func (x *FindInRepositoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_restic_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FindInRepositoryRequest.ProtoReflect.Descriptor instead.
+func (*FindInRepositoryRequest) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_restic_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *FindInRepositoryRequest) GetRepositoryId() string {
+	if x != nil {
+		return x.RepositoryId
+	}
+	return ""
+}
+
+func (x *FindInRepositoryRequest) GetPatterns() []string {
+	if x != nil {
+		return x.Patterns
+	}
+	return nil
+}
+
+func (x *FindInRepositoryRequest) GetIgnoreCase() bool {
+	if x != nil {
+		return x.IgnoreCase
+	}
+	return false
+}
+
+func (x *FindInRepositoryRequest) GetSnapshotIds() []string {
+	if x != nil {
+		return x.SnapshotIds
+	}
+	return nil
+}
+
+func (x *FindInRepositoryRequest) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+// FindInRepositoryResponse is what the search found.
+type FindInRepositoryResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One per matching path and snapshot.
+	Matches []*ResticFindMatch `protobuf:"bytes,1,rep,name=matches,proto3" json:"matches,omitempty"`
+	// The most matches a worker returns, or its result size cap, was
+	// reached.
+	Truncated bool `protobuf:"varint,2,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	// Every requested snapshot was searched (false: the search stopped at
+	// the scan timeout).
+	Complete bool `protobuf:"varint,3,opt,name=complete,proto3" json:"complete,omitempty"`
+	// How many snapshots were searched.
+	SnapshotsSearched int32 `protobuf:"varint,4,opt,name=snapshots_searched,json=snapshotsSearched,proto3" json:"snapshots_searched,omitempty"`
+	// The worker that searched.
+	Worker        *ProbeWorkerRef `protobuf:"bytes,5,opt,name=worker,proto3" json:"worker,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FindInRepositoryResponse) Reset() {
+	*x = FindInRepositoryResponse{}
+	mi := &file_syncr_v1_restic_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FindInRepositoryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FindInRepositoryResponse) ProtoMessage() {}
+
+func (x *FindInRepositoryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_restic_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FindInRepositoryResponse.ProtoReflect.Descriptor instead.
+func (*FindInRepositoryResponse) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_restic_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *FindInRepositoryResponse) GetMatches() []*ResticFindMatch {
+	if x != nil {
+		return x.Matches
+	}
+	return nil
+}
+
+func (x *FindInRepositoryResponse) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
+}
+
+func (x *FindInRepositoryResponse) GetComplete() bool {
+	if x != nil {
+		return x.Complete
+	}
+	return false
+}
+
+func (x *FindInRepositoryResponse) GetSnapshotsSearched() int32 {
+	if x != nil {
+		return x.SnapshotsSearched
+	}
+	return 0
+}
+
+func (x *FindInRepositoryResponse) GetWorker() *ProbeWorkerRef {
+	if x != nil {
+		return x.Worker
+	}
+	return nil
+}
+
+// CompareSnapshotsRequest names the two snapshots to compare.
+type CompareSnapshotsRequest struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	RepositoryId string                 `protobuf:"bytes,1,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
+	// The older and the newer snapshot (8 to 64 hex digits each); they must
+	// differ.
+	FromSnapshotId string `protobuf:"bytes,2,opt,name=from_snapshot_id,json=fromSnapshotId,proto3" json:"from_snapshot_id,omitempty"`
+	ToSnapshotId   string `protobuf:"bytes,3,opt,name=to_snapshot_id,json=toSnapshotId,proto3" json:"to_snapshot_id,omitempty"`
+	// Snapshot tree path of the folder to compare; empty or "/" is the
+	// whole tree.
+	Path string `protobuf:"bytes,4,opt,name=path,proto3" json:"path,omitempty"`
+	// The worker to compare through; empty lets the controller choose.
+	WorkerId      string `protobuf:"bytes,5,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompareSnapshotsRequest) Reset() {
+	*x = CompareSnapshotsRequest{}
+	mi := &file_syncr_v1_restic_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompareSnapshotsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompareSnapshotsRequest) ProtoMessage() {}
+
+func (x *CompareSnapshotsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_restic_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompareSnapshotsRequest.ProtoReflect.Descriptor instead.
+func (*CompareSnapshotsRequest) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_restic_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *CompareSnapshotsRequest) GetRepositoryId() string {
+	if x != nil {
+		return x.RepositoryId
+	}
+	return ""
+}
+
+func (x *CompareSnapshotsRequest) GetFromSnapshotId() string {
+	if x != nil {
+		return x.FromSnapshotId
+	}
+	return ""
+}
+
+func (x *CompareSnapshotsRequest) GetToSnapshotId() string {
+	if x != nil {
+		return x.ToSnapshotId
+	}
+	return ""
+}
+
+func (x *CompareSnapshotsRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *CompareSnapshotsRequest) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+// CompareSnapshotsResponse is the comparison.
+type CompareSnapshotsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The changed paths, in restic's order.
+	Changes []*ResticDiffChange `protobuf:"bytes,1,rep,name=changes,proto3" json:"changes,omitempty"`
+	// restic's totals; unset when the comparison stopped early.
+	Stats *ResticDiffStats `protobuf:"bytes,2,opt,name=stats,proto3" json:"stats,omitempty"`
+	// The most changes a worker returns, or its result size cap, was
+	// reached.
+	Truncated bool `protobuf:"varint,3,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	// restic finished (stats is set).
+	Complete bool `protobuf:"varint,4,opt,name=complete,proto3" json:"complete,omitempty"`
+	// The worker that compared them.
+	Worker        *ProbeWorkerRef `protobuf:"bytes,5,opt,name=worker,proto3" json:"worker,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompareSnapshotsResponse) Reset() {
+	*x = CompareSnapshotsResponse{}
+	mi := &file_syncr_v1_restic_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompareSnapshotsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompareSnapshotsResponse) ProtoMessage() {}
+
+func (x *CompareSnapshotsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_restic_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompareSnapshotsResponse.ProtoReflect.Descriptor instead.
+func (*CompareSnapshotsResponse) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_restic_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *CompareSnapshotsResponse) GetChanges() []*ResticDiffChange {
+	if x != nil {
+		return x.Changes
+	}
+	return nil
+}
+
+func (x *CompareSnapshotsResponse) GetStats() *ResticDiffStats {
+	if x != nil {
+		return x.Stats
+	}
+	return nil
+}
+
+func (x *CompareSnapshotsResponse) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
+}
+
+func (x *CompareSnapshotsResponse) GetComplete() bool {
+	if x != nil {
+		return x.Complete
+	}
+	return false
+}
+
+func (x *CompareSnapshotsResponse) GetWorker() *ProbeWorkerRef {
+	if x != nil {
+		return x.Worker
+	}
+	return nil
+}
+
 var File_syncr_v1_restic_proto protoreflect.FileDescriptor
 
 const file_syncr_v1_restic_proto_rawDesc = "" +
 	"\n" +
-	"\x15syncr/v1/restic.proto\x12\bsyncr.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x12syncr/v1/api.proto\x1a\x13syncr/v1/link.proto\x1a\x14syncr/v1/probe.proto\"\xc9\x05\n" +
+	"\x15syncr/v1/restic.proto\x12\bsyncr.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x12syncr/v1/api.proto\x1a\x13syncr/v1/link.proto\x1a\x14syncr/v1/probe.proto\"\xc9\x05\n" +
 	"\n" +
 	"Repository\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
@@ -1575,6 +2051,47 @@ const file_syncr_v1_restic_proto_rawDesc = "" +
 	"\aentries\x18\x02 \x03(\v2\x14.syncr.v1.ProbeEntryR\aentries\x12\x1c\n" +
 	"\ttruncated\x18\x03 \x01(\bR\ttruncated\x120\n" +
 	"\x06worker\x18\x04 \x01(\v2\x18.syncr.v1.ProbeWorkerRefR\x06workerJ\x04\b\x05\x10\n" +
+	"\"\x9b\x01\n" +
+	"\x1cMeasureSnapshotFolderRequest\x12#\n" +
+	"\rrepository_id\x18\x01 \x01(\tR\frepositoryId\x12\x1f\n" +
+	"\vsnapshot_id\x18\x02 \x01(\tR\n" +
+	"snapshotId\x12\x12\n" +
+	"\x04path\x18\x03 \x01(\tR\x04path\x12\x1b\n" +
+	"\tworker_id\x18\x04 \x01(\tR\bworkerIdJ\x04\b\x05\x10\n" +
+	"\"\xca\x01\n" +
+	"\x1dMeasureSnapshotFolderResponse\x12<\n" +
+	"\vmeasurement\x18\x01 \x01(\v2\x1a.syncr.v1.ProbeMeasurementR\vmeasurement\x120\n" +
+	"\x06worker\x18\x02 \x01(\v2\x18.syncr.v1.ProbeWorkerRefR\x06worker\x123\n" +
+	"\aelapsed\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\aelapsedJ\x04\b\x04\x10\n" +
+	"\"\xc1\x01\n" +
+	"\x17FindInRepositoryRequest\x12#\n" +
+	"\rrepository_id\x18\x01 \x01(\tR\frepositoryId\x12\x1a\n" +
+	"\bpatterns\x18\x02 \x03(\tR\bpatterns\x12\x1f\n" +
+	"\vignore_case\x18\x03 \x01(\bR\n" +
+	"ignoreCase\x12!\n" +
+	"\fsnapshot_ids\x18\x04 \x03(\tR\vsnapshotIds\x12\x1b\n" +
+	"\tworker_id\x18\x05 \x01(\tR\bworkerIdJ\x04\b\x06\x10\n" +
+	"\"\xf0\x01\n" +
+	"\x18FindInRepositoryResponse\x123\n" +
+	"\amatches\x18\x01 \x03(\v2\x19.syncr.v1.ResticFindMatchR\amatches\x12\x1c\n" +
+	"\ttruncated\x18\x02 \x01(\bR\ttruncated\x12\x1a\n" +
+	"\bcomplete\x18\x03 \x01(\bR\bcomplete\x12-\n" +
+	"\x12snapshots_searched\x18\x04 \x01(\x05R\x11snapshotsSearched\x120\n" +
+	"\x06worker\x18\x05 \x01(\v2\x18.syncr.v1.ProbeWorkerRefR\x06workerJ\x04\b\x06\x10\n" +
+	"\"\xc5\x01\n" +
+	"\x17CompareSnapshotsRequest\x12#\n" +
+	"\rrepository_id\x18\x01 \x01(\tR\frepositoryId\x12(\n" +
+	"\x10from_snapshot_id\x18\x02 \x01(\tR\x0efromSnapshotId\x12$\n" +
+	"\x0eto_snapshot_id\x18\x03 \x01(\tR\ftoSnapshotId\x12\x12\n" +
+	"\x04path\x18\x04 \x01(\tR\x04path\x12\x1b\n" +
+	"\tworker_id\x18\x05 \x01(\tR\bworkerIdJ\x04\b\x06\x10\n" +
+	"\"\xf3\x01\n" +
+	"\x18CompareSnapshotsResponse\x124\n" +
+	"\achanges\x18\x01 \x03(\v2\x1a.syncr.v1.ResticDiffChangeR\achanges\x12/\n" +
+	"\x05stats\x18\x02 \x01(\v2\x19.syncr.v1.ResticDiffStatsR\x05stats\x12\x1c\n" +
+	"\ttruncated\x18\x03 \x01(\bR\ttruncated\x12\x1a\n" +
+	"\bcomplete\x18\x04 \x01(\bR\bcomplete\x120\n" +
+	"\x06worker\x18\x05 \x01(\v2\x18.syncr.v1.ProbeWorkerRefR\x06workerJ\x04\b\x06\x10\n" +
 	"*\x83\x01\n" +
 	"\x14RepositoryCreateMode\x12&\n" +
 	"\"REPOSITORY_CREATE_MODE_UNSPECIFIED\x10\x00\x12\x1f\n" +
@@ -1583,7 +2100,7 @@ const file_syncr_v1_restic_proto_rawDesc = "" +
 	"\x19RepositoryDeletionOutcome\x12+\n" +
 	"'REPOSITORY_DELETION_OUTCOME_UNSPECIFIED\x10\x00\x12&\n" +
 	"\"REPOSITORY_DELETION_OUTCOME_FAILED\x10\x01\x12)\n" +
-	"%REPOSITORY_DELETION_OUTCOME_CANCELLED\x10\x022\x8e\x05\n" +
+	"%REPOSITORY_DELETION_OUTCOME_CANCELLED\x10\x022\xb4\a\n" +
 	"\rResticService\x12^\n" +
 	"\x10ListRepositories\x12!.syncr.v1.ListRepositoriesRequest\x1a\".syncr.v1.ListRepositoriesResponse\"\x03\x90\x02\x01\x12U\n" +
 	"\rGetRepository\x12\x1e.syncr.v1.GetRepositoryRequest\x1a\x1f.syncr.v1.GetRepositoryResponse\"\x03\x90\x02\x01\x12[\n" +
@@ -1591,7 +2108,10 @@ const file_syncr_v1_restic_proto_rawDesc = "" +
 	"\x10UpdateRepository\x12!.syncr.v1.UpdateRepositoryRequest\x1a\".syncr.v1.UpdateRepositoryResponse\"\x00\x12^\n" +
 	"\x10DeleteRepository\x12!.syncr.v1.DeleteRepositoryRequest\x1a\".syncr.v1.DeleteRepositoryResponse\"\x03\x90\x02\x02\x12R\n" +
 	"\rListSnapshots\x12\x1e.syncr.v1.ListSnapshotsRequest\x1a\x1f.syncr.v1.ListSnapshotsResponse\"\x00\x12X\n" +
-	"\x0eBrowseSnapshot\x12\x1f.syncr.v1.BrowseSnapshotRequest\x1a .syncr.v1.BrowseSnapshotResponse\"\x03\x90\x02\x01B\x8e\x01\n" +
+	"\x0eBrowseSnapshot\x12\x1f.syncr.v1.BrowseSnapshotRequest\x1a .syncr.v1.BrowseSnapshotResponse\"\x03\x90\x02\x01\x12j\n" +
+	"\x15MeasureSnapshotFolder\x12&.syncr.v1.MeasureSnapshotFolderRequest\x1a'.syncr.v1.MeasureSnapshotFolderResponse\"\x00\x12[\n" +
+	"\x10FindInRepository\x12!.syncr.v1.FindInRepositoryRequest\x1a\".syncr.v1.FindInRepositoryResponse\"\x00\x12[\n" +
+	"\x10CompareSnapshots\x12!.syncr.v1.CompareSnapshotsRequest\x1a\".syncr.v1.CompareSnapshotsResponse\"\x00B\x8e\x01\n" +
 	"\fcom.syncr.v1B\vResticProtoP\x01Z0github.com/Zeptiny/Syncr/gen/go/syncr/v1;syncrv1\xa2\x02\x03SXX\xaa\x02\bSyncr.V1\xca\x02\bSyncr\\V1\xe2\x02\x14Syncr\\V1\\GPBMetadata\xea\x02\tSyncr::V1b\x06proto3"
 
 var (
@@ -1607,47 +2127,58 @@ func file_syncr_v1_restic_proto_rawDescGZIP() []byte {
 }
 
 var file_syncr_v1_restic_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_syncr_v1_restic_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_syncr_v1_restic_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_syncr_v1_restic_proto_goTypes = []any{
-	(RepositoryCreateMode)(0),        // 0: syncr.v1.RepositoryCreateMode
-	(RepositoryDeletionOutcome)(0),   // 1: syncr.v1.RepositoryDeletionOutcome
-	(*Repository)(nil),               // 2: syncr.v1.Repository
-	(*RepositoryJobRef)(nil),         // 3: syncr.v1.RepositoryJobRef
-	(*RepositoryStats)(nil),          // 4: syncr.v1.RepositoryStats
-	(*RepositoryInput)(nil),          // 5: syncr.v1.RepositoryInput
-	(*ListRepositoriesRequest)(nil),  // 6: syncr.v1.ListRepositoriesRequest
-	(*ListRepositoriesResponse)(nil), // 7: syncr.v1.ListRepositoriesResponse
-	(*GetRepositoryRequest)(nil),     // 8: syncr.v1.GetRepositoryRequest
-	(*GetRepositoryResponse)(nil),    // 9: syncr.v1.GetRepositoryResponse
-	(*CreateRepositoryRequest)(nil),  // 10: syncr.v1.CreateRepositoryRequest
-	(*CreateRepositoryResponse)(nil), // 11: syncr.v1.CreateRepositoryResponse
-	(*UpdateRepositoryRequest)(nil),  // 12: syncr.v1.UpdateRepositoryRequest
-	(*UpdateRepositoryResponse)(nil), // 13: syncr.v1.UpdateRepositoryResponse
-	(*DeleteRepositoryRequest)(nil),  // 14: syncr.v1.DeleteRepositoryRequest
-	(*DeleteRepositoryResponse)(nil), // 15: syncr.v1.DeleteRepositoryResponse
-	(*ListSnapshotsRequest)(nil),     // 16: syncr.v1.ListSnapshotsRequest
-	(*ListSnapshotsResponse)(nil),    // 17: syncr.v1.ListSnapshotsResponse
-	(*BrowseSnapshotRequest)(nil),    // 18: syncr.v1.BrowseSnapshotRequest
-	(*BrowseSnapshotResponse)(nil),   // 19: syncr.v1.BrowseSnapshotResponse
-	(*JobRemoteRef)(nil),             // 20: syncr.v1.JobRemoteRef
-	(*timestamppb.Timestamp)(nil),    // 21: google.protobuf.Timestamp
-	(JobStatus)(0),                   // 22: syncr.v1.JobStatus
-	(*ProbeWorkerRef)(nil),           // 23: syncr.v1.ProbeWorkerRef
-	(*ResticSnapshot)(nil),           // 24: syncr.v1.ResticSnapshot
-	(*ProbeEntry)(nil),               // 25: syncr.v1.ProbeEntry
+	(RepositoryCreateMode)(0),             // 0: syncr.v1.RepositoryCreateMode
+	(RepositoryDeletionOutcome)(0),        // 1: syncr.v1.RepositoryDeletionOutcome
+	(*Repository)(nil),                    // 2: syncr.v1.Repository
+	(*RepositoryJobRef)(nil),              // 3: syncr.v1.RepositoryJobRef
+	(*RepositoryStats)(nil),               // 4: syncr.v1.RepositoryStats
+	(*RepositoryInput)(nil),               // 5: syncr.v1.RepositoryInput
+	(*ListRepositoriesRequest)(nil),       // 6: syncr.v1.ListRepositoriesRequest
+	(*ListRepositoriesResponse)(nil),      // 7: syncr.v1.ListRepositoriesResponse
+	(*GetRepositoryRequest)(nil),          // 8: syncr.v1.GetRepositoryRequest
+	(*GetRepositoryResponse)(nil),         // 9: syncr.v1.GetRepositoryResponse
+	(*CreateRepositoryRequest)(nil),       // 10: syncr.v1.CreateRepositoryRequest
+	(*CreateRepositoryResponse)(nil),      // 11: syncr.v1.CreateRepositoryResponse
+	(*UpdateRepositoryRequest)(nil),       // 12: syncr.v1.UpdateRepositoryRequest
+	(*UpdateRepositoryResponse)(nil),      // 13: syncr.v1.UpdateRepositoryResponse
+	(*DeleteRepositoryRequest)(nil),       // 14: syncr.v1.DeleteRepositoryRequest
+	(*DeleteRepositoryResponse)(nil),      // 15: syncr.v1.DeleteRepositoryResponse
+	(*ListSnapshotsRequest)(nil),          // 16: syncr.v1.ListSnapshotsRequest
+	(*ListSnapshotsResponse)(nil),         // 17: syncr.v1.ListSnapshotsResponse
+	(*BrowseSnapshotRequest)(nil),         // 18: syncr.v1.BrowseSnapshotRequest
+	(*BrowseSnapshotResponse)(nil),        // 19: syncr.v1.BrowseSnapshotResponse
+	(*MeasureSnapshotFolderRequest)(nil),  // 20: syncr.v1.MeasureSnapshotFolderRequest
+	(*MeasureSnapshotFolderResponse)(nil), // 21: syncr.v1.MeasureSnapshotFolderResponse
+	(*FindInRepositoryRequest)(nil),       // 22: syncr.v1.FindInRepositoryRequest
+	(*FindInRepositoryResponse)(nil),      // 23: syncr.v1.FindInRepositoryResponse
+	(*CompareSnapshotsRequest)(nil),       // 24: syncr.v1.CompareSnapshotsRequest
+	(*CompareSnapshotsResponse)(nil),      // 25: syncr.v1.CompareSnapshotsResponse
+	(*JobRemoteRef)(nil),                  // 26: syncr.v1.JobRemoteRef
+	(*timestamppb.Timestamp)(nil),         // 27: google.protobuf.Timestamp
+	(JobStatus)(0),                        // 28: syncr.v1.JobStatus
+	(*ProbeWorkerRef)(nil),                // 29: syncr.v1.ProbeWorkerRef
+	(*ResticSnapshot)(nil),                // 30: syncr.v1.ResticSnapshot
+	(*ProbeEntry)(nil),                    // 31: syncr.v1.ProbeEntry
+	(*ProbeMeasurement)(nil),              // 32: syncr.v1.ProbeMeasurement
+	(*durationpb.Duration)(nil),           // 33: google.protobuf.Duration
+	(*ResticFindMatch)(nil),               // 34: syncr.v1.ResticFindMatch
+	(*ResticDiffChange)(nil),              // 35: syncr.v1.ResticDiffChange
+	(*ResticDiffStats)(nil),               // 36: syncr.v1.ResticDiffStats
 }
 var file_syncr_v1_restic_proto_depIdxs = []int32{
-	20, // 0: syncr.v1.Repository.remote:type_name -> syncr.v1.JobRemoteRef
+	26, // 0: syncr.v1.Repository.remote:type_name -> syncr.v1.JobRemoteRef
 	4,  // 1: syncr.v1.Repository.stats:type_name -> syncr.v1.RepositoryStats
-	21, // 2: syncr.v1.Repository.created_at:type_name -> google.protobuf.Timestamp
-	21, // 3: syncr.v1.Repository.updated_at:type_name -> google.protobuf.Timestamp
-	21, // 4: syncr.v1.Repository.deletion_requested_at:type_name -> google.protobuf.Timestamp
+	27, // 2: syncr.v1.Repository.created_at:type_name -> google.protobuf.Timestamp
+	27, // 3: syncr.v1.Repository.updated_at:type_name -> google.protobuf.Timestamp
+	27, // 4: syncr.v1.Repository.deletion_requested_at:type_name -> google.protobuf.Timestamp
 	1,  // 5: syncr.v1.Repository.deletion_outcome:type_name -> syncr.v1.RepositoryDeletionOutcome
-	22, // 6: syncr.v1.RepositoryJobRef.status:type_name -> syncr.v1.JobStatus
-	21, // 7: syncr.v1.RepositoryJobRef.created_at:type_name -> google.protobuf.Timestamp
-	21, // 8: syncr.v1.RepositoryJobRef.finished_at:type_name -> google.protobuf.Timestamp
-	21, // 9: syncr.v1.RepositoryStats.latest_snapshot_at:type_name -> google.protobuf.Timestamp
-	21, // 10: syncr.v1.RepositoryStats.snapshots_refreshed_at:type_name -> google.protobuf.Timestamp
+	28, // 6: syncr.v1.RepositoryJobRef.status:type_name -> syncr.v1.JobStatus
+	27, // 7: syncr.v1.RepositoryJobRef.created_at:type_name -> google.protobuf.Timestamp
+	27, // 8: syncr.v1.RepositoryJobRef.finished_at:type_name -> google.protobuf.Timestamp
+	27, // 9: syncr.v1.RepositoryStats.latest_snapshot_at:type_name -> google.protobuf.Timestamp
+	27, // 10: syncr.v1.RepositoryStats.snapshots_refreshed_at:type_name -> google.protobuf.Timestamp
 	3,  // 11: syncr.v1.RepositoryStats.last_backup:type_name -> syncr.v1.RepositoryJobRef
 	3,  // 12: syncr.v1.RepositoryStats.last_check:type_name -> syncr.v1.RepositoryJobRef
 	0,  // 13: syncr.v1.RepositoryInput.mode:type_name -> syncr.v1.RepositoryCreateMode
@@ -1655,33 +2186,47 @@ var file_syncr_v1_restic_proto_depIdxs = []int32{
 	2,  // 15: syncr.v1.GetRepositoryResponse.repository:type_name -> syncr.v1.Repository
 	5,  // 16: syncr.v1.CreateRepositoryRequest.input:type_name -> syncr.v1.RepositoryInput
 	2,  // 17: syncr.v1.CreateRepositoryResponse.repository:type_name -> syncr.v1.Repository
-	23, // 18: syncr.v1.CreateRepositoryResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	29, // 18: syncr.v1.CreateRepositoryResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
 	2,  // 19: syncr.v1.UpdateRepositoryResponse.repository:type_name -> syncr.v1.Repository
-	23, // 20: syncr.v1.DeleteRepositoryResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	24, // 21: syncr.v1.ListSnapshotsResponse.snapshots:type_name -> syncr.v1.ResticSnapshot
-	21, // 22: syncr.v1.ListSnapshotsResponse.refreshed_at:type_name -> google.protobuf.Timestamp
-	23, // 23: syncr.v1.ListSnapshotsResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	25, // 24: syncr.v1.BrowseSnapshotResponse.entries:type_name -> syncr.v1.ProbeEntry
-	23, // 25: syncr.v1.BrowseSnapshotResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
-	6,  // 26: syncr.v1.ResticService.ListRepositories:input_type -> syncr.v1.ListRepositoriesRequest
-	8,  // 27: syncr.v1.ResticService.GetRepository:input_type -> syncr.v1.GetRepositoryRequest
-	10, // 28: syncr.v1.ResticService.CreateRepository:input_type -> syncr.v1.CreateRepositoryRequest
-	12, // 29: syncr.v1.ResticService.UpdateRepository:input_type -> syncr.v1.UpdateRepositoryRequest
-	14, // 30: syncr.v1.ResticService.DeleteRepository:input_type -> syncr.v1.DeleteRepositoryRequest
-	16, // 31: syncr.v1.ResticService.ListSnapshots:input_type -> syncr.v1.ListSnapshotsRequest
-	18, // 32: syncr.v1.ResticService.BrowseSnapshot:input_type -> syncr.v1.BrowseSnapshotRequest
-	7,  // 33: syncr.v1.ResticService.ListRepositories:output_type -> syncr.v1.ListRepositoriesResponse
-	9,  // 34: syncr.v1.ResticService.GetRepository:output_type -> syncr.v1.GetRepositoryResponse
-	11, // 35: syncr.v1.ResticService.CreateRepository:output_type -> syncr.v1.CreateRepositoryResponse
-	13, // 36: syncr.v1.ResticService.UpdateRepository:output_type -> syncr.v1.UpdateRepositoryResponse
-	15, // 37: syncr.v1.ResticService.DeleteRepository:output_type -> syncr.v1.DeleteRepositoryResponse
-	17, // 38: syncr.v1.ResticService.ListSnapshots:output_type -> syncr.v1.ListSnapshotsResponse
-	19, // 39: syncr.v1.ResticService.BrowseSnapshot:output_type -> syncr.v1.BrowseSnapshotResponse
-	33, // [33:40] is the sub-list for method output_type
-	26, // [26:33] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	29, // 20: syncr.v1.DeleteRepositoryResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	30, // 21: syncr.v1.ListSnapshotsResponse.snapshots:type_name -> syncr.v1.ResticSnapshot
+	27, // 22: syncr.v1.ListSnapshotsResponse.refreshed_at:type_name -> google.protobuf.Timestamp
+	29, // 23: syncr.v1.ListSnapshotsResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	31, // 24: syncr.v1.BrowseSnapshotResponse.entries:type_name -> syncr.v1.ProbeEntry
+	29, // 25: syncr.v1.BrowseSnapshotResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	32, // 26: syncr.v1.MeasureSnapshotFolderResponse.measurement:type_name -> syncr.v1.ProbeMeasurement
+	29, // 27: syncr.v1.MeasureSnapshotFolderResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	33, // 28: syncr.v1.MeasureSnapshotFolderResponse.elapsed:type_name -> google.protobuf.Duration
+	34, // 29: syncr.v1.FindInRepositoryResponse.matches:type_name -> syncr.v1.ResticFindMatch
+	29, // 30: syncr.v1.FindInRepositoryResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	35, // 31: syncr.v1.CompareSnapshotsResponse.changes:type_name -> syncr.v1.ResticDiffChange
+	36, // 32: syncr.v1.CompareSnapshotsResponse.stats:type_name -> syncr.v1.ResticDiffStats
+	29, // 33: syncr.v1.CompareSnapshotsResponse.worker:type_name -> syncr.v1.ProbeWorkerRef
+	6,  // 34: syncr.v1.ResticService.ListRepositories:input_type -> syncr.v1.ListRepositoriesRequest
+	8,  // 35: syncr.v1.ResticService.GetRepository:input_type -> syncr.v1.GetRepositoryRequest
+	10, // 36: syncr.v1.ResticService.CreateRepository:input_type -> syncr.v1.CreateRepositoryRequest
+	12, // 37: syncr.v1.ResticService.UpdateRepository:input_type -> syncr.v1.UpdateRepositoryRequest
+	14, // 38: syncr.v1.ResticService.DeleteRepository:input_type -> syncr.v1.DeleteRepositoryRequest
+	16, // 39: syncr.v1.ResticService.ListSnapshots:input_type -> syncr.v1.ListSnapshotsRequest
+	18, // 40: syncr.v1.ResticService.BrowseSnapshot:input_type -> syncr.v1.BrowseSnapshotRequest
+	20, // 41: syncr.v1.ResticService.MeasureSnapshotFolder:input_type -> syncr.v1.MeasureSnapshotFolderRequest
+	22, // 42: syncr.v1.ResticService.FindInRepository:input_type -> syncr.v1.FindInRepositoryRequest
+	24, // 43: syncr.v1.ResticService.CompareSnapshots:input_type -> syncr.v1.CompareSnapshotsRequest
+	7,  // 44: syncr.v1.ResticService.ListRepositories:output_type -> syncr.v1.ListRepositoriesResponse
+	9,  // 45: syncr.v1.ResticService.GetRepository:output_type -> syncr.v1.GetRepositoryResponse
+	11, // 46: syncr.v1.ResticService.CreateRepository:output_type -> syncr.v1.CreateRepositoryResponse
+	13, // 47: syncr.v1.ResticService.UpdateRepository:output_type -> syncr.v1.UpdateRepositoryResponse
+	15, // 48: syncr.v1.ResticService.DeleteRepository:output_type -> syncr.v1.DeleteRepositoryResponse
+	17, // 49: syncr.v1.ResticService.ListSnapshots:output_type -> syncr.v1.ListSnapshotsResponse
+	19, // 50: syncr.v1.ResticService.BrowseSnapshot:output_type -> syncr.v1.BrowseSnapshotResponse
+	21, // 51: syncr.v1.ResticService.MeasureSnapshotFolder:output_type -> syncr.v1.MeasureSnapshotFolderResponse
+	23, // 52: syncr.v1.ResticService.FindInRepository:output_type -> syncr.v1.FindInRepositoryResponse
+	25, // 53: syncr.v1.ResticService.CompareSnapshots:output_type -> syncr.v1.CompareSnapshotsResponse
+	44, // [44:54] is the sub-list for method output_type
+	34, // [34:44] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_syncr_v1_restic_proto_init() }
@@ -1698,7 +2243,7 @@ func file_syncr_v1_restic_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_syncr_v1_restic_proto_rawDesc), len(file_syncr_v1_restic_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   18,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

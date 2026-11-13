@@ -213,4 +213,142 @@ describe("RestoreSheet", () => {
     expect(def?.operation.case).toBe("resticRestore");
     expect(def?.hooks).toMatchObject({ before: ["stop-paperless"], after: ["start-paperless"] });
   });
+
+  describe("to the original location", () => {
+    const paths = ["/srv/photos/README.txt", "/srv/photos/2026/01"];
+    // Workers of 2.1 restore items in place; the rest are outdated.
+    const inPlace =
+      (...ids: string[]) =>
+      (ws: ReturnType<typeof m5.workers>) => {
+        for (const w of ws)
+          if (ids.includes(w.id)) w.info?.features.push("restic.restore_subfolder_paths");
+      };
+    const current = inPlace(fx.ids.nas, fx.ids.backupHost, fx.ids.office);
+
+    it("proposes the snapshot's machine and the items' folder, keeping existing files", async () => {
+      const { user, api, snapshot } = open(
+        m5.ids.photosVault,
+        { mode: "original", paths },
+        current,
+      );
+      expect(await screen.findByRole("combobox", { name: "Worker" })).toHaveTextContent("nas-01");
+      expect(screen.getByLabelText("Target folder")).toHaveValue("/srv/photos");
+      expect(
+        screen.getByText(
+          "Back where they were: the items go into the target as they were in /srv/photos.",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: /^Keep existing/ })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      expect(screen.getByTestId("restore-summary")).toHaveTextContent(
+        "Restores 2 items into /srv/photos on nas-01 and keeps existing files.",
+      );
+      await user.click(screen.getByRole("button", { name: "Start restore" }));
+      await waitFor(() => expect(api.of("RunJob")).toHaveLength(1));
+      const req = api.of<RunJobRequest>("RunJob")[0];
+      expect(req.workerId).toBe(fx.ids.nas);
+      expect(req.definition?.operation).toMatchObject({
+        case: "resticRestore",
+        value: {
+          snapshotId: snapshot.id,
+          target: "/srv/photos",
+          subfolder: "/srv/photos",
+          paths,
+          excludes: [],
+          overwrite: ResticRestoreOverwrite.NEVER,
+        },
+      });
+      // Going back is not a target to propose next time.
+      expect(localStorage.getItem(`syncr-restore-target:${m5.ids.photosVault}`)).toBeNull();
+    });
+
+    it("lets the user pick when the snapshot's machine is not online", async () => {
+      open(
+        m5.ids.officeLaptop,
+        { mode: "original", paths: ["/C/Users/ada/Documents/x.txt"] },
+        current,
+      );
+      const worker = await screen.findByRole("combobox", { name: "Worker" });
+      expect(worker).toHaveTextContent("Choose a worker");
+      expect(screen.getByText(/No online worker is OFFICE-PC/)).toBeInTheDocument();
+    });
+
+    it("never proposes an outdated worker, and blocks one that is chosen", async () => {
+      const { user, api } = open(
+        m5.ids.photosVault,
+        { mode: "original", paths },
+        inPlace(fx.ids.backupHost),
+      );
+      const worker = await screen.findByRole("combobox", { name: "Worker" });
+      expect(worker).toHaveTextContent("Choose a worker");
+      expect(
+        screen.getByText(/nas-01 took this snapshot, but it is too old to restore items back/),
+      ).toBeInTheDocument();
+      await user.click(worker);
+      expect(await screen.findByRole("option", { name: /nas-01.*outdated/ })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+      expect(screen.getByRole("option", { name: /backup-host/ })).not.toHaveAttribute(
+        "aria-disabled",
+      );
+      await user.keyboard("{Escape}");
+      expect(api.of("RunJob")).toHaveLength(0);
+    });
+
+    it("blocks a target outside the worker's allowed folders", async () => {
+      const { user, api } = open(m5.ids.photosVault, { mode: "original", paths }, current);
+      await user.click(await screen.findByRole("combobox", { name: "Worker" }));
+      await user.click(await screen.findByRole("option", { name: /backup-host/ }));
+      expect(screen.getByLabelText("Target folder")).toHaveValue("/srv/photos");
+      expect(screen.getByText(/Not inside backup-host's allowed folders/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Start restore" })).toBeDisabled();
+      expect(api.of("RunJob")).toHaveLength(0);
+    });
+  });
+
+  describe("remembered target", () => {
+    const key = `syncr-restore-target:${m5.ids.photosVault}`;
+
+    it("proposes the last worker and folder before the dated default", async () => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({ workerId: fx.ids.backupHost, target: "/srv/backup/last" }),
+      );
+      open(m5.ids.photosVault, { mode: "snapshot" });
+      expect(await screen.findByRole("combobox", { name: "Worker" })).toHaveTextContent(
+        "backup-host",
+      );
+      expect(screen.getByLabelText("Target folder")).toHaveValue("/srv/backup/last");
+    });
+
+    it("remembers a started restore and ignores what it cannot read", async () => {
+      localStorage.setItem(key, "{not json");
+      const { user, snapshot } = open(m5.ids.photosVault, {
+        mode: "items",
+        paths: ["/srv/photos/README.txt"],
+      });
+      expect(await screen.findByRole("combobox", { name: "Worker" })).toHaveTextContent("nas-01");
+      const target = `/srv/restore-${short(snapshot.id)}-20261110`;
+      expect(screen.getByLabelText("Target folder")).toHaveValue(target);
+      await user.click(screen.getByRole("button", { name: "Start restore" }));
+      await waitFor(() =>
+        expect(JSON.parse(localStorage.getItem(key) ?? "{}")).toEqual({
+          workerId: fx.ids.nas,
+          target,
+        }),
+      );
+    });
+
+    it("falls back when the remembered worker is gone or offline", async () => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({ workerId: fx.ids.office, target: "D:\\Shared\\r" }),
+      );
+      open(m5.ids.photosVault, { mode: "snapshot" });
+      expect(await screen.findByRole("combobox", { name: "Worker" })).toHaveTextContent("nas-01");
+    });
+  });
 });

@@ -1,0 +1,319 @@
+{
+  "about": "Selections turned into rclone transfers by selectionFilters (rclone-filters.ts). For each case: the selected items (paths relative to the tree's root, as a remote's are), the transfer's source folder and filter lines, and what `rclone lsf -R` lists with those filters in the source folder (folders end in /). Build the tree from `tree` (entries ending in / are empty folders; a file's content does not matter). Some names are not valid on Windows.",
+  "rclone": "v1.75.2",
+  "tree": [
+    "awkward/star*.txt",
+    "awkward/starX.txt",
+    "awkward/q?.txt",
+    "awkward/qX.txt",
+    "awkward/[br].txt",
+    "awkward/b.txt",
+    "awkward/r.txt",
+    "awkward/]close.txt",
+    "awkward/{a,b}.txt",
+    "awkward/a.txt",
+    "awkward/back\\slash.txt",
+    "awkward/backslash.txt",
+    "awkward/with space.txt",
+    "awkward/-dash.txt",
+    "awkward/+plus.txt",
+    "awkward/ünï cødé ✓.txt",
+    "awkward/trail ",
+    "awkward/trail",
+    "awkward/#hash.txt",
+    "awkward/;semi.txt",
+    "awkward/!bang",
+    "awkward/dir*/in.txt",
+    "awkward/dirX/out.txt",
+    "awkward/{x}/in.txt",
+    "awkward/x/out.txt",
+    "awkward/[d]/in.txt",
+    "awkward/d/out.txt",
+    "awkward/-rf/in.txt",
+    "awkward/ünï dir/f.txt",
+    "awkward/**/in.txt",
+    "awkward/zz/out.txt",
+    "photos/2025/01/a.jpg",
+    "photos/2025/02/b.jpg",
+    "photos/2025/03/c.jpg",
+    "photos/2026/01/c.jpg",
+    "photos/2026/README.txt",
+    "photos/catalog.lrcat",
+    "photos/empty/",
+    "docs/contracts/lease.pdf",
+    "docs/contracts-old/old.pdf",
+    "docs/notes.md",
+    "docs/notes.mdx",
+    "docs/taxes/2025/return.pdf",
+    "docs/taxes/2026/return.pdf",
+    "top.txt"
+  ],
+  "cases": [
+    {
+      "name": "one file",
+      "selection": [
+        {
+          "path": "docs/notes.md",
+          "dir": false
+        }
+      ],
+      "source": "docs",
+      "filters": ["+ /notes.md", "- **"],
+      "matched": ["notes.md"]
+    },
+    {
+      "name": "one folder",
+      "selection": [
+        {
+          "path": "photos/2026",
+          "dir": true
+        }
+      ],
+      "source": "photos",
+      "filters": ["+ /2026/**", "- **"],
+      "matched": ["2026/", "2026/01/", "2026/01/c.jpg", "2026/README.txt"]
+    },
+    {
+      "name": "an empty folder",
+      "selection": [
+        {
+          "path": "photos/empty",
+          "dir": true
+        }
+      ],
+      "source": "photos",
+      "filters": ["+ /empty/**", "- **"],
+      "matched": ["empty/"]
+    },
+    {
+      "name": "siblings, a folder and a file",
+      "selection": [
+        {
+          "path": "photos/2025/01",
+          "dir": true
+        },
+        {
+          "path": "photos/2025/02/b.jpg",
+          "dir": false
+        }
+      ],
+      "source": "photos/2025",
+      "filters": ["+ /01/**", "+ /02/b.jpg", "- **"],
+      "matched": ["01/", "01/a.jpg", "02/", "02/b.jpg"]
+    },
+    {
+      "name": "items at different depths",
+      "selection": [
+        {
+          "path": "docs/taxes/2025/return.pdf",
+          "dir": false
+        },
+        {
+          "path": "docs/notes.md",
+          "dir": false
+        }
+      ],
+      "source": "docs",
+      "filters": ["+ /taxes/2025/return.pdf", "+ /notes.md", "- **"],
+      "matched": ["notes.md", "taxes/", "taxes/2025/", "taxes/2025/return.pdf"]
+    },
+    {
+      "name": "items from different folders",
+      "selection": [
+        {
+          "path": "photos/2026/01/c.jpg",
+          "dir": false
+        },
+        {
+          "path": "docs/contracts",
+          "dir": true
+        },
+        {
+          "path": "top.txt",
+          "dir": false
+        }
+      ],
+      "source": "",
+      "filters": ["+ /photos/2026/01/c.jpg", "+ /docs/contracts/**", "+ /top.txt", "- **"],
+      "matched": [
+        "docs/",
+        "docs/contracts/",
+        "docs/contracts/lease.pdf",
+        "photos/",
+        "photos/2026/",
+        "photos/2026/01/",
+        "photos/2026/01/c.jpg",
+        "top.txt"
+      ]
+    },
+    {
+      "name": "a folder whose name starts another's",
+      "selection": [
+        {
+          "path": "docs/contracts",
+          "dir": true
+        }
+      ],
+      "source": "docs",
+      "filters": ["+ /contracts/**", "- **"],
+      "matched": ["contracts/", "contracts/lease.pdf"]
+    },
+    {
+      "name": "awkward file names",
+      "selection": [
+        {
+          "path": "awkward/star*.txt",
+          "dir": false
+        },
+        {
+          "path": "awkward/q?.txt",
+          "dir": false
+        },
+        {
+          "path": "awkward/[br].txt",
+          "dir": false
+        },
+        {
+          "path": "awkward/]close.txt",
+          "dir": false
+        },
+        {
+          "path": "awkward/{a,b}.txt",
+          "dir": false
+        },
+        {
+          "path": "awkward/back\\slash.txt",
+          "dir": false
+        },
+        {
+          "path": "awkward/with space.txt",
+          "dir": false
+        },
+        {
+          "path": "awkward/-dash.txt",
+          "dir": false
+        },
+        {
+          "path": "awkward/+plus.txt",
+          "dir": false
+        },
+        {
+          "path": "awkward/ünï cødé ✓.txt",
+          "dir": false
+        },
+        {
+          "path": "awkward/trail ",
+          "dir": false
+        },
+        {
+          "path": "awkward/#hash.txt",
+          "dir": false
+        },
+        {
+          "path": "awkward/;semi.txt",
+          "dir": false
+        },
+        {
+          "path": "awkward/!bang",
+          "dir": false
+        }
+      ],
+      "source": "awkward",
+      "filters": [
+        "+ /star\\*.txt",
+        "+ /q\\?.txt",
+        "+ /\\[br\\].txt",
+        "+ /\\]close.txt",
+        "+ /\\{a,b\\}.txt",
+        "+ /back\\\\slash.txt",
+        "+ /with space.txt",
+        "+ /-dash.txt",
+        "+ /+plus.txt",
+        "+ /ünï cødé ✓.txt",
+        "+ /trail[ ]",
+        "+ /#hash.txt",
+        "+ /;semi.txt",
+        "+ /!bang",
+        "- **"
+      ],
+      "matched": [
+        "!bang",
+        "#hash.txt",
+        "+plus.txt",
+        "-dash.txt",
+        ";semi.txt",
+        "[br].txt",
+        "]close.txt",
+        "back\\slash.txt",
+        "q?.txt",
+        "star*.txt",
+        "trail ",
+        "with space.txt",
+        "{a,b}.txt",
+        "ünï cødé ✓.txt"
+      ]
+    },
+    {
+      "name": "awkward folder names",
+      "selection": [
+        {
+          "path": "awkward/dir*",
+          "dir": true
+        },
+        {
+          "path": "awkward/{x}",
+          "dir": true
+        },
+        {
+          "path": "awkward/[d]",
+          "dir": true
+        },
+        {
+          "path": "awkward/-rf",
+          "dir": true
+        },
+        {
+          "path": "awkward/ünï dir",
+          "dir": true
+        },
+        {
+          "path": "awkward/**",
+          "dir": true
+        }
+      ],
+      "source": "awkward",
+      "filters": [
+        "+ /dir\\*/**",
+        "+ /\\{x\\}/**",
+        "+ /\\[d\\]/**",
+        "+ /-rf/**",
+        "+ /ünï dir/**",
+        "+ /\\*\\*/**",
+        "- **"
+      ],
+      "matched": [
+        "**/",
+        "**/in.txt",
+        "-rf/",
+        "-rf/in.txt",
+        "[d]/",
+        "[d]/in.txt",
+        "dir*/",
+        "dir*/in.txt",
+        "{x}/",
+        "{x}/in.txt",
+        "ünï dir/",
+        "ünï dir/f.txt"
+      ]
+    }
+  ],
+  "resticFindAbout": "Exact-path patterns of restic find (exactPathPattern in features/repositories/scans.ts, used by Show versions): each snapshot tree path and the pattern that matches only it. The system test searches with them.",
+  "resticFind": [
+    { "path": "/notes [draft]*.txt", "pattern": "/notes [[]draft][*].txt" },
+    { "path": "/awkward/q?.txt", "pattern": "/awkward/q[?].txt" },
+    { "path": "/awkward/back\\slash.txt", "pattern": "/awkward/back[\\\\]slash.txt" },
+    { "path": "/awkward/[d]/in.txt", "pattern": "/awkward/[[]d]/in.txt" },
+    { "path": "/awkward/{a,b}.txt", "pattern": "/awkward/{a,b}.txt" },
+    { "path": "/ünï dir/f.txt", "pattern": "/ünï dir/f.txt" }
+  ]
+}

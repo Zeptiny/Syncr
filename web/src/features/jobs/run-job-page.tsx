@@ -23,6 +23,8 @@ import { errorMessage, fieldViolations } from "@/lib/errors";
 import { invalidateService } from "@/lib/invalidate";
 import { isResticKind } from "@/lib/status";
 
+import { draftRunJob, type ParsedDraft } from "../files/job-drafts";
+
 import {
   definitionError,
   definitionState,
@@ -88,6 +90,8 @@ function serverErrors(err: unknown): { errors: Errors; rest: string[] } {
 export interface RunJobPageProps {
   /** from is an earlier job to run again with changes. */
   from?: Job;
+  /** draft is a job prepared elsewhere, e.g. in the file browser (job-drafts.ts). */
+  draft?: ParsedDraft;
   /** kind and repository preselect the form (from the URL). */
   kind?: EditableKind;
   repository?: string;
@@ -97,7 +101,7 @@ export interface RunJobPageProps {
  * RunJobPage queues a job on a worker: a transfer, a two-way sync, a
  * backup, a retention run, a check or a prune.
  */
-export function RunJobPage({ from, kind, repository }: RunJobPageProps) {
+export function RunJobPage({ from, draft, kind, repository }: RunJobPageProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const backends = useBackendMap();
@@ -106,7 +110,7 @@ export function RunJobPage({ from, kind, repository }: RunJobPageProps) {
   const repositories = useQuery(ResticService.method.listRepositories, {});
   const run = useMutation(JobService.method.runJob);
   const [s, setS] = useState<RunJobState>(() =>
-    from ? fromJob(from) : emptyRunJob(kind, repository),
+    from ? fromJob(from) : draft ? draftRunJob(draft) : emptyRunJob(kind, repository),
   );
   const [saved] = useState(() => (from ? definitionState(from.definition) : undefined));
   const [errors, setErrors] = useState<Errors>({});

@@ -2,11 +2,18 @@
 // and the delete request. No React here, so it is easy to test.
 import type { MessageInitShape } from "@bufbuild/protobuf";
 
+import { commonParent } from "@/components/app/file-browser/selection";
 import type { RunJobRequestSchema, Worker } from "@/gen/syncr/v1/api_pb";
 import { ResticRestoreOverwrite, type ResticSnapshot } from "@/gen/syncr/v1/link_pb";
 import type { DeleteRepositoryRequestSchema, Repository } from "@/gen/syncr/v1/restic_pb";
 import { isWindowsOS } from "@/lib/restic-paths";
-import { FEATURE_RESTIC, hasFeature, isOnline, sortWorkers } from "@/lib/workers";
+import {
+  FEATURE_RESTIC,
+  FEATURE_RESTORE_SUBFOLDER_PATHS,
+  hasFeature,
+  isOnline,
+  sortWorkers,
+} from "@/lib/workers";
 
 import { emptyHooks, toHooks, type HooksState } from "../jobs/hooks";
 import { overwriteLabel } from "../jobs/model";
@@ -60,6 +67,86 @@ export function pickRestoreWorker(workers: Worker[], hostname: string): Worker |
   );
 }
 
+/**
+ * cannotRestoreInPlace says why a worker cannot restore items to their
+ * original location (restic.restore_subfolder_paths, 2.1), or undefined
+ * when it can.
+ */
+export function cannotRestoreInPlace(w: Worker): string | undefined {
+  if (hasFeature(w, FEATURE_RESTORE_SUBFOLDER_PATHS)) return undefined;
+  return w.info ? "outdated" : "not connected yet";
+}
+
+/**
+ * hostWorker is the online worker with restic whose host name is the
+ * snapshot's (ignoring case), and that can restore items in place: the
+ * machine a restore to the original location goes back to. Without one,
+ * the user picks.
+ */
+export function hostWorker(workers: Worker[], hostname: string): Worker | undefined {
+  const host = hostname.trim().toLowerCase();
+  if (!host) return undefined;
+  return sortWorkers(workers).find(
+    (w) =>
+      isOnline(w) &&
+      hasFeature(w, FEATURE_RESTIC) &&
+      !cannotRestoreInPlace(w) &&
+      (w.info?.hostname ?? "").toLowerCase() === host,
+  );
+}
+
+/**
+ * outdatedHost is the online worker with restic whose host name is the
+ * snapshot's but that cannot restore items in place, to say so.
+ */
+export function outdatedHost(workers: Worker[], hostname: string): Worker | undefined {
+  const host = hostname.trim().toLowerCase();
+  if (!host) return undefined;
+  return sortWorkers(workers).find(
+    (w) =>
+      isOnline(w) &&
+      hasFeature(w, FEATURE_RESTIC) &&
+      cannotRestoreInPlace(w) !== undefined &&
+      (w.info?.hostname ?? "").toLowerCase() === host,
+  );
+}
+
+/** RememberedTarget is the last worker and folder a repository was restored into. */
+export interface RememberedTarget {
+  workerId: string;
+  target: string;
+}
+
+/** restoreTargetKey is the localStorage key of a repository's remembered target. */
+export function restoreTargetKey(repositoryId: string): string {
+  return `syncr-restore-target:${repositoryId}`;
+}
+
+/** loadRestoreTarget reads a repository's remembered target; storage may be unavailable. */
+export function loadRestoreTarget(repositoryId: string): RememberedTarget | undefined {
+  try {
+    const raw = localStorage.getItem(restoreTargetKey(repositoryId));
+    if (!raw) return undefined;
+    const v: unknown = JSON.parse(raw);
+    if (typeof v !== "object" || v === null) return undefined;
+    const { workerId, target } = v as Record<string, unknown>;
+    if (typeof workerId !== "string" || typeof target !== "string" || !workerId || !target)
+      return undefined;
+    return { workerId, target };
+  } catch {
+    return undefined;
+  }
+}
+
+/** saveRestoreTarget remembers where a repository was restored into, if storage allows. */
+export function saveRestoreTarget(repositoryId: string, t: RememberedTarget): void {
+  try {
+    localStorage.setItem(restoreTargetKey(repositoryId), JSON.stringify(t));
+  } catch {
+    // Private mode or full storage: nothing is remembered.
+  }
+}
+
 /** RestoreWhat is what a restore takes from the snapshot. */
 export type RestoreWhat =
   /** Everything, laid out under the target by its original path. */
@@ -67,7 +154,12 @@ export type RestoreWhat =
   /** Chosen files and folders, laid out by their original paths. */
   | { mode: "items"; paths: string[] }
   /** One folder's contents, placed directly in the target. */
-  | { mode: "folder"; folder: string };
+  | { mode: "folder"; folder: string }
+  /**
+   * Chosen files and folders, back where they were: their common parent's
+   * contents go into that folder's original path, keeping only the items.
+   */
+  | { mode: "original"; paths: string[] };
 
 /** RestoreState is the restore sheet's form. */
 export interface RestoreState {
@@ -99,6 +191,7 @@ export function emptyRestore(): RestoreState {
 export function whatLabel(what: RestoreWhat): string {
   switch (what.mode) {
     case "items":
+    case "original":
       return what.paths.length === 1 ? "1 item" : `${what.paths.length} items`;
     case "folder":
       return `the contents of ${what.folder}`;
@@ -134,8 +227,17 @@ export function validateRestore(what: RestoreWhat, s: RestoreState): RestoreErro
   if (!t) e.target = "Choose the folder to restore into.";
   else if (!(t.startsWith("/") || /^[A-Za-z]:[\\/]/.test(t) || t.startsWith("\\\\")))
     e.target = "Enter an absolute path on the worker.";
-  if (what.mode === "items" && what.paths.length === 0) e.what = "Select at least one item.";
+  if ((what.mode === "items" || what.mode === "original") && what.paths.length === 0)
+    e.what = "Select at least one item.";
   return e;
+}
+
+/**
+ * originalParent is the folder a restore to the original location restores
+ * from: the items' common parent in the snapshot ("/" for items at the top).
+ */
+export function originalParent(paths: string[]): string {
+  return commonParent(paths, "snapshot") ?? "/";
 }
 
 /** toRestoreRequest builds the RunJob request of a restore. */
@@ -146,6 +248,7 @@ export function toRestoreRequest(
   s: RestoreState,
 ): MessageInitShape<typeof RunJobRequestSchema> {
   const hooks = toHooks(s.hooks);
+  const excludes = [...new Set(s.excludes.map((x) => x.trim()).filter(Boolean))];
   return {
     workerId: s.workerId,
     definition: {
@@ -156,9 +259,17 @@ export function toRestoreRequest(
           repositoryId,
           snapshotId: snapshot.id,
           target: s.target.trim(),
-          paths: what.mode === "items" ? what.paths : [],
-          subfolder: what.mode === "folder" ? what.folder : "",
-          excludes: [...new Set(s.excludes.map((x) => x.trim()).filter(Boolean))],
+          // Back to the original location: the items of their common
+          // parent, restored into its original path (subfolder with paths;
+          // the worker needs link feature restic.restore_subfolder_paths).
+          paths: what.mode === "items" || what.mode === "original" ? what.paths : [],
+          subfolder:
+            what.mode === "folder"
+              ? what.folder
+              : what.mode === "original"
+                ? originalParent(what.paths)
+                : "",
+          excludes,
           verify: s.verify,
           // Unset would also mean "keep existing" to the controller; say it outright.
           overwrite:

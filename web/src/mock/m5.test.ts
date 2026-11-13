@@ -327,17 +327,26 @@ describe("mock transport, milestone 5", { timeout: 20_000 }, () => {
     const jobs = createClient(JobService, t);
     const workers = await createClient(WorkerAdminService, t).listWorkers({});
     const nas = workers.workers.find((w) => w.id === fx.ids.nas)!;
-    // The hooks and two-way sync mocks add their features to the up-to-date workers.
+    // The hooks, two-way sync and browser mocks add their features to the up-to-date workers.
     expect(nas.info?.features).toEqual([
       "probe",
       "restic.v2",
       "restic.delete",
       "job.hooks",
       "rclone.bisync",
+      "restic.restore_subfolder_paths",
     ]);
-    // Milestone 6 adds sftp_host_keys to the seven probe operations of m5.
-    expect(nas.info?.probeOps).toHaveLength(8);
-    expect(nas.info?.probeOps.at(-1)).toBe("sftp_host_keys");
+    // Milestone 6 adds sftp_host_keys to the seven probe operations of m5,
+    // and milestone 7 its five scans (sizes, search, compare).
+    expect(nas.info?.probeOps).toHaveLength(13);
+    expect(nas.info?.probeOps.slice(7)).toEqual([
+      "sftp_host_keys",
+      "measure_local",
+      "measure_remote",
+      "restic_measure",
+      "restic_find",
+      "restic_diff",
+    ]);
     expect(workers.workers.find((w) => w.id === m5.ids.oldNas)?.info?.features).toEqual([]);
 
     const waiting = (await jobs.getJob({ jobId: m5.ids.waitingBackup })).job!;

@@ -56,6 +56,7 @@ notify:
 probe:
   timeout: 30s               # SYNCR_PROBE_TIMEOUT: a folder listing or a remote test through a worker (1s to 90s)
   restic_timeout: 60s        # SYNCR_PROBE_RESTIC_TIMEOUT: creating or opening a repository, listing and browsing snapshots (1s to 90s)
+  scan_timeout: 45s          # SYNCR_PROBE_SCAN_TIMEOUT: folder sizes, snapshot searches and comparisons, which stop early with what they found (1s to 90s)
 dev:
   memory_store: false        # SYNCR_DEV_MEMORY_STORE: demos/tests only, instead of database.url; data is lost on exit
   seed: false                # SYNCR_DEV_SEED: demo data with public passwords (needs memory_store); never expose it
@@ -65,12 +66,24 @@ The controller refuses to start without `secrets.key` and without either
 `database.url` or `dev.memory_store: true`. `syncr-controller -healthcheck`
 calls the `/healthz` of the controller configured the same way (for
 container health checks; the image has no shell). Behind a reverse proxy, the
-proxy's read/idle timeout must exceed 40 s (workers long-poll for 25 s) and it
-must accept request bodies of 16 MiB; set `http.public_url` to its https URL,
+proxy's read/idle timeout must exceed 60 s (workers long-poll for 25 s, and
+folder sizes, searches and comparisons answer within `probe.scan_timeout`;
+if you raise it, keep the proxy above it plus 15 s) and it must accept
+request bodies of 16 MiB; set `http.public_url` to its https URL,
 and `http.client_ip_header` and `http.trusted_proxies` so the login and
 enrollment rate limits see clients, not the proxy. The controller refuses a
 `public_url` workers could not use (plain http except on loopback) and warns
 at start when session cookies would not be Secure.
+
+Folder sizes, snapshot searches and snapshot comparisons
+([browsing files](browsing.md)) walk whole trees, so they are bounded by
+`probe.scan_timeout` rather than the other probe timeouts. The worker stops
+shortly before it (at 40.5 s of 45 s: the limit minus a tenth, at least
+2 s) and answers with what it found, which the UI marks as "at least" or
+"stopped early"; it is not an error. Each worker runs one such scan at a
+time. Raising the limit (at most 90 s) gets more complete answers from
+big folders and buckets, at the cost of longer waits, and needs the
+reverse proxy's read timeout raised with it.
 
 Notification targets are checked against `notify.network_policy` at
 connect time (the address actually connected to, so DNS names cannot get

@@ -1160,6 +1160,8 @@ export interface M5 {
   start: (job: Job) => void;
   /** settle applies finished deletion jobs to their repositories. */
   settle: () => void;
+  /** files are the demo folders the probes list; finished transfers change them. */
+  files: { workers: Record<string, Record<string, Tree>>; remotes: Record<string, Tree> };
 }
 
 const active = (s: JobStatus) =>
@@ -1174,12 +1176,23 @@ const cases: Record<string, string> = {
   resticDeleteData: "restic_delete_data",
 };
 
+/** restoreWhat names what a restore takes, as the controller's titles do. */
+function restoreWhat(r: { subfolder: string; paths: string[]; snapshotId: string }): string {
+  const n = r.paths.length;
+  if (r.subfolder && n > 1) return `${n} items of ${r.subfolder}`;
+  if (n === 1) return r.paths[0];
+  if (r.subfolder) return r.subfolder;
+  return n ? `${n} items` : `snapshot ${r.snapshotId.slice(0, 8)}`;
+}
+
 /** createM5 builds the milestone 5 part of the mock over shared state. */
 export function createM5(d: M5Deps): M5 {
   const repos = d.data.repositories;
   const delay = () => d.sleep(d.probeDelay ?? 300);
-  const trees = workerTrees();
-  const remotes = remoteTrees();
+  // Copies: finished transfers change them (files), and the demo folders
+  // are shared module constants.
+  const trees = structuredClone(workerTrees());
+  const remotes = structuredClone(remoteTrees());
   let seq = 0;
   const newId = (p: string) =>
     `${p}-${Date.now().toString(16).slice(-8).padStart(8, "0")}-4000-8000-${(++seq).toString(16).padStart(12, "0")}`;
@@ -1413,7 +1426,7 @@ export function createM5(d: M5Deps): M5 {
         title = `Check ${name}`;
         break;
       case "resticRestore":
-        title = `Restore ${op.value.subfolder || (op.value.paths.length ? `${op.value.paths.length} items` : `snapshot ${op.value.snapshotId.slice(0, 8)}`)} from ${name} → ${op.value.target}`;
+        title = `Restore ${restoreWhat(op.value)} from ${name} → ${op.value.target}`;
         break;
       case "resticDeleteData":
         title = `Delete the data of ${name}`;
@@ -1830,5 +1843,5 @@ export function createM5(d: M5Deps): M5 {
     });
   };
 
-  return { register, check, describe, start, settle };
+  return { register, check, describe, start, settle, files: { workers: trees, remotes } };
 }

@@ -1,0 +1,3 @@
+{"time":"2026-11-13T04:40:36.057583625Z","level":"notice","msg":"Can't follow symlink without -L/--copy-links","object":"link","objectType":"*local.Object","source":"local/local.go:1370"}
+{"time":"2026-11-13T04:40:36.057912928Z","level":"error","msg":"failed to open directory \"locked\": open /data/tree/locked: permission denied","object":"locked","objectType":"string","source":"local/local.go:681"}
+{"time":"2026-11-13T04:40:36.058134477Z","level":"notice","msg":"Failed to lsjson: failed to open directory \"locked\": open /data/tree/locked: permission denied","source":"cmd/cmd.go:334"}

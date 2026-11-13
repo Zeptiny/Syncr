@@ -32,17 +32,24 @@ func probeCallTimeout(probe time.Duration) time.Duration {
 
 // probeProcedure reports whether a procedure waits for a worker's probe:
 // every ProbeService call, and the ResticService calls that initialize or
-// verify a repository, list its snapshots or browse one.
+// verify a repository, list its snapshots, or browse, measure, search or
+// compare them.
 func probeProcedure(procedure string) bool {
 	switch procedure {
 	case syncrv1connect.ProbeServiceListWorkerFilesProcedure,
 		syncrv1connect.ProbeServiceListRemoteFilesProcedure,
 		syncrv1connect.ProbeServiceTestRemoteProcedure,
 		syncrv1connect.ProbeServiceGetSftpHostKeysProcedure,
+		syncrv1connect.ProbeServiceMeasureWorkerFolderProcedure,
+		syncrv1connect.ProbeServiceMeasureRemoteFolderProcedure,
+		syncrv1connect.ProbeServiceGetRemoteUsageProcedure,
 		syncrv1connect.ResticServiceCreateRepositoryProcedure,
 		syncrv1connect.ResticServiceUpdateRepositoryProcedure,
 		syncrv1connect.ResticServiceListSnapshotsProcedure,
-		syncrv1connect.ResticServiceBrowseSnapshotProcedure:
+		syncrv1connect.ResticServiceBrowseSnapshotProcedure,
+		syncrv1connect.ResticServiceMeasureSnapshotFolderProcedure,
+		syncrv1connect.ResticServiceFindInRepositoryProcedure,
+		syncrv1connect.ResticServiceCompareSnapshotsProcedure:
 		return true
 	}
 	return false

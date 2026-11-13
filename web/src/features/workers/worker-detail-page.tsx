@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@connectrpc/connect-query";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { FolderSearch, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -10,7 +10,6 @@ import { ErrorState } from "@/components/app/error-state";
 import { KeyValueList } from "@/components/app/key-value-list";
 import { PageHeader } from "@/components/app/page-header";
 import { Panel } from "@/components/app/panel";
-import { PathBrowserDialog } from "@/components/app/path-browser";
 import { RelativeTime } from "@/components/app/relative-time";
 import { StatusBadge, StatusPill } from "@/components/app/status-badge";
 import { Button } from "@/components/ui/button";
@@ -28,7 +27,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { JobService, WorkerAdminService, type Worker } from "@/gen/syncr/v1/api_pb";
 import { WorkerMode } from "@/gen/syncr/v1/link_pb";
 import { useSession } from "@/hooks/use-session";
-import { copyText } from "@/lib/clipboard";
 import { errorMessage } from "@/lib/errors";
 import { durationSeconds, formatDateTime, formatLimit, tsDate } from "@/lib/format";
 import { invalidateService } from "@/lib/invalidate";
@@ -174,7 +172,6 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
   const remove = useMutation(WorkerAdminService.method.removeWorker);
   const [renaming, setRenaming] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const [browsing, setBrowsing] = useState(false);
 
   if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
   const w = q.data?.worker;
@@ -187,6 +184,7 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
     );
   }
   const info = w.info;
+  const browsable = isOnline(w) && hasFeature(w, FEATURE_PROBE);
   return (
     <>
       <PageHeader
@@ -266,7 +264,8 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
               <Button
                 variant="outline"
                 size="sm"
-                disabled={!isOnline(w) || !hasFeature(w, FEATURE_PROBE)}
+                asChild={browsable}
+                disabled={!browsable}
                 title={
                   !isOnline(w)
                     ? "The worker is offline."
@@ -274,29 +273,22 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
                       ? "This worker's version cannot list files."
                       : undefined
                 }
-                onClick={() => setBrowsing(true)}
               >
-                <FolderSearch aria-hidden />
-                Browse files
+                {browsable ? (
+                  <Link to="/workers/$workerId/files" params={{ workerId: w.id }}>
+                    <FolderSearch aria-hidden />
+                    Browse files
+                  </Link>
+                ) : (
+                  <>
+                    <FolderSearch aria-hidden />
+                    Browse files
+                  </>
+                )}
               </Button>
             ) : undefined
           }
         >
-          <PathBrowserDialog
-            open={browsing}
-            onOpenChange={setBrowsing}
-            source={{ kind: "worker", workerId: w.id }}
-            title={`Files on ${w.name}`}
-            description="Look around the worker's allowed folders. Selecting an entry copies its path."
-            mode="any"
-            onSelect={([path]) => {
-              if (path)
-                void copyText(path).then(
-                  () => toast.success(`Copied ${path}`),
-                  () => undefined,
-                );
-            }}
-          />
           {info?.localRoots.length ? (
             <ul className="flex flex-col gap-1.5">
               {info.localRoots.map((r) => (

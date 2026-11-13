@@ -150,8 +150,9 @@
 //	  owner's                                              repository_unavailable
 //	the worker runs another operating system than the
 //	  definition needs (jobkind RequiredOS: Windows VSS)   invalid_spec, saying which system
-//	the worker lacks a link feature the kind requires
-//	  (an older version; jobkind RequiredFeatures)         worker_outdated
+//	the worker lacks a link feature the kind or the
+//	  definition requires (an older version; jobkind
+//	  RequiredFeatures, DefinitionFeatures)                worker_outdated
 //	the job has a time limit and the worker does not
 //	  report link.FeatureJobTimeLimit                      worker_outdated, saying so
 //	the job names hooks and the worker does not report

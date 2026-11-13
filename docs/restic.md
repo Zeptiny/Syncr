@@ -8,7 +8,8 @@ storage through rclone, with the remotes you already store in Syncr.
 
 Design records: [repositories](adr/0011-restic-repositories.md),
 [worker probes](adr/0012-worker-probes.md),
-[concurrency keys](adr/0013-concurrency-keys.md).
+[concurrency keys](adr/0013-concurrency-keys.md),
+[browser operations](adr/0019-browser-operations.md).
 
 ## Repositories
 
@@ -99,17 +100,50 @@ including one that failed or was cancelled part-way (it may have changed
 the snapshots), and **Refresh** lists again. The newest 5000 snapshots are
 kept.
 
-Open a snapshot to browse its folders. From there:
+The list can be narrowed:
+
+- **Filter** by ID, host, tag or path, and pick a **Host** or a **Tag**.
+- **Group by host and paths** shows one group per backup set, as
+  `restic snapshots --group-by host,paths` does.
+- **Compare with the previous snapshot** (the icon on each row) compares a
+  snapshot with the one before it in the same group ([below](#compare-two-snapshots)).
+- **Search** finds files in every snapshot ([below](#search-and-file-versions)).
+
+### Browsing a snapshot
+
+Open a snapshot to browse its folders, with the same table, keyboard,
+selection and tray as the [file browser](browsing.md). In addition:
+
+- **The snapshot switcher** in the header steps to the **Older** or
+  **Newer** snapshot of the same host and paths, or picks any snapshot
+  from its menu, and keeps the open folder. A folder the other snapshot
+  does not have says so and offers its nearest parent.
+- **Listed by** chooses the worker that reads the repository (a repository
+  on a worker's disk needs its own worker).
+- **Calculate sizes** measures the open folder of the snapshot
+  ([folder sizes](browsing.md#folder-sizes)).
+- **Compare with…** compares this snapshot with another, for the open
+  folder.
+- Each row's menu has **Restore…** (that item), **Restore to original
+  location…**, **Show versions** (files and links only) and **Copy path**.
+
+### Restore
+
+From the snapshot browser:
 
 - **Restore whole snapshot** writes everything below the target folder,
   with the original paths (`/srv/photos/a.jpg` restored to `/srv/restore`
   becomes `/srv/restore/srv/photos/a.jpg`).
 - **Restore this folder** writes the folder's content directly into the
   target.
-- **Restore selected** writes the ticked files and folders, with their
+- **Restore selected** writes the selected files and folders, with their
   original paths below the target.
+- **Restore to original location** (a row's menu, or the tray) writes the
+  selected items back where they were.
 
-The target is a folder of the worker, inside its `local_roots`.
+The target is a folder of the worker, inside its `local_roots`. The sheet
+proposes the worker and target you used last for this repository (kept in
+your browser), as long as that worker is online.
 
 **Existing files are kept by default.** Choose what happens when a file
 already exists:
@@ -121,11 +155,89 @@ already exists:
 | Replace older files | Replaces a file that is older than the one in the snapshot. |
 | Replace all | Always writes the snapshot's file. |
 
+**Restore to original location** proposes the worker whose host name is
+the snapshot's host and, as the target, the items' common folder as it is
+on that machine: for `/srv/photos/2026` and `/srv/photos/a.jpg` it is
+`/srv/photos`, and a Windows snapshot's `/C/Users/ada/Documents` becomes
+`C:\Users\ada\Documents`. Existing files are kept unless you choose
+otherwise. With no such worker online you choose one; a target outside the
+chosen worker's `local_roots` is refused. The job restores that folder of
+the snapshot (`restic restore <snapshot>:/srv/photos`) with only the
+selected items (`--include`), so they land at their own paths and nothing
+else is written. This needs a worker of 2.1 or later (the
+`restic.restore_subfolder_paths` feature): the restore sheet proposes only
+such a worker and shows older ones as outdated, and a job sent to an older
+worker through the API fails with `worker_outdated`.
+
+### Search and file versions
+
+**Search** (on the repository's page or in the snapshot browser) runs
+`restic find` over **all snapshots** (the default) or one, through a
+worker:
+
+- **Ignore case** is on by default.
+- A pattern without `/` matches a file or folder of that name anywhere in
+  the path: `*.pdf`, `albums.json`.
+- A pattern with `/` matches the end of the path (`2026/albums.json`
+  matches `/srv/photos/2026/albums.json`), or from the top when it starts
+  with `/` (`/srv/photos/*.jpg`).
+- `*` matches any part of a name, `?` one character and `**` any number of
+  folders. To match `*`, `?` or `[` themselves, write `[*]`, `[?]` or
+  `[[]`.
+- A matching folder also brings everything inside it: `docs` lists the
+  folder and its whole content.
+- A pattern is at most 256 bytes. (The API takes up to ten at once.)
+
+Results are grouped by path, newest first: how many snapshots hold it,
+and its size and time in the newest. A path opens into its **versions**:
+the distinct copies (by size and modification time), each with the
+snapshots that hold it, a link to its folder in one of them, and
+**Restore…**.
+
+**Show versions** in the snapshot browser's row menu shows the same for
+one file, in a side sheet: every snapshot that has that exact path,
+grouped by version. Folders have no versions: compare snapshots instead.
+
+The search is in the page's address, so it can be bookmarked or shared.
+Opening such an address, or reloading the page, fills in the form and
+waits for **Search**: a search reads every snapshot, so a link never
+starts one on a worker by itself. From the app (the form, the snapshot
+browser) it runs at once.
+
+A search stops at 1,000 matches (the result says so, and how many
+snapshots it searched), and like folder sizes it stops at
+`probe.scan_timeout` with what it found so far. Narrow the pattern, or
+search one snapshot, to see more.
+
+### Compare two snapshots
+
+**Compare** runs `restic diff` between two snapshots, for the whole tree
+or one folder. The page shows the totals first (files added, removed and
+changed, bytes added and removed), then the changes, which you can filter
+by kind (**Added**, **Removed**, **Changed**, **Type changed**) and by
+text. Each path opens its folder in the snapshot that has it.
+
+- Added and removed folders are listed (with a trailing `/`), and so is
+  everything in them. A folder whose content changed is not listed
+  itself; the files that changed are.
+- A file whose content is unchanged is not listed, even when only its
+  modification time or permissions changed: Syncr runs `restic diff`
+  without `--metadata`, which would mark every folder above a change.
+- Type changes are, for example, a link that became a file.
+- At most 2,000 changes are listed; the totals still cover all of them.
+  A comparison that reaches `probe.scan_timeout` stops with the changes
+  found so far and no totals, and says so.
+- Like a search, a comparison opened from an address (a shared link, a
+  reload) waits for **Compare**; from the snapshot list or **Compare
+  with…** in the snapshot browser it runs at once.
+
 ## Browsing and testing
 
-- **Browse** buttons list the folders of a worker (inside its
-  `local_roots`), of a remote, or of a snapshot, so paths need not be
-  typed. Any signed-in user may browse any online worker's allowed folders.
+- **Browse** opens the folders of a worker (inside its `local_roots`) or
+  of a remote as a page, where you can select, copy, move, measure and
+  start jobs ([browsing files](browsing.md)). Any signed-in user may
+  browse any online worker's allowed folders. In forms, **Browse** opens
+  the same folders in a dialog to pick a path.
 - **Test remote** on a remote's form lists the remote through a worker and
   reports what it found: the first entries, the space used where the
   backend can tell, or the error. It also tests values you have not saved
@@ -133,11 +245,12 @@ already exists:
 
 These are *probes*: short, read-only operations a worker answers within the
 request. They are limited to 20 at once per user and then two a second, and
-to `probe.timeout` (30 s) for listings and tests and `probe.restic_timeout`
-(60 s) for restic's operations. Raise `probe.restic_timeout` (at most 90 s)
-if listing the snapshots of a large repository on a slow remote times out.
-A remote on a worker's local folder can only be browsed through that
-worker.
+to `probe.timeout` (30 s) for listings and tests, `probe.restic_timeout`
+(60 s) for restic's listings, and `probe.scan_timeout` (45 s) for folder
+sizes, searches and comparisons, which end early with what they found.
+Raise `probe.restic_timeout` (at most 90 s) if listing the snapshots of a
+large repository on a slow remote times out. A remote on a worker's local
+folder can only be browsed through that worker.
 
 Probes and the restic jobs need a current worker. A worker that is too old
 shows as **Outdated** on its page; jobs sent to it fail with

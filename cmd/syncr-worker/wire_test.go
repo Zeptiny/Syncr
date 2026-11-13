@@ -152,8 +152,8 @@ func TestBuildWorkerRegistersEveryRunner(t *testing.T) {
 	}
 
 	// The probe executor runs every probe operation with the same tools.
-	if w.probes == nil || !slices.Equal(w.probes.Ops(), link.ProbeOps()) {
-		t.Errorf("probes = %v, want every operation %v", w.probes, link.ProbeOps())
+	if ops := link.ProbeOps(); w.probes == nil || !slices.Equal(w.probes.Ops(), ops) {
+		t.Errorf("probes = %v, want every operation %v", w.probes, ops)
 	}
 
 	for _, tool := range []string{toolRclone, toolRestic} {

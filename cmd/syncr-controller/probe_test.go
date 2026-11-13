@@ -8,9 +8,10 @@ import (
 	"github.com/Zeptiny/Syncr/internal/link"
 )
 
-// TestProbeSettingsReachTheLink: probe.timeout and probe.restic_timeout are
-// what the probe broker caps a probe at and, with the broker's grace, how
-// long a passive worker's Probe may take to answer.
+// TestProbeSettingsReachTheLink: the longest of probe.timeout,
+// probe.restic_timeout and probe.scan_timeout is what the probe broker caps
+// a probe at and, with the broker's grace, how long a passive worker's
+// Probe may take to answer.
 func TestProbeSettingsReachTheLink(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -19,9 +20,12 @@ func TestProbeSettingsReachTheLink(t *testing.T) {
 		wantCap time.Duration
 	}{
 		{"defaults", controllerconfig.Default().Probe, time.Minute},
-		{"a longer restic timeout", controllerconfig.Probe{Timeout: 20 * time.Second, ResticTimeout: 75 * time.Second}, 75 * time.Second},
-		{"a longer listing timeout", controllerconfig.Probe{Timeout: 40 * time.Second, ResticTimeout: 10 * time.Second}, 40 * time.Second},
-		{"the longest allowed", controllerconfig.Probe{Timeout: link.MaxProbeTimeout, ResticTimeout: link.MaxProbeTimeout}, link.MaxProbeTimeout},
+		{"a longer restic timeout", controllerconfig.Probe{Timeout: 20 * time.Second, ResticTimeout: 75 * time.Second, ScanTimeout: 45 * time.Second}, 75 * time.Second},
+		{"a longer listing timeout", controllerconfig.Probe{Timeout: 40 * time.Second, ResticTimeout: 10 * time.Second, ScanTimeout: 30 * time.Second}, 40 * time.Second},
+		{"a longer scan timeout", controllerconfig.Probe{Timeout: 30 * time.Second, ResticTimeout: 60 * time.Second, ScanTimeout: 80 * time.Second}, 80 * time.Second},
+		{"the longest allowed", controllerconfig.Probe{
+			Timeout: link.MaxProbeTimeout, ResticTimeout: link.MaxProbeTimeout, ScanTimeout: link.MaxProbeTimeout,
+		}, link.MaxProbeTimeout},
 	}
 	for _, tt := range tests {
 		cfg := controllerconfig.Default()

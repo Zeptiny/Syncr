@@ -1,0 +1,3 @@
+{"time":"2026-11-13T04:49:14.424327243Z","level":"error","msg":"error listing: error listing \"private\": permission denied","object":"private","objectType":"string","source":"walk/walk.go:175"}
+{"time":"2026-11-13T04:49:14.602353217Z","level":"error","msg":"error listing: error listing \"locked\": permission denied","object":"locked","objectType":"string","source":"walk/walk.go:175"}
+{"time":"2026-11-13T04:49:14.605111645Z","level":"notice","msg":"Failed to lsjson with 3 errors: last error was: error in ListJSON: error listing \"locked\": permission denied","source":"cmd/cmd.go:336"}

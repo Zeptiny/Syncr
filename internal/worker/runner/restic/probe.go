@@ -17,7 +17,8 @@ const (
 )
 
 // Prober runs the probe operations restic_snapshots, restic_ls, restic_init
-// and restic_config with the runners' engine: the same binaries,
+// and restic_config, and restic_measure, restic_find and restic_diff
+// (probe_scan.go), with the runners' engine: the same binaries,
 // environment, quoting and scrubbing. Reads use --no-lock, so they never
 // conflict with a job on the repository. It is safe for concurrent use.
 type Prober struct{ e *engine }
@@ -33,18 +34,7 @@ func NewProber(cfg Config) (*Prober, error) {
 
 // run executes one probe command; every error it returns is scrubbed.
 func (p *Prober) run(ctx context.Context, kind, probeID string, remotes []*syncrv1.RemoteDefinition, cmd command) (*session, error) {
-	secrets := append([]string{cmd.repo.GetPassword()}, remoteSecrets(remotes)...)
-	if !jobIDPattern.MatchString(probeID) {
-		return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "invalid probe ID %q", probeID)
-	}
-	_, s, sc, err := p.e.exec(ctx, execution{
-		kind: kind, scratch: "probe-" + probeID, logID: probeID,
-		remotes: remotes, cmd: cmd, secrets: secrets,
-	})
-	if err != nil && !runner.Canceled(err) {
-		err = sc.Error(err)
-	}
-	return s, err
+	return p.runWith(ctx, probeID, remotes, execution{kind: kind, cmd: cmd})
 }
 
 func scrubbed(secretsOf *syncrv1.ResticRepository, remotes []*syncrv1.RemoteDefinition, err error) error {

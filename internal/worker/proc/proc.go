@@ -155,6 +155,14 @@ type Spec struct {
 	Stdout LineFunc
 	Stderr LineFunc
 
+	// StdoutChunks delivers standard output as it is read, in chunks of
+	// at most Options.MaxLineBytes, instead of line by line: for a tool
+	// that streams one long document without newlines (restic find
+	// --json), which would otherwise arrive only when the tool exits. A
+	// chunk may end anywhere, even inside a UTF-8 sequence; Line.Truncated
+	// is never set.
+	StdoutChunks bool
+
 	// GracePeriod overrides Options.GracePeriod for this run when positive.
 	GracePeriod time.Duration
 }
@@ -210,6 +218,7 @@ func (s *Supervisor) Run(ctx context.Context, spec Spec) (Result, error) {
 	var stdout, stderr *lineWriter
 	if spec.Stdout != nil {
 		stdout = newLineWriter(spec.Stdout, s.maxLineBytes, lines)
+		stdout.chunks = spec.StdoutChunks
 		cmd.Stdout = stdout
 	}
 	if spec.Stderr != nil {

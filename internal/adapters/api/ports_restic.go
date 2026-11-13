@@ -29,6 +29,14 @@ type ResticService interface {
 	Snapshots(ctx context.Context, actor domain.Actor, id domain.ResticRepoID, o restic.SnapshotsOptions) (restic.SnapshotList, error)
 	// Browse lists one directory of a snapshot.
 	Browse(ctx context.Context, actor domain.Actor, id domain.ResticRepoID, snapshotID, path string, workerID domain.WorkerID) (restic.Listing, error)
+	// Measure measures a folder of a snapshot: its totals and each child
+	// folder's (partial at the scan timeout).
+	Measure(ctx context.Context, actor domain.Actor, id domain.ResticRepoID, snapshotID, path string, workerID domain.WorkerID) (restic.Measurement, error)
+	// Find searches the repository's snapshots (restic find).
+	Find(ctx context.Context, actor domain.Actor, id domain.ResticRepoID, q restic.FindQuery, workerID domain.WorkerID) (restic.FindResult, error)
+	// Compare compares snapshot fromID with the newer toID, the whole tree
+	// or the folder path (restic diff).
+	Compare(ctx context.Context, actor domain.Actor, id domain.ResticRepoID, fromID, toID, path string, workerID domain.WorkerID) (restic.Comparison, error)
 	RepositoryNames
 }
 

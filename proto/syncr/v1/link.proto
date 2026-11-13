@@ -1535,7 +1535,11 @@ message ResticRestore {
 
   // Literal snapshot tree paths to restore, with their contents. The worker
   // turns each into an --include pattern for its own OS (escaping glob
-  // characters); empty restores everything.
+  // characters); empty restores everything. With subfolder, each path must
+  // lie strictly inside it, and the worker makes it relative to the
+  // subfolder (restic matches includes that way with "<id>:<subfolder>").
+  // Controllers send paths with a subfolder only to workers that report
+  // the feature restic.restore_subfolder_paths; older workers refuse it.
   repeated string paths = 9;
 
   reserved 10 to 19;
@@ -1792,6 +1796,14 @@ message ProbeSpec {
     // Milestone 6: an SFTP server's host keys, fetched by the worker itself
     // (no tool, no remote).
     ProbeSftpHostKeys sftp_host_keys = 17;
+    // Milestone 7: measuring folders, searching and comparing snapshots.
+    // These hold the worker's heavy slot (one at a time) and end at a soft
+    // deadline with what they found (complete=false).
+    ProbeMeasureLocal measure_local = 18;
+    ProbeMeasureRemote measure_remote = 19;
+    ProbeResticMeasure restic_measure = 20;
+    ProbeResticFind restic_find = 21;
+    ProbeResticDiff restic_diff = 22;
   }
 }
 
@@ -1898,6 +1910,81 @@ message ProbeSftpHostKeys {
   reserved 3 to 9;
 }
 
+// ProbeMeasureLocal measures a folder on the worker's filesystem (Go walk,
+// no tool), inside local_roots. Links are counted, never followed.
+message ProbeMeasureLocal {
+  // Absolute local path inside the worker's local_roots (required).
+  string path = 1;
+
+  reserved 2 to 9;
+}
+
+// ProbeMeasureRemote measures a folder of a remote (rclone lsjson -R).
+message ProbeMeasureRemote {
+  // A remote alias of ProbeSpec.remotes (required) and a path on it.
+  Location location = 1;
+
+  reserved 2 to 9;
+}
+
+// ProbeResticMeasure measures a folder of a snapshot (restic --no-lock ls
+// --json --recursive).
+message ProbeResticMeasure {
+  ResticRepository repository = 1;
+
+  // Snapshot ID (8 to 64 hex digits).
+  string snapshot_id = 2;
+
+  // Snapshot tree path of the folder, as ProbeResticLs.path.
+  string path = 3;
+
+  reserved 4 to 9;
+}
+
+// ProbeResticFind searches snapshots (restic --no-lock find --json).
+message ProbeResticFind {
+  ResticRepository repository = 1;
+
+  // Glob patterns as restic find takes them (1 to 10). A pattern without
+  // "/" matches any name in a path; one with "/" matches the path's
+  // trailing folders and name, and a leading "/" anchors it at the root.
+  // A match on a folder matches everything below it. "**" spans folders;
+  // a character class such as "[*]" matches a glob character literally.
+  repeated string patterns = 2;
+
+  // Match case-insensitively (--ignore-case).
+  bool ignore_case = 3;
+
+  // Only these snapshots; empty searches all of them.
+  repeated string snapshot_ids = 4;
+
+  // At most this many matches; 0 means the worker's default (1000). Workers
+  // cap it (5000).
+  int32 max_matches = 5;
+
+  reserved 6 to 9;
+}
+
+// ProbeResticDiff compares two snapshots (restic --no-lock diff --json),
+// the whole tree or one folder.
+message ProbeResticDiff {
+  ResticRepository repository = 1;
+
+  // The older and the newer snapshot (8 to 64 hex digits each).
+  string from_snapshot_id = 2;
+  string to_snapshot_id = 3;
+
+  // Snapshot tree path of the folder to compare; empty or "/" is the whole
+  // tree.
+  string path = 4;
+
+  // At most this many changes; 0 means the worker's default (2000). Workers
+  // cap it (5000).
+  int32 max_changes = 5;
+
+  reserved 6 to 9;
+}
+
 // ProbeStatus is how a probe ended.
 enum ProbeStatus {
   PROBE_STATUS_UNSPECIFIED = 0;
@@ -1938,6 +2025,12 @@ message ProbeResult {
     ResticRepositoryConfig repository_config = 13;
     // sftp_host_keys.
     SftpHostKeys sftp_host_keys = 14;
+    // measure_local, measure_remote, restic_measure.
+    ProbeMeasurement measurement = 15;
+    // restic_find.
+    ResticFindOutput find = 16;
+    // restic_diff.
+    ResticDiffOutput diff = 17;
   }
 }
 
@@ -2046,4 +2139,131 @@ message SftpHostKey {
   string fingerprint_sha256 = 3;
 
   reserved 4 to 9;
+}
+
+// ProbeMeasurement is a measured folder: its totals and each child
+// folder's. With complete=false the walk stopped early (the soft deadline)
+// and every number is a lower bound.
+message ProbeMeasurement {
+  // The measured path, as the op named it (normalized).
+  string path = 1;
+
+  // Bytes of every file below path, how many files and how many folders.
+  int64 bytes = 2;
+  int64 files = 3;
+  int64 dirs = 4;
+
+  // The direct child folders' totals, largest first (by bytes, then files,
+  // then name); at most max entries, the largest kept (children_truncated
+  // says more were found).
+  repeated ProbeChildMeasurement children = 5;
+  bool children_truncated = 6;
+
+  // The walk covered everything.
+  bool complete = 7;
+
+  // Entries the walk could not read (permission denied, vanished while
+  // walking); links are never followed, so their targets do not count.
+  // With any, the totals are lower bounds even when complete is true.
+  int64 unreadable = 8;
+
+  reserved 9;
+}
+
+// ProbeChildMeasurement is one child folder's totals.
+message ProbeChildMeasurement {
+  // Base name of the child folder.
+  string name = 1;
+
+  // Bytes of every file below it, how many files and how many folders.
+  int64 bytes = 2;
+  int64 files = 3;
+  int64 dirs = 4;
+
+  reserved 5 to 9;
+}
+
+// ResticFindOutput is what a search found.
+message ResticFindOutput {
+  repeated ResticFindMatch matches = 1;
+
+  // max_matches or the result size cap was reached.
+  bool truncated = 2;
+
+  // Every requested snapshot was searched.
+  bool complete = 3;
+
+  // How many snapshots were searched.
+  int32 snapshots_searched = 4;
+
+  reserved 5 to 9;
+}
+
+// ResticFindMatch is one matching path in one snapshot.
+message ResticFindMatch {
+  // Full snapshot ID.
+  string snapshot_id = 1;
+
+  // The match: entry.path is its snapshot tree path.
+  ProbeEntry entry = 2;
+
+  reserved 3 to 9;
+}
+
+// ResticDiffModifier is the kind of a change (restic diff's modifier).
+enum ResticDiffModifier {
+  RESTIC_DIFF_MODIFIER_UNSPECIFIED = 0;
+  // "+": only in the newer snapshot.
+  RESTIC_DIFF_MODIFIER_ADDED = 1;
+  // "-": only in the older snapshot.
+  RESTIC_DIFF_MODIFIER_REMOVED = 2;
+  // "M": the content changed.
+  RESTIC_DIFF_MODIFIER_CHANGED = 3;
+  // "U": only metadata changed. restic reports it only with --metadata,
+  // which workers do not pass, so they do not send it today.
+  RESTIC_DIFF_MODIFIER_METADATA = 4;
+  // "T": the type changed (e.g. a file became a folder).
+  RESTIC_DIFF_MODIFIER_TYPE = 5;
+  // Anything restic adds later ("?").
+  RESTIC_DIFF_MODIFIER_OTHER = 6;
+}
+
+// ResticDiffChange is one changed path.
+message ResticDiffChange {
+  // Snapshot tree path (a folder ends in "/", as restic prints it).
+  string path = 1;
+
+  // What changed.
+  ResticDiffModifier modifier = 2;
+
+  reserved 3 to 9;
+}
+
+// ResticDiffStats are restic diff's closing statistics.
+message ResticDiffStats {
+  int64 changed_files = 1;
+  int64 added_files = 2;
+  int64 added_dirs = 3;
+  int64 added_bytes = 4;
+  int64 removed_files = 5;
+  int64 removed_dirs = 6;
+  int64 removed_bytes = 7;
+
+  reserved 8 to 9;
+}
+
+// ResticDiffOutput is a comparison.
+message ResticDiffOutput {
+  repeated ResticDiffChange changes = 1;
+
+  // restic's statistics; unset when the comparison stopped early.
+  ResticDiffStats stats = 2;
+
+  // max_changes or the result size cap was reached.
+  bool truncated = 3;
+
+  // restic finished (stats is set).
+  bool complete = 4;
+
+  reserved 5 to 9;
 }

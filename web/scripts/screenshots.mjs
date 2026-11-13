@@ -8,8 +8,8 @@
 //                           01-setup (default: skipped unless SYNCR_UI_MOCK=1)
 //   SYNCR_UI_USER           sign-in user (default admin)
 //   SYNCR_UI_PASSWORD       sign-in password (default syncr-demo-admin)
-//   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3, hooks, bisync or readme:
-//                           which shot list
+//   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3, hooks, bisync, browser
+//                           or readme: which shot list
 //   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/<set>)
 //   SYNCR_SCREENSHOT_ONLY   comma-separated shot names to take (default all)
 //   SYNCR_SCREENSHOT_MOBILE 1 to also take 390px-wide shots
@@ -33,7 +33,7 @@ const mock = process.env.SYNCR_UI_MOCK === "1";
 const setupUrl = (process.env.SYNCR_SETUP_URL ?? (mock ? base : "")).replace(/\/$/, "");
 const user = process.env.SYNCR_UI_USER ?? "admin";
 const password = process.env.SYNCR_UI_PASSWORD ?? "syncr-demo-admin";
-const set = ["m3", "m4", "m5", "hooks", "bisync", "readme"].includes(
+const set = ["m3", "m4", "m5", "hooks", "bisync", "browser", "readme"].includes(
   process.env.SYNCR_SCREENSHOT_SET,
 )
   ? process.env.SYNCR_SCREENSHOT_SET
@@ -805,6 +805,273 @@ async function bisync(browser) {
   }
 }
 
+// api calls a Connect method of the controller with the page's session
+// (same origin), so it needs a real controller, not the in-browser mock.
+async function api(page, method, body = {}) {
+  return page.evaluate(
+    async ({ method, body }) => {
+      const res = await fetch(`/syncr.v1.${method}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Syncr-CSRF": "1" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`${method}: HTTP ${res.status}`);
+      return res.json();
+    },
+    { method, body },
+  );
+}
+
+// seedIds returns the dev seed's worker, remote and repository IDs by name
+// (they change with every start).
+async function seedIds(page) {
+  if (!page.url().startsWith(base)) await page.goto(`${base}/`);
+  const byName = (list = []) => Object.fromEntries(list.map((x) => [x.name, x.id]));
+  const [w, r, rp] = await Promise.all([
+    api(page, "WorkerAdminService/ListWorkers"),
+    api(page, "RemoteService/ListRemotes"),
+    api(page, "ResticService/ListRepositories"),
+  ]);
+  return {
+    workers: byName(w.workers),
+    remotes: byName(r.remotes),
+    repos: byName(rp.repositories),
+  };
+}
+
+// newestSnapshot lists a repository's snapshots again (the seed starts
+// with an out-of-date list) and returns the newest one's ID.
+async function newestSnapshot(page, repoId) {
+  const { snapshots = [] } = await api(page, "ResticService/ListSnapshots", {
+    repositoryId: repoId,
+    refresh: true,
+  });
+  const newest = snapshots.reduce((a, b) => (Date.parse(b.time) > Date.parse(a.time) ? b : a));
+  return newest.id;
+}
+
+// open goes to a page of the UI and waits for it to settle.
+async function open(page, path, ms) {
+  await page.goto(`${base}${path}`);
+  await settle(page, ms);
+}
+
+// workerFiles opens nas-01's folder, measures it with "Calculate sizes"
+// and selects the named rows.
+async function workerFiles(page, path, { measure = false, select = [] } = {}) {
+  const { workers } = await seedIds(page);
+  await open(page, `/workers/${workers["nas-01"]}/files?path=${encodeURIComponent(path)}`);
+  if (measure) {
+    await page.getByRole("button", { name: "Calculate sizes" }).click();
+    await page.getByRole("button", { name: "Measure again" }).waitFor();
+    await settle(page, 400);
+  }
+  for (const name of select) await page.getByRole("checkbox", { name: `Select ${name}` }).click();
+  await settle(page, 300);
+}
+
+// transferSheet selects two items of nas-01's /srv/docs and fills the copy
+// or move sheet: into B2 offsite's inbox/from-nas, replacing older files.
+async function transferSheet(page) {
+  await workerFiles(page, "/srv/docs", { select: ["contracts", "budget.xlsx"] });
+  await page.getByRole("button", { name: "Copy or move…" }).first().click();
+  await page.locator("#transfer-dest-where").click();
+  await page.getByRole("option", { name: /^B2 offsite/ }).click();
+  await page.locator("#transfer-dest-path").fill("inbox/from-nas");
+  await page.getByRole("radio", { name: /^Replace older files/ }).click();
+  // Choosing an option scrolled the sheet: show it from the top.
+  await page.getByRole("dialog").evaluate((d) => {
+    for (const el of [d, ...d.querySelectorAll("*")]) el.scrollTop = 0;
+  });
+  await settle(page, 300);
+}
+
+// snapshotPage opens Photos vault's newest snapshot at path.
+async function snapshotPage(page, path) {
+  const { repos } = await seedIds(page);
+  const repo = repos["Photos vault"];
+  const snap = await newestSnapshot(page, repo);
+  await open(page, `/repositories/${repo}/snapshots/${snap}?path=${encodeURIComponent(path)}`);
+  return repo;
+}
+
+// rowMenu opens the row menu (⋯) of a file table row.
+async function rowMenu(page, name) {
+  await page.getByRole("button", { name: `Actions for ${name}` }).click();
+  await page.getByRole("menu").waitFor();
+  await settle(page, 200);
+}
+
+// The file browser shots (milestone 7). They expect the dev seed
+// (internal/devseed: scans.go and probes.go): nas-01 with /srv (one
+// unreadable entry) and /mnt (a walk that stops early), B2 offsite with
+// usage, Photos vault whose snapshots differ (albums.json changes every few
+// snapshots; the newest two differ by added, removed, changed and
+// type-changed entries).
+const browserShots = [
+  [
+    "01-worker-files",
+    async (p) => workerFiles(p, "/srv", { measure: true, select: ["photos", "docs"] }),
+  ],
+  ["02-worker-sizes-partial", async (p) => workerFiles(p, "/mnt", { measure: true })],
+  [
+    "03-remote-usage",
+    async (p) => {
+      const { remotes } = await seedIds(p);
+      await open(p, `/remotes/${remotes["B2 offsite"]}/files`);
+      await p.getByRole("button", { name: "Calculate sizes" }).click();
+      await p.getByRole("button", { name: "Measure again" }).waitFor();
+      await settle(p, 400);
+    },
+  ],
+  ["04-transfer-sheet", async (p) => transferSheet(p)],
+  [
+    "05-move-confirm",
+    async (p) => {
+      await transferSheet(p);
+      await p.getByRole("radio", { name: /^Move/ }).click();
+      await p.getByRole("dialog").getByRole("button", { name: /^Move/ }).last().click();
+      await p.getByRole("alertdialog").waitFor();
+      await settle(p, 300);
+    },
+  ],
+  [
+    "06-job-draft",
+    async (p) => {
+      await workerFiles(p, "/srv/docs", { select: ["contracts", "taxes"] });
+      await p.getByRole("button", { name: "New job" }).click();
+      await p.getByRole("menuitem", { name: "Back up with restic…", exact: true }).click();
+      await p.waitForURL((u) => u.pathname === "/jobs/new");
+      await settle(p);
+    },
+  ],
+  [
+    "07-snapshot-browser",
+    async (p) => {
+      await snapshotPage(p, "/srv/photos/2026");
+      await p.getByRole("checkbox", { name: "Select 01" }).click();
+      await p.getByRole("checkbox", { name: "Select 02" }).click();
+      await rowMenu(p, "albums.json");
+    },
+  ],
+  [
+    "08-restore-original",
+    async (p) => {
+      await snapshotPage(p, "/srv/photos");
+      await rowMenu(p, "2026");
+      await p.getByRole("menuitem", { name: "Restore to original location…" }).click();
+      await p.getByRole("dialog").waitFor();
+      await settle(p, 400);
+    },
+  ],
+  [
+    "09-snapshot-sizes",
+    async (p) => {
+      await snapshotPage(p, "/srv/photos");
+      await p.getByRole("button", { name: "Calculate sizes" }).click();
+      await p.getByRole("button", { name: "Measure again" }).waitFor();
+      await settle(p, 400);
+    },
+  ],
+  [
+    "10-search-versions",
+    async (p) => {
+      const { repos } = await seedIds(p);
+      // An address alone fills the form: the search runs on its button.
+      await open(p, `/repositories/${repos["Photos vault"]}/search?q=albums.json`);
+      await p.getByRole("button", { name: "Search", exact: true }).click();
+      await p.getByRole("region", { name: "Search results" }).waitFor();
+      await settle(p, 900);
+      await p
+        .getByRole("button", { name: /albums\.json/ })
+        .first()
+        .click();
+      await settle(p, 400);
+    },
+  ],
+  [
+    "11-file-versions",
+    async (p) => {
+      await snapshotPage(p, "/srv/photos/2026");
+      await rowMenu(p, "albums.json");
+      await p.getByRole("menuitem", { name: "Show versions" }).click();
+      await p.getByRole("dialog").waitFor();
+      await settle(p, 900);
+    },
+  ],
+  [
+    "12-compare",
+    async (p) => {
+      const { repos } = await seedIds(p);
+      const repo = repos["Photos vault"];
+      await newestSnapshot(p, repo);
+      await open(p, `/repositories/${repo}`);
+      await p
+        .getByRole("link", { name: /^Compare .* with previous$/ })
+        .first()
+        .click();
+      await p.waitForURL((u) => u.pathname.endsWith("/compare"));
+      await settle(p, 900);
+    },
+  ],
+  [
+    "13-snapshot-list",
+    async (p) => {
+      const { repos } = await seedIds(p);
+      const repo = repos["NAS documents"];
+      await newestSnapshot(p, repo);
+      await open(p, `/repositories/${repo}`);
+      await p.getByLabel("Group by host and paths").click();
+      await scrollTo(p, p.getByRole("tab", { name: "Snapshots" }), 24);
+      await p.mouse.move(0, 0);
+      await settle(p, 300);
+    },
+  ],
+];
+
+// browserSet takes the file browser shots: light at 1440×900, the compare
+// page in dark, and the worker's files with the selection at phone width
+// (and every shot at 390 px with MOBILE=1).
+async function browserSet(browser) {
+  const variants = [{ suffix: "", width: 1440, height: 900 }];
+  if (mobile) variants.push({ suffix: "-mobile", width: 390, height: 844 });
+  for (const v of variants) {
+    const p = await newPage(browser, v);
+    await signIn(p);
+    for (const [name, go] of browserShots) {
+      if (!wanted(name)) continue;
+      await go(p);
+      await shot(p, name + v.suffix);
+      // Close a menu, sheet or dialog a shot left open before the next page.
+      await p.keyboard.press("Escape");
+    }
+    await p.context().close();
+  }
+  const shots = Object.fromEntries(browserShots);
+  const phone = { width: 390, height: 844 };
+  const extra = [
+    ["14-compare-dark", { dark: true }, shots["12-compare"]],
+    ["15-worker-files-mobile", phone, shots["01-worker-files"]],
+    [
+      "16-selection-mobile",
+      phone,
+      async (p) => {
+        await shots["01-worker-files"](p);
+        await p.getByRole("button", { name: "Show selection" }).click();
+        await p.getByRole("dialog").waitFor();
+        await settle(p, 400);
+      },
+    ],
+  ].filter(([name]) => wanted(name) && !(mobile && name.endsWith("-mobile")));
+  for (const [name, opts, go] of extra) {
+    const p = await newPage(browser, opts);
+    await signIn(p);
+    await go(p);
+    await shot(p, name);
+    await p.context().close();
+  }
+}
+
 // The README shots: one page per feature from the same seeded controller,
 // each in light and dark so the README can follow the reader's theme.
 const readmeShots = [
@@ -827,6 +1094,7 @@ const readmeShots = [
   ],
   ["schedule", async (p) => openRow(p, "/schedules", "Nightly photos")],
   ["workers", async (p) => (await p.goto(`${base}/workers`), settle(p))],
+  ["files", async (p) => workerFiles(p, "/srv", { measure: true, select: ["photos", "docs"] })],
 ];
 
 // readme takes every README shot at 1440×900, light then dark.
@@ -864,6 +1132,10 @@ async function main() {
     }
     if (set === "bisync") {
       await bisync(browser);
+      return;
+    }
+    if (set === "browser") {
+      await browserSet(browser);
       return;
     }
     if (set === "m5") {

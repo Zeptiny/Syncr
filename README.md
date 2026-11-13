@@ -3,7 +3,7 @@
 Self-hosted manager for [rclone](https://rclone.org/) transfers and
 [restic](https://restic.net/) backups. One controller with a web UI drives
 any number of workers on your servers and desktops (Linux and Windows):
-run jobs by hand or on a schedule, watch them live, browse and restore
+run jobs by hand or on a schedule, watch them live, browse files and
 snapshots, and get notified when something fails.
 
 <picture>
@@ -22,7 +22,13 @@ snapshots, and get notified when something fails.
   would empty a side.
 - **restic backups.** Create or connect repositories on any remote, back up
   a worker's folders, apply retention and check them. Browse snapshots and
-  restore all of one, a folder or selected files.
+  restore all of one, a folder or selected files, also back to where they
+  were. Search every snapshot for a file and its versions, and compare
+  two snapshots.
+- **File browser.** Browse a worker's folders and your remotes, select
+  files and folders across folders, copy or move them, see which folder
+  takes the space, and start a backup, a transfer or a schedule from what
+  you selected.
 - **Hooks.** Run commands a worker's operator prepared before and after a
   job: dump a database, stop and start containers, ping a monitor.
 - **Schedules.** Cron expressions with time zones and daylight-saving rules,
@@ -75,6 +81,15 @@ snapshots, and get notified when something fails.
       <p align="center">Workers on Linux and Windows</p>
     </td>
   </tr>
+  <tr>
+    <td colspan="2">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme/files-dark.png">
+        <img alt="A worker's folders with their measured sizes and two folders selected for copying" src="docs/screenshots/readme/files.png">
+      </picture>
+      <p align="center">Browsing a worker's folders, with sizes and a selection</p>
+    </td>
+  </tr>
 </table>
 
 ## Quick start
@@ -125,8 +140,9 @@ back up the database and `SYNCR_SECRETS_KEY`: see
 - [Configuration](docs/configuration.md): every controller setting
 - Workers: [Linux](docs/setup-linux.md), [Windows](docs/setup-windows.md),
   [configuration](docs/worker-config.md), [upgrading](docs/upgrade.md)
-- [Two-way sync](docs/bisync.md), [restic backups](docs/restic.md),
-  [hooks](docs/hooks.md) and [notifications](docs/notifications.md)
+- [Browsing files](docs/browsing.md), [two-way sync](docs/bisync.md),
+  [restic backups](docs/restic.md), [hooks](docs/hooks.md) and
+  [notifications](docs/notifications.md)
 - [Scripting the API](docs/api.md)
 - [Development](docs/development.md): building, testing and the architecture
 - [Release notes](docs/releases/) · [Security policy](SECURITY.md)

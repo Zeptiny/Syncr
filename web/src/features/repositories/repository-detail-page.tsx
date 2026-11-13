@@ -3,10 +3,12 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import {
   ArrowRightLeft,
   CalendarClock,
+  GitCompareArrows,
   Pencil,
   Play,
   Plus,
   Scissors,
+  Search,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
@@ -39,6 +41,7 @@ import { DeleteRepositoryDialog } from "./delete-repository-dialog";
 import { DeletionBanner } from "./deletion-banner";
 import { DeletingBadge, RepositoryLocation } from "./repositories-page";
 import { RepositorySettings } from "./repository-settings";
+import { runScan } from "./scan-run";
 import type { RepositoryTab } from "./search";
 import { SnapshotsTable } from "./snapshots-table";
 
@@ -175,6 +178,12 @@ export function RepositoryDetailPage({
         }
         actions={
           <>
+            <Button variant="outline" asChild>
+              <Link to="/repositories/$repositoryId/search" params={{ repositoryId: repo.id }}>
+                <Search aria-hidden />
+                Search
+              </Link>
+            </Button>
             <ActionLink kind="restic_check" repo={repo} icon={ShieldCheck}>
               Check now
             </ActionLink>
@@ -289,7 +298,26 @@ export function RepositoryDetailPage({
           </TabsList>
 
           <TabsContent value="snapshots" className="pt-4">
-            <SnapshotsTable repository={repo} workers={workerList} />
+            <SnapshotsTable
+              repository={repo}
+              workers={workerList}
+              rowActions={(snap, previous) =>
+                previous ? (
+                  <Button variant="ghost" size="icon-sm" asChild>
+                    <Link
+                      to="/repositories/$repositoryId/compare"
+                      params={{ repositoryId: repo.id }}
+                      search={{ from: previous.id, to: snap.id }}
+                      state={runScan}
+                      aria-label={`Compare ${snap.id.slice(0, 8)} with previous`}
+                      title="Compare with the previous snapshot of the same host and paths"
+                    >
+                      <GitCompareArrows aria-hidden />
+                    </Link>
+                  </Button>
+                ) : null
+              }
+            />
           </TabsContent>
 
           <TabsContent value="jobs" className="pt-4">

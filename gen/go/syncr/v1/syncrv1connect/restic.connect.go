@@ -54,6 +54,15 @@ const (
 	// ResticServiceBrowseSnapshotProcedure is the fully-qualified name of the ResticService's
 	// BrowseSnapshot RPC.
 	ResticServiceBrowseSnapshotProcedure = "/syncr.v1.ResticService/BrowseSnapshot"
+	// ResticServiceMeasureSnapshotFolderProcedure is the fully-qualified name of the ResticService's
+	// MeasureSnapshotFolder RPC.
+	ResticServiceMeasureSnapshotFolderProcedure = "/syncr.v1.ResticService/MeasureSnapshotFolder"
+	// ResticServiceFindInRepositoryProcedure is the fully-qualified name of the ResticService's
+	// FindInRepository RPC.
+	ResticServiceFindInRepositoryProcedure = "/syncr.v1.ResticService/FindInRepository"
+	// ResticServiceCompareSnapshotsProcedure is the fully-qualified name of the ResticService's
+	// CompareSnapshots RPC.
+	ResticServiceCompareSnapshotsProcedure = "/syncr.v1.ResticService/CompareSnapshots"
 )
 
 // ResticServiceClient is a client for the syncr.v1.ResticService service.
@@ -84,6 +93,20 @@ type ResticServiceClient interface {
 	ListSnapshots(context.Context, *connect.Request[v1.ListSnapshotsRequest]) (*connect.Response[v1.ListSnapshotsResponse], error)
 	// BrowseSnapshot lists one directory of a snapshot.
 	BrowseSnapshot(context.Context, *connect.Request[v1.BrowseSnapshotRequest]) (*connect.Response[v1.BrowseSnapshotResponse], error)
+	// MeasureSnapshotFolder measures a folder of a snapshot (Milestone 7):
+	// its totals and each child folder's, as ProbeService.MeasureWorkerFolder
+	// does (partial at the scan timeout, UNAVAILABLE while the worker is
+	// already measuring or searching). POST only.
+	MeasureSnapshotFolder(context.Context, *connect.Request[v1.MeasureSnapshotFolderRequest]) (*connect.Response[v1.MeasureSnapshotFolderResponse], error)
+	// FindInRepository searches the repository's snapshots (restic find):
+	// all of them, or the snapshot_ids given. It stops at the scan timeout
+	// or at the most matches a worker returns (complete and truncated say
+	// so). POST only.
+	FindInRepository(context.Context, *connect.Request[v1.FindInRepositoryRequest]) (*connect.Response[v1.FindInRepositoryResponse], error)
+	// CompareSnapshots compares two snapshots (restic diff), the whole tree
+	// or one folder. A snapshot compared with itself is INVALID_ARGUMENT.
+	// POST only.
+	CompareSnapshots(context.Context, *connect.Request[v1.CompareSnapshotsRequest]) (*connect.Response[v1.CompareSnapshotsResponse], error)
 }
 
 // NewResticServiceClient constructs a client for the syncr.v1.ResticService service. By default, it
@@ -143,18 +166,39 @@ func NewResticServiceClient(httpClient connect.HTTPClient, baseURL string, opts 
 			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 			connect.WithClientOptions(opts...),
 		),
+		measureSnapshotFolder: connect.NewClient[v1.MeasureSnapshotFolderRequest, v1.MeasureSnapshotFolderResponse](
+			httpClient,
+			baseURL+ResticServiceMeasureSnapshotFolderProcedure,
+			connect.WithSchema(resticServiceMethods.ByName("MeasureSnapshotFolder")),
+			connect.WithClientOptions(opts...),
+		),
+		findInRepository: connect.NewClient[v1.FindInRepositoryRequest, v1.FindInRepositoryResponse](
+			httpClient,
+			baseURL+ResticServiceFindInRepositoryProcedure,
+			connect.WithSchema(resticServiceMethods.ByName("FindInRepository")),
+			connect.WithClientOptions(opts...),
+		),
+		compareSnapshots: connect.NewClient[v1.CompareSnapshotsRequest, v1.CompareSnapshotsResponse](
+			httpClient,
+			baseURL+ResticServiceCompareSnapshotsProcedure,
+			connect.WithSchema(resticServiceMethods.ByName("CompareSnapshots")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // resticServiceClient implements ResticServiceClient.
 type resticServiceClient struct {
-	listRepositories *connect.Client[v1.ListRepositoriesRequest, v1.ListRepositoriesResponse]
-	getRepository    *connect.Client[v1.GetRepositoryRequest, v1.GetRepositoryResponse]
-	createRepository *connect.Client[v1.CreateRepositoryRequest, v1.CreateRepositoryResponse]
-	updateRepository *connect.Client[v1.UpdateRepositoryRequest, v1.UpdateRepositoryResponse]
-	deleteRepository *connect.Client[v1.DeleteRepositoryRequest, v1.DeleteRepositoryResponse]
-	listSnapshots    *connect.Client[v1.ListSnapshotsRequest, v1.ListSnapshotsResponse]
-	browseSnapshot   *connect.Client[v1.BrowseSnapshotRequest, v1.BrowseSnapshotResponse]
+	listRepositories      *connect.Client[v1.ListRepositoriesRequest, v1.ListRepositoriesResponse]
+	getRepository         *connect.Client[v1.GetRepositoryRequest, v1.GetRepositoryResponse]
+	createRepository      *connect.Client[v1.CreateRepositoryRequest, v1.CreateRepositoryResponse]
+	updateRepository      *connect.Client[v1.UpdateRepositoryRequest, v1.UpdateRepositoryResponse]
+	deleteRepository      *connect.Client[v1.DeleteRepositoryRequest, v1.DeleteRepositoryResponse]
+	listSnapshots         *connect.Client[v1.ListSnapshotsRequest, v1.ListSnapshotsResponse]
+	browseSnapshot        *connect.Client[v1.BrowseSnapshotRequest, v1.BrowseSnapshotResponse]
+	measureSnapshotFolder *connect.Client[v1.MeasureSnapshotFolderRequest, v1.MeasureSnapshotFolderResponse]
+	findInRepository      *connect.Client[v1.FindInRepositoryRequest, v1.FindInRepositoryResponse]
+	compareSnapshots      *connect.Client[v1.CompareSnapshotsRequest, v1.CompareSnapshotsResponse]
 }
 
 // ListRepositories calls syncr.v1.ResticService.ListRepositories.
@@ -192,6 +236,21 @@ func (c *resticServiceClient) BrowseSnapshot(ctx context.Context, req *connect.R
 	return c.browseSnapshot.CallUnary(ctx, req)
 }
 
+// MeasureSnapshotFolder calls syncr.v1.ResticService.MeasureSnapshotFolder.
+func (c *resticServiceClient) MeasureSnapshotFolder(ctx context.Context, req *connect.Request[v1.MeasureSnapshotFolderRequest]) (*connect.Response[v1.MeasureSnapshotFolderResponse], error) {
+	return c.measureSnapshotFolder.CallUnary(ctx, req)
+}
+
+// FindInRepository calls syncr.v1.ResticService.FindInRepository.
+func (c *resticServiceClient) FindInRepository(ctx context.Context, req *connect.Request[v1.FindInRepositoryRequest]) (*connect.Response[v1.FindInRepositoryResponse], error) {
+	return c.findInRepository.CallUnary(ctx, req)
+}
+
+// CompareSnapshots calls syncr.v1.ResticService.CompareSnapshots.
+func (c *resticServiceClient) CompareSnapshots(ctx context.Context, req *connect.Request[v1.CompareSnapshotsRequest]) (*connect.Response[v1.CompareSnapshotsResponse], error) {
+	return c.compareSnapshots.CallUnary(ctx, req)
+}
+
 // ResticServiceHandler is an implementation of the syncr.v1.ResticService service.
 type ResticServiceHandler interface {
 	// ListRepositories lists the caller's repositories, by name. Repositories
@@ -220,6 +279,20 @@ type ResticServiceHandler interface {
 	ListSnapshots(context.Context, *connect.Request[v1.ListSnapshotsRequest]) (*connect.Response[v1.ListSnapshotsResponse], error)
 	// BrowseSnapshot lists one directory of a snapshot.
 	BrowseSnapshot(context.Context, *connect.Request[v1.BrowseSnapshotRequest]) (*connect.Response[v1.BrowseSnapshotResponse], error)
+	// MeasureSnapshotFolder measures a folder of a snapshot (Milestone 7):
+	// its totals and each child folder's, as ProbeService.MeasureWorkerFolder
+	// does (partial at the scan timeout, UNAVAILABLE while the worker is
+	// already measuring or searching). POST only.
+	MeasureSnapshotFolder(context.Context, *connect.Request[v1.MeasureSnapshotFolderRequest]) (*connect.Response[v1.MeasureSnapshotFolderResponse], error)
+	// FindInRepository searches the repository's snapshots (restic find):
+	// all of them, or the snapshot_ids given. It stops at the scan timeout
+	// or at the most matches a worker returns (complete and truncated say
+	// so). POST only.
+	FindInRepository(context.Context, *connect.Request[v1.FindInRepositoryRequest]) (*connect.Response[v1.FindInRepositoryResponse], error)
+	// CompareSnapshots compares two snapshots (restic diff), the whole tree
+	// or one folder. A snapshot compared with itself is INVALID_ARGUMENT.
+	// POST only.
+	CompareSnapshots(context.Context, *connect.Request[v1.CompareSnapshotsRequest]) (*connect.Response[v1.CompareSnapshotsResponse], error)
 }
 
 // NewResticServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -275,6 +348,24 @@ func NewResticServiceHandler(svc ResticServiceHandler, opts ...connect.HandlerOp
 		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 		connect.WithHandlerOptions(opts...),
 	)
+	resticServiceMeasureSnapshotFolderHandler := connect.NewUnaryHandler(
+		ResticServiceMeasureSnapshotFolderProcedure,
+		svc.MeasureSnapshotFolder,
+		connect.WithSchema(resticServiceMethods.ByName("MeasureSnapshotFolder")),
+		connect.WithHandlerOptions(opts...),
+	)
+	resticServiceFindInRepositoryHandler := connect.NewUnaryHandler(
+		ResticServiceFindInRepositoryProcedure,
+		svc.FindInRepository,
+		connect.WithSchema(resticServiceMethods.ByName("FindInRepository")),
+		connect.WithHandlerOptions(opts...),
+	)
+	resticServiceCompareSnapshotsHandler := connect.NewUnaryHandler(
+		ResticServiceCompareSnapshotsProcedure,
+		svc.CompareSnapshots,
+		connect.WithSchema(resticServiceMethods.ByName("CompareSnapshots")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/syncr.v1.ResticService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ResticServiceListRepositoriesProcedure:
@@ -291,6 +382,12 @@ func NewResticServiceHandler(svc ResticServiceHandler, opts ...connect.HandlerOp
 			resticServiceListSnapshotsHandler.ServeHTTP(w, r)
 		case ResticServiceBrowseSnapshotProcedure:
 			resticServiceBrowseSnapshotHandler.ServeHTTP(w, r)
+		case ResticServiceMeasureSnapshotFolderProcedure:
+			resticServiceMeasureSnapshotFolderHandler.ServeHTTP(w, r)
+		case ResticServiceFindInRepositoryProcedure:
+			resticServiceFindInRepositoryHandler.ServeHTTP(w, r)
+		case ResticServiceCompareSnapshotsProcedure:
+			resticServiceCompareSnapshotsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -326,4 +423,16 @@ func (UnimplementedResticServiceHandler) ListSnapshots(context.Context, *connect
 
 func (UnimplementedResticServiceHandler) BrowseSnapshot(context.Context, *connect.Request[v1.BrowseSnapshotRequest]) (*connect.Response[v1.BrowseSnapshotResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ResticService.BrowseSnapshot is not implemented"))
+}
+
+func (UnimplementedResticServiceHandler) MeasureSnapshotFolder(context.Context, *connect.Request[v1.MeasureSnapshotFolderRequest]) (*connect.Response[v1.MeasureSnapshotFolderResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ResticService.MeasureSnapshotFolder is not implemented"))
+}
+
+func (UnimplementedResticServiceHandler) FindInRepository(context.Context, *connect.Request[v1.FindInRepositoryRequest]) (*connect.Response[v1.FindInRepositoryResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ResticService.FindInRepository is not implemented"))
+}
+
+func (UnimplementedResticServiceHandler) CompareSnapshots(context.Context, *connect.Request[v1.CompareSnapshotsRequest]) (*connect.Response[v1.CompareSnapshotsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ResticService.CompareSnapshots is not implemented"))
 }

@@ -15,11 +15,15 @@ import {
   generatePassword,
   locationText,
   pickRestoreWorker,
+  cannotRestoreInPlace,
+  hostWorker,
+  outdatedHost,
   restoreSummary,
   shortId,
   toDeleteRequest,
   toRestoreRequest,
   validateRestore,
+  originalParent,
 } from "./model";
 import {
   validateNewRepositorySearch,
@@ -66,6 +70,21 @@ describe("repository model", () => {
     expect(pickRestoreWorker(workers, "office-pc")?.name).toBe("office-pc");
     expect(pickRestoreWorker([], "nas-01")).toBeUndefined();
     expect(pickRestoreWorker(fx.workers(now), "nas-01")).toBeUndefined();
+  });
+
+  it("goes back in place only on a host worker that can restore items there", () => {
+    const workers = m5.workers(now);
+    const nas = workers.find((w) => w.id === fx.ids.nas)!;
+    // nas-01 without restic.restore_subfolder_paths (before 2.1): outdated.
+    expect(cannotRestoreInPlace(nas)).toBe("outdated");
+    expect(hostWorker(workers, "NAS-01")).toBeUndefined();
+    expect(outdatedHost(workers, "NAS-01")?.name).toBe("nas-01");
+    nas.info!.features.push("restic.restore_subfolder_paths");
+    expect(cannotRestoreInPlace(nas)).toBeUndefined();
+    expect(hostWorker(workers, "NAS-01")?.name).toBe("nas-01");
+    expect(outdatedHost(workers, "NAS-01")).toBeUndefined();
+    // A worker that never connected has reported nothing yet.
+    expect(cannotRestoreInPlace({ ...nas, info: undefined })).toBe("not connected yet");
   });
 
   it("summarizes a restore in one line", () => {
@@ -255,11 +274,42 @@ describe("repository model", () => {
     });
     expect(validateRepositorySearch({ tab: "snapshots" })).toEqual({ tab: undefined });
     expect(validateRepositorySearch({ tab: "nope" })).toEqual({ tab: undefined });
-    expect(validateNewRepositorySearch({ remote: "r1", password: "x", path: "p" })).toEqual({
+    expect(validateNewRepositorySearch({ remote: "r1", password: "x", path: "/p/q/" })).toEqual({
       remote: "r1",
+      path: "p/q",
     });
+    // A path means nothing without its remote.
+    expect(validateNewRepositorySearch({ path: "p" })).toEqual({});
     expect(validateSnapshotSearch({ path: "/srv/photos" })).toEqual({ path: "/srv/photos" });
     expect(validateSnapshotSearch({ path: "/" })).toEqual({ path: undefined });
     expect(validateSnapshotSearch({ path: "relative" })).toEqual({ path: undefined });
+  });
+});
+
+describe("restore to the original location", () => {
+  it("restores the items' common parent", () => {
+    expect(originalParent(["/srv/photos/a.jpg"])).toBe("/srv/photos");
+    expect(originalParent(["/srv/photos/2026/01", "/srv/docs/x"])).toBe("/srv");
+    expect(originalParent(["/srv", "/home"])).toBe("/");
+  });
+});
+
+describe("restore request to the original location", () => {
+  it("sends the items of their common parent", () => {
+    const req = toRestoreRequest(
+      m5.ids.photosVault,
+      { id: "1a2b3c4d" },
+      { mode: "original", paths: ["/srv/photos/2026/01", "/srv/photos/README.txt"] },
+      { ...emptyRestore(), workerId: fx.ids.nas, target: "/srv/photos", excludes: ["*.tmp"] },
+    );
+    expect(req.definition?.operation).toMatchObject({
+      case: "resticRestore",
+      value: {
+        target: "/srv/photos",
+        subfolder: "/srv/photos",
+        paths: ["/srv/photos/2026/01", "/srv/photos/README.txt"],
+        excludes: ["*.tmp"],
+      },
+    });
   });
 });

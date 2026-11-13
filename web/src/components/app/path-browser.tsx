@@ -1,4 +1,3 @@
-import { ArrowUp, CornerDownLeft } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -10,13 +9,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { ProbeEntryType, type ProbeEntry } from "@/gen/syncr/v1/link_pb";
 import { usePathListing, type PathSource } from "@/hooks/use-path-listing";
 import { normalizePath, parentPath, rootPath } from "@/lib/paths";
 
 import { FileTable } from "./file-table";
-import { PathBreadcrumbs } from "./path-breadcrumbs";
+import { BrowserToolbar } from "./file-browser/browser-toolbar";
+import { missingFolderHint } from "./file-browser/helpers";
 
 /** PathBrowserDialogProps configures PathBrowserDialog. */
 export interface PathBrowserDialogProps {
@@ -40,9 +39,10 @@ export interface PathBrowserDialogProps {
 
 /**
  * PathBrowserDialog browses folders on a worker, a remote or a snapshot
- * and returns the chosen paths. Type a path and press Enter to jump to it,
- * or open folders from the list. In folder mode the footer button chooses
- * the folder that is open.
+ * and returns the chosen paths: the forms' path picker. Type a path and
+ * press Enter to jump to it, or open folders from the list. In folder mode
+ * the footer button chooses the folder that is open. It is a thin wrapper
+ * around the file browser's toolbar and table.
  */
 export function PathBrowserDialog(props: PathBrowserDialogProps) {
   // The body mounts with the dialog, so every opening starts fresh.
@@ -69,7 +69,6 @@ function Browser({
   const kind = source.kind;
   const top = rootPath(kind);
   const [path, setPath] = useState(() => (initialPath ? normalizePath(initialPath, kind) : top));
-  const [typed, setTyped] = useState(path);
   const [selected, setSelected] = useState<string[]>([]);
   const listing = usePathListing(source, path, { dirsOnly: mode === "dir" });
   // A worker's top lists its allowed folders, which bound the way up.
@@ -79,7 +78,6 @@ function Browser({
   const go = (to: string) => {
     const next = to === top ? top : normalizePath(to, kind);
     setPath(next);
-    setTyped(next);
     if (!multiple) setSelected([]);
   };
   const canSelect = (e: ProbeEntry) =>
@@ -108,45 +106,17 @@ function Browser({
           {listing.worker?.name && kind !== "worker" && <> Listed by {listing.worker.name}.</>}
         </DialogDescription>
       </DialogHeader>
-      <div className="flex flex-col gap-2 border-b px-5 py-3">
-        <form
-          className="flex items-center gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            go(typed);
-          }}
-        >
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            aria-label="Up one folder"
-            disabled={atTop}
-            onClick={() => go(parentPath(path, kind, rootPaths))}
-          >
-            <ArrowUp aria-hidden />
-          </Button>
-          <Input
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            aria-label="Path"
-            placeholder={kind === "remote" ? "folder/inside/remote" : "/path/to/folder"}
-            spellCheck={false}
-            autoComplete="off"
-            className="h-9 min-w-0 flex-1 bg-card font-mono text-[13px]"
-          />
-          <Button type="submit" variant="outline" size="icon" aria-label="Go to this path">
-            <CornerDownLeft aria-hidden />
-          </Button>
-        </form>
-        <PathBreadcrumbs
-          path={path}
-          kind={kind}
-          rootLabel={rootLabel ?? names[kind]}
-          onNavigate={go}
-        />
-      </div>
+      <BrowserToolbar
+        kind={kind}
+        path={path}
+        onNavigate={go}
+        rootLabel={rootLabel ?? names[kind]}
+        roots={rootPaths}
+        onRefresh={listing.refetch}
+        isFetching={listing.isFetching}
+        updatedAt={listing.dataUpdatedAt}
+        className="px-5"
+      />
       <FileTable
         key={path}
         className="min-h-48 flex-1"
@@ -156,7 +126,9 @@ function Browser({
         error={listing.error}
         onRetry={listing.refetch}
         truncated={listing.truncated}
+        missingHint={missingFolderHint(kind)}
         onOpen={(e) => go(e.path)}
+        onUp={atTop ? undefined : () => go(parentPath(path, kind, rootPaths))}
         compact
         selection={
           multiple || mode !== "dir"

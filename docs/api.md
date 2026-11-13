@@ -55,6 +55,53 @@ curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/j
   why (`resyncReason`), and counts the conflicts (`conflicts`, with the
   first 20 in `conflictPaths`).
 
+The [file browser](browsing.md)'s scans are calls of their own. All of
+them go through a worker and answer within the request:
+
+| Call | What it does |
+|---|---|
+| `ProbeService/MeasureWorkerFolder` | folder sizes of a worker's folder (`workerId`, `path`) |
+| `ProbeService/MeasureRemoteFolder` | folder sizes of a folder of one of your remotes (`remoteId`, `path`, optional `workerId`) |
+| `ProbeService/GetRemoteUsage` | a remote's usage, as `rclone about` reports it |
+| `ResticService/MeasureSnapshotFolder` | folder sizes of a snapshot's folder |
+| `ResticService/FindInRepository` | `restic find` over all snapshots or some (`patterns`, `ignoreCase`, `snapshotIds`) |
+| `ResticService/CompareSnapshots` | `restic diff` of two snapshots, optionally of one folder (`fromSnapshotId`, `toSnapshotId`, `path`) |
+
+```sh
+curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"repositoryId":"<repository id>","patterns":["*.pdf"],"ignoreCase":true}' \
+  http://127.0.0.1:8080/syncr.v1.ResticService/FindInRepository
+# {"matches":[{"snapshotId":"5f1c...","entry":{"name":"lease.pdf","path":"/srv/docs/lease.pdf",...}}],
+#  "complete":true,"snapshotsSearched":12,"worker":{...}}
+```
+
+- The five scans accept POST only (opening a URL cannot start one), are
+  bounded by `probe.scan_timeout` and run one at a time per worker: a
+  second one gets `unavailable` ("already measuring or searching"); a
+  worker whose probe slots are all taken answers `unavailable` ("busy
+  with other requests"). The web UI keeps a search or comparison in its
+  page's address, but opening such an address (a link, a reload) only
+  fills in the form: the scan runs when you press **Search** or
+  **Compare**, or when you come from a page of the app that started it.
+- **A partial answer is a success.** `complete: false` means the scan
+  stopped at its time limit (every number is a lower bound; a comparison
+  then has no `stats`). `truncated: true` means a limit was reached:
+  1,000 matches, 2,000 changes (the `stats` still cover every change), or
+  more child folders than listed (`childrenTruncated`). A measurement's
+  `unreadable` counts entries the worker could not read.
+- Measurements list the child folders largest first. Search matches come
+  newest snapshot first, with full snapshot IDs. Change paths are full
+  snapshot paths; folders end in `/`.
+- A remote on a worker's disk needs `workerId`; `GetRemoteUsage` then
+  answers `usage.unsupported`, like a backend that cannot tell.
+
+Copy and move from the browser are ordinary `RunJob` calls with an
+`rcloneTransfer` definition whose `filters` select the items; restoring
+selected items back to their place is a `resticRestore` with both
+`subfolder` and `paths` (each path inside the subfolder), which needs a
+worker with the `restic.restore_subfolder_paths` feature (2.1 or later;
+older workers fail it with `JOB_ERROR_CODE_WORKER_OUTDATED`).
+
 A location is a path on one of your remotes (`remoteId`, path relative to its
 root) or, without `remoteId`, an absolute path on the worker inside its
 `local_roots`. `JobService.WatchJob` streams status changes and live

@@ -6,7 +6,7 @@ import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegen
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import type { Duration } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_duration } from "@bufbuild/protobuf/wkt";
-import type { ProbeEntry, ProbeUsage, SftpHostKey } from "./link_pb";
+import type { ProbeEntry, ProbeMeasurement, ProbeUsage, SftpHostKey } from "./link_pb";
 import { file_syncr_v1_link } from "./link_pb";
 import type { RemoteInput } from "./remotes_pb";
 import { file_syncr_v1_remotes } from "./remotes_pb";
@@ -16,7 +16,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file syncr/v1/probe.proto.
  */
 export const file_syncr_v1_probe: GenFile = /*@__PURE__*/
-  fileDesc("ChRzeW5jci92MS9wcm9iZS5wcm90bxIIc3luY3IudjEiMAoOUHJvYmVXb3JrZXJSZWYSCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCUoECAMQBiJSChZMaXN0V29ya2VyRmlsZXNSZXF1ZXN0EhEKCXdvcmtlcl9pZBgBIAEoCRIMCgRwYXRoGAIgASgJEhEKCWRpcnNfb25seRgDIAEoCEoECAQQCiKRAQoXTGlzdFdvcmtlckZpbGVzUmVzcG9uc2USDAoEcGF0aBgBIAEoCRIlCgdlbnRyaWVzGAIgAygLMhQuc3luY3IudjEuUHJvYmVFbnRyeRIRCgl0cnVuY2F0ZWQYAyABKAgSKAoGd29ya2VyGAQgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgFEAoiZQoWTGlzdFJlbW90ZUZpbGVzUmVxdWVzdBIRCglyZW1vdGVfaWQYASABKAkSDAoEcGF0aBgCIAEoCRIRCgl3b3JrZXJfaWQYAyABKAkSEQoJZGlyc19vbmx5GAQgASgISgQIBRAKIpEBChdMaXN0UmVtb3RlRmlsZXNSZXNwb25zZRIMCgRwYXRoGAEgASgJEiUKB2VudHJpZXMYAiADKAsyFC5zeW5jci52MS5Qcm9iZUVudHJ5EhEKCXRydW5jYXRlZBgDIAEoCBIoCgZ3b3JrZXIYBCABKAsyGC5zeW5jci52MS5Qcm9iZVdvcmtlclJlZkoECAUQCiJzChFUZXN0UmVtb3RlUmVxdWVzdBIRCglyZW1vdGVfaWQYASABKAkSJAoFaW5wdXQYAiABKAsyFS5zeW5jci52MS5SZW1vdGVJbnB1dBIRCgl3b3JrZXJfaWQYAyABKAkSDAoEcGF0aBgEIAEoCUoECAUQCiL4AQoSVGVzdFJlbW90ZVJlc3BvbnNlEgoKAm9rGAEgASgIEg0KBWVycm9yGAIgASgJEhIKCmVycm9yX2NvZGUYAyABKAkSKAoGd29ya2VyGAQgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWYSKgoHbGF0ZW5jeRgFIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbhIPCgdlbnRyaWVzGAYgASgFEg4KBnNhbXBsZRgHIAMoCRIRCgl0cnVuY2F0ZWQYCCABKAgSIwoFdXNhZ2UYCSABKAsyFC5zeW5jci52MS5Qcm9iZVVzYWdlSgQIChAUIk0KFkdldFNmdHBIb3N0S2V5c1JlcXVlc3QSDAoEaG9zdBgBIAEoCRIMCgRwb3J0GAIgASgFEhEKCXdvcmtlcl9pZBgDIAEoCUoECAQQCiJuChdHZXRTZnRwSG9zdEtleXNSZXNwb25zZRIjCgRrZXlzGAEgAygLMhUuc3luY3IudjEuU2Z0cEhvc3RLZXkSKAoGd29ya2VyGAIgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgDEAoy7QIKDFByb2JlU2VydmljZRJbCg9MaXN0V29ya2VyRmlsZXMSIC5zeW5jci52MS5MaXN0V29ya2VyRmlsZXNSZXF1ZXN0GiEuc3luY3IudjEuTGlzdFdvcmtlckZpbGVzUmVzcG9uc2UiA5ACARJbCg9MaXN0UmVtb3RlRmlsZXMSIC5zeW5jci52MS5MaXN0UmVtb3RlRmlsZXNSZXF1ZXN0GiEuc3luY3IudjEuTGlzdFJlbW90ZUZpbGVzUmVzcG9uc2UiA5ACARJJCgpUZXN0UmVtb3RlEhsuc3luY3IudjEuVGVzdFJlbW90ZVJlcXVlc3QaHC5zeW5jci52MS5UZXN0UmVtb3RlUmVzcG9uc2UiABJYCg9HZXRTZnRwSG9zdEtleXMSIC5zeW5jci52MS5HZXRTZnRwSG9zdEtleXNSZXF1ZXN0GiEuc3luY3IudjEuR2V0U2Z0cEhvc3RLZXlzUmVzcG9uc2UiAEKNAQoMY29tLnN5bmNyLnYxQgpQcm9iZVByb3RvUAFaMGdpdGh1Yi5jb20vWmVwdGlueS9TeW5jci9nZW4vZ28vc3luY3IvdjE7c3luY3J2MaICA1NYWKoCCFN5bmNyLlYxygIIU3luY3JcVjHiAhRTeW5jclxWMVxHUEJNZXRhZGF0YeoCCVN5bmNyOjpWMWIGcHJvdG8z", [file_google_protobuf_duration, file_syncr_v1_link, file_syncr_v1_remotes]);
+  fileDesc("ChRzeW5jci92MS9wcm9iZS5wcm90bxIIc3luY3IudjEiMAoOUHJvYmVXb3JrZXJSZWYSCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCUoECAMQBiJSChZMaXN0V29ya2VyRmlsZXNSZXF1ZXN0EhEKCXdvcmtlcl9pZBgBIAEoCRIMCgRwYXRoGAIgASgJEhEKCWRpcnNfb25seRgDIAEoCEoECAQQCiKRAQoXTGlzdFdvcmtlckZpbGVzUmVzcG9uc2USDAoEcGF0aBgBIAEoCRIlCgdlbnRyaWVzGAIgAygLMhQuc3luY3IudjEuUHJvYmVFbnRyeRIRCgl0cnVuY2F0ZWQYAyABKAgSKAoGd29ya2VyGAQgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgFEAoiZQoWTGlzdFJlbW90ZUZpbGVzUmVxdWVzdBIRCglyZW1vdGVfaWQYASABKAkSDAoEcGF0aBgCIAEoCRIRCgl3b3JrZXJfaWQYAyABKAkSEQoJZGlyc19vbmx5GAQgASgISgQIBRAKIpEBChdMaXN0UmVtb3RlRmlsZXNSZXNwb25zZRIMCgRwYXRoGAEgASgJEiUKB2VudHJpZXMYAiADKAsyFC5zeW5jci52MS5Qcm9iZUVudHJ5EhEKCXRydW5jYXRlZBgDIAEoCBIoCgZ3b3JrZXIYBCABKAsyGC5zeW5jci52MS5Qcm9iZVdvcmtlclJlZkoECAUQCiJzChFUZXN0UmVtb3RlUmVxdWVzdBIRCglyZW1vdGVfaWQYASABKAkSJAoFaW5wdXQYAiABKAsyFS5zeW5jci52MS5SZW1vdGVJbnB1dBIRCgl3b3JrZXJfaWQYAyABKAkSDAoEcGF0aBgEIAEoCUoECAUQCiL4AQoSVGVzdFJlbW90ZVJlc3BvbnNlEgoKAm9rGAEgASgIEg0KBWVycm9yGAIgASgJEhIKCmVycm9yX2NvZGUYAyABKAkSKAoGd29ya2VyGAQgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWYSKgoHbGF0ZW5jeRgFIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbhIPCgdlbnRyaWVzGAYgASgFEg4KBnNhbXBsZRgHIAMoCRIRCgl0cnVuY2F0ZWQYCCABKAgSIwoFdXNhZ2UYCSABKAsyFC5zeW5jci52MS5Qcm9iZVVzYWdlSgQIChAUIk0KFkdldFNmdHBIb3N0S2V5c1JlcXVlc3QSDAoEaG9zdBgBIAEoCRIMCgRwb3J0GAIgASgFEhEKCXdvcmtlcl9pZBgDIAEoCUoECAQQCiJuChdHZXRTZnRwSG9zdEtleXNSZXNwb25zZRIjCgRrZXlzGAEgAygLMhUuc3luY3IudjEuU2Z0cEhvc3RLZXkSKAoGd29ya2VyGAIgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgDEAoiQwoaTWVhc3VyZVdvcmtlckZvbGRlclJlcXVlc3QSEQoJd29ya2VyX2lkGAEgASgJEgwKBHBhdGgYAiABKAlKBAgDEAoiqgEKG01lYXN1cmVXb3JrZXJGb2xkZXJSZXNwb25zZRIvCgttZWFzdXJlbWVudBgBIAEoCzIaLnN5bmNyLnYxLlByb2JlTWVhc3VyZW1lbnQSKAoGd29ya2VyGAIgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWYSKgoHZWxhcHNlZBgDIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbkoECAQQCiJWChpNZWFzdXJlUmVtb3RlRm9sZGVyUmVxdWVzdBIRCglyZW1vdGVfaWQYASABKAkSDAoEcGF0aBgCIAEoCRIRCgl3b3JrZXJfaWQYAyABKAlKBAgEEAoiqgEKG01lYXN1cmVSZW1vdGVGb2xkZXJSZXNwb25zZRIvCgttZWFzdXJlbWVudBgBIAEoCzIaLnN5bmNyLnYxLlByb2JlTWVhc3VyZW1lbnQSKAoGd29ya2VyGAIgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWYSKgoHZWxhcHNlZBgDIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbkoECAQQCiJDChVHZXRSZW1vdGVVc2FnZVJlcXVlc3QSEQoJcmVtb3RlX2lkGAEgASgJEhEKCXdvcmtlcl9pZBgCIAEoCUoECAMQCiJtChZHZXRSZW1vdGVVc2FnZVJlc3BvbnNlEiMKBXVzYWdlGAEgASgLMhQuc3luY3IudjEuUHJvYmVVc2FnZRIoCgZ3b3JrZXIYAiABKAsyGC5zeW5jci52MS5Qcm9iZVdvcmtlclJlZkoECAMQCjKTBQoMUHJvYmVTZXJ2aWNlElsKD0xpc3RXb3JrZXJGaWxlcxIgLnN5bmNyLnYxLkxpc3RXb3JrZXJGaWxlc1JlcXVlc3QaIS5zeW5jci52MS5MaXN0V29ya2VyRmlsZXNSZXNwb25zZSIDkAIBElsKD0xpc3RSZW1vdGVGaWxlcxIgLnN5bmNyLnYxLkxpc3RSZW1vdGVGaWxlc1JlcXVlc3QaIS5zeW5jci52MS5MaXN0UmVtb3RlRmlsZXNSZXNwb25zZSIDkAIBEkkKClRlc3RSZW1vdGUSGy5zeW5jci52MS5UZXN0UmVtb3RlUmVxdWVzdBocLnN5bmNyLnYxLlRlc3RSZW1vdGVSZXNwb25zZSIAElgKD0dldFNmdHBIb3N0S2V5cxIgLnN5bmNyLnYxLkdldFNmdHBIb3N0S2V5c1JlcXVlc3QaIS5zeW5jci52MS5HZXRTZnRwSG9zdEtleXNSZXNwb25zZSIAEmQKE01lYXN1cmVXb3JrZXJGb2xkZXISJC5zeW5jci52MS5NZWFzdXJlV29ya2VyRm9sZGVyUmVxdWVzdBolLnN5bmNyLnYxLk1lYXN1cmVXb3JrZXJGb2xkZXJSZXNwb25zZSIAEmQKE01lYXN1cmVSZW1vdGVGb2xkZXISJC5zeW5jci52MS5NZWFzdXJlUmVtb3RlRm9sZGVyUmVxdWVzdBolLnN5bmNyLnYxLk1lYXN1cmVSZW1vdGVGb2xkZXJSZXNwb25zZSIAElgKDkdldFJlbW90ZVVzYWdlEh8uc3luY3IudjEuR2V0UmVtb3RlVXNhZ2VSZXF1ZXN0GiAuc3luY3IudjEuR2V0UmVtb3RlVXNhZ2VSZXNwb25zZSIDkAIBQo0BCgxjb20uc3luY3IudjFCClByb2JlUHJvdG9QAVowZ2l0aHViLmNvbS9aZXB0aW55L1N5bmNyL2dlbi9nby9zeW5jci92MTtzeW5jcnYxogIDU1hYqgIIU3luY3IuVjHKAghTeW5jclxWMeICFFN5bmNyXFYxXEdQQk1ldGFkYXRh6gIJU3luY3I6OlYxYgZwcm90bzM", [file_google_protobuf_duration, file_syncr_v1_link, file_syncr_v1_remotes]);
 
 /**
  * ProbeWorkerRef names the worker that ran a probe.
@@ -402,8 +402,202 @@ export const GetSftpHostKeysResponseSchema: GenMessage<GetSftpHostKeysResponse> 
   messageDesc(file_syncr_v1_probe, 8);
 
 /**
- * ProbeService browses workers and remotes, tests remotes and fetches SFTP
- * host keys, through a worker.
+ * MeasureWorkerFolderRequest names the folder to measure.
+ *
+ * @generated from message syncr.v1.MeasureWorkerFolderRequest
+ */
+export type MeasureWorkerFolderRequest = Message<"syncr.v1.MeasureWorkerFolderRequest"> & {
+  /**
+   * The worker (required).
+   *
+   * @generated from field: string worker_id = 1;
+   */
+  workerId: string;
+
+  /**
+   * Absolute local path inside the worker's local_roots (required).
+   *
+   * @generated from field: string path = 2;
+   */
+  path: string;
+};
+
+/**
+ * Describes the message syncr.v1.MeasureWorkerFolderRequest.
+ * Use `create(MeasureWorkerFolderRequestSchema)` to create a new message.
+ */
+export const MeasureWorkerFolderRequestSchema: GenMessage<MeasureWorkerFolderRequest> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_probe, 9);
+
+/**
+ * MeasureWorkerFolderResponse is the measured folder.
+ *
+ * @generated from message syncr.v1.MeasureWorkerFolderResponse
+ */
+export type MeasureWorkerFolderResponse = Message<"syncr.v1.MeasureWorkerFolderResponse"> & {
+  /**
+   * The totals and each child folder's; measurement.path is the measured
+   * local path (normalized by the worker).
+   *
+   * @generated from field: syncr.v1.ProbeMeasurement measurement = 1;
+   */
+  measurement?: ProbeMeasurement | undefined;
+
+  /**
+   * The worker that measured it.
+   *
+   * @generated from field: syncr.v1.ProbeWorkerRef worker = 2;
+   */
+  worker?: ProbeWorkerRef | undefined;
+
+  /**
+   * How long the measurement ran on the worker.
+   *
+   * @generated from field: google.protobuf.Duration elapsed = 3;
+   */
+  elapsed?: Duration | undefined;
+};
+
+/**
+ * Describes the message syncr.v1.MeasureWorkerFolderResponse.
+ * Use `create(MeasureWorkerFolderResponseSchema)` to create a new message.
+ */
+export const MeasureWorkerFolderResponseSchema: GenMessage<MeasureWorkerFolderResponse> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_probe, 10);
+
+/**
+ * MeasureRemoteFolderRequest names the folder to measure.
+ *
+ * @generated from message syncr.v1.MeasureRemoteFolderRequest
+ */
+export type MeasureRemoteFolderRequest = Message<"syncr.v1.MeasureRemoteFolderRequest"> & {
+  /**
+   * One of the caller's remotes (required).
+   *
+   * @generated from field: string remote_id = 1;
+   */
+  remoteId: string;
+
+  /**
+   * Path on the remote, relative to its root; empty is the root.
+   *
+   * @generated from field: string path = 2;
+   */
+  path: string;
+
+  /**
+   * The worker to measure through; empty lets the controller choose
+   * (required for a remote on a worker's local filesystem).
+   *
+   * @generated from field: string worker_id = 3;
+   */
+  workerId: string;
+};
+
+/**
+ * Describes the message syncr.v1.MeasureRemoteFolderRequest.
+ * Use `create(MeasureRemoteFolderRequestSchema)` to create a new message.
+ */
+export const MeasureRemoteFolderRequestSchema: GenMessage<MeasureRemoteFolderRequest> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_probe, 11);
+
+/**
+ * MeasureRemoteFolderResponse is the measured folder.
+ *
+ * @generated from message syncr.v1.MeasureRemoteFolderResponse
+ */
+export type MeasureRemoteFolderResponse = Message<"syncr.v1.MeasureRemoteFolderResponse"> & {
+  /**
+   * The totals and each child folder's; measurement.path is the measured
+   * path relative to the remote's root.
+   *
+   * @generated from field: syncr.v1.ProbeMeasurement measurement = 1;
+   */
+  measurement?: ProbeMeasurement | undefined;
+
+  /**
+   * The worker that measured it.
+   *
+   * @generated from field: syncr.v1.ProbeWorkerRef worker = 2;
+   */
+  worker?: ProbeWorkerRef | undefined;
+
+  /**
+   * How long the measurement ran on the worker.
+   *
+   * @generated from field: google.protobuf.Duration elapsed = 3;
+   */
+  elapsed?: Duration | undefined;
+};
+
+/**
+ * Describes the message syncr.v1.MeasureRemoteFolderResponse.
+ * Use `create(MeasureRemoteFolderResponseSchema)` to create a new message.
+ */
+export const MeasureRemoteFolderResponseSchema: GenMessage<MeasureRemoteFolderResponse> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_probe, 12);
+
+/**
+ * GetRemoteUsageRequest names the remote.
+ *
+ * @generated from message syncr.v1.GetRemoteUsageRequest
+ */
+export type GetRemoteUsageRequest = Message<"syncr.v1.GetRemoteUsageRequest"> & {
+  /**
+   * One of the caller's remotes (required).
+   *
+   * @generated from field: string remote_id = 1;
+   */
+  remoteId: string;
+
+  /**
+   * The worker to ask through; empty lets the controller choose.
+   *
+   * @generated from field: string worker_id = 2;
+   */
+  workerId: string;
+};
+
+/**
+ * Describes the message syncr.v1.GetRemoteUsageRequest.
+ * Use `create(GetRemoteUsageRequestSchema)` to create a new message.
+ */
+export const GetRemoteUsageRequestSchema: GenMessage<GetRemoteUsageRequest> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_probe, 13);
+
+/**
+ * GetRemoteUsageResponse is the remote's usage.
+ *
+ * @generated from message syncr.v1.GetRemoteUsageResponse
+ */
+export type GetRemoteUsageResponse = Message<"syncr.v1.GetRemoteUsageResponse"> & {
+  /**
+   * Unset fields are unknown to the backend; unsupported says it cannot
+   * tell at all.
+   *
+   * @generated from field: syncr.v1.ProbeUsage usage = 1;
+   */
+  usage?: ProbeUsage | undefined;
+
+  /**
+   * The worker that asked.
+   *
+   * @generated from field: syncr.v1.ProbeWorkerRef worker = 2;
+   */
+  worker?: ProbeWorkerRef | undefined;
+};
+
+/**
+ * Describes the message syncr.v1.GetRemoteUsageResponse.
+ * Use `create(GetRemoteUsageResponseSchema)` to create a new message.
+ */
+export const GetRemoteUsageResponseSchema: GenMessage<GetRemoteUsageResponse> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_probe, 14);
+
+/**
+ * ProbeService browses workers and remotes, tests remotes, fetches SFTP
+ * host keys, measures folders and asks remotes for their usage, through a
+ * worker.
  *
  * Remotes are the caller's (NOT_FOUND otherwise, admins included); any user
  * may browse any worker's local roots (workers are shared). Worker-side
@@ -469,6 +663,46 @@ export const ProbeService: GenService<{
     methodKind: "unary";
     input: typeof GetSftpHostKeysRequestSchema;
     output: typeof GetSftpHostKeysResponseSchema;
+  },
+  /**
+   * MeasureWorkerFolder measures a folder on a worker (Milestone 7): its
+   * totals and each child folder's. Any user may measure any worker's
+   * folders, as they may list them. The walk ends at the controller's scan
+   * timeout with what it found (complete=false). A worker already
+   * measuring or searching is UNAVAILABLE. Rate limited; POST only, so a
+   * cross-site link cannot start a scan.
+   *
+   * @generated from rpc syncr.v1.ProbeService.MeasureWorkerFolder
+   */
+  measureWorkerFolder: {
+    methodKind: "unary";
+    input: typeof MeasureWorkerFolderRequestSchema;
+    output: typeof MeasureWorkerFolderResponseSchema;
+  },
+  /**
+   * MeasureRemoteFolder measures a folder of one of the caller's remotes,
+   * as MeasureWorkerFolder does. A remote on a worker's local filesystem
+   * needs worker_id. POST only.
+   *
+   * @generated from rpc syncr.v1.ProbeService.MeasureRemoteFolder
+   */
+  measureRemoteFolder: {
+    methodKind: "unary";
+    input: typeof MeasureRemoteFolderRequestSchema;
+    output: typeof MeasureRemoteFolderResponseSchema;
+  },
+  /**
+   * GetRemoteUsage asks one of the caller's remotes for its usage (rclone
+   * about). A backend that cannot tell answers with usage.unsupported. A
+   * remote on a worker's local filesystem needs worker_id and answers
+   * usage.unsupported without asking the worker.
+   *
+   * @generated from rpc syncr.v1.ProbeService.GetRemoteUsage
+   */
+  getRemoteUsage: {
+    methodKind: "unary";
+    input: typeof GetRemoteUsageRequestSchema;
+    output: typeof GetRemoteUsageResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_syncr_v1_probe, 0);

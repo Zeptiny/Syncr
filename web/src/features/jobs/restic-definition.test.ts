@@ -389,6 +389,26 @@ describe("resticSummary", () => {
       title: "Restore 2 items from Photos vault → /srv/restore",
       detail: "keeps existing files",
     });
+    const ofFolder = (paths: string[]) =>
+      sum({
+        operation: {
+          case: "resticRestore",
+          value: {
+            repositoryId: "r",
+            snapshotId: "0123456789abcdef",
+            target: "/srv/photos",
+            subfolder: "/srv/photos",
+            paths,
+          },
+        },
+      })?.title;
+    expect(ofFolder(["/srv/photos/a", "/srv/photos/b"])).toBe(
+      "Restore 2 items of /srv/photos from Photos vault → /srv/photos",
+    );
+    expect(ofFolder(["/srv/photos/a"])).toBe(
+      "Restore /srv/photos/a from Photos vault → /srv/photos",
+    );
+    expect(ofFolder([])).toBe("Restore /srv/photos from Photos vault → /srv/photos");
     expect(
       sum({ operation: { case: "resticDeleteData", value: { repositoryId: "r" } } })?.title,
     ).toBe("Delete the data of Photos vault");

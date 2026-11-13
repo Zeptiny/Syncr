@@ -185,7 +185,8 @@ func obscuredSecrets(remotes []*syncrv1.RemoteDefinition, env map[string]string)
 // failure builds the runner error for a restic exit. A plain failure (exit
 // code 1) whose message names a known condition gets that condition's code:
 // ALREADY_EXISTS for an init over an existing repository, NOT_FOUND for a
-// snapshot or snapshot path that does not exist.
+// snapshot or snapshot path that does not exist (or, for diff, a folder
+// that is a file).
 func failure(verb string, code int, message string) error {
 	e := &ExitError{Verb: verb, ExitCode: code, Message: message}
 	wire := jobErrorCode(e)
@@ -193,8 +194,9 @@ func failure(verb string, code int, message string) error {
 		switch {
 		case verb == "init" && strings.Contains(message, "config file already exists"):
 			wire = syncrv1.JobErrorCode_JOB_ERROR_CODE_ALREADY_EXISTS
-		case (verb == "ls" || verb == "restore") &&
-			(strings.Contains(message, "no matching ID found") || notFoundPath.MatchString(message)):
+		case (verb == "ls" || verb == "restore" || verb == "diff") &&
+			(strings.Contains(message, "no matching ID found") || notFoundPath.MatchString(message)),
+			verb == "diff" && notAFolder.MatchString(message):
 			wire = syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND
 		}
 	}
@@ -204,3 +206,7 @@ func failure(verb string, code int, message string) error {
 // notFoundPath matches restic's message for a missing snapshot subfolder
 // ("path nope: not found").
 var notFoundPath = regexp.MustCompile(`^(Fatal: )?path .*: not found$`)
+
+// notAFolder matches restic diff's message for a snapshot subfolder that is
+// a file ("path srv/a.txt: not a directory").
+var notAFolder = regexp.MustCompile(`^(Fatal: )?path .*: not a directory$`)

@@ -172,13 +172,14 @@ export function resticSummary(
     }
     case "resticRestore": {
       const d = op.value;
-      const what = d.subfolder
-        ? d.subfolder
-        : d.paths.length === 1
+      // As the controller's titles: items of a subfolder are restored as
+      // they were in it (back to the original location).
+      const what =
+        d.paths.length === 1
           ? d.paths[0]
           : d.paths.length > 1
-            ? `${d.paths.length} items`
-            : `snapshot ${d.snapshotId.slice(0, 8)}`;
+            ? `${d.paths.length} items${d.subfolder ? ` of ${d.subfolder}` : ""}`
+            : d.subfolder || `snapshot ${d.snapshotId.slice(0, 8)}`;
       return {
         title: `Restore ${what} from ${name} → ${d.target}`,
         detail: parts(

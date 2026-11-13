@@ -357,6 +357,28 @@ func TestRunLineFraming(t *testing.T) {
 	}
 }
 
+func TestRunStdoutChunks(t *testing.T) {
+	t.Parallel()
+	var chunks []string
+	spec := helperSpec(t, "long", "100")
+	spec.StdoutChunks = true
+	spec.Stdout = func(l Line) { chunks = append(chunks, string(l.Data)) }
+
+	if _, err := New(Options{MaxLineBytes: 16}).Run(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	// The output arrives whole and unsplit by lines, in chunks no longer
+	// than the line limit.
+	if got, want := strings.Join(chunks, ""), strings.Repeat("x", 100)+"\nafter\n"; got != want {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+	for _, c := range chunks {
+		if len(c) > 16 {
+			t.Errorf("chunk of %d bytes: %q", len(c), c)
+		}
+	}
+}
+
 func TestRunDeliversEveryLineInOrder(t *testing.T) {
 	t.Parallel()
 	const n = 5000

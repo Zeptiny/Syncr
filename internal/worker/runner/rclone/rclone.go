@@ -14,9 +14,10 @@
 //   - paths follow "--", remote paths are "<alias>:<path>" with a validated
 //     alias, and local paths must pass the local path policy.
 //
-// The Prober (probe.go) answers the probe operations list_remote and about
-// with the same validation, environment and isolation: one "rclone lsjson"
-// or "rclone about" process per probe, read as it prints.
+// The Prober (probe.go, probe_measure.go) answers the probe operations
+// list_remote, about and measure_remote with the same validation,
+// environment and isolation: one "rclone lsjson" or "rclone about" process
+// per probe, read as it prints.
 //
 // Progress comes from rclone's JSON log (--use-json-log, stats every
 // second); unknown keys are ignored. Exit codes map to job error codes, and
@@ -25,7 +26,8 @@
 //
 // Allowed dependencies: the standard library, the generated protobuf code,
 // internal/worker/proc, internal/worker/runner, internal/worker/runner/scrub,
-// internal/worker/rcloneenv and internal/worker/bisyncstate.
+// internal/worker/runner/tally, internal/worker/rcloneenv and
+// internal/worker/bisyncstate.
 package rclone
 
 import (

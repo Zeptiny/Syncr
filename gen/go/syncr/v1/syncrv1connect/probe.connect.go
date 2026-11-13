@@ -44,6 +44,15 @@ const (
 	// ProbeServiceGetSftpHostKeysProcedure is the fully-qualified name of the ProbeService's
 	// GetSftpHostKeys RPC.
 	ProbeServiceGetSftpHostKeysProcedure = "/syncr.v1.ProbeService/GetSftpHostKeys"
+	// ProbeServiceMeasureWorkerFolderProcedure is the fully-qualified name of the ProbeService's
+	// MeasureWorkerFolder RPC.
+	ProbeServiceMeasureWorkerFolderProcedure = "/syncr.v1.ProbeService/MeasureWorkerFolder"
+	// ProbeServiceMeasureRemoteFolderProcedure is the fully-qualified name of the ProbeService's
+	// MeasureRemoteFolder RPC.
+	ProbeServiceMeasureRemoteFolderProcedure = "/syncr.v1.ProbeService/MeasureRemoteFolder"
+	// ProbeServiceGetRemoteUsageProcedure is the fully-qualified name of the ProbeService's
+	// GetRemoteUsage RPC.
+	ProbeServiceGetRemoteUsageProcedure = "/syncr.v1.ProbeService/GetRemoteUsage"
 )
 
 // ProbeServiceClient is a client for the syncr.v1.ProbeService service.
@@ -70,6 +79,22 @@ type ProbeServiceClient interface {
 	// server the worker cannot reach, or one that does not speak SSH, is
 	// FAILED_PRECONDITION with the worker's message.
 	GetSftpHostKeys(context.Context, *connect.Request[v1.GetSftpHostKeysRequest]) (*connect.Response[v1.GetSftpHostKeysResponse], error)
+	// MeasureWorkerFolder measures a folder on a worker (Milestone 7): its
+	// totals and each child folder's. Any user may measure any worker's
+	// folders, as they may list them. The walk ends at the controller's scan
+	// timeout with what it found (complete=false). A worker already
+	// measuring or searching is UNAVAILABLE. Rate limited; POST only, so a
+	// cross-site link cannot start a scan.
+	MeasureWorkerFolder(context.Context, *connect.Request[v1.MeasureWorkerFolderRequest]) (*connect.Response[v1.MeasureWorkerFolderResponse], error)
+	// MeasureRemoteFolder measures a folder of one of the caller's remotes,
+	// as MeasureWorkerFolder does. A remote on a worker's local filesystem
+	// needs worker_id. POST only.
+	MeasureRemoteFolder(context.Context, *connect.Request[v1.MeasureRemoteFolderRequest]) (*connect.Response[v1.MeasureRemoteFolderResponse], error)
+	// GetRemoteUsage asks one of the caller's remotes for its usage (rclone
+	// about). A backend that cannot tell answers with usage.unsupported. A
+	// remote on a worker's local filesystem needs worker_id and answers
+	// usage.unsupported without asking the worker.
+	GetRemoteUsage(context.Context, *connect.Request[v1.GetRemoteUsageRequest]) (*connect.Response[v1.GetRemoteUsageResponse], error)
 }
 
 // NewProbeServiceClient constructs a client for the syncr.v1.ProbeService service. By default, it
@@ -109,15 +134,37 @@ func NewProbeServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(probeServiceMethods.ByName("GetSftpHostKeys")),
 			connect.WithClientOptions(opts...),
 		),
+		measureWorkerFolder: connect.NewClient[v1.MeasureWorkerFolderRequest, v1.MeasureWorkerFolderResponse](
+			httpClient,
+			baseURL+ProbeServiceMeasureWorkerFolderProcedure,
+			connect.WithSchema(probeServiceMethods.ByName("MeasureWorkerFolder")),
+			connect.WithClientOptions(opts...),
+		),
+		measureRemoteFolder: connect.NewClient[v1.MeasureRemoteFolderRequest, v1.MeasureRemoteFolderResponse](
+			httpClient,
+			baseURL+ProbeServiceMeasureRemoteFolderProcedure,
+			connect.WithSchema(probeServiceMethods.ByName("MeasureRemoteFolder")),
+			connect.WithClientOptions(opts...),
+		),
+		getRemoteUsage: connect.NewClient[v1.GetRemoteUsageRequest, v1.GetRemoteUsageResponse](
+			httpClient,
+			baseURL+ProbeServiceGetRemoteUsageProcedure,
+			connect.WithSchema(probeServiceMethods.ByName("GetRemoteUsage")),
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // probeServiceClient implements ProbeServiceClient.
 type probeServiceClient struct {
-	listWorkerFiles *connect.Client[v1.ListWorkerFilesRequest, v1.ListWorkerFilesResponse]
-	listRemoteFiles *connect.Client[v1.ListRemoteFilesRequest, v1.ListRemoteFilesResponse]
-	testRemote      *connect.Client[v1.TestRemoteRequest, v1.TestRemoteResponse]
-	getSftpHostKeys *connect.Client[v1.GetSftpHostKeysRequest, v1.GetSftpHostKeysResponse]
+	listWorkerFiles     *connect.Client[v1.ListWorkerFilesRequest, v1.ListWorkerFilesResponse]
+	listRemoteFiles     *connect.Client[v1.ListRemoteFilesRequest, v1.ListRemoteFilesResponse]
+	testRemote          *connect.Client[v1.TestRemoteRequest, v1.TestRemoteResponse]
+	getSftpHostKeys     *connect.Client[v1.GetSftpHostKeysRequest, v1.GetSftpHostKeysResponse]
+	measureWorkerFolder *connect.Client[v1.MeasureWorkerFolderRequest, v1.MeasureWorkerFolderResponse]
+	measureRemoteFolder *connect.Client[v1.MeasureRemoteFolderRequest, v1.MeasureRemoteFolderResponse]
+	getRemoteUsage      *connect.Client[v1.GetRemoteUsageRequest, v1.GetRemoteUsageResponse]
 }
 
 // ListWorkerFiles calls syncr.v1.ProbeService.ListWorkerFiles.
@@ -138,6 +185,21 @@ func (c *probeServiceClient) TestRemote(ctx context.Context, req *connect.Reques
 // GetSftpHostKeys calls syncr.v1.ProbeService.GetSftpHostKeys.
 func (c *probeServiceClient) GetSftpHostKeys(ctx context.Context, req *connect.Request[v1.GetSftpHostKeysRequest]) (*connect.Response[v1.GetSftpHostKeysResponse], error) {
 	return c.getSftpHostKeys.CallUnary(ctx, req)
+}
+
+// MeasureWorkerFolder calls syncr.v1.ProbeService.MeasureWorkerFolder.
+func (c *probeServiceClient) MeasureWorkerFolder(ctx context.Context, req *connect.Request[v1.MeasureWorkerFolderRequest]) (*connect.Response[v1.MeasureWorkerFolderResponse], error) {
+	return c.measureWorkerFolder.CallUnary(ctx, req)
+}
+
+// MeasureRemoteFolder calls syncr.v1.ProbeService.MeasureRemoteFolder.
+func (c *probeServiceClient) MeasureRemoteFolder(ctx context.Context, req *connect.Request[v1.MeasureRemoteFolderRequest]) (*connect.Response[v1.MeasureRemoteFolderResponse], error) {
+	return c.measureRemoteFolder.CallUnary(ctx, req)
+}
+
+// GetRemoteUsage calls syncr.v1.ProbeService.GetRemoteUsage.
+func (c *probeServiceClient) GetRemoteUsage(ctx context.Context, req *connect.Request[v1.GetRemoteUsageRequest]) (*connect.Response[v1.GetRemoteUsageResponse], error) {
+	return c.getRemoteUsage.CallUnary(ctx, req)
 }
 
 // ProbeServiceHandler is an implementation of the syncr.v1.ProbeService service.
@@ -164,6 +226,22 @@ type ProbeServiceHandler interface {
 	// server the worker cannot reach, or one that does not speak SSH, is
 	// FAILED_PRECONDITION with the worker's message.
 	GetSftpHostKeys(context.Context, *connect.Request[v1.GetSftpHostKeysRequest]) (*connect.Response[v1.GetSftpHostKeysResponse], error)
+	// MeasureWorkerFolder measures a folder on a worker (Milestone 7): its
+	// totals and each child folder's. Any user may measure any worker's
+	// folders, as they may list them. The walk ends at the controller's scan
+	// timeout with what it found (complete=false). A worker already
+	// measuring or searching is UNAVAILABLE. Rate limited; POST only, so a
+	// cross-site link cannot start a scan.
+	MeasureWorkerFolder(context.Context, *connect.Request[v1.MeasureWorkerFolderRequest]) (*connect.Response[v1.MeasureWorkerFolderResponse], error)
+	// MeasureRemoteFolder measures a folder of one of the caller's remotes,
+	// as MeasureWorkerFolder does. A remote on a worker's local filesystem
+	// needs worker_id. POST only.
+	MeasureRemoteFolder(context.Context, *connect.Request[v1.MeasureRemoteFolderRequest]) (*connect.Response[v1.MeasureRemoteFolderResponse], error)
+	// GetRemoteUsage asks one of the caller's remotes for its usage (rclone
+	// about). A backend that cannot tell answers with usage.unsupported. A
+	// remote on a worker's local filesystem needs worker_id and answers
+	// usage.unsupported without asking the worker.
+	GetRemoteUsage(context.Context, *connect.Request[v1.GetRemoteUsageRequest]) (*connect.Response[v1.GetRemoteUsageResponse], error)
 }
 
 // NewProbeServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -199,6 +277,25 @@ func NewProbeServiceHandler(svc ProbeServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(probeServiceMethods.ByName("GetSftpHostKeys")),
 		connect.WithHandlerOptions(opts...),
 	)
+	probeServiceMeasureWorkerFolderHandler := connect.NewUnaryHandler(
+		ProbeServiceMeasureWorkerFolderProcedure,
+		svc.MeasureWorkerFolder,
+		connect.WithSchema(probeServiceMethods.ByName("MeasureWorkerFolder")),
+		connect.WithHandlerOptions(opts...),
+	)
+	probeServiceMeasureRemoteFolderHandler := connect.NewUnaryHandler(
+		ProbeServiceMeasureRemoteFolderProcedure,
+		svc.MeasureRemoteFolder,
+		connect.WithSchema(probeServiceMethods.ByName("MeasureRemoteFolder")),
+		connect.WithHandlerOptions(opts...),
+	)
+	probeServiceGetRemoteUsageHandler := connect.NewUnaryHandler(
+		ProbeServiceGetRemoteUsageProcedure,
+		svc.GetRemoteUsage,
+		connect.WithSchema(probeServiceMethods.ByName("GetRemoteUsage")),
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/syncr.v1.ProbeService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ProbeServiceListWorkerFilesProcedure:
@@ -209,6 +306,12 @@ func NewProbeServiceHandler(svc ProbeServiceHandler, opts ...connect.HandlerOpti
 			probeServiceTestRemoteHandler.ServeHTTP(w, r)
 		case ProbeServiceGetSftpHostKeysProcedure:
 			probeServiceGetSftpHostKeysHandler.ServeHTTP(w, r)
+		case ProbeServiceMeasureWorkerFolderProcedure:
+			probeServiceMeasureWorkerFolderHandler.ServeHTTP(w, r)
+		case ProbeServiceMeasureRemoteFolderProcedure:
+			probeServiceMeasureRemoteFolderHandler.ServeHTTP(w, r)
+		case ProbeServiceGetRemoteUsageProcedure:
+			probeServiceGetRemoteUsageHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -232,4 +335,16 @@ func (UnimplementedProbeServiceHandler) TestRemote(context.Context, *connect.Req
 
 func (UnimplementedProbeServiceHandler) GetSftpHostKeys(context.Context, *connect.Request[v1.GetSftpHostKeysRequest]) (*connect.Response[v1.GetSftpHostKeysResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ProbeService.GetSftpHostKeys is not implemented"))
+}
+
+func (UnimplementedProbeServiceHandler) MeasureWorkerFolder(context.Context, *connect.Request[v1.MeasureWorkerFolderRequest]) (*connect.Response[v1.MeasureWorkerFolderResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ProbeService.MeasureWorkerFolder is not implemented"))
+}
+
+func (UnimplementedProbeServiceHandler) MeasureRemoteFolder(context.Context, *connect.Request[v1.MeasureRemoteFolderRequest]) (*connect.Response[v1.MeasureRemoteFolderResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ProbeService.MeasureRemoteFolder is not implemented"))
+}
+
+func (UnimplementedProbeServiceHandler) GetRemoteUsage(context.Context, *connect.Request[v1.GetRemoteUsageRequest]) (*connect.Response[v1.GetRemoteUsageResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ProbeService.GetRemoteUsage is not implemented"))
 }

@@ -201,9 +201,9 @@ func probeLimit() ratelimit.Config {
 }
 
 // probeConfig is the probe broker's configuration: it caps a probe at the
-// longer of probe.timeout and probe.restic_timeout, so what the controller
-// enforces is what is configured (the grace is the default,
-// link.ProbeGrace).
+// longest of probe.timeout, probe.restic_timeout and probe.scan_timeout,
+// so what the controller enforces is what is configured (the grace is the
+// default, link.ProbeGrace).
 func probeConfig(p controllerconfig.Probe) dispatch.ProbeConfig {
 	return dispatch.ProbeConfig{MaxTimeout: p.Longest()}
 }
@@ -396,7 +396,7 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 	runner, err := probe.NewRunner(probe.Deps{
 		Transport: transport, Workers: ws, Jobs: js, Remotes: rs, Limiter: probeLimiter, IDs: ids,
 		Logger: log.With("component", "probe"),
-	}, probe.Config{Timeout: cfg.Probe.Timeout, ResticTimeout: cfg.Probe.ResticTimeout})
+	}, probe.Config{Timeout: cfg.Probe.Timeout, ResticTimeout: cfg.Probe.ResticTimeout, ScanTimeout: cfg.Probe.ScanTimeout})
 	if err != nil {
 		return nil, fmt.Errorf("probe runner: %w", err)
 	}

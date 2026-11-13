@@ -20,6 +20,9 @@ type lineWriter struct {
 	out       chan<- streamLine
 	buf       []byte
 	truncated bool
+	// chunks queues what is written as it comes, in pieces of at most max
+	// bytes, instead of splitting it into lines (Spec.StdoutChunks).
+	chunks bool
 }
 
 func newLineWriter(fn LineFunc, maxBytes int, out chan<- streamLine) *lineWriter {
@@ -30,6 +33,14 @@ func newLineWriter(fn LineFunc, maxBytes int, out chan<- streamLine) *lineWriter
 // is full, which back-pressures the child.
 func (w *lineWriter) Write(p []byte) (int, error) {
 	n := len(p)
+	if w.chunks {
+		for len(p) > 0 {
+			c := min(len(p), w.max)
+			w.out <- streamLine{fn: w.fn, line: Line{Data: bytes.Clone(p[:c])}}
+			p = p[c:]
+		}
+		return n, nil
+	}
 	for len(p) > 0 {
 		i := bytes.IndexByte(p, '\n')
 		if i < 0 {

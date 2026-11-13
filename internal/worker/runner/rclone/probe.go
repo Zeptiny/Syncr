@@ -29,10 +29,10 @@ const (
 	maxAboutBytes = 64 << 10
 )
 
-// Prober runs the probe operations list_remote and about with the runner's
-// validation, environment, isolation and scrubbing: remotes reach rclone
-// only as environment variables, in a private scratch directory. It is safe
-// for concurrent use.
+// Prober runs the probe operations list_remote, about and measure_remote
+// with the runner's validation, environment, isolation and scrubbing:
+// remotes reach rclone only as environment variables, in a private scratch
+// directory. It is safe for concurrent use.
 type Prober struct{ r *Runner }
 
 // NewProber returns a Prober for cfg.

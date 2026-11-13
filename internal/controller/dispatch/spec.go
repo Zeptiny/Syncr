@@ -219,6 +219,13 @@ func (s *Specs) Build(ctx context.Context, j jobs.Job, w workers.Info) (*syncrv1
 			return nil, fmt.Errorf("job %s: %w: it lacks the feature %q that %s jobs need", j.ID, ErrWorkerOutdated, f, kind)
 		}
 	}
+	// Some options need a newer worker than their kind (e.g. selected items
+	// of a restore's subfolder), which an older one refuses or misreads.
+	for _, f := range s.kinds.DefinitionFeatures(def) {
+		if !w.HasFeatures(f) {
+			return nil, fmt.Errorf("job %s: %w: it lacks the feature %q that this %s job needs", j.ID, ErrWorkerOutdated, f, kind)
+		}
+	}
 	// A worker that ignores max_runtime would run the job without a limit.
 	limit := s.TimeLimit(def)
 	if limit > 0 && !w.HasFeatures(link.FeatureJobTimeLimit) {

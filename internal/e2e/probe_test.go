@@ -71,11 +71,12 @@ type probeWorker struct {
 }
 
 // newProbeWorker starts a worker reporting o (with a fakeProber unless o
-// has none) and waits until its Hello is stored.
+// has no features or a prober of its own) and waits until its Hello is
+// stored.
 func newProbeWorker(t *testing.T, c *controller, passive bool, o workerOptions) *probeWorker {
 	t.Helper()
 	pw := &probeWorker{c: c, prober: newFakeProber()}
-	if o.features != nil {
+	if o.features != nil && o.prober == nil {
 		o.prober = pw.prober
 	}
 	if passive {

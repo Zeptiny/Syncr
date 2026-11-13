@@ -1,0 +1,5 @@
+{"message_type":"change","path":"/C/Users/ada/Documents/new folder/","modifier":"+"}
+{"message_type":"change","path":"/C/Users/ada/Documents/new folder/plan.txt","modifier":"+"}
+{"message_type":"change","path":"/C/Users/ada/Documents/report.docx","modifier":"M"}
+{"message_type":"change","path":"/C/Users/ada/Pictures/cat.png","modifier":"-"}
+{"message_type":"statistics","source_snapshot":"6e6e19e71383a7fd54af390ed628483531a68ca7693d9343bf9ee0ab483fb94b","target_snapshot":"865ccb3da8d371cd5820dd82e691eef531c5a6002bc36470f7d191675c50290c","changed_files":1,"added":{"files":1,"dirs":1,"others":0,"data_blobs":2,"tree_blobs":7,"bytes":2825},"removed":{"files":1,"dirs":0,"others":0,"data_blobs":2,"tree_blobs":6,"bytes":4461}}
