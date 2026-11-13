@@ -68,7 +68,9 @@ service ProbeService {
   rpc MeasureRemoteFolder(MeasureRemoteFolderRequest) returns (MeasureRemoteFolderResponse) {}
 
   // GetRemoteUsage asks one of the caller's remotes for its usage (rclone
-  // about). A backend that cannot tell answers with usage.unsupported.
+  // about). A backend that cannot tell answers with usage.unsupported. A
+  // remote on a worker's local filesystem needs worker_id and answers
+  // usage.unsupported without asking the worker.
   rpc GetRemoteUsage(GetRemoteUsageRequest) returns (GetRemoteUsageResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }

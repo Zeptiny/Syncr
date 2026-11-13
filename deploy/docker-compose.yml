@@ -25,8 +25,9 @@
 # and set SYNCR_PUBLIC_URL to its https:// URL (which also makes the session
 # cookie Secure), or let the controller serve TLS itself
 # (SYNCR_HTTP_TLS_CERT_FILE / _KEY_FILE below). Behind a proxy, set the
-# proxy's read/idle timeout above 40 s (workers long-poll for 25 s) and
-# allow request bodies of 16 MiB.
+# proxy's read/idle timeout above 60 s (workers long-poll for 25 s; folder
+# sizes and snapshot searches answer within SYNCR_PROBE_SCAN_TIMEOUT, 45 s)
+# and allow request bodies of 16 MiB.
 #
 # One controller per database: a second one waits until the first stops
 # (docs/adr/0015-single-controller-guard.md).

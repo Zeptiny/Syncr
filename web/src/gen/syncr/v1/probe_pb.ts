@@ -693,7 +693,9 @@ export const ProbeService: GenService<{
   },
   /**
    * GetRemoteUsage asks one of the caller's remotes for its usage (rclone
-   * about). A backend that cannot tell answers with usage.unsupported.
+   * about). A backend that cannot tell answers with usage.unsupported. A
+   * remote on a worker's local filesystem needs worker_id and answers
+   * usage.unsupported without asking the worker.
    *
    * @generated from rpc syncr.v1.ProbeService.GetRemoteUsage
    */

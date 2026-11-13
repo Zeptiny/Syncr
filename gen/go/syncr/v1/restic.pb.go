@@ -1596,9 +1596,13 @@ func (x *MeasureSnapshotFolderResponse) GetElapsed() *durationpb.Duration {
 type FindInRepositoryRequest struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	RepositoryId string                 `protobuf:"bytes,1,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
-	// Glob patterns as restic find takes them: matched against the base
-	// name, or against the whole path when they contain "/". 1 to 10, each
-	// 1 to 256 bytes of valid UTF-8 without NUL or line breaks.
+	// Glob patterns as restic find takes them. A pattern without "/" matches
+	// any name in a path; one with "/" matches the path's trailing folders
+	// and name ("data/a.txt" matches "/srv/data/a.txt"), and a leading "/"
+	// anchors it at the root. A match on a folder matches everything below
+	// it. "**" spans folders; a character class such as "[*]" matches a glob
+	// character literally. 1 to 10, each 1 to 256 bytes of valid UTF-8
+	// without NUL or line breaks.
 	Patterns []string `protobuf:"bytes,2,rep,name=patterns,proto3" json:"patterns,omitempty"`
 	// Match case-insensitively.
 	IgnoreCase bool `protobuf:"varint,3,opt,name=ignore_case,json=ignoreCase,proto3" json:"ignore_case,omitempty"`

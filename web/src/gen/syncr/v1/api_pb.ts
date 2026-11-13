@@ -1577,7 +1577,11 @@ export type ResticRestoreDefinition = Message<"syncr.v1.ResticRestoreDefinition"
 
   /**
    * Literal snapshot tree paths to restore (selected items), at most 1000;
-   * each starts with "/". Cannot be combined with subfolder.
+   * each starts with "/". With subfolder, each path must lie strictly inside
+   * it, and the items land in target as they were in the subfolder (the
+   * subfolder's own path is left out); that needs a worker with the link
+   * feature restic.restore_subfolder_paths, and an older one fails the job
+   * with WORKER_OUTDATED.
    *
    * @generated from field: repeated string paths = 4;
    */
@@ -1599,7 +1603,7 @@ export type ResticRestoreDefinition = Message<"syncr.v1.ResticRestoreDefinition"
 
   /**
    * Restore the contents of this snapshot folder (a tree path) directly
-   * into target.
+   * into target; with paths, only those items of it.
    *
    * @generated from field: string subfolder = 7;
    */

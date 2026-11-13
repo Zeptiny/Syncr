@@ -2597,7 +2597,11 @@ export type ResticRestore = Message<"syncr.v1.ResticRestore"> & {
   /**
    * Literal snapshot tree paths to restore, with their contents. The worker
    * turns each into an --include pattern for its own OS (escaping glob
-   * characters); empty restores everything.
+   * characters); empty restores everything. With subfolder, each path must
+   * lie strictly inside it, and the worker makes it relative to the
+   * subfolder (restic matches includes that way with "<id>:<subfolder>").
+   * Controllers send paths with a subfolder only to workers that report
+   * the feature restic.restore_subfolder_paths; older workers refuse it.
    *
    * @generated from field: repeated string paths = 9;
    */
@@ -3583,7 +3587,11 @@ export type ProbeResticFind = Message<"syncr.v1.ProbeResticFind"> & {
   repository?: ResticRepository | undefined;
 
   /**
-   * Glob patterns as restic find takes them (1 to 10).
+   * Glob patterns as restic find takes them (1 to 10). A pattern without
+   * "/" matches any name in a path; one with "/" matches the path's
+   * trailing folders and name, and a leading "/" anchors it at the root.
+   * A match on a folder matches everything below it. "**" spans folders;
+   * a character class such as "[*]" matches a glob character literally.
    *
    * @generated from field: repeated string patterns = 2;
    */
@@ -4053,8 +4061,9 @@ export type ProbeMeasurement = Message<"syncr.v1.ProbeMeasurement"> & {
   dirs: bigint;
 
   /**
-   * The direct child folders' totals, by name; at most max entries
-   * (children_truncated says more were found).
+   * The direct child folders' totals, largest first (by bytes, then files,
+   * then name); at most max entries, the largest kept (children_truncated
+   * says more were found).
    *
    * @generated from field: repeated syncr.v1.ProbeChildMeasurement children = 5;
    */
@@ -5284,7 +5293,8 @@ export enum ResticDiffModifier {
   CHANGED = 3,
 
   /**
-   * "U": only metadata changed.
+   * "U": only metadata changed. restic reports it only with --metadata,
+   * which workers do not pass, so they do not send it today.
    *
    * @generated from enum value: RESTIC_DIFF_MODIFIER_METADATA = 4;
    */

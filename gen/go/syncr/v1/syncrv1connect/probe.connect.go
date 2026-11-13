@@ -91,7 +91,9 @@ type ProbeServiceClient interface {
 	// needs worker_id. POST only.
 	MeasureRemoteFolder(context.Context, *connect.Request[v1.MeasureRemoteFolderRequest]) (*connect.Response[v1.MeasureRemoteFolderResponse], error)
 	// GetRemoteUsage asks one of the caller's remotes for its usage (rclone
-	// about). A backend that cannot tell answers with usage.unsupported.
+	// about). A backend that cannot tell answers with usage.unsupported. A
+	// remote on a worker's local filesystem needs worker_id and answers
+	// usage.unsupported without asking the worker.
 	GetRemoteUsage(context.Context, *connect.Request[v1.GetRemoteUsageRequest]) (*connect.Response[v1.GetRemoteUsageResponse], error)
 }
 
@@ -236,7 +238,9 @@ type ProbeServiceHandler interface {
 	// needs worker_id. POST only.
 	MeasureRemoteFolder(context.Context, *connect.Request[v1.MeasureRemoteFolderRequest]) (*connect.Response[v1.MeasureRemoteFolderResponse], error)
 	// GetRemoteUsage asks one of the caller's remotes for its usage (rclone
-	// about). A backend that cannot tell answers with usage.unsupported.
+	// about). A backend that cannot tell answers with usage.unsupported. A
+	// remote on a worker's local filesystem needs worker_id and answers
+	// usage.unsupported without asking the worker.
 	GetRemoteUsage(context.Context, *connect.Request[v1.GetRemoteUsageRequest]) (*connect.Response[v1.GetRemoteUsageResponse], error)
 }
 

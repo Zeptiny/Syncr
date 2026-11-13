@@ -1145,7 +1145,8 @@ const (
 	ResticDiffModifier_RESTIC_DIFF_MODIFIER_REMOVED ResticDiffModifier = 2
 	// "M": the content changed.
 	ResticDiffModifier_RESTIC_DIFF_MODIFIER_CHANGED ResticDiffModifier = 3
-	// "U": only metadata changed.
+	// "U": only metadata changed. restic reports it only with --metadata,
+	// which workers do not pass, so they do not send it today.
 	ResticDiffModifier_RESTIC_DIFF_MODIFIER_METADATA ResticDiffModifier = 4
 	// "T": the type changed (e.g. a file became a folder).
 	ResticDiffModifier_RESTIC_DIFF_MODIFIER_TYPE ResticDiffModifier = 5
@@ -5555,7 +5556,11 @@ type ResticRestore struct {
 	Overwrite ResticRestoreOverwrite `protobuf:"varint,8,opt,name=overwrite,proto3,enum=syncr.v1.ResticRestoreOverwrite" json:"overwrite,omitempty"`
 	// Literal snapshot tree paths to restore, with their contents. The worker
 	// turns each into an --include pattern for its own OS (escaping glob
-	// characters); empty restores everything.
+	// characters); empty restores everything. With subfolder, each path must
+	// lie strictly inside it, and the worker makes it relative to the
+	// subfolder (restic matches includes that way with "<id>:<subfolder>").
+	// Controllers send paths with a subfolder only to workers that report
+	// the feature restic.restore_subfolder_paths; older workers refuse it.
 	Paths         []string `protobuf:"bytes,9,rep,name=paths,proto3" json:"paths,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -7500,7 +7505,11 @@ func (x *ProbeResticMeasure) GetPath() string {
 type ProbeResticFind struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Repository *ResticRepository      `protobuf:"bytes,1,opt,name=repository,proto3" json:"repository,omitempty"`
-	// Glob patterns as restic find takes them (1 to 10).
+	// Glob patterns as restic find takes them (1 to 10). A pattern without
+	// "/" matches any name in a path; one with "/" matches the path's
+	// trailing folders and name, and a leading "/" anchors it at the root.
+	// A match on a folder matches everything below it. "**" spans folders;
+	// a character class such as "[*]" matches a glob character literally.
 	Patterns []string `protobuf:"bytes,2,rep,name=patterns,proto3" json:"patterns,omitempty"`
 	// Match case-insensitively (--ignore-case).
 	IgnoreCase bool `protobuf:"varint,3,opt,name=ignore_case,json=ignoreCase,proto3" json:"ignore_case,omitempty"`
@@ -8323,8 +8332,9 @@ type ProbeMeasurement struct {
 	Bytes int64 `protobuf:"varint,2,opt,name=bytes,proto3" json:"bytes,omitempty"`
 	Files int64 `protobuf:"varint,3,opt,name=files,proto3" json:"files,omitempty"`
 	Dirs  int64 `protobuf:"varint,4,opt,name=dirs,proto3" json:"dirs,omitempty"`
-	// The direct child folders' totals, by name; at most max entries
-	// (children_truncated says more were found).
+	// The direct child folders' totals, largest first (by bytes, then files,
+	// then name); at most max entries, the largest kept (children_truncated
+	// says more were found).
 	Children          []*ProbeChildMeasurement `protobuf:"bytes,5,rep,name=children,proto3" json:"children,omitempty"`
 	ChildrenTruncated bool                     `protobuf:"varint,6,opt,name=children_truncated,json=childrenTruncated,proto3" json:"children_truncated,omitempty"`
 	// The walk covered everything.
