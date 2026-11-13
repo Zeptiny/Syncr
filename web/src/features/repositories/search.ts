@@ -29,14 +29,19 @@ export function validateNewRepositorySearch(s: Record<string, unknown>): NewRepo
   return { remote: str(s.remote) };
 }
 
-/** SnapshotSearch is the folder open in the snapshot browser. */
+/** SnapshotSearch is the folder open in the snapshot browser and its listing worker. */
 export interface SnapshotSearch {
   /** path is a snapshot tree path; absent for the root. */
   path?: string;
+  /** worker pins the worker that lists; absent lets the controller choose. */
+  worker?: string;
 }
 
 /** validateSnapshotSearch parses the snapshot browser's search params. */
 export function validateSnapshotSearch(s: Record<string, unknown>): SnapshotSearch {
   const p = str(s.path);
-  return { path: p && p.startsWith("/") && p !== "/" ? p : undefined };
+  return {
+    path: p && p.startsWith("/") && p !== "/" ? p : undefined,
+    worker: str(s.worker),
+  };
 }

@@ -39,6 +39,7 @@ import * as hooksMock from "./hooks";
 import { registerM4 } from "./m4";
 import * as m5mock from "./m5";
 import * as m6 from "./m6";
+import { registerM7 } from "./m7";
 
 const passwords: Record<string, string> = { admin: "syncr-demo-admin", alice: "syncr-demo-alice" };
 const SESSION_KEY = "syncr.mock.session";
@@ -673,5 +674,6 @@ export function createMockTransport(): Transport {
 
     // Last: its methods replace the unimplemented ones registered above.
     m6.registerM6(router, { me, workers, invalid, sleep: (ms) => sleep(ms) });
+    registerM7(router, { me, workers, remotes: () => remotes, invalid, sleep: (ms) => sleep(ms) });
   });
 }

@@ -24,6 +24,13 @@ export interface PathListing {
   truncated: boolean;
   /** worker is the worker that answered. */
   worker: ProbeWorkerRef | undefined;
+  /**
+   * workerId is the worker the listing is about or came from: a worker
+   * source's own worker, else the chosen one, else the one that answered.
+   */
+  workerId: string | undefined;
+  /** dataUpdatedAt is when the shown listing arrived (ms since the epoch; 0 before). */
+  dataUpdatedAt: number;
   isLoading: boolean;
   isFetching: boolean;
   error: unknown;
@@ -33,6 +40,23 @@ export interface PathListing {
 /** sourceKind is how the paths of a source are written. */
 export function sourceKind(source: PathSource): PathKind {
   return source.kind;
+}
+
+/**
+ * sourceKey identifies a source: a selection made in one is cleared when
+ * the key changes. The listing worker of a remote is part of it only for
+ * remotes on a worker's own disk (local), where another worker is another
+ * disk; pass local for those.
+ */
+export function sourceKey(source: PathSource, local = false): string {
+  switch (source.kind) {
+    case "worker":
+      return `worker:${source.workerId}`;
+    case "remote":
+      return `remote:${source.remoteId}${local ? `@${source.workerId ?? ""}` : ""}`;
+    default:
+      return `snapshot:${source.repositoryId}:${source.snapshotId}`;
+  }
 }
 
 /**
@@ -79,6 +103,11 @@ export function usePathListing(
     entries: q.data?.entries,
     truncated: q.data?.truncated ?? false,
     worker: q.data?.worker,
+    workerId:
+      source.kind === "worker"
+        ? source.workerId
+        : source.workerId || q.data?.worker?.id || undefined,
+    dataUpdatedAt: q.data ? q.dataUpdatedAt : 0,
     isLoading: q.isLoading,
     isFetching: q.isFetching,
     error: q.error ?? undefined,

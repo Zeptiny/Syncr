@@ -3,15 +3,24 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { createColumnHelper } from "@tanstack/react-table";
 import { Camera, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { DataTable } from "@/components/app/data-table";
 import { EmptyState } from "@/components/app/empty-state";
+import { FilterBar, SearchInput } from "@/components/app/filter-bar";
 import { RelativeTime } from "@/components/app/relative-time";
 import { ShortId } from "@/components/app/short-id";
 import { StatusPill } from "@/components/app/status-badge";
 import { WorkerPicker } from "@/components/app/worker-picker";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import type { Worker } from "@/gen/syncr/v1/api_pb";
 import type { ResticSnapshot } from "@/gen/syncr/v1/link_pb";
 import {
@@ -24,6 +33,16 @@ import { formatBytes, formatCount, formatDateTime, tsDate } from "@/lib/format";
 import { invalidateService } from "@/lib/invalidate";
 import { cn } from "@/lib/utils";
 
+import {
+  filterSnapshots,
+  groupSnapshots,
+  hostsOf,
+  isFiltered,
+  noFilter,
+  tagsOf,
+  type SnapshotFilter,
+} from "./snapshot-groups";
+
 const col = createColumnHelper<ResticSnapshot>();
 const PAGE = 100;
 
@@ -32,20 +51,34 @@ export interface SnapshotsTableProps {
   repository: Repository;
   /** workers are offered as the one that lists the snapshots. */
   workers: Worker[];
+  /**
+   * rowActions renders a row's actions in a last column, given the
+   * snapshot before it in its group (same host and paths), e.g. "Compare
+   * with previous". Without it there is no such column.
+   */
+  rowActions?: (snapshot: ResticSnapshot, previous: ResticSnapshot | undefined) => React.ReactNode;
 }
+
+const ALL = "__all__";
 
 /**
  * SnapshotsTable lists a repository's snapshots from the controller's
  * cache and refreshes it through a worker: once by itself when the cache
  * is out of date, and whenever Refresh is pressed. Rows open the snapshot
  * browser. While the repository's data is being deleted the cache can
- * still be read, but not refreshed.
+ * still be read, but not refreshed. The list can be filtered by text
+ * (ID, host, tag, path), host and tag, and grouped by host and paths
+ * like restic groups them.
  */
-export function SnapshotsTable({ repository, workers }: SnapshotsTableProps) {
+export function SnapshotsTable({ repository, workers, rowActions }: SnapshotsTableProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [workerId, setWorkerId] = useState("");
   const [shown, setShown] = useState(PAGE);
+  const [filter, setFilter] = useState<SnapshotFilter>(noFilter);
+  const [grouped, setGrouped] = useState(false);
+  const groupId = useId();
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const cached = useQuery(ResticService.method.listSnapshots, {
     repositoryId: repository.id,
     refresh: false,
@@ -84,6 +117,23 @@ export function SnapshotsTable({ repository, workers }: SnapshotsTableProps) {
     auto.current = true;
     void doRefresh("");
   }, [stale, canRefresh, doRefresh]);
+
+  const all = data?.snapshots;
+  // The previous snapshot of each one's group, over the whole list.
+  const previous = useMemo(() => {
+    const m = new Map<string, ResticSnapshot>();
+    for (const g of groupSnapshots(all ?? []))
+      g.snapshots.forEach((x, i) => {
+        const before = g.snapshots[i + 1];
+        if (before) m.set(x.id, before);
+      });
+    return m;
+  }, [all]);
+  const hosts = useMemo(() => hostsOf(all ?? []), [all]);
+  const tags = useMemo(() => tagsOf(all ?? []), [all]);
+  const matching = useMemo(() => filterSnapshots(all ?? [], filter), [all, filter]);
+  const groups = useMemo(() => (grouped ? groupSnapshots(matching) : []), [grouped, matching]);
+  const filtered = isFiltered(filter);
 
   const columns = useMemo(
     () => [
@@ -166,12 +216,30 @@ export function SnapshotsTable({ repository, workers }: SnapshotsTableProps) {
         ),
         meta: { className: "text-right" },
       }),
+      ...(rowActions
+        ? [
+            col.display({
+              id: "actions",
+              header: () => <span className="sr-only">Actions</span>,
+              cell: ({ row: { original: s } }) => (
+                <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                  {rowActions(s, previous.get(s.id))}
+                </span>
+              ),
+              meta: { className: "w-12 text-right" },
+            }),
+          ]
+        : []),
     ],
-    [],
+    [rowActions, previous],
   );
 
-  const all = data?.snapshots;
-  const rows = all?.slice(0, shown);
+  const rows = all ? matching.slice(0, shown) : undefined;
+  const open = (s: ResticSnapshot) =>
+    void navigate({
+      to: "/repositories/$repositoryId/snapshots/$snapshotId",
+      params: { repositoryId: repository.id, snapshotId: s.id },
+    });
   const refreshError = refresh.error ? errorMessage(refresh.error) : data?.refreshError;
   return (
     <div className="flex flex-col gap-3">
@@ -236,33 +304,134 @@ export function SnapshotsTable({ repository, workers }: SnapshotsTableProps) {
           {formatCount(all?.length ?? 0)} are shown.
         </p>
       )}
-      <DataTable
-        aria-label="Snapshots"
-        columns={columns}
-        data={rows}
-        isLoading={cached.isPending && !fresh}
-        error={!fresh ? (cached.error ?? undefined) : undefined}
-        onRetry={() => void cached.refetch()}
-        getRowId={(s) => s.id}
-        rowLabel={(s) => `Snapshot ${s.id.slice(0, 8)}`}
-        onRowClick={(s) =>
-          void navigate({
-            to: "/repositories/$repositoryId/snapshots/$snapshotId",
-            params: { repositoryId: repository.id, snapshotId: s.id },
-          })
-        }
-        empty={
-          <EmptyState
-            icon={Camera}
-            title={refresh.isPending ? "Listing the snapshots…" : "No snapshots yet"}
-            description="A snapshot is one backup run. Back up some folders into this repository to get the first one."
+      {all && all.length > 0 && (
+        <FilterBar className="mb-0" active={filtered} onClear={() => setFilter(noFilter)}>
+          <SearchInput
+            value={filter.text}
+            onChange={(text) => setFilter((f) => ({ ...f, text }))}
+            placeholder="Filter by ID, host, tag or path"
+            className="sm:w-72"
           />
-        }
-      />
-      {all && all.length > shown && (
+          {hosts.length > 1 && (
+            <Select
+              value={filter.host || ALL}
+              onValueChange={(v) => setFilter((f) => ({ ...f, host: v === ALL ? "" : v }))}
+            >
+              <SelectTrigger aria-label="Host" className="w-full bg-card sm:w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>All hosts</SelectItem>
+                {hosts.map((h) => (
+                  <SelectItem key={h} value={h}>
+                    {h}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {tags.length > 1 && (
+            <Select
+              value={filter.tag || ALL}
+              onValueChange={(v) => setFilter((f) => ({ ...f, tag: v === ALL ? "" : v }))}
+            >
+              <SelectTrigger aria-label="Tag" className="w-full bg-card sm:w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>All tags</SelectItem>
+                {tags.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {t}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <span className="flex items-center gap-2">
+            <Switch id={groupId} checked={grouped} onCheckedChange={setGrouped} />
+            <label htmlFor={groupId} className="text-[13px]">
+              Group by host and paths
+            </label>
+          </span>
+          {filtered && (
+            <span className="tabular text-xs text-muted-foreground sm:ml-auto">
+              {formatCount(matching.length)} of {formatCount(all.length)}
+            </span>
+          )}
+        </FilterBar>
+      )}
+      {grouped && all ? (
+        groups.length === 0 ? (
+          <EmptyState title="No snapshot matches the filter" className="rounded-lg border py-10" />
+        ) : (
+          groups.map((g) => {
+            const label = `${g.host || "Unknown host"}: ${g.paths.join(", ") || "no paths"}`;
+            const open_ = expanded.has(g.key);
+            const list = open_ ? g.snapshots : g.snapshots.slice(0, PAGE);
+            return (
+              <section key={g.key} aria-label={label} className="flex flex-col gap-2">
+                <h3 className="flex flex-wrap items-baseline gap-x-2 text-[13px] font-semibold">
+                  {g.host || "Unknown host"}
+                  <span className="font-mono text-[12.5px] font-normal text-muted-foreground">
+                    {g.paths.join(", ") || "–"}
+                  </span>
+                  <span className="tabular text-xs font-normal text-muted-foreground">
+                    {g.snapshots.length === 1
+                      ? "1 snapshot"
+                      : `${formatCount(g.snapshots.length)} snapshots`}
+                  </span>
+                </h3>
+                <DataTable
+                  aria-label={`Snapshots of ${label}`}
+                  columns={columns}
+                  data={list}
+                  getRowId={(s) => s.id}
+                  rowLabel={(s) => `Snapshot ${s.id.slice(0, 8)}`}
+                  onRowClick={open}
+                />
+                {list.length < g.snapshots.length && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="self-end"
+                    onClick={() => setExpanded((e) => new Set([...e, g.key]))}
+                  >
+                    Show all {formatCount(g.snapshots.length)}
+                  </Button>
+                )}
+              </section>
+            );
+          })
+        )
+      ) : (
+        <DataTable
+          aria-label="Snapshots"
+          columns={columns}
+          data={rows}
+          isLoading={cached.isPending && !fresh}
+          error={!fresh ? (cached.error ?? undefined) : undefined}
+          onRetry={() => void cached.refetch()}
+          getRowId={(s) => s.id}
+          rowLabel={(s) => `Snapshot ${s.id.slice(0, 8)}`}
+          onRowClick={open}
+          empty={
+            filtered ? (
+              <EmptyState title="No snapshot matches the filter" />
+            ) : (
+              <EmptyState
+                icon={Camera}
+                title={refresh.isPending ? "Listing the snapshots…" : "No snapshots yet"}
+                description="A snapshot is one backup run. Back up some folders into this repository to get the first one."
+              />
+            )
+          }
+        />
+      )}
+      {!grouped && all && matching.length > shown && (
         <div className="flex items-center justify-between text-[13px] text-muted-foreground">
           <span className="tabular">
-            Showing {shown} of {formatCount(all.length)}
+            Showing {shown} of {formatCount(matching.length)}
           </span>
           <Button variant="outline" size="sm" onClick={() => setShown((n) => n + PAGE)}>
             Show more

@@ -23,6 +23,7 @@ import { csrfHeader } from "@/lib/transport";
 import * as hooksMock from "@/mock/hooks";
 import * as m5 from "@/mock/m5";
 import * as m6 from "@/mock/m6";
+import { registerM7 } from "@/mock/m7";
 
 import { signedIn } from "./app-api";
 import * as fx from "./fixtures";
@@ -170,6 +171,15 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
       m6.registerM6(router, {
         me: () => me,
         workers,
+        invalid,
+        sleep: () => Promise.resolve(),
+        probeDelay: 0,
+      });
+      // Milestone 7: the file browser's remote usage.
+      registerM7(router, {
+        me: () => me,
+        workers,
+        remotes: () => remotes,
         invalid,
         sleep: () => Promise.resolve(),
         probeDelay: 0,

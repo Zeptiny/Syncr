@@ -4,39 +4,45 @@ import { ArchiveRestore, FolderDown, ListChecks } from "lucide-react";
 import { useState } from "react";
 
 import { ErrorState } from "@/components/app/error-state";
-import { FileTable } from "@/components/app/file-table";
+import { FileBrowser } from "@/components/app/file-browser/file-browser";
+import { copyPathItem } from "@/components/app/file-browser/helpers";
+import { uncovered } from "@/components/app/file-browser/selection";
+import { useBrowserSelection } from "@/components/app/file-browser/use-selection";
 import { KeyValueList } from "@/components/app/key-value-list";
 import { PageHeader } from "@/components/app/page-header";
 import { Panel } from "@/components/app/panel";
-import { PathBreadcrumbs } from "@/components/app/path-breadcrumbs";
 import { RelativeTime } from "@/components/app/relative-time";
 import { ShortId } from "@/components/app/short-id";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WorkerAdminService } from "@/gen/syncr/v1/api_pb";
 import { ResticService } from "@/gen/syncr/v1/restic_pb";
-import { usePathListing } from "@/hooks/use-path-listing";
+import { sourceKey, type PathSource } from "@/hooks/use-path-listing";
 import { formatBytes, formatCount, formatDateTime, formatDuration, tsDate } from "@/lib/format";
 import { normalizePath } from "@/lib/paths";
 import { isWindowsTree } from "@/lib/restic-paths";
 
 import { DeletingBadge } from "./repositories-page";
-import type { RestoreWhat } from "./model";
+import { isLocalRepository, type RestoreWhat } from "./model";
 import { RestoreSheet } from "./restore-sheet";
+import type { SnapshotSearch } from "./search";
+import { findSnapshot } from "./snapshot-groups";
+import { SnapshotSwitcher } from "./snapshot-switcher";
 
 /**
  * SnapshotBrowserPage walks one snapshot's files, a folder at a time, and
  * starts restores: of ticked items, of the open folder, or of everything.
+ * The switcher moves to another snapshot and keeps the open folder.
  */
 export function SnapshotBrowserPage({
   repositoryId,
   snapshotId,
   path: searchPath,
+  worker,
 }: {
   repositoryId: string;
   snapshotId: string;
-  path?: string;
-}) {
+} & SnapshotSearch) {
   const navigate = useNavigate();
   const path = normalizePath(searchPath ?? "/", "snapshot");
   const repoQ = useQuery(ResticService.method.getRepository, { repositoryId });
@@ -46,8 +52,8 @@ export function SnapshotBrowserPage({
     workerId: "",
   });
   const workers = useQuery(WorkerAdminService.method.listWorkers, {});
-  const listing = usePathListing({ kind: "snapshot", repositoryId, snapshotId }, path);
-  const [selected, setSelected] = useState<string[]>([]);
+  const source: PathSource = { kind: "snapshot", repositoryId, snapshotId, workerId: worker };
+  const [selection, setSelection] = useBrowserSelection(sourceKey(source));
   const [restore, setRestore] = useState<RestoreWhat | undefined>();
 
   if (repoQ.error) return <ErrorState error={repoQ.error} onRetry={() => void repoQ.refetch()} />;
@@ -60,17 +66,18 @@ export function SnapshotBrowserPage({
       </div>
     );
   }
-  const snapshot = snaps.data?.snapshots.find(
-    (s) => s.id === snapshotId || s.id.startsWith(snapshotId),
-  );
+  const snapshot = findSnapshot(snaps.data?.snapshots ?? [], snapshotId);
   const sum = snapshot?.summary;
   const windows = isWindowsTree(snapshot?.paths ?? []);
-  const go = (to: string) =>
+  const open = (id: string, to: string, via = worker) =>
     void navigate({
       to: "/repositories/$repositoryId/snapshots/$snapshotId",
-      params: { repositoryId, snapshotId },
-      search: { path: to === "/" ? undefined : to },
+      params: { repositoryId, snapshotId: id },
+      search: { path: to === "/" ? undefined : to, worker: via },
     });
+  const go = (to: string) => open(snapshotId, to);
+  const local = isLocalRepository(repo);
+  const selected = uncovered(selection, "snapshot").map((i) => i.path);
   const duration =
     sum?.backupStart && sum.backupEnd
       ? (tsDate(sum.backupEnd)!.getTime() - tsDate(sum.backupStart)!.getTime()) / 1000
@@ -106,10 +113,17 @@ export function SnapshotBrowserPage({
           </span>
         }
         actions={
-          <Button disabled={locked} onClick={() => setRestore({ mode: "snapshot" })}>
-            <ArchiveRestore aria-hidden />
-            Restore whole snapshot
-          </Button>
+          <>
+            <SnapshotSwitcher
+              snapshots={snaps.data?.snapshots ?? []}
+              current={snapshot}
+              onSwitch={(id) => open(id, path)}
+            />
+            <Button disabled={locked} onClick={() => setRestore({ mode: "snapshot" })}>
+              <ArchiveRestore aria-hidden />
+              Restore whole snapshot
+            </Button>
+          </>
         }
       />
       <div className="grid items-start gap-6 lg:grid-cols-[19rem_minmax(0,1fr)]">
@@ -165,24 +179,37 @@ export function SnapshotBrowserPage({
           )}
         </Panel>
 
-        <Panel flush className="min-w-0">
-          <div className="flex flex-col gap-3 border-b px-4 py-3">
-            <PathBreadcrumbs
-              path={path}
-              kind="snapshot"
-              rootLabel="Snapshot"
-              driveRoot={windows}
-              onNavigate={go}
-            />
-            <div className="flex flex-wrap items-center gap-2">
+        <FileBrowser
+          className="min-w-0"
+          source={source}
+          path={path}
+          onNavigate={go}
+          selection={selection}
+          onSelectionChange={setSelection}
+          rootLabel="Snapshot"
+          driveRoot={windows}
+          rowMenu={(e) => [copyPathItem(e)]}
+          workerChoice={{
+            workers: workers.data?.workers ?? [],
+            op: "restic_ls",
+            required: local,
+            onChange: (id) => open(snapshotId, path, id || undefined),
+          }}
+          waitingForWorker={
+            local && !worker
+              ? "This repository is on a worker's disk: choose that worker above to list the snapshot."
+              : undefined
+          }
+          toolbarActions={
+            <>
               <Button
                 variant="outline"
                 size="sm"
-                disabled={locked || selected.length === 0}
+                disabled={locked || selection.size === 0}
                 onClick={() => setRestore({ mode: "items", paths: selected })}
               >
                 <ListChecks aria-hidden />
-                Restore selected ({selected.length})
+                Restore selected ({selection.size})
               </Button>
               <Button
                 variant="outline"
@@ -193,30 +220,9 @@ export function SnapshotBrowserPage({
                 <FolderDown aria-hidden />
                 Restore this folder…
               </Button>
-              {selected.length > 0 && (
-                <Button variant="ghost" size="sm" onClick={() => setSelected([])}>
-                  Clear selection
-                </Button>
-              )}
-              {listing.worker?.name && (
-                <span className="text-xs text-muted-foreground sm:ml-auto">
-                  Listed by {listing.worker.name}
-                </span>
-              )}
-            </div>
-          </div>
-          <FileTable
-            key={path}
-            aria-label={`Contents of ${path}`}
-            entries={listing.entries}
-            isLoading={listing.isLoading}
-            error={listing.error}
-            onRetry={listing.refetch}
-            truncated={listing.truncated}
-            onOpen={(e) => go(e.path)}
-            selection={{ selected, onChange: setSelected, multiple: true }}
-          />
-        </Panel>
+            </>
+          }
+        />
       </div>
 
       {restore && (

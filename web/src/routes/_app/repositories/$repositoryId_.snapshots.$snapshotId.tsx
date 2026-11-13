@@ -10,13 +10,14 @@ export const Route = createFileRoute("/_app/repositories/$repositoryId_/snapshot
 
 function SnapshotBrowser() {
   const { repositoryId, snapshotId } = Route.useParams();
-  const { path } = Route.useSearch();
+  const { path, worker } = Route.useSearch();
   return (
     <SnapshotBrowserPage
       key={`${repositoryId}:${snapshotId}`}
       repositoryId={repositoryId}
       snapshotId={snapshotId}
       path={path}
+      worker={worker}
     />
   );
 }

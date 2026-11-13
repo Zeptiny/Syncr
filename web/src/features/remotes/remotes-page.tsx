@@ -2,13 +2,11 @@ import { useQuery } from "@connectrpc/connect-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { createColumnHelper } from "@tanstack/react-table";
 import { Archive, Cloud, FolderSearch, KeyRound, MoreHorizontal, Pencil, Plus } from "lucide-react";
-import { useMemo, useState } from "react";
-import { toast } from "sonner";
+import { useMemo } from "react";
 
 import { DataTable } from "@/components/app/data-table";
 import { EmptyState } from "@/components/app/empty-state";
 import { PageHeader } from "@/components/app/page-header";
-import { PathBrowserDialog } from "@/components/app/path-browser";
 import { RelativeTime } from "@/components/app/relative-time";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,7 +17,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { RemoteService, type Remote } from "@/gen/syncr/v1/remotes_pb";
 import { useBackendMap } from "@/hooks/use-backends";
-import { copyText } from "@/lib/clipboard";
 import { tsDate } from "@/lib/format";
 
 import { BackendIcon } from "./backend-icon";
@@ -42,7 +39,6 @@ export function RemotesPage() {
   const navigate = useNavigate();
   const backends = useBackendMap();
   const q = useQuery(RemoteService.method.listRemotes, {});
-  const [browsing, setBrowsing] = useState<Remote | undefined>();
   const names = useMemo(
     () => new Map((q.data?.remotes ?? []).map((r) => [r.id, r.name])),
     [q.data],
@@ -119,9 +115,11 @@ export function RemotesPage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => setBrowsing(r)}>
-                  <FolderSearch aria-hidden />
-                  Browse
+                <DropdownMenuItem asChild>
+                  <Link to="/remotes/$remoteId/files" params={{ remoteId: r.id }}>
+                    <FolderSearch aria-hidden />
+                    Browse
+                  </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <Link to="/remotes/$remoteId" params={{ remoteId: r.id }}>
@@ -183,24 +181,6 @@ export function RemotesPage() {
           />
         }
       />
-      {browsing && (
-        <PathBrowserDialog
-          open
-          onOpenChange={(o) => !o && setBrowsing(undefined)}
-          source={{ kind: "remote", remoteId: browsing.id }}
-          title={`Browse ${browsing.name}`}
-          rootLabel={browsing.name}
-          description="Look around the remote. Selecting an entry copies its path."
-          mode="any"
-          onSelect={([path]) => {
-            if (path === undefined) return;
-            void copyText(path).then(
-              () => toast.success(`Copied ${path || "the root path"}`),
-              () => undefined,
-            );
-          }}
-        />
-      )}
     </>
   );
 }

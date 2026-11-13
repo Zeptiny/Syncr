@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@connectrpc/connect-query";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
-import { Trash2 } from "lucide-react";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { FolderSearch, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -72,6 +72,14 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
           <span className="text-[13px] text-muted-foreground">
             {backend.label}, updated <RelativeTime date={tsDate(remote.updatedAt)} />
           </span>
+        }
+        actions={
+          <Button variant="outline" asChild>
+            <Link to="/remotes/$remoteId/files" params={{ remoteId: remote.id }}>
+              <FolderSearch aria-hidden />
+              Browse
+            </Link>
+          </Button>
         }
       />
       <Panel className="max-w-4xl">

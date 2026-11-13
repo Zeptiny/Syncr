@@ -2,24 +2,45 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
+import type { ResticSnapshot } from "@/gen/syncr/v1/link_pb";
 import type { ListSnapshotsRequest } from "@/gen/syncr/v1/restic_pb";
 import * as m5 from "@/mock/m5";
 import * as fx from "@/test/fixtures";
 import { m5Api } from "@/test/m5-api";
 import { renderInRouter } from "@/test/render";
 
-import { SnapshotsTable } from "./snapshots-table";
+import { SnapshotsTable, type SnapshotsTableProps } from "./snapshots-table";
 
 const now = Date.now();
 
-function show(repoId: string) {
+function show(
+  repoId: string,
+  opts: {
+    adjust?: (snaps: ResticSnapshot[]) => void;
+    rowActions?: SnapshotsTableProps["rowActions"];
+  } = {},
+) {
   const api = m5Api(now);
+  opts.adjust?.(api.repo(repoId).snapshots);
   const view = renderInRouter(
-    <SnapshotsTable repository={api.repo(repoId).repo} workers={m5.workers(now)} />,
+    <SnapshotsTable
+      repository={api.repo(repoId).repo}
+      workers={m5.workers(now)}
+      rowActions={opts.rowActions}
+    />,
     { transport: api.transport },
   );
   return { api, user: userEvent.setup(), ...view };
 }
+
+// Two of Photos vault's snapshots come from a laptop instead.
+const twoHosts = (snaps: ResticSnapshot[]) => {
+  for (const i of [1, 3]) {
+    snaps[i].host = "laptop";
+    snaps[i].paths = ["/home/ada"];
+    snaps[i].tags = i === 1 ? ["laptop"] : [];
+  }
+};
 
 const requests = (api: ReturnType<typeof m5Api>) =>
   api.of<ListSnapshotsRequest>("ListSnapshots").map((r) => ({
@@ -96,5 +117,47 @@ describe("SnapshotsTable", () => {
     await waitFor(() =>
       expect(location().pathname).toBe(`/repositories/${m5.ids.photosVault}/snapshots/${first.id}`),
     );
+  });
+
+  it("filters by text, host and tag", async () => {
+    const { user } = show(m5.ids.photosVault, { adjust: twoHosts });
+    const table = await screen.findByRole("table", { name: "Snapshots" });
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(31));
+    await user.type(screen.getByLabelText("Filter by ID, host, tag or path"), "home/ad");
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(3));
+    expect(screen.getByText("2 of 30")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(31));
+
+    await user.click(screen.getByRole("combobox", { name: "Host" }));
+    await user.click(await screen.findByRole("option", { name: "nas-01" }));
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(29));
+    await user.click(screen.getByRole("combobox", { name: "Host" }));
+    await user.click(await screen.findByRole("option", { name: "All hosts" }));
+    await user.click(screen.getByRole("combobox", { name: "Tag" }));
+    await user.click(await screen.findByRole("option", { name: "laptop" }));
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
+  });
+
+  it("groups by host and paths and offers each row its previous snapshot", async () => {
+    const seen = new Map<string, string | undefined>();
+    const { user, api } = show(m5.ids.photosVault, {
+      adjust: twoHosts,
+      rowActions: (s, prev) => {
+        seen.set(s.id, prev?.id);
+        return <span>actions</span>;
+      },
+    });
+    await screen.findByRole("table", { name: "Snapshots" });
+    await user.click(await screen.findByRole("switch", { name: "Group by host and paths" }));
+    const nas = await screen.findByRole("table", { name: "Snapshots of nas-01: /srv/photos" });
+    const laptop = screen.getByRole("table", { name: "Snapshots of laptop: /home/ada" });
+    expect(within(nas).getAllByRole("row")).toHaveLength(29);
+    expect(within(laptop).getAllByRole("row")).toHaveLength(3);
+    // The previous snapshot is the one before in the same group.
+    const snaps = api.repo(m5.ids.photosVault).snapshots;
+    expect(seen.get(snaps[1].id)).toBe(snaps[3].id);
+    expect(seen.get(snaps[0].id)).toBe(snaps[2].id);
+    expect(seen.get(snaps[29].id)).toBeUndefined();
   });
 });
