@@ -336,6 +336,26 @@ func TestFailureFallsBackToDiagnosticLines(t *testing.T) {
 	}
 }
 
+// TestFailureNamesRcloneErrors: restic reports a failing rclone backend
+// only by an HTTP status; the error rclone logged is the reason.
+func TestFailureNamesRcloneErrors(t *testing.T) {
+	t.Parallel()
+	te := newTestEnv(t)
+	te.sup.exited(1).stderr = []string{
+		"rclone: 2026/11/13 03:02:24 ERROR : Create repo failed to Mkdir: operation error S3: CreateBucket, https response error StatusCode: 403, api error AccessDenied: Access Denied.",
+		`{"message_type":"exit_error","code":1,"message":"Fatal: create repository at rclone:bk:x failed: unexpected HTTP response (500): 500 Internal Server Error"}`,
+	}
+	_, _, err := te.run(remoteSpec(func(s *syncrv1.JobSpec) {
+		s.Operation = &syncrv1.JobSpec_ResticInit{ResticInit: &syncrv1.ResticInit{Repository: remoteRepo()}}
+	}))
+	mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED)
+	want := "restic init: command failed (exit code 1): Fatal: create repository at rclone:bk:x failed: unexpected HTTP response (500): 500 Internal Server Error" +
+		"; rclone: Create repo failed to Mkdir: operation error S3: CreateBucket, https response error StatusCode: 403, api error AccessDenied: Access Denied."
+	if err.Error() != want {
+		t.Errorf("error =\n%q\nwant\n%q", err, want)
+	}
+}
+
 func TestBackupWithUnreadableFilesSucceedsWithWarnings(t *testing.T) {
 	t.Parallel()
 	te := newTestEnv(t)
@@ -440,6 +460,12 @@ func TestSecretsAreScrubbed(t *testing.T) {
 		{"diagnostic lines", func(te *testEnv) {
 			te.sup.exited(1).stderr = []string{leaky("rclone: CRITICAL:")}
 		}, func(te *testEnv) error { _, _, err := te.run(pruneSpec()); return err }},
+		{"rclone error after an exit_error", func(te *testEnv) {
+			te.sup.exited(1).stderr = []string{
+				leaky("rclone: 2026/11/13 03:02:24 ERROR :"),
+				`{"message_type":"exit_error","code":1,"message":"Fatal: unexpected HTTP response (500)"}`,
+			}
+		}, func(te *testEnv) error { _, _, err := te.run(pruneSpec()); return err }},
 		{"path policy error", func(*testEnv) {},
 			func(te *testEnv) error {
 				te.cfg.Paths = leakyPolicy{}
@@ -514,6 +540,24 @@ func TestSecretsAreScrubbedBeforeClipping(t *testing.T) {
 		}},
 		{"exit_error message", func(te *testEnv) {
 			te.sup.exited(1).stderr = []string{`{"message_type":"exit_error","code":1,"message":"` + straddle(maxFailureDetail) + `"}`}
+		}, func(t *testing.T, _ runner.Result, err error) {
+			t.Helper()
+			mustNotLeak(t, err.Error())
+		}},
+		{"rclone error", func(te *testEnv) {
+			te.sup.exited(1).stderr = []string{
+				"rclone: 2026/11/13 03:02:24 ERROR : " + straddle(maxTailLineBytes-len("rclone: ")),
+				`{"message_type":"exit_error","code":1,"message":"Fatal: unexpected HTTP response (500)"}`,
+			}
+		}, func(t *testing.T, _ runner.Result, err error) {
+			t.Helper()
+			mustNotLeak(t, err.Error())
+		}},
+		{"rclone error past the failure limit", func(te *testEnv) {
+			te.sup.exited(1).stderr = []string{
+				"rclone: 2026/11/13 03:02:24 ERROR : " + testSecret,
+				`{"message_type":"exit_error","code":1,"message":"` + strings.Repeat("x", maxFailureDetail-len("; rclone: ")-8) + `"}`,
+			}
 		}, func(t *testing.T, _ runner.Result, err error) {
 			t.Helper()
 			mustNotLeak(t, err.Error())
