@@ -30,6 +30,10 @@ export interface WorkerChooserProps {
   listedBy?: ProbeWorkerRef;
   /** required drops "Automatic": a remote on a worker's own disk. */
   required?: boolean;
+  /** label names the choice for screen readers (default "Listing worker"). */
+  label?: string;
+  /** menuLabel heads the menu (default "Listed by"). */
+  menuLabel?: string;
 }
 
 /**
@@ -44,6 +48,8 @@ export function WorkerChooser({
   onChange,
   listedBy,
   required,
+  label = "Listing worker",
+  menuLabel = "Listed by",
 }: WorkerChooserProps) {
   const offered = eligibleWorkers(workers, op);
   const chosen = value ? workers.find((w) => w.id === value) : undefined;
@@ -56,14 +62,14 @@ export function WorkerChooser({
           variant={required && !value ? "outline" : "ghost"}
           size="xs"
           className="-my-1 font-medium text-foreground"
-          aria-label={`Listing worker: ${name ?? (required ? "none chosen" : "automatic")}. Choose another`}
+          aria-label={`${label}: ${name ?? (required ? "none chosen" : "automatic")}. Choose another`}
         >
           {name ? `by ${name}` : required ? "Choose a worker" : "by any worker"}
           <ChevronDown aria-hidden />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-56">
-        <DropdownMenuLabel>Listed by</DropdownMenuLabel>
+        <DropdownMenuLabel>{menuLabel}</DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuRadioGroup
           value={value || AUTO}
@@ -86,7 +92,7 @@ export function WorkerChooser({
         </DropdownMenuRadioGroup>
         {offered.length === 0 && (
           <p className="px-2 py-2 text-[13px] text-muted-foreground">
-            No online worker can list this.
+            No online worker can do this.
           </p>
         )}
       </DropdownMenuContent>

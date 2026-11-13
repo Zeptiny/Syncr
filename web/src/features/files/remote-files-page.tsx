@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { WorkerAdminService } from "@/gen/syncr/v1/api_pb";
 import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
 import { useBackendMap } from "@/hooks/use-backends";
+import { useFolderMeasure } from "@/hooks/use-folder-measure";
 import { sourceKey, usePathListing, type PathSource } from "@/hooks/use-path-listing";
 import { normalizePath } from "@/lib/paths";
 
@@ -51,6 +52,7 @@ export function RemoteFilesPage({
   const listing = usePathListing(source, open, { enabled: !!remote && !waiting });
   const place: Place = { kind: "remote", remoteId, local, workerId: local ? worker : undefined };
   const transfer = useTransferActions(place);
+  const measure = useFolderMeasure(source, open, { local, enabled: !!remote && !waiting });
   const go = (search: RemoteFilesSearch) =>
     void navigate({ to: "/remotes/$remoteId/files", params: { remoteId }, search });
 
@@ -96,6 +98,7 @@ export function RemoteFilesPage({
         selection={selection}
         onSelectionChange={setSelection}
         rootLabel={remote.name}
+        measure={measure}
         rowMenu={(e) => [transfer.rowItem(e), copyPathItem(e)]}
         toolbarActions={
           waiting ? undefined : (

@@ -112,7 +112,7 @@ describe("snapshot browser", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((m) => m.textContent),
-    ).toEqual(["Restore…", "Restore to original location…", "Copy path"]);
+    ).toEqual(["Restore…", "Restore to original location…", "Show versions", "Copy path"]);
     await user.click(within(menu).getByRole("menuitem", { name: "Restore to original location…" }));
     const sheet = await screen.findByRole("dialog", { name: /^Restore from snapshot/ });
     expect(within(sheet).getByText("1 item")).toBeInTheDocument();

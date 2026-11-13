@@ -3,15 +3,19 @@ import { MousePointerClick } from "lucide-react";
 
 import type { Worker } from "@/gen/syncr/v1/api_pb";
 import type { ProbeEntry } from "@/gen/syncr/v1/link_pb";
+import type { FolderMeasure } from "@/hooks/use-folder-measure";
 import { usePathListing, type PathSource } from "@/hooks/use-path-listing";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { parentPath, rootPath } from "@/lib/paths";
+import { useNow } from "@/hooks/use-now";
+import { formatRelative } from "@/lib/format";
+import { normalizePath, parentPath, rootPath } from "@/lib/paths";
 import { cn } from "@/lib/utils";
 
 import { EmptyState } from "../empty-state";
 import { FileTable, type RowMenuItem } from "../file-table";
 import { BrowserToolbar } from "./browser-toolbar";
-import { isMissingFolder } from "./helpers";
+import { isMissingFolder, missingFolderHint } from "./helpers";
+import { MeasureControl } from "./measure-control";
 import {
   commonParent,
   knownSize,
@@ -22,6 +26,7 @@ import {
   type Selection,
 } from "./selection";
 import { SelectionTray } from "./selection-tray";
+import { SizeCell } from "./size-cell";
 import { WorkerChooser } from "./worker-chooser";
 
 /** SelectionContext is what a page's selection actions act on. */
@@ -67,8 +72,14 @@ export interface FileBrowserProps {
   rowMenu?: (entry: ProbeEntry) => RowMenuItem[];
   /** folderSize is a folder's measured size: Size sort and the tray's total. */
   folderSize?: (entry: ProbeEntry) => bigint | undefined;
-  /** renderFolderSize renders a folder's Size cell (default "–"). */
+  /** renderFolderSize renders a folder's Size cell (default "–", or the measured size). */
   renderFolderSize?: (entry: ProbeEntry) => React.ReactNode;
+  /**
+   * measure adds "Calculate sizes" (useFolderMeasure): the toolbar's
+   * button and total, the folders' Size cells, the Size sort and the
+   * tray's total. Refresh forgets the open folder's measurement.
+   */
+  measure?: FolderMeasure;
   /** workerChoice adds "by <worker> ▾" to the toolbar. */
   workerChoice?: WorkerChoice;
   /**
@@ -102,6 +113,7 @@ export function FileBrowser({
   rowMenu,
   folderSize,
   renderFolderSize,
+  measure,
   workerChoice,
   waitingForWorker,
   toolbarActions,
@@ -142,6 +154,30 @@ export function FileBrowser({
       navigate.current(parentPath(path, kind, rootPaths));
   }, [climbing, missing, listing.isLoading, path, top, kind, rootPaths]);
 
+  // Measured sizes, unless the page brings its own.
+  const now = useNow(30_000, !!measure && measure.folders.size > 0);
+  const ago = (at: number) => formatRelative(new Date(at), now.getTime() < at ? new Date(at) : now);
+  const sizeOf = folderSize ?? measure?.folderSize;
+  const sizeAtLeast = folderSize ? undefined : measure?.folderAtLeast;
+  const sizeCell =
+    renderFolderSize ??
+    (measure
+      ? (e: ProbeEntry) => {
+          const f = measure.folders.get(normalizePath(e.path, kind));
+          if (!f) return undefined;
+          return (
+            <SizeCell
+              bytes={f.bytes}
+              files={f.files}
+              dirs={f.dirs}
+              total={measure.child(e) ? measure.result?.measurement.bytes : undefined}
+              atLeast={f.atLeast}
+              measured={`measured ${ago(f.measuredAt)}`}
+            />
+          );
+        }
+      : undefined);
+
   const ctx: SelectionContext = {
     selection,
     items: uncovered(selection, kind),
@@ -149,7 +185,7 @@ export function FileBrowser({
       uncovered(selection, kind).map((i) => i.path),
       kind,
     ),
-    size: knownSize(selection, kind, folderSize),
+    size: knownSize(selection, kind, sizeOf, sizeAtLeast),
     clear: () => onSelectionChange(new Map()),
   };
 
@@ -158,7 +194,8 @@ export function FileBrowser({
       kind={kind}
       selection={selection}
       onChange={onSelectionChange}
-      folderSize={folderSize}
+      folderSize={sizeOf}
+      folderSizeAtLeast={sizeAtLeast}
       rootLabel={rootLabel}
       actions={selectionActions?.(ctx)}
       mobile={mobile}
@@ -180,7 +217,14 @@ export function FileBrowser({
             rootLabel={rootLabel}
             roots={rootPaths}
             driveRoot={driveRoot}
-            onRefresh={waiting ? undefined : listing.refetch}
+            onRefresh={
+              waiting
+                ? undefined
+                : () => {
+                    measure?.forget();
+                    listing.refetch();
+                  }
+            }
             isFetching={listing.isFetching}
             updatedAt={listing.dataUpdatedAt}
             listedBy={
@@ -196,7 +240,19 @@ export function FileBrowser({
               ) : undefined
             }
             actions={toolbarActions}
-            extra={toolbarExtra}
+            extra={
+              measure && !waiting ? (
+                <>
+                  <MeasureControl
+                    measure={measure}
+                    measuredAgo={measure.result ? ago(measure.result.measuredAt) : undefined}
+                  />
+                  {toolbarExtra}
+                </>
+              ) : (
+                toolbarExtra
+              )
+            }
           />
           {waiting ? (
             <EmptyState icon={MousePointerClick} title={waitingForWorker} className="py-12" />
@@ -219,8 +275,9 @@ export function FileBrowser({
                 canSelect,
               }}
               rowMenu={rowMenu}
-              folderSize={folderSize}
-              renderFolderSize={renderFolderSize}
+              folderSize={sizeOf}
+              renderFolderSize={sizeCell}
+              missingHint={missingFolderHint(kind)}
               onGoToParent={path === top ? undefined : () => setClimbing(true)}
               autoFocus={focus?.path === path}
               focusPath={focus?.path === path ? focus.from : undefined}

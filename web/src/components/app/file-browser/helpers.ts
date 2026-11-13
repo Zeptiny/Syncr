@@ -7,6 +7,7 @@ import type { ProbeEntry } from "@/gen/syncr/v1/link_pb";
 import { copyText } from "@/lib/clipboard";
 import { fieldViolations } from "@/lib/errors";
 import { formatBytes } from "@/lib/format";
+import type { PathKind } from "@/lib/paths";
 import { isOnline, sortWorkers } from "@/lib/workers";
 
 import type { RowMenuItem } from "../file-table";
@@ -21,6 +22,22 @@ export function isMissingFolder(err: unknown): boolean {
   return fieldViolations(err).some(
     (v) => v.field === "path" && /does not exist|is not a folder/.test(v.message),
   );
+}
+
+/**
+ * missingFolderHint explains a folder that isn't there, in the words of
+ * the place browsed: a worker's or a remote's folder was moved or deleted,
+ * a snapshot may simply not hold it.
+ */
+export function missingFolderHint(kind: PathKind): string {
+  switch (kind) {
+    case "worker":
+      return "It was moved or deleted on the worker, or the worker can't read it.";
+    case "remote":
+      return "It was moved or deleted on the remote.";
+    default:
+      return "This snapshot does not have it: it was added later, or removed before.";
+  }
 }
 
 /** copyPathItem is the row menu's "Copy path". */

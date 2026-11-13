@@ -23,7 +23,7 @@ import { csrfHeader } from "@/lib/transport";
 import * as hooksMock from "@/mock/hooks";
 import * as m5 from "@/mock/m5";
 import * as m6 from "@/mock/m6";
-import { applyTransfer, registerM7 } from "@/mock/m7";
+import { applyTransfer, applyWorkers as applyM7Workers, registerM7 } from "@/mock/m7";
 import { isTerminal } from "@/lib/status";
 
 import { signedIn } from "./app-api";
@@ -51,6 +51,8 @@ export interface M5Api {
    * demo folders the probes list.
    */
   finish: (jobId: string, status?: JobStatus) => void;
+  /** busy are workers whose heavy slot is taken: their scans are refused as busy. */
+  busy: Set<string>;
 }
 
 /**
@@ -66,11 +68,13 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
   const workers = m5.workers(now);
   m6.applyWorkers(workers);
   hooksMock.applyWorkers(workers);
+  applyM7Workers(workers);
   const jobs = [...data.jobs, ...hooksMock.jobs(now)];
   const schedules = [...data.schedules];
   const remotes = fx.remotes(now);
   const me = fx.users(now).find((u) => u.username === user)!;
   const calls: Call[] = [];
+  const busy = new Set<string>();
   const invalid = (violations: { field: string; message: string }[]) =>
     new ConnectError("invalid argument", Code.InvalidArgument, undefined, [
       { desc: ValidationErrorSchema, value: { violations } },
@@ -207,7 +211,8 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
         sleep: () => Promise.resolve(),
         probeDelay: 0,
       });
-      // Milestone 7: the file browser's remote usage.
+      // Milestone 7: the file browser's remote usage, folder sizes,
+      // snapshot search and compare.
       registerM7(router, {
         me: () => me,
         workers,
@@ -215,6 +220,10 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
         invalid,
         sleep: () => Promise.resolve(),
         probeDelay: 0,
+        now,
+        repositories: () => data.repositories,
+        files: api.files,
+        busy,
       });
     },
     { transport: { interceptors: [csrfHeader, record] } },
@@ -227,5 +236,6 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
     jobs,
     repo: (id) => data.repositories.find((r) => r.repo.id === id)!,
     finish,
+    busy,
   };
 }

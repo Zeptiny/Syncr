@@ -83,6 +83,8 @@ export interface FileTableProps {
   folderSize?: (entry: ProbeEntry) => bigint | undefined;
   /** renderFolderSize renders a folder's Size cell; the default is "–". */
   renderFolderSize?: (entry: ProbeEntry) => React.ReactNode;
+  /** missingHint explains a folder that isn't there (see missingFolderHint). */
+  missingHint?: string;
   /**
    * onGoToParent is offered as "Go to the nearest parent" when the folder
    * does not exist (a deleted folder, another snapshot).
@@ -123,6 +125,7 @@ export function FileTable({
   rowMenu,
   folderSize,
   renderFolderSize,
+  missingHint = "It was moved or deleted.",
   onGoToParent,
   autoFocus,
   focusPath,
@@ -296,7 +299,7 @@ export function FileTable({
           </div>
           <h3 className="text-[15px] font-semibold">This folder isn't here</h3>
           <p className="mt-1 max-w-[52ch] text-[13px] leading-5 text-muted-foreground">
-            It was moved or deleted, or this snapshot does not have it.
+            {missingHint}
           </p>
           {onGoToParent && (
             <Button variant="outline" size="sm" className="mt-5" onClick={onGoToParent}>

@@ -12,6 +12,7 @@ import { StatusBadge } from "@/components/app/status-badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WorkerAdminService } from "@/gen/syncr/v1/api_pb";
+import { useFolderMeasure } from "@/hooks/use-folder-measure";
 import { sourceKey, type PathSource } from "@/hooks/use-path-listing";
 import { normalizePath } from "@/lib/paths";
 
@@ -33,6 +34,7 @@ export function WorkerFilesPage({ workerId, path }: { workerId: string; path?: s
   const open = path ? normalizePath(path, "worker") : "";
   const place: Place = { kind: "worker", workerId };
   const transfer = useTransferActions(place);
+  const measure = useFolderMeasure(source, open);
 
   if (wq.error) return <ErrorState error={wq.error} onRetry={() => void wq.refetch()} />;
   const w = wq.data?.worker;
@@ -77,6 +79,7 @@ export function WorkerFilesPage({ workerId, path }: { workerId: string; path?: s
         selection={selection}
         onSelectionChange={setSelection}
         rootLabel="Allowed folders"
+        measure={measure}
         rowMenu={(e) => [transfer.rowItem(e), copyPathItem(e)]}
         toolbarActions={
           <JobDraftMenu

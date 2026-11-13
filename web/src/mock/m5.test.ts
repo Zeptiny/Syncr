@@ -335,9 +335,17 @@ describe("mock transport, milestone 5", { timeout: 20_000 }, () => {
       "job.hooks",
       "rclone.bisync",
     ]);
-    // Milestone 6 adds sftp_host_keys to the seven probe operations of m5.
-    expect(nas.info?.probeOps).toHaveLength(8);
-    expect(nas.info?.probeOps.at(-1)).toBe("sftp_host_keys");
+    // Milestone 6 adds sftp_host_keys to the seven probe operations of m5,
+    // and milestone 7 its five scans (sizes, search, compare).
+    expect(nas.info?.probeOps).toHaveLength(13);
+    expect(nas.info?.probeOps.slice(7)).toEqual([
+      "sftp_host_keys",
+      "measure_local",
+      "measure_remote",
+      "restic_measure",
+      "restic_find",
+      "restic_diff",
+    ]);
     expect(workers.workers.find((w) => w.id === m5.ids.oldNas)?.info?.features).toEqual([]);
 
     const waiting = (await jobs.getJob({ jobId: m5.ids.waitingBackup })).job!;

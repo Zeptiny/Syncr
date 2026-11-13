@@ -34,6 +34,8 @@ import { Route as AppWorkersIndexRouteImport } from "./routes/_app/workers/index
 import { Route as AppWorkersWorkerIdRouteImport } from "./routes/_app/workers/$workerId";
 import { Route as AppWorkersNewRouteImport } from "./routes/_app/workers/new";
 import { Route as AppRemotesRemoteIdFilesRouteImport } from "./routes/_app/remotes/$remoteId_.files";
+import { Route as AppRepositoriesRepositoryIdCompareRouteImport } from "./routes/_app/repositories/$repositoryId_.compare";
+import { Route as AppRepositoriesRepositoryIdSearchRouteImport } from "./routes/_app/repositories/$repositoryId_.search";
 import { Route as AppSchedulesScheduleIdEditRouteImport } from "./routes/_app/schedules/$scheduleId_.edit";
 import { Route as AppWorkersWorkerIdFilesRouteImport } from "./routes/_app/workers/$workerId_.files";
 import { Route as AppRepositoriesRepositoryIdSnapshotsSnapshotIdRouteImport } from "./routes/_app/repositories/$repositoryId_.snapshots.$snapshotId";
@@ -164,6 +166,18 @@ const AppRemotesRemoteIdFilesRoute = AppRemotesRemoteIdFilesRouteImport.update({
   path: "/remotes/$remoteId/files",
   getParentRoute: () => AppRoute,
 } as any);
+const AppRepositoriesRepositoryIdCompareRoute =
+  AppRepositoriesRepositoryIdCompareRouteImport.update({
+    id: "/repositories/$repositoryId_/compare",
+    path: "/repositories/$repositoryId/compare",
+    getParentRoute: () => AppRoute,
+  } as any);
+const AppRepositoriesRepositoryIdSearchRoute =
+  AppRepositoriesRepositoryIdSearchRouteImport.update({
+    id: "/repositories/$repositoryId_/search",
+    path: "/repositories/$repositoryId/search",
+    getParentRoute: () => AppRoute,
+  } as any);
 const AppSchedulesScheduleIdEditRoute =
   AppSchedulesScheduleIdEditRouteImport.update({
     id: "/schedules/$scheduleId_/edit",
@@ -207,6 +221,8 @@ export interface FileRoutesByFullPath {
   "/users/": typeof AppUsersIndexRoute;
   "/workers/": typeof AppWorkersIndexRoute;
   "/remotes/$remoteId/files": typeof AppRemotesRemoteIdFilesRoute;
+  "/repositories/$repositoryId/compare": typeof AppRepositoriesRepositoryIdCompareRoute;
+  "/repositories/$repositoryId/search": typeof AppRepositoriesRepositoryIdSearchRoute;
   "/schedules/$scheduleId/edit": typeof AppSchedulesScheduleIdEditRoute;
   "/workers/$workerId/files": typeof AppWorkersWorkerIdFilesRoute;
   "/repositories/$repositoryId/snapshots/$snapshotId": typeof AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute;
@@ -236,6 +252,8 @@ export interface FileRoutesByTo {
   "/users": typeof AppUsersIndexRoute;
   "/workers": typeof AppWorkersIndexRoute;
   "/remotes/$remoteId/files": typeof AppRemotesRemoteIdFilesRoute;
+  "/repositories/$repositoryId/compare": typeof AppRepositoriesRepositoryIdCompareRoute;
+  "/repositories/$repositoryId/search": typeof AppRepositoriesRepositoryIdSearchRoute;
   "/schedules/$scheduleId/edit": typeof AppSchedulesScheduleIdEditRoute;
   "/workers/$workerId/files": typeof AppWorkersWorkerIdFilesRoute;
   "/repositories/$repositoryId/snapshots/$snapshotId": typeof AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute;
@@ -267,6 +285,8 @@ export interface FileRoutesById {
   "/_app/users/": typeof AppUsersIndexRoute;
   "/_app/workers/": typeof AppWorkersIndexRoute;
   "/_app/remotes/$remoteId_/files": typeof AppRemotesRemoteIdFilesRoute;
+  "/_app/repositories/$repositoryId_/compare": typeof AppRepositoriesRepositoryIdCompareRoute;
+  "/_app/repositories/$repositoryId_/search": typeof AppRepositoriesRepositoryIdSearchRoute;
   "/_app/schedules/$scheduleId_/edit": typeof AppSchedulesScheduleIdEditRoute;
   "/_app/workers/$workerId_/files": typeof AppWorkersWorkerIdFilesRoute;
   "/_app/repositories/$repositoryId_/snapshots/$snapshotId": typeof AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute;
@@ -298,6 +318,8 @@ export interface FileRouteTypes {
     | "/users/"
     | "/workers/"
     | "/remotes/$remoteId/files"
+    | "/repositories/$repositoryId/compare"
+    | "/repositories/$repositoryId/search"
     | "/schedules/$scheduleId/edit"
     | "/workers/$workerId/files"
     | "/repositories/$repositoryId/snapshots/$snapshotId";
@@ -327,6 +349,8 @@ export interface FileRouteTypes {
     | "/users"
     | "/workers"
     | "/remotes/$remoteId/files"
+    | "/repositories/$repositoryId/compare"
+    | "/repositories/$repositoryId/search"
     | "/schedules/$scheduleId/edit"
     | "/workers/$workerId/files"
     | "/repositories/$repositoryId/snapshots/$snapshotId";
@@ -357,6 +381,8 @@ export interface FileRouteTypes {
     | "/_app/users/"
     | "/_app/workers/"
     | "/_app/remotes/$remoteId_/files"
+    | "/_app/repositories/$repositoryId_/compare"
+    | "/_app/repositories/$repositoryId_/search"
     | "/_app/schedules/$scheduleId_/edit"
     | "/_app/workers/$workerId_/files"
     | "/_app/repositories/$repositoryId_/snapshots/$snapshotId";
@@ -545,6 +571,20 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AppRemotesRemoteIdFilesRouteImport;
       parentRoute: typeof AppRoute;
     };
+    "/_app/repositories/$repositoryId_/compare": {
+      id: "/_app/repositories/$repositoryId_/compare";
+      path: "/repositories/$repositoryId/compare";
+      fullPath: "/repositories/$repositoryId/compare";
+      preLoaderRoute: typeof AppRepositoriesRepositoryIdCompareRouteImport;
+      parentRoute: typeof AppRoute;
+    };
+    "/_app/repositories/$repositoryId_/search": {
+      id: "/_app/repositories/$repositoryId_/search";
+      path: "/repositories/$repositoryId/search";
+      fullPath: "/repositories/$repositoryId/search";
+      preLoaderRoute: typeof AppRepositoriesRepositoryIdSearchRouteImport;
+      parentRoute: typeof AppRoute;
+    };
     "/_app/schedules/$scheduleId_/edit": {
       id: "/_app/schedules/$scheduleId_/edit";
       path: "/schedules/$scheduleId/edit";
@@ -592,6 +632,8 @@ interface AppRouteChildren {
   AppUsersIndexRoute: typeof AppUsersIndexRoute;
   AppWorkersIndexRoute: typeof AppWorkersIndexRoute;
   AppRemotesRemoteIdFilesRoute: typeof AppRemotesRemoteIdFilesRoute;
+  AppRepositoriesRepositoryIdCompareRoute: typeof AppRepositoriesRepositoryIdCompareRoute;
+  AppRepositoriesRepositoryIdSearchRoute: typeof AppRepositoriesRepositoryIdSearchRoute;
   AppSchedulesScheduleIdEditRoute: typeof AppSchedulesScheduleIdEditRoute;
   AppWorkersWorkerIdFilesRoute: typeof AppWorkersWorkerIdFilesRoute;
   AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute: typeof AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute;
@@ -620,6 +662,10 @@ const AppRouteChildren: AppRouteChildren = {
   AppUsersIndexRoute: AppUsersIndexRoute,
   AppWorkersIndexRoute: AppWorkersIndexRoute,
   AppRemotesRemoteIdFilesRoute: AppRemotesRemoteIdFilesRoute,
+  AppRepositoriesRepositoryIdCompareRoute:
+    AppRepositoriesRepositoryIdCompareRoute,
+  AppRepositoriesRepositoryIdSearchRoute:
+    AppRepositoriesRepositoryIdSearchRoute,
   AppSchedulesScheduleIdEditRoute: AppSchedulesScheduleIdEditRoute,
   AppWorkersWorkerIdFilesRoute: AppWorkersWorkerIdFilesRoute,
   AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute:

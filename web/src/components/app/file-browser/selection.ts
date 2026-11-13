@@ -166,20 +166,22 @@ export interface KnownSize {
 /**
  * knownSize adds up the uncovered items: files by their listed size,
  * folders by their measured size (folderSize) where known. Any unmeasured
- * folder makes the total a lower bound ("at least").
+ * folder, or one whose measurement is a lower bound (folderAtLeast), makes
+ * the total a lower bound ("at least").
  */
 export function knownSize(
   sel: Selection,
   kind: PathKind,
   folderSize?: (entry: ProbeEntry) => bigint | undefined,
+  folderAtLeast?: (entry: ProbeEntry) => boolean,
 ): KnownSize {
   const out: KnownSize = { bytes: 0n, atLeast: false, files: 0, folders: 0 };
   for (const { entry } of uncovered(sel, kind)) {
     if (isDir(entry)) {
       out.folders++;
       const s = folderSize?.(entry);
-      if (s === undefined) out.atLeast = true;
-      else out.bytes += s;
+      if (s === undefined || folderAtLeast?.(entry)) out.atLeast = true;
+      if (s !== undefined) out.bytes += s;
     } else {
       out.files++;
       out.bytes += entry.size;

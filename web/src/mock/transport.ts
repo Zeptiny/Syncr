@@ -39,7 +39,7 @@ import * as hooksMock from "./hooks";
 import { registerM4 } from "./m4";
 import * as m5mock from "./m5";
 import * as m6 from "./m6";
-import { applyTransfer, registerM7 } from "./m7";
+import { applyTransfer, applyWorkers as applyM7Workers, registerM7 } from "./m7";
 
 const passwords: Record<string, string> = { admin: "syncr-demo-admin", alice: "syncr-demo-alice" };
 const SESSION_KEY = "syncr.mock.session";
@@ -81,6 +81,7 @@ export function createMockTransport(): Transport {
   m6.applyWorkers(workers);
   hooksMock.applyWorkers(workers);
   bisyncMock.applyWorkers(workers);
+  applyM7Workers(workers);
   workers.push(m6.atticWorker(now));
   let remotes = [...fx.remotes(now), m6.verifiedRemote(now), bisyncMock.r2Remote(now)].sort(
     (a, b) => a.name.localeCompare(b.name),
@@ -679,6 +680,15 @@ export function createMockTransport(): Transport {
 
     // Last: its methods replace the unimplemented ones registered above.
     m6.registerM6(router, { me, workers, invalid, sleep: (ms) => sleep(ms) });
-    registerM7(router, { me, workers, remotes: () => remotes, invalid, sleep: (ms) => sleep(ms) });
+    registerM7(router, {
+      me,
+      workers,
+      remotes: () => remotes,
+      invalid,
+      sleep: (ms) => sleep(ms),
+      now,
+      repositories: () => m5data.repositories,
+      files: m5.files,
+    });
   });
 }

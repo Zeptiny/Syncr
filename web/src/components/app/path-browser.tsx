@@ -15,6 +15,7 @@ import { normalizePath, parentPath, rootPath } from "@/lib/paths";
 
 import { FileTable } from "./file-table";
 import { BrowserToolbar } from "./file-browser/browser-toolbar";
+import { missingFolderHint } from "./file-browser/helpers";
 
 /** PathBrowserDialogProps configures PathBrowserDialog. */
 export interface PathBrowserDialogProps {
@@ -125,6 +126,7 @@ function Browser({
         error={listing.error}
         onRetry={listing.refetch}
         truncated={listing.truncated}
+        missingHint={missingFolderHint(kind)}
         onOpen={(e) => go(e.path)}
         onUp={atTop ? undefined : () => go(parentPath(path, kind, rootPaths))}
         compact

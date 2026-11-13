@@ -34,6 +34,8 @@ export interface SelectionTrayProps {
   onChange: (selection: Selection) => void;
   /** folderSize is a folder's measured size, counted in the total. */
   folderSize?: (entry: ProbeEntry) => bigint | undefined;
+  /** folderSizeAtLeast says a folder's measured size is a lower bound. */
+  folderSizeAtLeast?: (entry: ProbeEntry) => boolean;
   /** actions are the page's buttons for the selection. */
   actions?: React.ReactNode;
   /** rootLabel names the top folder in the group headings. */
@@ -51,10 +53,10 @@ export interface SelectionTrayProps {
  * width it is a bottom bar that opens a sheet.
  */
 export function SelectionTray(props: SelectionTrayProps) {
-  const { selection, kind, folderSize, mobile } = props;
+  const { selection, kind, folderSize, folderSizeAtLeast, mobile } = props;
   const [open, setOpen] = useState(false);
   if (selection.size === 0) return null;
-  const size = knownSize(selection, kind, folderSize);
+  const size = knownSize(selection, kind, folderSize, folderSizeAtLeast);
   const summary = `${selection.size.toLocaleString("en-US")} selected`;
 
   if (mobile)
@@ -107,6 +109,7 @@ function TrayBody({
   selection,
   onChange,
   folderSize,
+  folderSizeAtLeast,
   actions,
   rootLabel,
   onEmptied,
@@ -168,13 +171,15 @@ function TrayBody({
                         <span className="truncate text-xs">in {folderLabel(it.coveredBy)}</span>
                       )}
                     </span>
-                    <span className="tabular shrink-0 text-xs text-muted-foreground">
-                      {dir
-                        ? measured === undefined
-                          ? "–"
-                          : formatBytes(measured)
-                        : formatBytes(it.entry.size)}
-                    </span>
+                    {/* An unmeasured folder shows no size: a dash beside the
+                        remove button would read as a minus button. */}
+                    {(!dir || measured !== undefined) && (
+                      <span className="tabular shrink-0 text-xs text-muted-foreground">
+                        {dir && measured !== undefined
+                          ? `${folderSizeAtLeast?.(it.entry) ? "≥ " : ""}${formatBytes(measured)}`
+                          : formatBytes(it.entry.size)}
+                      </span>
+                    )}
                     <Button
                       variant="ghost"
                       size="icon-xs"

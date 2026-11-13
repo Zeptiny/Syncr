@@ -9,7 +9,8 @@ import type { Place } from "./transfer";
 /**
  * invalidatePlaces marks the cached listings of places as stale, so the
  * open browser lists them again: every folder of a worker, or of a remote
- * through any worker, and the remote's usage.
+ * through any worker, and the remote's usage. Their measured folder sizes
+ * are dropped too (they are measured again only when asked).
  */
 export async function invalidatePlaces(client: QueryClient, places: Place[]): Promise<void> {
   const keys: readonly unknown[][] = places.flatMap((p): unknown[][] =>
@@ -17,6 +18,11 @@ export async function invalidatePlaces(client: QueryClient, places: Place[]): Pr
       ? [
           createConnectQueryKey({
             schema: ProbeService.method.listWorkerFiles,
+            input: { workerId: p.workerId },
+            cardinality: undefined,
+          }),
+          createConnectQueryKey({
+            schema: ProbeService.method.measureWorkerFolder,
             input: { workerId: p.workerId },
             cardinality: undefined,
           }),
@@ -29,6 +35,11 @@ export async function invalidatePlaces(client: QueryClient, places: Place[]): Pr
           }),
           createConnectQueryKey({
             schema: ProbeService.method.getRemoteUsage,
+            input: { remoteId: p.remoteId },
+            cardinality: undefined,
+          }),
+          createConnectQueryKey({
+            schema: ProbeService.method.measureRemoteFolder,
             input: { remoteId: p.remoteId },
             cardinality: undefined,
           }),

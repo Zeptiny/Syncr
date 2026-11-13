@@ -49,3 +49,55 @@ export function validateSnapshotSearch(s: Record<string, unknown>): SnapshotSear
     worker: str(s.worker),
   };
 }
+
+const snapshotId = (v: unknown) => {
+  const s = str(v)?.toLowerCase();
+  return s && /^[0-9a-f]{8,64}$/.test(s) ? s : undefined;
+};
+
+/** FindSearch is the search page's URL state: the pattern, the scope and the case. */
+export interface FindSearch {
+  /** q is the pattern; absent shows the form only. */
+  q?: string;
+  /** snapshot limits the search to one snapshot; absent searches all of them. */
+  snapshot?: string;
+  /** icase is false to match case; absent ignores case (the default). */
+  icase?: false;
+  /** worker pins the worker that searches (required for a repository on a worker's disk). */
+  worker?: string;
+}
+
+/** validateFindSearch parses /repositories/$id/search's search params. */
+export function validateFindSearch(s: Record<string, unknown>): FindSearch {
+  const q = typeof s.q === "string" ? s.q.replace(/[\r\n\0]/g, "").trim() : "";
+  const off = s.icase === false || s.icase === "false" || s.icase === 0 || s.icase === "0";
+  return {
+    q: q ? q.slice(0, 256) : undefined,
+    snapshot: snapshotId(s.snapshot),
+    icase: off ? false : undefined,
+    worker: str(s.worker),
+  };
+}
+
+/** CompareSearch is the compare page's URL state. */
+export interface CompareSearch {
+  /** from is the older snapshot, to the newer (IDs). */
+  from?: string;
+  to?: string;
+  /** path is the folder compared; absent compares the whole snapshots. */
+  path?: string;
+  /** worker pins the worker that compares. */
+  worker?: string;
+}
+
+/** validateCompareSearch parses /repositories/$id/compare's search params. */
+export function validateCompareSearch(s: Record<string, unknown>): CompareSearch {
+  const p = str(s.path);
+  const path = p && p.startsWith("/") ? "/" + p.split("/").filter(Boolean).join("/") : undefined;
+  return {
+    from: snapshotId(s.from),
+    to: snapshotId(s.to),
+    path: path && path !== "/" ? path : undefined,
+    worker: str(s.worker),
+  };
+}
