@@ -43,7 +43,11 @@ sudo install -m 0755 syncr-worker /usr/local/bin/syncr-worker
 sudo syncr-worker setup --controller https://syncr.example.com --token syncr_et_...
 ```
 
-The worker shows as online on the **Workers** page within seconds.
+The page that showed the command follows the worker: it shows when the
+command has run and the worker enrolled, then, once it has connected, its
+hostname, versions and allowed folders (`local_roots`), with a link to its
+page. An empty list of allowed folders is flagged there: jobs could not
+touch the machine's own files.
 
 ### Verifying a download
 

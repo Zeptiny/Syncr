@@ -18,10 +18,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { WorkerAdminService, type CreateEnrollmentTokenResponse } from "@/gen/syncr/v1/api_pb";
+import {
+  WorkerAdminService,
+  type CreateEnrollmentTokenResponse,
+  type Worker,
+} from "@/gen/syncr/v1/api_pb";
 import { errorMessage, fieldViolations } from "@/lib/errors";
 import { tsDate } from "@/lib/format";
 import { invalidateService } from "@/lib/invalidate";
+
+import { EnrollmentProgressView, useEnrollmentProgress } from "./enrollment-progress";
 
 const ttls = [
   { value: String(15 * 60_000), label: "15 minutes" },
@@ -30,12 +36,26 @@ const ttls = [
   { value: String(7 * 24 * 60 * 60_000), label: "7 days" },
 ];
 
+/** ActiveEnrollmentProps configures ActiveEnrollment. */
+export interface ActiveEnrollmentProps {
+  /** onConnected runs once the new worker has connected. */
+  onConnected?: (worker: Worker) => void;
+  /**
+   * workerLink sets how prominent the link to the connected worker is:
+   * secondary where the page has its own main button (the setup wizard).
+   */
+  workerLink?: "primary" | "secondary";
+  /** pollMs overrides how often the page asks while it waits (tests). */
+  pollMs?: number;
+}
+
 /**
  * ActiveEnrollment creates a one-time enrollment token and shows the
- * install commands that use it. Active workers connect out to this
- * controller, so they work behind NAT.
+ * install commands that use it, then follows the worker as it enrolls and
+ * connects. Active workers connect out to this controller, so they work
+ * behind NAT.
  */
-export function ActiveEnrollment() {
+export function ActiveEnrollment({ onConnected, workerLink, pollMs }: ActiveEnrollmentProps) {
   const [ttl, setTtl] = useState(ttls[1].value);
   const [result, setResult] = useState<CreateEnrollmentTokenResponse | undefined>();
   const create = useMutation(WorkerAdminService.method.createEnrollmentToken);
@@ -79,6 +99,33 @@ export function ActiveEnrollment() {
         </p>
       )}
       {result && (
+        <FollowEnrollment
+          key={result.tokenId}
+          result={result}
+          onConnected={onConnected}
+          workerLink={workerLink}
+          pollMs={pollMs}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * FollowEnrollment shows a new token's install commands until a worker
+ * uses it (they are spent then), and how far the enrollment has come.
+ */
+function FollowEnrollment({
+  result,
+  onConnected,
+  workerLink,
+  pollMs,
+}: { result: CreateEnrollmentTokenResponse } & ActiveEnrollmentProps) {
+  const progress = useEnrollmentProgress(result.tokenId, { pollMs, onConnected });
+  const expiresAt = tsDate(result.expiresAt);
+  return (
+    <>
+      {progress.stage === "waiting" && (
         <CopyCommand
           commands={result.installCommands}
           shownOnce={
@@ -87,13 +134,14 @@ export function ActiveEnrollment() {
                 Copy it now: this command is shown only once.
               </strong>{" "}
               It contains a single-use enrollment token that expires{" "}
-              <RelativeTime date={tsDate(result.expiresAt)} />. The worker shows up in the list as
-              soon as it connects.
+              <RelativeTime date={expiresAt} />. This page follows the worker as it enrolls and
+              connects.
             </>
           }
         />
       )}
-    </div>
+      <EnrollmentProgressView progress={progress} expiresAt={expiresAt} workerLink={workerLink} />
+    </>
   );
 }
 

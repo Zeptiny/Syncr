@@ -64,7 +64,7 @@ func (s *Service) CreateEnrollmentToken(ctx context.Context, ttl time.Duration) 
 	if err := s.tokens.CreateEnrollmentToken(ctx, t); err != nil {
 		return EnrollmentGrant{}, fmt.Errorf("create enrollment token: %w", err)
 	}
-	s.log.InfoContext(ctx, "enrollment token created", "token_id", t.ID.String(), "expires_at", t.ExpiresAt)
+	s.log.InfoContext(ctx, "enrollment token created", "id", t.ID.String(), "expires_at", t.ExpiresAt)
 	return EnrollmentGrant{ID: t.ID, Token: token, ExpiresAt: t.ExpiresAt}, nil
 }
 
