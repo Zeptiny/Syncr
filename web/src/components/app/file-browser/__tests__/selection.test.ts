@@ -16,8 +16,11 @@ import {
   removePaths,
   setSelected,
   uncovered,
+  viewOf,
   withPaths,
+  type Selection,
 } from "../selection";
+import type { PathKind } from "@/lib/paths";
 
 const entry = (path: string, type: ProbeEntryType, size = 0): ProbeEntry =>
   create(ProbeEntrySchema, {
@@ -97,6 +100,100 @@ describe("selection", () => {
       { folder: "/srv/photos", items: [expect.objectContaining({ path: "/srv/photos/2026" })] },
       { folder: "/", items: [expect.objectContaining({ path: "/b" })] },
     ]);
+  });
+});
+
+// The covering rule, said the slow way: the outermost selected folder
+// that isInside holds the path.
+function slowCover(sel: Selection, path: string, kind: PathKind): string | undefined {
+  let best: string | undefined;
+  for (const [p, e] of sel) {
+    if (e.type !== ProbeEntryType.DIR || !isInside(path, p, kind)) continue;
+    if (best === undefined || isInside(best, p, kind)) best = p;
+  }
+  return best;
+}
+
+describe("coverage", () => {
+  it.each<[PathKind, ProbeEntry[]]>([
+    [
+      "worker",
+      [
+        dir("/srv"),
+        file("/srv/a"),
+        dir("/srv/data"),
+        file("/srv/data/b"),
+        dir("/srv/data2"),
+        file("/srv/data2/c"),
+        file("/srv-other/d"),
+        dir("/"),
+        file("/e"),
+      ],
+    ],
+    [
+      "worker",
+      [
+        dir("D:\\"),
+        file("D:\\x.txt"),
+        dir("d:\\Photos"),
+        file("D:\\photos\\2026\\a.jpg"),
+        file("D:/Photos/b.jpg"),
+        dir("E:\\Data"),
+        file("e:\\data\\c"),
+        file("E:\\Data2\\d"),
+        dir("\\\\srv\\share"),
+        file("\\\\srv\\share\\f"),
+        file("\\\\srv\\share2\\g"),
+      ],
+    ],
+    [
+      "remote",
+      [
+        dir("photos"),
+        file("photos/a"),
+        dir("photos/2026"),
+        file("photos/2026/b"),
+        file("photos2/c"),
+      ],
+    ],
+    [
+      "snapshot",
+      [
+        dir("/srv/photos"),
+        file("/srv/photos/a"),
+        file("/srv/photos2/b"),
+        dir("/x"),
+        file("/x/y/z"),
+      ],
+    ],
+  ])("agrees with isInside (%s)", (kind, entries) => {
+    const s = fromEntries(entries);
+    const v = viewOf(s, kind);
+    for (const it of v.all) expect(it.coveredBy, it.path).toBe(slowCover(s, it.path, kind));
+    expect(v.uncovered).toEqual(v.all.filter((i) => i.coveredBy === undefined));
+  });
+
+  // Ticking every folder of one with thousands of them used to freeze the
+  // page (each item compared with every other one, several times a render).
+  it.each([
+    ["POSIX", "/srv/events", "/"],
+    ["Windows", "D:\\Events", "\\"],
+  ])("works out 5,000 selected %s folders quickly", (_, base, sep) => {
+    const folders = Array.from({ length: 5000 }, (_, i) => dir(`${base}${sep}event-${i}`));
+    const s = fromEntries([...folders, file(`${base}${sep}event-7${sep}inside.jpg`)]);
+    const start = performance.now();
+    const v = viewOf(s, "worker");
+    const size = knownSize(s, "worker");
+    const groups = groupByFolder(s, "worker");
+    const took = performance.now() - start;
+    expect(v.uncovered).toHaveLength(5000);
+    expect(v.all.at(-1)?.coveredBy).toBe(`${base}${sep}event-7`);
+    expect(v.parent).toBe(base);
+    expect(size.folders).toBe(5000);
+    expect(groups).toHaveLength(2);
+    // The quadratic version took seconds (POSIX) to tens of seconds
+    // (Windows); this takes milliseconds. The bound is loose for slow CI.
+    expect(took).toBeLessThan(1000);
   });
 });
 

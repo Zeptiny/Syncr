@@ -75,9 +75,14 @@ curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/j
 #  "complete":true,"snapshotsSearched":12,"worker":{...}}
 ```
 
-- The five scans accept POST only (a link cannot start one), are bounded
-  by `probe.scan_timeout` and run one at a time per worker: a second one
-  gets `unavailable` ("already measuring or searching").
+- The five scans accept POST only (opening a URL cannot start one), are
+  bounded by `probe.scan_timeout` and run one at a time per worker: a
+  second one gets `unavailable` ("already measuring or searching"); a
+  worker whose probe slots are all taken answers `unavailable` ("busy
+  with other requests"). The web UI keeps a search or comparison in its
+  page's address, but opening such an address (a link, a reload) only
+  fills in the form: the scan runs when you press **Search** or
+  **Compare**, or when you come from a page of the app that started it.
 - **A partial answer is a success.** `complete: false` means the scan
   stopped at its time limit (every number is a lower bound; a comparison
   then has no `stats`). `truncated: true` means a limit was reached:

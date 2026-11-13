@@ -1,6 +1,9 @@
 package link
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Time limits of probes, shared by both sides of the link so they agree:
 // every other probe limit (the controller's settings, the probe broker,
@@ -27,6 +30,22 @@ const (
 // restic one.
 func HeavyProbeOps() []string {
 	return []string{"measure_local", "measure_remote", "restic_measure", "restic_find", "restic_diff"}
+}
+
+// Messages of a probe the worker refuses with BUSY. The protocol has one
+// BUSY code for both causes, so the controller tells them apart by the
+// heavy one's message (workers since 2.1.0-rc.1 send exactly these).
+const (
+	// ProbeBusySlots: every normal probe slot is taken.
+	ProbeBusySlots = "the worker is running too many probes; try again"
+	// ProbeBusyHeavy: a heavy probe was asked while one already runs.
+	ProbeBusyHeavy = "the worker is already measuring, searching or comparing; try again in a moment"
+)
+
+// IsHeavyBusy reports whether a BUSY probe failure's message says the
+// worker's heavy slot is taken (ProbeBusyHeavy), not its normal slots.
+func IsHeavyBusy(message string) bool {
+	return strings.Contains(message, ProbeBusyHeavy)
 }
 
 // IsHeavyProbeOp reports whether op is one of HeavyProbeOps.

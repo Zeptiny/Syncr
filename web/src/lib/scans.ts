@@ -20,7 +20,24 @@ export function isBusy(err: unknown): boolean {
   );
 }
 
-/** scanErrorText turns a scan's error into a sentence, the busy worker in the UI's words. */
+/** SLOTS_BUSY_TEXT is what the UI says when the worker has too many requests at once. */
+export const SLOTS_BUSY_TEXT = "This worker is busy with other requests. Try again in a moment.";
+
+/**
+ * isSlotsBusy reports whether a scan was refused because the worker's
+ * probe slots are all taken (by listings and the like), not by a scan.
+ */
+export function isSlotsBusy(err: unknown): boolean {
+  return (
+    err instanceof ConnectError &&
+    err.code === Code.Unavailable &&
+    /is busy with other requests/.test(err.rawMessage)
+  );
+}
+
+/** scanErrorText turns a scan's error into a sentence, a busy worker in the UI's words. */
 export function scanErrorText(err: unknown): string {
-  return isBusy(err) ? BUSY_TEXT : errorMessage(err);
+  if (isBusy(err)) return BUSY_TEXT;
+  if (isSlotsBusy(err)) return SLOTS_BUSY_TEXT;
+  return errorMessage(err);
 }

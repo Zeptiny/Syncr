@@ -118,8 +118,9 @@ describe("TransferSheet", { timeout: 30_000 }, () => {
     await chooseDestination(user, sheet, /^Folders on nas-01/, "/srv/backup");
     await user.click(within(sheet).getByRole("button", { name: "Move…" }));
     const confirm = await screen.findByRole("alertdialog", { name: "Move 1 item?" });
+    // Keep existing (the default): what is skipped stays in the source.
     expect(confirm).toHaveTextContent(
-      "1 item will be deleted from /srv/docs on nas-01 once copied.",
+      "1 item will be deleted from /srv/docs on nas-01 once copied. Files already at the destination are skipped and stay in /srv/docs on nas-01.",
     );
     expect(api.of("RunJob")).toHaveLength(0);
     await user.click(within(confirm).getByRole("button", { name: "Move" }));
@@ -133,7 +134,14 @@ describe("TransferSheet", { timeout: 30_000 }, () => {
 
     const listed = api.of("ListWorkerFiles").length;
     act(() => api.finish(api.jobs[0].id));
-    expect(await screen.findByText("Moved 1 item into /srv/backup on nas-01")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Move of 1 item into /srv/backup on nas-01 finished"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Files that were already at the destination were skipped and stay in the source. The job's page has the counts.",
+      ),
+    ).toBeInTheDocument();
     await waitFor(() => expect(api.of("ListWorkerFiles").length).toBeGreaterThan(listed));
     await waitFor(() => expect(within(grid).queryByText("notes.md")).toBeNull());
     // The moved item left the selection when the move started.

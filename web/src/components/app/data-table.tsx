@@ -83,7 +83,8 @@ export function DataTable<T>({
 
   return (
     <div className={cn("overflow-hidden rounded-lg border bg-card", className)}>
-      <div className="overflow-x-auto">
+      {/* relative: screen-reader-only header text (absolute) stays inside the scroll box. */}
+      <div className="relative overflow-x-auto">
         <table
           className="w-full caption-bottom text-sm"
           aria-label={aria["aria-label"]}

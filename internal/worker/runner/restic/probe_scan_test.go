@@ -794,3 +794,50 @@ func TestTreePathIn(t *testing.T) {
 		}
 	}
 }
+
+// TestFindAttributionWithEqualTimes: restic searches newest first but
+// orders snapshots of equal times its own way, so a search stopped in a
+// group credits its matches only when one snapshot can be it.
+func TestFindAttributionWithEqualTimes(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 11, 1, 3, 0, 0, 0, time.UTC)
+	a := strings.Repeat("a", 64)
+	b := strings.Repeat("b", 64)
+	c := strings.Repeat("c", 64)
+	match := func() *syncrv1.ProbeEntry { return &syncrv1.ProbeEntry{Path: "/srv/x"} }
+	for _, tc := range []struct {
+		name     string
+		order    []findSnap // newest first, equal times by ID, as findOrder lists them
+		reported []string   // the groups restic ended, in its order
+		want     string     // the snapshot the unfinished group is credited to ("" none)
+		searched int
+	}{
+		// a and b were taken at the same time; restic searched b first (no
+		// matches, so it printed nothing), then reported a: the unfinished
+		// group may be b's as well as c's. By position (a, b, c) it would
+		// have been credited to c.
+		{"equal times, restic's order differs", []findSnap{{b, t0}, {a, t0}, {c, t0.Add(-time.Hour)}}, []string{a}, "", 1},
+		{"equal times, nothing older", []findSnap{{a, t0}, {b, t0}}, []string{a}, b, 1},
+		{"one older left", []findSnap{{a, t0}, {b, t0.Add(-time.Hour)}}, []string{a}, b, 1},
+		{"two older left", []findSnap{{a, t0}, {b, t0.Add(-time.Hour)}, {c, t0.Add(-2 * time.Hour)}}, []string{a}, "", 1},
+		{"newer ones without matches count as searched", []findSnap{{a, t0}, {b, t0.Add(-time.Hour)}, {c, t0.Add(-2 * time.Hour)}}, []string{b}, c, 2},
+		{"nothing reported, one snapshot", []findSnap{{c, t0}}, nil, c, 0},
+		{"nothing reported, two snapshots", []findSnap{{a, t0}, {c, t0.Add(-time.Hour)}}, nil, "", 0},
+	} {
+		f := &findStream{groups: tc.reported, pending: []*syncrv1.ProbeEntry{match(), match()}}
+		f.attribute(tc.order)
+		got := ""
+		if len(f.matches) > 0 {
+			got = f.matches[0].GetSnapshotId()
+			if len(f.matches) != 2 || f.matches[1].GetSnapshotId() != got {
+				t.Errorf("%s: matches %v", tc.name, f.matches)
+			}
+		}
+		if got != tc.want {
+			t.Errorf("%s: credited to %.8q, want %.8q", tc.name, got, tc.want)
+		}
+		if n := f.searched(tc.order, false); n != tc.searched {
+			t.Errorf("%s: searched %d, want %d", tc.name, n, tc.searched)
+		}
+	}
+}

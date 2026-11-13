@@ -90,10 +90,13 @@ export function BrowserToolbar({
           value={typed}
           onChange={(e) => setTyped(e.target.value)}
           aria-label="Path"
-          placeholder={kind === "remote" ? "folder/inside/remote" : "/path/to/folder"}
+          // A hint, not a value: in the sans font, unlike the paths typed.
+          placeholder={
+            kind === "remote" ? "Type a path, e.g. photos/2026" : "Type a path, e.g. /srv/photos"
+          }
           spellCheck={false}
           autoComplete="off"
-          className="h-9 min-w-0 flex-1 bg-card font-mono text-[13px]"
+          className="h-9 min-w-0 flex-1 bg-card font-mono text-[13px] placeholder:font-sans"
         />
         <Button type="submit" variant="outline" size="icon" aria-label="Go to this path">
           <CornerDownLeft aria-hidden />

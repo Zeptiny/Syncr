@@ -11,12 +11,22 @@ const now = Date.UTC(2026, 10, 10, 12);
 const vault = m5.ids.photosVault;
 const short = (id: string) => id.slice(0, 8);
 
+// Opening a scan page's URL alone (a link, a reload) only fills the form:
+// nothing runs until its button is pressed.
+async function press(api: ReturnType<typeof m5Api>, button: "Search" | "Compare") {
+  await screen.findByText(button === "Search" ? "Ready to search" : "Ready to compare");
+  expect(api.of(button === "Search" ? "FindInRepository" : "CompareSnapshots")).toHaveLength(0);
+  await userEvent.setup().click(screen.getByRole("button", { name: button }));
+}
+
 describe("search", { timeout: 30_000 }, () => {
   it("groups matches by path and opens into versions, each opened or restored", async () => {
     const user = userEvent.setup();
     const api = m5Api(now);
     const snaps = api.repo(vault).snapshots;
     const { router } = renderApp(`/repositories/${vault}/search?q=albums.json`, api.transport);
+    expect(await screen.findByRole("textbox", { name: "Pattern" })).toHaveValue("albums.json");
+    await press(api, "Search");
     const results = await screen.findByRole("region", { name: "Search results" });
     expect(
       within(results).getByText(/^30 matches, 1 path\. 30 of 30 snapshots searched\.$/),
@@ -69,6 +79,7 @@ describe("search", { timeout: 30_000 }, () => {
   it("says when the search was cut at its most matches", async () => {
     const api = m5Api(now);
     renderApp(`/repositories/${vault}/search?q=*.jpg`, api.transport);
+    await press(api, "Search");
     const results = await screen.findByRole("region", { name: "Search results" });
     expect(
       within(results).getByText(
@@ -111,7 +122,9 @@ describe("search", { timeout: 30_000 }, () => {
   });
 
   it("shows a bad pattern at the box", async () => {
-    renderApp(`/repositories/${vault}/search?q=${"é".repeat(200)}`, m5Api(now).transport);
+    const api = m5Api(now);
+    renderApp(`/repositories/${vault}/search?q=${"é".repeat(200)}`, api.transport);
+    await press(api, "Search");
     expect(await screen.findByRole("alert")).toHaveTextContent("Must be at most 256 bytes.");
     expect(screen.getByRole("textbox", { name: "Pattern" })).toHaveAttribute(
       "aria-invalid",
@@ -231,6 +244,13 @@ describe("compare", { timeout: 30_000 }, () => {
     expect(
       screen.queryByRole("link", { name: `Compare ${short(snaps.at(-1)!.id)} with previous` }),
     ).toBeNull();
+    // Followed in the app, the link compares at once.
+    await userEvent.setup().click(link);
+    expect(await screen.findByRole("list", { name: "Changes" })).toBeInTheDocument();
+    expect(screen.queryByText("Ready to compare")).toBeNull();
+    expect(api.of<CompareSnapshotsRequest>("CompareSnapshots")).toMatchObject([
+      { fromSnapshotId: snaps[1].id, toSnapshotId: snaps[0].id },
+    ]);
   });
 
   it("shows the totals, then the changes by kind and text, each opening its folder", async () => {
@@ -241,6 +261,7 @@ describe("compare", { timeout: 30_000 }, () => {
       `/repositories/${vault}/compare?from=${snaps[1].id}&to=${snaps[0].id}`,
       api.transport,
     );
+    await press(api, "Compare");
     const changes = await screen.findByRole("list", { name: "Changes" });
     expect(api.of<CompareSnapshotsRequest>("CompareSnapshots")).toMatchObject([
       { fromSnapshotId: snaps[1].id, toSnapshotId: snaps[0].id, path: "" },
@@ -290,6 +311,7 @@ describe("compare", { timeout: 30_000 }, () => {
       `/repositories/${vault}/compare?from=${snaps[29].id}&to=${snaps[0].id}`,
       api.transport,
     );
+    await press(api, "Compare");
     expect(
       await screen.findByText(/stopped at the time limit, so there are no totals/),
     ).toBeInTheDocument();
@@ -301,6 +323,7 @@ describe("compare", { timeout: 30_000 }, () => {
     const api = m5Api(now);
     const snaps = api.repo(vault).snapshots;
     renderApp(`/repositories/${vault}/compare?to=${snaps[0].id}`, api.transport);
+    await press(api, "Compare");
     await screen.findByRole("list", { name: "Changes" });
     expect(api.of<CompareSnapshotsRequest>("CompareSnapshots")[0]).toMatchObject({
       fromSnapshotId: snaps[1].id,

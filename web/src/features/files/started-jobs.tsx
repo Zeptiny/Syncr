@@ -37,7 +37,18 @@ export function StartedJobs({
             description: "The job's page lists what would be copied.",
             action: view,
           });
-        else toast.success(`${s.op === "move" ? "Moved" : "Copied"} ${s.what}`, { action: view });
+        else if (s.op === "move")
+          // A move skips files already at the destination (Keep
+          // existing), and those stay in the source: "Moved" would claim
+          // more than happened.
+          toast.success(`Move of ${s.what} finished`, {
+            description:
+              s.conflict === "keep"
+                ? "Files that were already at the destination were skipped and stay in the source. The job's page has the counts."
+                : "The job's page has the counts.",
+            action: view,
+          });
+        else toast.success(`Copied ${s.what}`, { action: view });
         break;
       case JobStatus.CANCELLED:
         toast.info(`The ${name} was cancelled`, { action: view });

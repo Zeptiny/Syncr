@@ -15,7 +15,9 @@ const AUTO = "__auto__";
 
 /**
  * WorkerPicker selects a worker, online ones first. With autoLabel it also
- * offers "let Syncr choose", which is the empty value.
+ * offers "let Syncr choose", which is the empty value. unavailable names
+ * why a worker cannot do the job ("outdated"): it is shown, with the
+ * reason, but cannot be chosen.
  */
 export function WorkerPicker({
   id,
@@ -26,6 +28,7 @@ export function WorkerPicker({
   className,
   autoLabel,
   disabled,
+  unavailable,
   "aria-label": ariaLabel,
 }: {
   id?: string;
@@ -37,6 +40,8 @@ export function WorkerPicker({
   /** autoLabel adds a first choice with the empty value, e.g. "Automatic". */
   autoLabel?: string;
   disabled?: boolean;
+  /** unavailable returns why a worker cannot be chosen, or undefined. */
+  unavailable?: (w: Worker) => string | undefined;
   "aria-label"?: string;
 }) {
   return (
@@ -57,8 +62,9 @@ export function WorkerPicker({
         {autoLabel && <SelectItem value={AUTO}>{autoLabel}</SelectItem>}
         {sortWorkers(workers).map((w) => {
           const meta = workerStatusMeta(w.status);
+          const why = unavailable?.(w);
           return (
-            <SelectItem key={w.id} value={w.id}>
+            <SelectItem key={w.id} value={w.id} disabled={why !== undefined}>
               <span
                 className={cn("size-2 shrink-0 rounded-full", toneDot[meta.tone])}
                 aria-hidden
@@ -67,6 +73,7 @@ export function WorkerPicker({
               <span className="ml-1 text-xs text-muted-foreground">
                 {meta.label}
                 {w.info?.os ? `, ${w.info.os}/${w.info.arch}` : ""}
+                {why !== undefined && `, ${why}`}
               </span>
             </SelectItem>
           );

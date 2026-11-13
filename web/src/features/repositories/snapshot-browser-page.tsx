@@ -14,7 +14,6 @@ import { useState } from "react";
 import { ErrorState } from "@/components/app/error-state";
 import { FileBrowser } from "@/components/app/file-browser/file-browser";
 import { copyPathItem } from "@/components/app/file-browser/helpers";
-import { uncovered } from "@/components/app/file-browser/selection";
 import type { RowMenuItem } from "@/components/app/file-table";
 import { useBrowserSelection } from "@/components/app/file-browser/use-selection";
 import { KeyValueList } from "@/components/app/key-value-list";
@@ -37,6 +36,7 @@ import { DeletingBadge } from "./repositories-page";
 import { FileVersionsSheet } from "./file-versions-sheet";
 import { isLocalRepository, type RestoreWhat } from "./model";
 import { RestoreSheet, type RestoreSheetProps } from "./restore-sheet";
+import { runScan } from "./scan-run";
 import { olderFirst } from "./scans";
 import type { SnapshotSearch } from "./search";
 import { findSnapshot } from "./snapshot-groups";
@@ -100,7 +100,6 @@ export function SnapshotBrowserPage({
     });
   const go = (to: string) => open(snapshotId, to);
   const local = isLocalRepository(repo);
-  const selected = uncovered(selection, "snapshot").map((i) => i.path);
   const duration =
     sum?.backupStart && sum.backupEnd
       ? (tsDate(sum.backupEnd)!.getTime() - tsDate(sum.backupStart)!.getTime()) / 1000
@@ -143,6 +142,7 @@ export function SnapshotBrowserPage({
       to: "/repositories/$repositoryId/compare",
       params: { repositoryId },
       search: { from: from.id, to: to.id, path: path === "/" ? undefined : path, worker },
+      state: runScan,
     });
   };
 
@@ -302,13 +302,13 @@ export function SnapshotBrowserPage({
               ? "This repository is on a worker's disk: choose that worker above to list the snapshot."
               : undefined
           }
-          toolbarActions={
+          toolbarActions={(ctx) => (
             <>
               <Button
                 variant="outline"
                 size="sm"
                 disabled={locked || selection.size === 0}
-                onClick={() => setRestore({ mode: "items", paths: selected })}
+                onClick={() => setRestore({ mode: "items", paths: ctx.items.map((i) => i.path) })}
               >
                 <ListChecks aria-hidden />
                 Restore selected ({selection.size})
@@ -323,7 +323,7 @@ export function SnapshotBrowserPage({
                 Restore this folder…
               </Button>
             </>
-          }
+          )}
         />
       </div>
 

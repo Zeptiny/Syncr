@@ -1,5 +1,5 @@
 import { ClipboardCopy, ListChecks, X } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -19,18 +19,20 @@ import { cn } from "@/lib/utils";
 import { EntryIcon } from "../entry-icon";
 import { sizeText } from "./helpers";
 import {
-  groupByFolder,
-  knownSize,
-  pathsText,
+  groupItems,
   removePaths,
-  uncovered,
+  type KnownSize,
   type Selection,
+  type SelectionView,
 } from "./selection";
 
 /** SelectionTrayProps configures SelectionTray. */
 export interface SelectionTrayProps {
   kind: PathKind;
   selection: Selection;
+  /** view is the selection worked out once (viewOf), and size its known size. */
+  view: SelectionView;
+  size: KnownSize;
   onChange: (selection: Selection) => void;
   /** folderSize is a folder's measured size, counted in the total. */
   folderSize?: (entry: ProbeEntry) => bigint | undefined;
@@ -40,34 +42,47 @@ export interface SelectionTrayProps {
   actions?: React.ReactNode;
   /** rootLabel names the top folder in the group headings. */
   rootLabel: string;
-  /** mobile shows a bottom bar that opens the tray in a sheet. */
-  mobile?: boolean;
+  /**
+   * placement is where the tray goes: "side" a panel (beside the table, or
+   * below it); "bar" a bar stuck to the bottom of the window inside the
+   * browser, and "phone" one across the screen's bottom, both opening the
+   * tray in a sheet.
+   */
+  placement?: TrayPlacement;
   className?: string;
 }
+
+/** TrayPlacement is where SelectionTray goes; see SelectionTrayProps.placement. */
+export type TrayPlacement = "side" | "bar" | "phone";
 
 /**
  * SelectionTray shows what is selected across folders, grouped by folder,
  * with remove buttons, the known total size, "Copy paths" (one per line)
  * and Clear, plus the page's actions. Items inside a selected folder are
- * listed as "in <folder>": actions leave them to their folder. At phone
- * width it is a bottom bar that opens a sheet.
+ * listed as "in <folder>": actions leave them to their folder. Where it
+ * cannot sit beside the table it is a bottom bar that opens a sheet, so it
+ * is always in reach.
  */
 export function SelectionTray(props: SelectionTrayProps) {
-  const { selection, kind, folderSize, folderSizeAtLeast, mobile } = props;
+  const { selection, size, placement = "side" } = props;
   const [open, setOpen] = useState(false);
   if (selection.size === 0) return null;
-  const size = knownSize(selection, kind, folderSize, folderSizeAtLeast);
   const summary = `${selection.size.toLocaleString("en-US")} selected`;
 
-  if (mobile)
+  if (placement !== "side")
     return (
       <>
-        {/* Room for the bar, so it never hides the last rows. */}
-        <div aria-hidden className="h-16" />
+        {/* Room for the phone's bar, so it never hides the last rows. */}
+        {placement === "phone" && <div aria-hidden className="h-16" />}
         <div
           role="region"
           aria-label="Selection"
-          className="fixed inset-x-0 bottom-0 z-40 flex items-center gap-3 border-t bg-card px-4 py-3 shadow-[0_-4px_12px_rgb(0_0_0/0.08)]"
+          className={cn(
+            "flex items-center gap-3 bg-card px-4 py-3",
+            placement === "phone"
+              ? "fixed inset-x-0 bottom-0 z-40 border-t shadow-[0_-4px_12px_rgb(0_0_0/0.08)]"
+              : "sticky bottom-3 z-30 rounded-lg border shadow-[0_4px_16px_rgb(0_0_0/0.12)]",
+          )}
         >
           <div className="flex min-w-0 flex-1 flex-col">
             <span className="text-[13px] font-semibold">{summary}</span>
@@ -107,6 +122,7 @@ export function SelectionTray(props: SelectionTrayProps) {
 function TrayBody({
   kind,
   selection,
+  view,
   onChange,
   folderSize,
   folderSizeAtLeast,
@@ -114,7 +130,7 @@ function TrayBody({
   rootLabel,
   onEmptied,
 }: SelectionTrayProps & { onEmptied?: () => void }) {
-  const groups = groupByFolder(selection, kind);
+  const groups = useMemo(() => groupItems(view.all, kind), [view.all, kind]);
   const change = (s: Selection) => {
     onChange(s);
     if (s.size === 0) onEmptied?.();
@@ -122,8 +138,8 @@ function TrayBody({
   const folderLabel = (folder: string) =>
     folder === rootPath(kind) ? rootLabel : (pathCrumbs(folder, kind).at(-1)?.label ?? folder);
   const copy = () => {
-    const n = uncovered(selection, kind).length;
-    copyText(pathsText(selection, kind)).then(
+    const n = view.uncovered.length;
+    copyText(view.uncovered.map((i) => i.path).join("\n")).then(
       () => toast.success(n === 1 ? "Copied 1 path" : `Copied ${n} paths`),
       () => toast.error("Couldn't copy to the clipboard"),
     );

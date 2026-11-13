@@ -57,7 +57,11 @@ const measureCheckEvery = 256
 // every other name-surrogate reparse point, are counted as entries and
 // never entered, so the walk stays below path. (Go reports such entries
 // as links or irregular files, never as folders.) Folders on other
-// filesystems mounted below path are walked.
+// filesystems mounted below path are walked, except Linux pseudo
+// filesystems (proc, sysfs, cgroup, debugfs and the like, told by their
+// filesystem type): they hold kernel state, not data (/proc/kcore alone
+// reports the address space's size), so such a folder counts as a folder
+// and is not entered.
 //
 // An entry that cannot be read (a folder without permission, a file that
 // vanished) is skipped and counted in Unreadable, not fatal. Hard links
@@ -89,7 +93,7 @@ func (p *Policy) Measure(ctx context.Context, path string, maxChildren int) (Mea
 	if !info.IsDir() {
 		return Measurement{}, &PathError{Path: path, Err: fmt.Errorf("%w: not a folder", ErrInvalidPath)}
 	}
-	w := &walker{ctx: ctx, open: openDir}
+	w := &walker{ctx: ctx, open: openDir, pseudo: pseudoFS}
 	m, err := w.measure(clean, maxChildren)
 	m.Path = clean
 	return m, err
@@ -109,11 +113,14 @@ func openDir(dir string) (dirReader, error) {
 // errStop ends a walk whose context ended.
 var errStop = errors.New("walk stopped")
 
-// walker sums a folder tree. open is a seam for tests (a folder that
-// cannot be read).
+// walker sums a folder tree. open and pseudo are seams for tests (a
+// folder that cannot be read, one on a pseudo filesystem).
 type walker struct {
 	ctx  context.Context
 	open func(dir string) (dirReader, error)
+	// pseudo reports an opened folder on a pseudo filesystem, which the
+	// walk does not enter (nil: none is).
+	pseudo func(dirReader) bool
 	// seen counts entries since the last context check.
 	seen       int
 	unreadable int64
@@ -226,6 +233,9 @@ func (w *walker) readDir(dir string, top bool, fn func(fs.DirEntry) error) error
 		return nil
 	}
 	defer f.Close()
+	if w.pseudo != nil && w.pseudo(f) {
+		return nil
+	}
 	for {
 		des, rerr := f.ReadDir(listBatch)
 		for _, de := range des {

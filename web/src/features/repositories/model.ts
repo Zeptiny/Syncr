@@ -7,7 +7,13 @@ import type { RunJobRequestSchema, Worker } from "@/gen/syncr/v1/api_pb";
 import { ResticRestoreOverwrite, type ResticSnapshot } from "@/gen/syncr/v1/link_pb";
 import type { DeleteRepositoryRequestSchema, Repository } from "@/gen/syncr/v1/restic_pb";
 import { isWindowsOS } from "@/lib/restic-paths";
-import { FEATURE_RESTIC, hasFeature, isOnline, sortWorkers } from "@/lib/workers";
+import {
+  FEATURE_RESTIC,
+  FEATURE_RESTORE_SUBFOLDER_PATHS,
+  hasFeature,
+  isOnline,
+  sortWorkers,
+} from "@/lib/workers";
 
 import { emptyHooks, toHooks, type HooksState } from "../jobs/hooks";
 import { overwriteLabel } from "../jobs/model";
@@ -62,9 +68,20 @@ export function pickRestoreWorker(workers: Worker[], hostname: string): Worker |
 }
 
 /**
+ * cannotRestoreInPlace says why a worker cannot restore items to their
+ * original location (restic.restore_subfolder_paths, 2.1), or undefined
+ * when it can.
+ */
+export function cannotRestoreInPlace(w: Worker): string | undefined {
+  if (hasFeature(w, FEATURE_RESTORE_SUBFOLDER_PATHS)) return undefined;
+  return w.info ? "outdated" : "not connected yet";
+}
+
+/**
  * hostWorker is the online worker with restic whose host name is the
- * snapshot's (ignoring case): the machine a restore to the original
- * location goes back to. Without one, the user picks.
+ * snapshot's (ignoring case), and that can restore items in place: the
+ * machine a restore to the original location goes back to. Without one,
+ * the user picks.
  */
 export function hostWorker(workers: Worker[], hostname: string): Worker | undefined {
   const host = hostname.trim().toLowerCase();
@@ -73,6 +90,23 @@ export function hostWorker(workers: Worker[], hostname: string): Worker | undefi
     (w) =>
       isOnline(w) &&
       hasFeature(w, FEATURE_RESTIC) &&
+      !cannotRestoreInPlace(w) &&
+      (w.info?.hostname ?? "").toLowerCase() === host,
+  );
+}
+
+/**
+ * outdatedHost is the online worker with restic whose host name is the
+ * snapshot's but that cannot restore items in place, to say so.
+ */
+export function outdatedHost(workers: Worker[], hostname: string): Worker | undefined {
+  const host = hostname.trim().toLowerCase();
+  if (!host) return undefined;
+  return sortWorkers(workers).find(
+    (w) =>
+      isOnline(w) &&
+      hasFeature(w, FEATURE_RESTIC) &&
+      cannotRestoreInPlace(w) !== undefined &&
       (w.info?.hostname ?? "").toLowerCase() === host,
   );
 }

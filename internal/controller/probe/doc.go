@@ -62,8 +62,10 @@
 //	WRONG_PASSWORD                                    domain.ErrFailedPrecondition
 //	REPOSITORY_NOT_FOUND                              domain.ErrFailedPrecondition
 //	TIMEOUT, BUSY, cancelled, no answer, offline      domain.ErrUnavailable
-//	BUSY of a heavy probe                             domain.ErrUnavailable ("is already measuring
-//	                                                    or searching; try again in a moment")
+//	BUSY of a heavy probe, its heavy slot taken       domain.ErrUnavailable ("is already measuring
+//	  (link.ProbeBusyHeavy)                             or searching; try again in a moment")
+//	BUSY, normal slots full                           domain.ErrUnavailable ("is busy with other
+//	                                                    requests; try again in a moment")
 //	an OK answer without the operation's output       domain.ErrUnavailable
 //	a remote on a worker's disk without a worker      *domain.ValidationError on "worker_id"
 //	measuring a worker's folder without worker or

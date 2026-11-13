@@ -41,6 +41,7 @@ import { DeleteRepositoryDialog } from "./delete-repository-dialog";
 import { DeletionBanner } from "./deletion-banner";
 import { DeletingBadge, RepositoryLocation } from "./repositories-page";
 import { RepositorySettings } from "./repository-settings";
+import { runScan } from "./scan-run";
 import type { RepositoryTab } from "./search";
 import { SnapshotsTable } from "./snapshots-table";
 
@@ -307,6 +308,7 @@ export function RepositoryDetailPage({
                       to="/repositories/$repositoryId/compare"
                       params={{ repositoryId: repo.id }}
                       search={{ from: previous.id, to: snap.id }}
+                      state={runScan}
                       aria-label={`Compare ${snap.id.slice(0, 8)} with previous`}
                       title="Compare with the previous snapshot of the same host and paths"
                     >

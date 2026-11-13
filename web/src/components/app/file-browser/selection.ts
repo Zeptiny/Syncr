@@ -87,29 +87,108 @@ export function isInside(path: string, folder: string, kind: PathKind): boolean 
 }
 
 /**
- * coveringFolder returns the outermost selected folder that holds path,
- * or undefined when none does.
+ * coverKey is the form of a path that ancestry is checked on: Windows
+ * worker paths without case, with backslashes and no trailing ones (a
+ * drive root "D:\\" becomes "d:"); every other path as it is.
  */
-export function coveringFolder(sel: Selection, path: string, kind: PathKind): string | undefined {
-  let best: string | undefined;
-  for (const [p, e] of sel) {
-    if (!isDir(e) || !isInside(path, p, kind)) continue;
-    if (best === undefined || isInside(best, p, kind)) best = p;
-  }
-  return best;
+function coverKey(path: string, kind: PathKind): string {
+  if (kind === "worker" && isWindowsPath(path))
+    return path.replaceAll("/", "\\").toLowerCase().replace(/\\+$/, "");
+  return path;
 }
 
-/** items lists the selection in order, each with the folder that covers it. */
-export function items(sel: Selection, kind: PathKind): SelectedItem[] {
+/**
+ * ancestorKeys lists the keys of the folders that hold key, outermost
+ * first, as isInside decides: the top of the place, then each prefix
+ * that ends before a separator.
+ */
+function ancestorKeys(key: string, kind: PathKind): string[] {
+  const out: string[] = [];
+  const top = rootPath(kind);
+  if (key === top) return out;
+  out.push(top);
+  const windows = kind === "worker" && isWindowsPath(key);
+  if (kind === "worker" && !windows && key.startsWith("/") && key !== "/") out.push("/");
+  const sep = windows ? "\\" : "/";
+  for (let i = key.indexOf(sep, 1); i > 0; i = key.indexOf(sep, i + 1)) out.push(key.slice(0, i));
+  return out;
+}
+
+/**
+ * coverFinder returns a function that names the outermost selected folder
+ * holding a path. It costs one set lookup per ancestor of the path, so
+ * selecting thousands of folders stays fast.
+ */
+function coverFinder(sel: Selection, kind: PathKind): (path: string) => string | undefined {
+  // The selected folders by key; the first of two equal keys wins.
+  const folders = new Map<string, string>();
+  for (const [p, e] of sel) {
+    if (!isDir(e)) continue;
+    const k = coverKey(p, kind);
+    if (!folders.has(k)) folders.set(k, p);
+  }
+  return (path) => {
+    if (folders.size === 0) return undefined;
+    for (const a of ancestorKeys(coverKey(path, kind), kind)) {
+      const f = folders.get(a);
+      if (f !== undefined) return f;
+    }
+    return undefined;
+  };
+}
+
+/** coveredItems lists the selection in order, each with the folder that covers it. */
+function coveredItems(sel: Selection, kind: PathKind): SelectedItem[] {
+  const cover = coverFinder(sel, kind);
   return [...sel].map(([path, entry]) => {
-    const coveredBy = coveringFolder(sel, path, kind);
+    const coveredBy = cover(path);
     return coveredBy === undefined ? { path, entry } : { path, entry, coveredBy };
   });
 }
 
+/**
+ * coveringFolder returns the outermost selected folder that holds path,
+ * or undefined when none does.
+ */
+export function coveringFolder(sel: Selection, path: string, kind: PathKind): string | undefined {
+  return coverFinder(sel, kind)(path);
+}
+
+/** SelectionView is a selection worked out once: what every view of it needs. */
+export interface SelectionView {
+  /** all lists the selection in order, each item with the folder that covers it. */
+  all: SelectedItem[];
+  /** uncovered are the items actions act on: those no selected folder holds. */
+  uncovered: SelectedItem[];
+  /** parent is the deepest folder holding every uncovered item (see commonParent). */
+  parent: string | undefined;
+}
+
+/**
+ * viewOf works a selection out once. Callers keep it (useMemo) and pass
+ * it on, instead of asking items or uncovered again on every render.
+ */
+export function viewOf(sel: Selection, kind: PathKind): SelectionView {
+  const all = coveredItems(sel, kind);
+  const free = all.filter((i) => i.coveredBy === undefined);
+  return {
+    all,
+    uncovered: free,
+    parent: commonParent(
+      free.map((i) => i.path),
+      kind,
+    ),
+  };
+}
+
+/** items lists the selection in order, each with the folder that covers it. */
+export function items(sel: Selection, kind: PathKind): SelectedItem[] {
+  return coveredItems(sel, kind);
+}
+
 /** uncovered lists the items actions act on: those no selected folder holds. */
 export function uncovered(sel: Selection, kind: PathKind): SelectedItem[] {
-  return items(sel, kind).filter((i) => i.coveredBy === undefined);
+  return coveredItems(sel, kind).filter((i) => i.coveredBy === undefined);
 }
 
 /**
@@ -175,8 +254,17 @@ export function knownSize(
   folderSize?: (entry: ProbeEntry) => bigint | undefined,
   folderAtLeast?: (entry: ProbeEntry) => boolean,
 ): KnownSize {
+  return sizeOfItems(uncovered(sel, kind), folderSize, folderAtLeast);
+}
+
+/** sizeOfItems is knownSize over uncovered items already worked out (viewOf). */
+export function sizeOfItems(
+  free: readonly SelectedItem[],
+  folderSize?: (entry: ProbeEntry) => bigint | undefined,
+  folderAtLeast?: (entry: ProbeEntry) => boolean,
+): KnownSize {
   const out: KnownSize = { bytes: 0n, atLeast: false, files: 0, folders: 0 };
-  for (const { entry } of uncovered(sel, kind)) {
+  for (const { entry } of free) {
     if (isDir(entry)) {
       out.folders++;
       const s = folderSize?.(entry);
@@ -198,8 +286,13 @@ export interface SelectionGroup {
 
 /** groupByFolder groups the selection by parent folder, in selection order. */
 export function groupByFolder(sel: Selection, kind: PathKind): SelectionGroup[] {
+  return groupItems(items(sel, kind), kind);
+}
+
+/** groupItems is groupByFolder over items already worked out (viewOf). */
+export function groupItems(all: readonly SelectedItem[], kind: PathKind): SelectionGroup[] {
   const groups = new Map<string, SelectionGroup>();
-  for (const item of items(sel, kind)) {
+  for (const item of all) {
     const folder = parentPath(item.path, kind);
     let g = groups.get(folder);
     if (!g) {

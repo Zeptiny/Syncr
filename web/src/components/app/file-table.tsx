@@ -107,7 +107,9 @@ const count = (n: number) => n.toLocaleString("en-US");
  * in the browser. Rows take a roving focus: arrows, Home and End move,
  * Enter opens a folder, Space ticks, Shift+Space and Shift+click tick a
  * range, Backspace or Alt+Up goes up, Ctrl+A ticks every row matching the
- * filter and Escape clears the filter, then the selection. The file
+ * filter and Escape clears the filter. Escape never clears the selection:
+ * it may span folders, and a stray press (closing a menu) would lose it;
+ * the selection tray's Clear does that. The file
  * browser, its picker dialog and the snapshot browser share it.
  */
 export function FileTable({
@@ -281,10 +283,6 @@ export function FileTable({
           ev.stopPropagation();
           setFilter("");
           setShown(pageSize);
-        } else if (selection && selection.selected.length > 0) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          change([]);
         }
         return;
     }

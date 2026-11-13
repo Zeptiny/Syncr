@@ -13,6 +13,7 @@ import * as m5 from "@/mock/m5";
 import * as fx from "@/test/fixtures";
 
 import {
+  moveText,
   planTransfer,
   transferDefinition,
   transferSummary,
@@ -138,6 +139,37 @@ describe("planTransfer", () => {
     expect(plan(s, to(nas, "/srv/backup")).errors).toEqual({});
   });
 
+  it("sees a local remote and its worker's folders as one disk", () => {
+    const withRemotes = (s: TransferSource, d: Endpoint) =>
+      planTransfer(
+        s,
+        { destination: d, workerId: "", conflict: "keep" },
+        workers,
+        undefined,
+        remotes,
+      );
+    const s = src([item("/srv/photos/2026", true), item("/srv/photos/README.txt")], "/srv/photos");
+    // Photos is /srv/photos on nas-01's disk (listed by nas-01).
+    expect(withRemotes(s, to(photosOnNas, "2026/01")).errors.destination).toMatch(/into itself/);
+    expect(withRemotes(s, to(photosOnNas, "")).errors.destination).toMatch(
+      /already in this folder/,
+    );
+    expect(withRemotes(s, to(photosOnNas, "2025")).errors).toEqual({});
+    // Media disk has no worker of its own: the job's (nas-01, the source's) disk.
+    const media = src([item("/mnt/media/films", true)], "/mnt/media");
+    expect(withRemotes(media, to(mediaDisk, "films")).errors.destination).toMatch(/into itself/);
+    // From the remote into the worker's folders, the other way round.
+    const r = src([item("2026", true)], "", photosOnNas);
+    expect(withRemotes(r, to(nas, "/srv/photos/2026/x")).errors.destination).toMatch(/into itself/);
+    expect(withRemotes(r, to(nas, "/srv/photos")).errors.destination).toMatch(/already/);
+    expect(withRemotes(r, to(nas, "/srv/other")).errors).toEqual({});
+    // On another worker's disk it is another place (and refused as two disks).
+    expect(
+      withRemotes(s, to({ ...photosOnNas, workerId: fx.ids.backupHost }, "2026")).errors
+        .destination,
+    ).toBeUndefined();
+  });
+
   it("asks for a destination, an absolute worker path, and one worker", () => {
     const s = src([item("/srv/docs/notes.md")], "/srv/docs");
     expect(plan(s, undefined).errors.destination).toBe("Choose the folder the items go into.");
@@ -215,6 +247,20 @@ describe("transferDefinition", () => {
       ),
     ).toBe(
       "Moves 3 items from /srv/docs on nas-01 into B2 offsite (its root) and replaces older files.",
+    );
+  });
+});
+
+describe("moveText", () => {
+  it("says what each conflict choice leaves in the source", () => {
+    expect(moveText("keep", "2 items", "/srv")).toBe(
+      "2 items will be deleted from /srv once copied. Files already at the destination are skipped and stay in /srv.",
+    );
+    expect(moveText("differ", "2 items", "/srv")).toBe(
+      "2 items will be deleted from /srv once copied.",
+    );
+    expect(moveText("older", "2 items", "/srv")).toMatch(
+      /newer copy, it is kept and the older file in \/srv is deleted too\.$/,
     );
   });
 });

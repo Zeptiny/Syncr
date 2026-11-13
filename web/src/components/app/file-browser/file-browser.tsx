@@ -6,6 +6,7 @@ import type { ProbeEntry } from "@/gen/syncr/v1/link_pb";
 import type { FolderMeasure } from "@/hooks/use-folder-measure";
 import { usePathListing, type PathSource } from "@/hooks/use-path-listing";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useMinWidth } from "@/hooks/use-min-width";
 import { useNow } from "@/hooks/use-now";
 import { formatRelative } from "@/lib/format";
 import { normalizePath, parentPath, rootPath } from "@/lib/paths";
@@ -17,9 +18,8 @@ import { BrowserToolbar } from "./browser-toolbar";
 import { isMissingFolder, missingFolderHint } from "./helpers";
 import { MeasureControl } from "./measure-control";
 import {
-  commonParent,
-  knownSize,
-  uncovered,
+  sizeOfItems,
+  viewOf,
   withPaths,
   type KnownSize,
   type SelectedItem,
@@ -87,8 +87,11 @@ export interface FileBrowserProps {
    * worker is chosen (no listing is asked for meanwhile).
    */
   waitingForWorker?: string;
-  /** toolbarActions are the page's buttons for the open folder. */
-  toolbarActions?: React.ReactNode;
+  /**
+   * toolbarActions are the page's buttons for the open folder; as a
+   * function they get the selection (worked out once per change).
+   */
+  toolbarActions?: React.ReactNode | ((ctx: SelectionContext) => React.ReactNode);
   /** toolbarExtra sits on the toolbar's right: usage, "Calculate sizes". */
   toolbarExtra?: React.ReactNode;
   className?: string;
@@ -178,34 +181,41 @@ export function FileBrowser({
         }
       : undefined);
 
+  // The selection is worked out once per change: with thousands of
+  // folders selected, every render asking again would freeze the page.
+  const view = useMemo(() => viewOf(selection, kind), [selection, kind]);
   const ctx: SelectionContext = {
     selection,
-    items: uncovered(selection, kind),
-    parent: commonParent(
-      uncovered(selection, kind).map((i) => i.path),
-      kind,
-    ),
-    size: knownSize(selection, kind, sizeOf, sizeAtLeast),
+    items: view.uncovered,
+    parent: view.parent,
+    size: sizeOfItems(view.uncovered, sizeOf, sizeAtLeast),
     clear: () => onSelectionChange(new Map()),
   };
 
+  // The tray sits beside the table from 56rem of the browser's width;
+  // narrower, it is a bar stuck to the window's bottom, always in reach.
+  const boxRef = useRef<HTMLDivElement>(null);
+  const wide = useMinWidth(boxRef, 56);
+  const side = wide && !mobile;
   const tray = (
     <SelectionTray
       kind={kind}
       selection={selection}
+      view={view}
+      size={ctx.size}
       onChange={onSelectionChange}
       folderSize={sizeOf}
       folderSizeAtLeast={sizeAtLeast}
       rootLabel={rootLabel}
       actions={selectionActions?.(ctx)}
-      mobile={mobile}
-      className="@4xl:sticky @4xl:top-4 @4xl:max-h-[calc(100dvh-2rem)]"
+      placement={mobile ? "phone" : wide ? "side" : "bar"}
+      className={side ? "sticky top-4 max-h-[calc(100dvh-2rem)]" : undefined}
     />
   );
 
   return (
-    <div className={cn("@container", className)}>
-      <div className="grid items-start gap-4 @4xl:grid-cols-[minmax(0,1fr)_17rem]">
+    <div ref={boxRef} className={className}>
+      <div className={cn("grid items-start gap-4", side && "grid-cols-[minmax(0,1fr)_17rem]")}>
         <section
           aria-label="Files"
           className="min-w-0 rounded-lg border bg-card text-card-foreground"
@@ -239,7 +249,7 @@ export function FileBrowser({
                 />
               ) : undefined
             }
-            actions={toolbarActions}
+            actions={typeof toolbarActions === "function" ? toolbarActions(ctx) : toolbarActions}
             extra={
               measure && !waiting ? (
                 <>
@@ -287,7 +297,12 @@ export function FileBrowser({
         {selection.size > 0 ? (
           tray
         ) : (
-          <aside className="hidden rounded-lg border border-dashed px-4 py-5 text-[13px] text-muted-foreground @4xl:block">
+          <aside
+            className={cn(
+              "rounded-lg border border-dashed px-4 py-5 text-[13px] text-muted-foreground",
+              !side && "hidden",
+            )}
+          >
             Tick files and folders to select them. The selection stays while you move between
             folders.
           </aside>

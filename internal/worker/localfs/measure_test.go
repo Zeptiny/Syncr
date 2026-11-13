@@ -234,3 +234,27 @@ func TestSortChildren(t *testing.T) {
 
 // Compile-time check: *os.File is a dirReader.
 var _ dirReader = (*os.File)(nil)
+
+// TestMeasureSkipsPseudoFilesystems: a folder on a pseudo filesystem (the
+// walker's pseudo seam stands in for proc here) counts as a folder and is
+// not entered.
+func TestMeasureSkipsPseudoFilesystems(t *testing.T) {
+	t.Parallel()
+	_, root := measureFixture(t)
+	photos := filepath.Join(root, "photos")
+	w := &walker{ctx: t.Context(), open: openDir, pseudo: func(d dirReader) bool {
+		f, ok := d.(*os.File)
+		return ok && f.Name() == photos
+	}}
+	m, err := w.measure(root, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fixture without photos' 4000 bytes, 2 files and 1 folder.
+	if m.Bytes != 11 || m.Files != 4 || m.Dirs != 4 || !m.Complete || m.Unreadable != 0 {
+		t.Errorf("measurement = %+v", m)
+	}
+	if i := slices.IndexFunc(m.Children, func(c ChildMeasurement) bool { return c.Name == "photos" }); i < 0 || m.Children[i] != (ChildMeasurement{Name: "photos"}) {
+		t.Errorf("children = %+v, want photos empty", m.Children)
+	}
+}

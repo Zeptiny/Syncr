@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { commonParent } from "@/components/app/file-browser/selection";
+import { exactPathPattern } from "@/features/repositories/scans";
 
 import golden from "./rclone-filters.golden.json";
 import {
@@ -36,6 +37,11 @@ describe("rclone filters golden cases (checked with real rclone)", () => {
       }
     });
   }
+
+  // The system test (internal/e2e/system) searches restic with these.
+  it.each(golden.resticFind)("writes the exact find pattern of $path", ({ path, pattern }) => {
+    expect(exactPathPattern(path)).toBe(pattern);
+  });
 
   it("holds no absolute paths", () => {
     const text = JSON.stringify(golden);

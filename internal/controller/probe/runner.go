@@ -406,8 +406,10 @@ func (e *workerError) Error() string   { return e.mapped.Error() }
 func (e *workerError) Unwrap() []error { return []error{e.mapped, e.probe} }
 
 // failure maps a result of probe operation op that is not OK (M5 design
-// §6.7). A heavy operation (link.HeavyProbeOps) refused as BUSY says why:
-// a worker runs one at a time.
+// §6.7). A heavy operation (link.HeavyProbeOps) refused as BUSY because
+// the worker's heavy slot is taken (link.IsHeavyBusy) says why: a worker
+// runs one at a time. Refused because its normal slots are full, it says
+// the worker is busy, like any other probe.
 func failure(workerName, op string, res *syncrv1.ProbeResult, secrets []string) *workerError {
 	code := link.ErrorCodeName(res.GetError().GetCode())
 	msg := clip(redact.Scrub(res.GetError().GetMessage(), secrets...))
@@ -427,7 +429,7 @@ func failure(workerName, op string, res *syncrv1.ProbeResult, secrets []string) 
 		mapped = fmt.Errorf("%w: no repository at the stored location", domain.ErrFailedPrecondition)
 	case res.GetError().GetCode() == syncrv1.JobErrorCode_JOB_ERROR_CODE_TIMEOUT:
 		mapped = fmt.Errorf("%w: worker %q did not finish in time", domain.ErrUnavailable, workerName)
-	case res.GetError().GetCode() == syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY && link.IsHeavyProbeOp(op):
+	case res.GetError().GetCode() == syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY && link.IsHeavyProbeOp(op) && link.IsHeavyBusy(res.GetError().GetMessage()):
 		mapped = fmt.Errorf("%w: worker %q is already measuring or searching; try again in a moment", domain.ErrUnavailable, workerName)
 	case res.GetError().GetCode() == syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY:
 		mapped = fmt.Errorf("%w: worker %q is busy with other requests; try again in a moment", domain.ErrUnavailable, workerName)

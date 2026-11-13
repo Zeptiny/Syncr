@@ -127,10 +127,12 @@ func TestSystemBrowserScans(t *testing.T) {
 
 	// 2. Search: both versions of the draft, newest first, found by its
 	// name and by the anchored, escaped exact path ("Show versions").
-	var exact string
-	for seg := range strings.SplitSeq(strings.Trim(tree, "/")+"/"+draft, "/") {
-		exact += "/" + escapeGlob(seg)
+	// The pattern is the web's (exactPathPattern), from the golden file:
+	// the draft's, below a tree whose names need no escaping.
+	if strings.ContainsAny(tree, `*?[\`) {
+		t.Fatalf("the temporary folder %q needs escaping in a pattern", tree)
 	}
+	exact := strings.TrimSuffix(tree, "/") + loadFilterGolden(t).findPattern(t, "/"+draft)
 	for _, pattern := range []string{"*DRAFT*", exact} {
 		found, err := e.restic.FindInRepository(ctx, connect.NewRequest(&syncrv1.FindInRepositoryRequest{
 			RepositoryId: repo.GetId(), Patterns: []string{pattern}, IgnoreCase: pattern != exact,
@@ -216,26 +218,9 @@ func TestSystemBrowserScans(t *testing.T) {
 	e.noPasswordAnywhere()
 }
 
-// escapeGlob escapes a name for restic's patterns with character classes,
-// as the web's escapeGlob (web/src/features/repositories/scans.ts) does.
-func escapeGlob(name string) string {
-	var b strings.Builder
-	for _, r := range name {
-		switch r {
-		case '*', '?', '[':
-			b.WriteString("[" + string(r) + "]")
-		case '\\':
-			b.WriteString(`[\\]`)
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
 // filterGolden is web/src/lib/rclone-filters.golden.json: selections as the
 // web turns them into a transfer's source folder and filter lines, checked
-// with rclone lsf.
+// with rclone lsf, and the web's exact-path patterns of restic find.
 type filterGolden struct {
 	Rclone string   `json:"rclone"`
 	Tree   []string `json:"tree"`
@@ -245,6 +230,22 @@ type filterGolden struct {
 		Filters []string `json:"filters"`
 		Matched []string `json:"matched"`
 	} `json:"cases"`
+	ResticFind []struct {
+		Path    string `json:"path"`
+		Pattern string `json:"pattern"`
+	} `json:"resticFind"`
+}
+
+// findPattern is the web's exact find pattern of a snapshot tree path.
+func (g filterGolden) findPattern(t *testing.T, path string) string {
+	t.Helper()
+	for _, f := range g.ResticFind {
+		if f.Path == path {
+			return f.Pattern
+		}
+	}
+	t.Fatalf("the golden file has no find pattern of %q", path)
+	return ""
 }
 
 func loadFilterGolden(t *testing.T) filterGolden {

@@ -33,6 +33,7 @@ import { DestinationPicker } from "./destination-picker";
 import { makeJobDraft } from "./job-drafts";
 import {
   conflictOptions,
+  moveText,
   endpointText,
   itemsText,
   placeKind,
@@ -123,7 +124,7 @@ function Body({
   const form = { destination, workerId, conflict };
 
   const plan = (): TransferPlan | undefined => {
-    const r = planTransfer(source, form, workers, listedBy);
+    const r = planTransfer(source, form, workers, listedBy, remotes);
     setErrors(r.errors);
     return r.plan;
   };
@@ -149,6 +150,7 @@ function Body({
         onStarted({
           jobId: job.id,
           op,
+          conflict,
           dryRun,
           what,
           refresh: op === "move" ? [p.destination.place, p.source.place] : [p.destination.place],
@@ -335,7 +337,7 @@ function Body({
         open={!!confirming}
         onOpenChange={(o) => !o && setConfirming(undefined)}
         title={`Move ${itemsText(n)}?`}
-        description={`${itemsText(n)} will be deleted from ${fromText} once copied.`}
+        description={moveText(conflict, itemsText(n), fromText)}
         confirmLabel="Move"
         destructive
         onConfirm={() => (confirming ? start(confirming, false) : undefined)}

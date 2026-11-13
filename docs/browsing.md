@@ -66,11 +66,13 @@ worker.
 | Shift+Space, Shift+click | select a range, from the last row you ticked |
 | Ctrl+A (Cmd+A on a Mac) | select every row that matches the filter |
 | Backspace, Alt+Up | go up one folder |
-| Escape | clear the filter, then the selection |
+| Escape | clear the filter |
 
 Ranges follow the order you see, sorted and filtered. **Select all** (the
 box in the header, or Ctrl+A) selects every row that matches the filter in
-the open folder, not only the 200 rows on the page, and says so.
+the open folder, not only the 200 rows on the page, and says so. Escape
+never clears the selection, which may span folders: the tray's **Clear**
+does.
 
 ### The tray
 
@@ -115,7 +117,10 @@ selected matches.
 **The destination** is a folder on one of your remotes or a folder of a
 worker, typed or picked with **Browse**. Choosing the folder the items are
 already in, or a folder inside a selected folder ("A folder can't be copied
-into itself"), is refused.
+into itself"), is refused. A remote of the **Local directory** type is a
+folder on a worker's disk: its folders and the worker's own are the same
+place for this check, and a copy or move into one refreshes the other's
+listing.
 
 **Which worker runs it:**
 
@@ -140,7 +145,18 @@ page lists what would be copied, moved or skipped.
 **Move** asks first ("2 items will be deleted from /srv/docs on nas-01
 once copied"). A move deletes each file from the source once it is safely
 at the destination, then removes the folders it moved and any folder it
-emptied. The source folder itself, and folders you did not select that
+emptied. What the conflict choice skips depends on the choice, like a file
+manager's "skip":
+
+- **Keep existing** (the default): a file that is already at the
+  destination is skipped and **stays in the source**, so the folders that
+  hold it stay too. The confirmation and the message at the end say so;
+  the job's page counts what was moved.
+- **Replace older files**: where the destination already has a newer
+  copy, that copy is kept and the older file in the source is deleted.
+- **Replace files that differ**: every selected file ends up at the
+  destination and leaves the source.
+ The source folder itself, and folders you did not select that
 still hold something or were empty before, stay. Folders, including empty
 selected ones, are created at the destination where the backend has
 folders (a bucket has none: an empty folder does not arrive there).
@@ -190,6 +206,12 @@ remote (`rclone lsjson -R` through a worker) and in a snapshot
 - **Links are never followed** (symbolic links, Windows junctions): they
   count as entries of no size, so a link to a big disk does not make a
   folder look big, and a loop cannot trap the walk.
+- **Linux pseudo filesystems are skipped** (`/proc`, `/sys`, cgroup,
+  debugfs and the like, recognized by their filesystem type wherever they
+  are mounted): they hold kernel state, not files (`/proc/kcore` alone
+  reports the size of the address space). Such a folder counts as a
+  folder of no size. Other filesystems mounted below the folder are
+  measured.
 - **Unreadable entries** (a folder the worker may not open, a file deleted
   while it walks) are counted and skipped: the result says "1 entry could
   not be read", and the totals are then lower bounds.
@@ -204,7 +226,10 @@ remote (`rclone lsjson -R` through a worker) and in a snapshot
 - **One scan per worker at a time.** Measuring, searching a repository and
   comparing snapshots are heavy, so each worker runs one of them at a time
   (next to its normal listings). A second one is refused at once: "This
-  worker is already measuring or searching. Try again in a moment."
+  worker is already measuring or searching. Try again in a moment." When
+  the worker is answering too many other requests at once, any request,
+  a scan included, is refused with "This worker is busy with other
+  requests."
 - Like listings, scans count against your probe rate limit (20 at once,
   then two a second).
 - A bucket is listed page by page (S3 returns 1,000 objects per request,
@@ -220,10 +245,17 @@ remote (`rclone lsjson -R` through a worker) and in a snapshot
 
 - There is no new folder, rename or delete, and no download (planned in
   [issue #36](https://github.com/Zeptiny/Syncr/issues/36)). A move is the
-  only action that removes files, and only after copying them.
+  only action that removes files, and only once the destination has them.
+  With **Keep existing**, files already at the destination stay in the
+  source.
 - A copy between two workers' folders needs a remote in between.
 - Scans have no progress and cannot run longer than `probe.scan_timeout`;
   what does not fit is reported as "at least".
 - Copy and move send at most 999 selected items in one job.
 - Names that are not valid on Windows (`*`, `?`, a trailing space) cannot
   be copied to a Windows worker's disk, whatever was selected.
+- A snapshot that is missing and a folder that is missing are told apart
+  by the text of restic's error (the worker reports both as "not found"),
+  so a folder whose name contains "no snapshot" may be reported as a
+  missing snapshot. A separate error code needs a change of the worker
+  protocol.

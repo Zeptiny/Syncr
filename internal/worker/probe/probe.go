@@ -311,7 +311,7 @@ func (e *Executor) acquire(heavy bool) (*slot, error) {
 	select {
 	case e.slot <- struct{}{}:
 	default:
-		return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, "the worker is running too many probes; try again")
+		return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, "%s", link.ProbeBusySlots)
 	}
 	s := &slot{ch: e.slot}
 	if !heavy {
@@ -323,8 +323,7 @@ func (e *Executor) acquire(heavy bool) (*slot, error) {
 		return s, nil
 	default:
 		s.release()
-		return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY,
-			"the worker is already measuring, searching or comparing; try again in a moment")
+		return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, "%s", link.ProbeBusyHeavy)
 	}
 }
 

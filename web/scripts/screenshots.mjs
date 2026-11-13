@@ -977,7 +977,11 @@ const browserShots = [
     "10-search-versions",
     async (p) => {
       const { repos } = await seedIds(p);
-      await open(p, `/repositories/${repos["Photos vault"]}/search?q=albums.json`, 900);
+      // An address alone fills the form: the search runs on its button.
+      await open(p, `/repositories/${repos["Photos vault"]}/search?q=albums.json`);
+      await p.getByRole("button", { name: "Search", exact: true }).click();
+      await p.getByRole("region", { name: "Search results" }).waitFor();
+      await settle(p, 900);
       await p
         .getByRole("button", { name: /albums\.json/ })
         .first()

@@ -142,8 +142,11 @@ func TestMeasureWorkerFolder(t *testing.T) {
 		field  string
 		msg    string
 	}{
-		{"busy", failed(syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, "the worker is already measuring, searching or comparing"),
+		{"busy", failed(syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, link.ProbeBusyHeavy),
 			domain.ErrUnavailable, "", `worker "nas" is already measuring or searching; try again in a moment`},
+		// Refused because the normal slots are full, not the heavy one.
+		{"slots full", failed(syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, link.ProbeBusySlots),
+			domain.ErrUnavailable, "", `worker "nas" is busy with other requests; try again in a moment`},
 		{"timeout", failed(syncrv1.JobErrorCode_JOB_ERROR_CODE_TIMEOUT, ""), domain.ErrUnavailable, "", "did not finish in time"},
 		{"outside the roots", failed(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED, "/etc"), domain.ErrInvalidArgument, "path", "outside"},
 		{"missing", failed(syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "no such folder"), domain.ErrInvalidArgument, "path", "does not exist"},
@@ -229,7 +232,7 @@ func TestMeasureRemoteFolder(t *testing.T) {
 	if resp, err = e.svc.MeasureRemoteFolder(ctx, alice, remote, "photos", domain.WorkerID{}); err != nil || resp.GetMeasurement().GetComplete() {
 		t.Errorf("partial = %v, %v", resp, err)
 	}
-	e.transport.answer = failed(syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, "busy")
+	e.transport.answer = failed(syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, link.ProbeBusyHeavy)
 	if _, err := e.svc.MeasureRemoteFolder(ctx, alice, remote, "photos", domain.WorkerID{}); !errors.Is(err, domain.ErrUnavailable) ||
 		!strings.Contains(err.Error(), "already measuring or searching") {
 		t.Errorf("busy: %v", err)
@@ -397,9 +400,13 @@ func TestRunnerScans(t *testing.T) {
 
 	// Failures: busy, a missing snapshot (with the worker's code), no
 	// output, and an old worker chosen explicitly.
-	e.transport.answer = failed(syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, "already scanning")
+	e.transport.answer = failed(syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, link.ProbeBusyHeavy)
 	if _, err := e.runner.Find(ctx, alice.UserID, target, q); !errors.Is(err, domain.ErrUnavailable) || !strings.Contains(err.Error(), "already measuring or searching") {
 		t.Errorf("busy: %v", err)
+	}
+	e.transport.answer = failed(syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, link.ProbeBusySlots)
+	if _, err := e.runner.Find(ctx, alice.UserID, target, q); !errors.Is(err, domain.ErrUnavailable) || !strings.Contains(err.Error(), "is busy with other requests") {
+		t.Errorf("slots full: %v", err)
 	}
 	e.transport.answer = failed(syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, `restic diff: failed (exit code 1): no matching ID found for prefix "5e6f7a8b"`)
 	var pe *restic.ProbeError

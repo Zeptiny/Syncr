@@ -104,13 +104,31 @@ to tell an unknown snapshot from one without matches.
 Nothing is stored. Results live in the browser's query cache until the
 user refreshes or a job started from the page ends.
 
+The scans accept no GET, so a link cannot start one through the API. The
+web's search and compare pages keep the scan in their address, to share
+or bookmark, but opening the address alone (a link, a reload) shows the
+filled form and its button. The app's own ways in (the page's form, the
+snapshot list, the snapshot browser's **Compare with…**) ask for the run
+in the router's history state, which a link cannot carry, tagged with the
+page load so that a reload does not count.
+
+The worker's measuring walk (`measure_local`) does not enter Linux pseudo
+filesystems (proc, sysfs, cgroup, debugfs and the like), recognized by
+their filesystem type (`fstatfs`), not by path: they hold kernel state,
+and `/proc/kcore` alone reports the address space's size. Other mounted
+filesystems are walked.
+
 ### One heavy probe per worker
 
 A worker runs at most one of the five scans at a time (`MaxHeavy`,
 default 1), in addition to one of its normal probe slots. A second one is
 refused at once with BUSY, which the API maps to UNAVAILABLE and the UI
 words as "This worker is already measuring or searching. Try again in a
-moment." Listings stay fast while a scan runs, and a few users clicking
+moment." A scan refused because the worker's normal probe slots are all
+taken is BUSY too; the protocol has one code for both, so the worker
+words them differently (`link.ProbeBusyHeavy`, `link.ProbeBusySlots`)
+and the controller and the UI say "busy with other requests" for the
+second. Listings stay fast while a scan runs, and a few users clicking
 **Calculate sizes** cannot keep a NAS's disks busy with parallel walks.
 
 ### Copy and move are transfer jobs with filters
@@ -187,11 +205,25 @@ their own, and for forgetting single snapshots and editing tags.
 - Copies and moves are visible, cancellable jobs with their filters on the
   job page, and run under the same rules as any transfer, including
   concurrency, notifications and time limits. A filtered move removes
-  only what it moved, and folders that became empty.
+  only what it moved, and folders that became empty. Like a file
+  manager's "skip", a move with Keep existing leaves the files that were
+  already at the destination in the source; the confirmation, the end
+  message and the docs say so. (Under Replace older files rclone deletes
+  an older source file when the destination has a newer copy.)
 - The filters depend on rclone's syntax; the golden file and the system
   test catch a change on an rclone upgrade.
 - Comparisons do not show changes of metadata alone.
-- A restore of selected items to their original place needs a 2.1 worker.
+- A restore of selected items to their original place needs a 2.1 worker;
+  the restore sheet proposes only workers that report the feature and
+  shows the others as outdated.
+- A missing snapshot and a missing folder both come back from the worker
+  as NOT_FOUND, and the controller tells them apart by restic's message
+  ("no snapshot", "no matching ID"), so a folder named like that is
+  reported on the snapshot. A structured code needs a protocol change;
+  this is a known limitation.
+- A stopped search keeps the matches of the snapshot restic was printing
+  only when one snapshot can be it: restic names a snapshot after its
+  matches and orders snapshots of equal times its own way.
 - Windows paths (`C:` in snapshot trees, `\` as a separator for restic's
   patterns, junctions in walks) are covered by unit tests and recorded
   output here, and only proven by Windows CI.

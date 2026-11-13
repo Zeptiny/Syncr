@@ -1,11 +1,13 @@
 import { useCallback, useState } from "react";
 
-import type { TransferOp, Place } from "./transfer";
+import type { Conflict, TransferOp, Place } from "./transfer";
 
 /** StartedJob is a job a file browser page started and follows until it ends. */
 export interface StartedJob {
   jobId: string;
   op: TransferOp;
+  /** conflict is what the job did with files already at the destination. */
+  conflict: Conflict;
   dryRun: boolean;
   /** what says what moves where, for the end toast: "3 items into B2 offsite: inbox". */
   what: string;

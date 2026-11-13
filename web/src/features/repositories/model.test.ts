@@ -15,6 +15,9 @@ import {
   generatePassword,
   locationText,
   pickRestoreWorker,
+  cannotRestoreInPlace,
+  hostWorker,
+  outdatedHost,
   restoreSummary,
   shortId,
   toDeleteRequest,
@@ -67,6 +70,21 @@ describe("repository model", () => {
     expect(pickRestoreWorker(workers, "office-pc")?.name).toBe("office-pc");
     expect(pickRestoreWorker([], "nas-01")).toBeUndefined();
     expect(pickRestoreWorker(fx.workers(now), "nas-01")).toBeUndefined();
+  });
+
+  it("goes back in place only on a host worker that can restore items there", () => {
+    const workers = m5.workers(now);
+    const nas = workers.find((w) => w.id === fx.ids.nas)!;
+    // nas-01 without restic.restore_subfolder_paths (before 2.1): outdated.
+    expect(cannotRestoreInPlace(nas)).toBe("outdated");
+    expect(hostWorker(workers, "NAS-01")).toBeUndefined();
+    expect(outdatedHost(workers, "NAS-01")?.name).toBe("nas-01");
+    nas.info!.features.push("restic.restore_subfolder_paths");
+    expect(cannotRestoreInPlace(nas)).toBeUndefined();
+    expect(hostWorker(workers, "NAS-01")?.name).toBe("nas-01");
+    expect(outdatedHost(workers, "NAS-01")).toBeUndefined();
+    // A worker that never connected has reported nothing yet.
+    expect(cannotRestoreInPlace({ ...nas, info: undefined })).toBe("not connected yet");
   });
 
   it("summarizes a restore in one line", () => {

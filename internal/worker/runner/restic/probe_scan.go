@@ -188,7 +188,9 @@ func (n *nodeTally) line(l proc.Line) {
 // snapshots_searched counts every snapshot when restic finished; when it
 // was stopped, those up to the last one it reported (a lower bound).
 // Matches of a snapshot restic had not finished are kept only when it
-// can only be the last snapshot left (always for a single snapshot).
+// can only be one snapshot (always for a single snapshot): restic names a
+// group's snapshot after its matches, so the candidates are those it has
+// not reported that are no newer than the oldest it has (see left).
 //
 // Patterns are restic's: a pattern without "/" is matched against the
 // names in a path, one with "/" against the path's trailing folders (a
@@ -230,7 +232,7 @@ func (p *Prober) Find(ctx context.Context, probeID string, remotes []*syncrv1.Re
 	}
 	if len(requested) > 0 {
 		for _, sn := range order {
-			args = append(args, "--snapshot="+sn)
+			args = append(args, "--snapshot="+sn.id)
 		}
 	}
 	args = append(append(args, "--"), op.GetPatterns()...)
@@ -269,10 +271,16 @@ func (p *Prober) Find(ctx context.Context, probeID string, remotes []*syncrv1.Re
 	}, nil
 }
 
+// findSnap is a snapshot a search covers: its full ID and its time.
+type findSnap struct {
+	id   string
+	time time.Time
+}
+
 // findOrder lists the snapshots a search covers (the requested ones, or
-// all), newest first, as full IDs. A requested ID that matches none fails
-// with NOT_FOUND.
-func (p *Prober) findOrder(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, repo *syncrv1.ResticRepository, requested []string) ([]string, error) {
+// all), newest first (between equal times by ID), with full IDs. A
+// requested ID that matches none fails with NOT_FOUND.
+func (p *Prober) findOrder(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, repo *syncrv1.ResticRepository, requested []string) ([]findSnap, error) {
 	args := []string{}
 	if len(requested) > 0 {
 		args = append(append(args, "--"), requested...)
@@ -300,10 +308,10 @@ func (p *Prober) findOrder(ctx context.Context, probeID string, remotes []*syncr
 		}
 		return cmp.Compare(a.GetId(), b.GetId())
 	})
-	order := make([]string, 0, len(snaps))
+	order := make([]findSnap, 0, len(snaps))
 	for _, sn := range snaps {
-		if !slices.Contains(order, sn.GetId()) {
-			order = append(order, sn.GetId())
+		if !slices.ContainsFunc(order, func(o findSnap) bool { return o.id == sn.GetId() }) {
+			order = append(order, findSnap{id: sn.GetId(), time: sn.GetTime().AsTime()})
 		}
 	}
 	return order, nil
@@ -498,31 +506,62 @@ func (f *findStream) assign(id string) {
 	f.pending = nil
 }
 
-// last returns the position in order (newest first) of the last snapshot
-// restic reported, -1 if none; one order does not hold (made since it was
-// listed) counts by the number of groups.
-func (f *findStream) last(order []string) int {
-	if len(f.groups) == 0 {
-		return -1
+// oldestReported returns the time of the oldest snapshot restic reported
+// that order holds, and whether there is one.
+func (f *findStream) oldestReported(order []findSnap) (time.Time, bool) {
+	var oldest time.Time
+	found := false
+	for _, sn := range order {
+		if slices.Contains(f.groups, sn.id) && (!found || sn.time.Before(oldest)) {
+			oldest, found = sn.time, true
+		}
 	}
-	return max(slices.Index(order, f.groups[len(f.groups)-1]), len(f.groups)-1)
+	return oldest, found
+}
+
+// left lists the snapshots restic may have been searching when it was
+// stopped: those it did not report and that are no newer than the oldest
+// it did. restic searches newest first, but orders snapshots of equal
+// times its own way, so a snapshot as old as the oldest reported one may
+// not have been searched yet.
+func (f *findStream) left(order []findSnap) []findSnap {
+	oldest, ok := f.oldestReported(order)
+	var out []findSnap
+	for _, sn := range order {
+		if !slices.Contains(f.groups, sn.id) && (!ok || !sn.time.After(oldest)) {
+			out = append(out, sn)
+		}
+	}
+	return out
 }
 
 // attribute gives the matches of the group restic was printing when it
-// was stopped their snapshot, when only one snapshot was left to search.
-func (f *findStream) attribute(order []string) {
-	if rest := order[f.last(order)+1:]; len(rest) == 1 && len(f.pending) > 0 {
-		f.assign(rest[0])
+// was stopped their snapshot, when only one snapshot can be it (always
+// for a single snapshot). Otherwise they are dropped: restic names a
+// group's snapshot only after its matches, and crediting the wrong one
+// would offer a version to restore from a snapshot that lacks it.
+func (f *findStream) attribute(order []findSnap) {
+	if rest := f.left(order); len(rest) == 1 && len(f.pending) > 0 {
+		f.assign(rest[0].id)
 	}
 }
 
 // searched is the number of snapshots searched: all when restic finished,
-// else those up to the last one it reported.
-func (f *findStream) searched(order []string, complete bool) int {
+// else those it reported and those newer than the oldest one it reported
+// (a lower bound: one of the same time may have been searched too). A
+// group order does not hold (made since it was listed) still counts.
+func (f *findStream) searched(order []findSnap, complete bool) int {
 	if complete {
 		return max(len(order), len(f.groups))
 	}
-	return f.last(order) + 1
+	oldest, ok := f.oldestReported(order)
+	n := 0
+	for _, sn := range order {
+		if slices.Contains(f.groups, sn.id) || ok && sn.time.After(oldest) {
+			n++
+		}
+	}
+	return max(n, len(f.groups))
 }
 
 // Diff compares two snapshots, or one folder of each (diff --json --

@@ -67,14 +67,19 @@ export const HEAVY_OPS = [
   "restic_diff",
 ];
 
+/** RESTORE_FEATURE is what a worker that restores items in place reports. */
+export const RESTORE_FEATURE = "restic.restore_subfolder_paths";
+
 /**
- * applyWorkers lets the demo's current workers measure, search and
- * compare: those that list folders advertise the heavy operations.
+ * applyWorkers lets the demo's current workers measure, search, compare
+ * and restore items in place: those that list folders advertise the heavy
+ * operations and the restore feature.
  */
 export function applyWorkers(workers: Worker[]): void {
   for (const w of workers) {
     if (!w.info?.probeOps.includes("list_local")) continue;
     for (const op of HEAVY_OPS) if (!w.info.probeOps.includes(op)) w.info.probeOps.push(op);
+    if (!w.info.features.includes(RESTORE_FEATURE)) w.info.features.push(RESTORE_FEATURE);
   }
 }
 

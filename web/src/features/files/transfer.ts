@@ -41,6 +41,30 @@ export function samePlace(a: Place, b: Place): boolean {
   return false;
 }
 
+/**
+ * onDisk writes an endpoint as a folder on a worker's disk, when it is
+ * one: a worker's folder, or a folder of a local-type remote whose worker
+ * is known (its own, else jobWorker, the worker that runs the job; remotes
+ * give its base folder, options.path). A local remote and the worker's own
+ * folders are then the same place, for the check of a folder copied into
+ * itself.
+ */
+export function onDisk(
+  e: Endpoint,
+  remotes: readonly Remote[],
+  jobWorker?: string,
+): { workerId: string; path: string } | undefined {
+  const p = e.place;
+  if (p.kind === "worker") return { workerId: p.workerId, path: e.path };
+  const workerId = p.workerId || jobWorker;
+  if (!p.local || !workerId) return undefined;
+  const base = remotes.find((r) => r.id === p.remoteId)?.options.path;
+  if (!base) return undefined;
+  let path = normalizePath(base, "worker");
+  for (const part of e.path.split("/").filter(Boolean)) path = joinPath(path, part, "worker");
+  return { workerId, path };
+}
+
 /** placeLabel names a place: a worker's or a remote's name. */
 export function placeLabel(p: Place, workers: Worker[], remotes: Remote[]): string {
   if (p.kind === "worker") return workers.find((w) => w.id === p.workerId)?.name ?? "a worker";
@@ -85,6 +109,25 @@ export function conflictText(c: Conflict): string {
       return "replaces older files";
     default:
       return "keeps existing files";
+  }
+}
+
+/**
+ * moveText says what a move deletes from the source, for its
+ * confirmation. rclone moves a file only when it copies it, or when the
+ * destination's copy makes it unneeded: a file skipped because one is
+ * already there (Keep existing) stays in the source, while an older one
+ * skipped under Replace older files is deleted with the newer copy kept.
+ */
+export function moveText(c: Conflict, what: string, from: string): string {
+  const deleted = `${what} will be deleted from ${from} once copied.`;
+  switch (c) {
+    case "keep":
+      return `${deleted} Files already at the destination are skipped and stay in ${from}.`;
+    case "older":
+      return `${deleted} Where the destination has a newer copy, it is kept and the older file in ${from} is deleted too.`;
+    default:
+      return deleted;
   }
 }
 
@@ -206,12 +249,14 @@ export function transferSource(
  * planTransfer checks the sheet's choices and builds the transfer, or
  * returns what is wrong: no destination, a folder copied into itself, the
  * items' own folder as the destination, two workers' disks, no worker.
+ * remotes give local remotes' folders (see onDisk).
  */
 export function planTransfer(
   src: TransferSource,
   form: TransferForm,
   workers: Worker[],
   listedBy?: string,
+  remotes: readonly Remote[] = [],
 ): { plan?: TransferPlan; errors: TransferErrors } {
   const errors: TransferErrors = {};
   const sourceWorker =
@@ -220,26 +265,39 @@ export function planTransfer(
   if ("error" in from) errors.what = from.error;
 
   const dest = form.destination;
+  const rule = workerRule(src.place, dest?.place, workers, listedBy);
+  const runner =
+    rule.kind === "pinned" ? rule.workerId : rule.kind === "choose" ? form.workerId : undefined;
   if (!dest) errors.destination = "Choose the folder the items go into.";
   else {
     const kind = placeKind(dest.place);
     const path = normalizePath(dest.path, kind);
     if (kind === "worker" && !/^([A-Za-z]:[\\/]|\/|\\\\)/.test(path))
       errors.destination = "Choose a folder on the worker, inside its allowed folders.";
-    else if (samePlace(src.place, dest.place)) {
-      const into = src.items.find(
-        (i) =>
-          i.entry.type === ProbeEntryType.DIR &&
-          (sameFolder(i.path, path, kind) || isInside(path, i.path, kind)),
-      );
-      if (into)
-        errors.destination = `A folder can't be copied into itself: ${nameOf(into.path, kind)} is selected.`;
-      else if (src.parent !== undefined && sameFolder(src.parent, path, kind))
-        errors.destination = "The items are already in this folder. Choose another one.";
+    else {
+      // Compare in the destination's terms, or on the worker's disk when
+      // one side is a local remote of that worker and the other its folder.
+      const at = (p: string): Endpoint => ({ place: src.place, path: p });
+      const same = samePlace(src.place, dest.place);
+      const disk = same ? undefined : onDisk({ place: dest.place, path }, remotes, runner);
+      const shared = disk && onDisk(at(""), remotes, runner)?.workerId === disk.workerId;
+      const k: PathKind = same ? kind : "worker";
+      const there = (p: string) => (same ? p : (onDisk(at(p), remotes, runner)?.path ?? p));
+      const to = same ? path : (disk?.path ?? path);
+      if (same || shared) {
+        const into = src.items.find(
+          (i) =>
+            i.entry.type === ProbeEntryType.DIR &&
+            (sameFolder(there(i.path), to, k) || isInside(to, there(i.path), k)),
+        );
+        if (into)
+          errors.destination = `A folder can't be copied into itself: ${nameOf(into.path, placeKind(src.place))} is selected.`;
+        else if (src.parent !== undefined && sameFolder(there(src.parent), to, k))
+          errors.destination = "The items are already in this folder. Choose another one.";
+      }
     }
   }
 
-  const rule = workerRule(src.place, dest?.place, workers, listedBy);
   let workerId = "";
   if (rule.kind === "refused") errors.worker = rule.message;
   else if (rule.kind === "pinned") workerId = rule.workerId;

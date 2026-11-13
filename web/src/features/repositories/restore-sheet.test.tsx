@@ -216,9 +216,21 @@ describe("RestoreSheet", () => {
 
   describe("to the original location", () => {
     const paths = ["/srv/photos/README.txt", "/srv/photos/2026/01"];
+    // Workers of 2.1 restore items in place; the rest are outdated.
+    const inPlace =
+      (...ids: string[]) =>
+      (ws: ReturnType<typeof m5.workers>) => {
+        for (const w of ws)
+          if (ids.includes(w.id)) w.info?.features.push("restic.restore_subfolder_paths");
+      };
+    const current = inPlace(fx.ids.nas, fx.ids.backupHost, fx.ids.office);
 
     it("proposes the snapshot's machine and the items' folder, keeping existing files", async () => {
-      const { user, api, snapshot } = open(m5.ids.photosVault, { mode: "original", paths });
+      const { user, api, snapshot } = open(
+        m5.ids.photosVault,
+        { mode: "original", paths },
+        current,
+      );
       expect(await screen.findByRole("combobox", { name: "Worker" })).toHaveTextContent("nas-01");
       expect(screen.getByLabelText("Target folder")).toHaveValue("/srv/photos");
       expect(
@@ -253,14 +265,41 @@ describe("RestoreSheet", () => {
     });
 
     it("lets the user pick when the snapshot's machine is not online", async () => {
-      open(m5.ids.officeLaptop, { mode: "original", paths: ["/C/Users/ada/Documents/x.txt"] });
+      open(
+        m5.ids.officeLaptop,
+        { mode: "original", paths: ["/C/Users/ada/Documents/x.txt"] },
+        current,
+      );
       const worker = await screen.findByRole("combobox", { name: "Worker" });
       expect(worker).toHaveTextContent("Choose a worker");
       expect(screen.getByText(/No online worker is OFFICE-PC/)).toBeInTheDocument();
     });
 
+    it("never proposes an outdated worker, and blocks one that is chosen", async () => {
+      const { user, api } = open(
+        m5.ids.photosVault,
+        { mode: "original", paths },
+        inPlace(fx.ids.backupHost),
+      );
+      const worker = await screen.findByRole("combobox", { name: "Worker" });
+      expect(worker).toHaveTextContent("Choose a worker");
+      expect(
+        screen.getByText(/nas-01 took this snapshot, but it is too old to restore items back/),
+      ).toBeInTheDocument();
+      await user.click(worker);
+      expect(await screen.findByRole("option", { name: /nas-01.*outdated/ })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+      expect(screen.getByRole("option", { name: /backup-host/ })).not.toHaveAttribute(
+        "aria-disabled",
+      );
+      await user.keyboard("{Escape}");
+      expect(api.of("RunJob")).toHaveLength(0);
+    });
+
     it("blocks a target outside the worker's allowed folders", async () => {
-      const { user, api } = open(m5.ids.photosVault, { mode: "original", paths });
+      const { user, api } = open(m5.ids.photosVault, { mode: "original", paths }, current);
       await user.click(await screen.findByRole("combobox", { name: "Worker" }));
       await user.click(await screen.findByRole("option", { name: /backup-host/ }));
       expect(screen.getByLabelText("Target folder")).toHaveValue("/srv/photos");

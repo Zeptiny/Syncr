@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/link"
 	"github.com/Zeptiny/Syncr/internal/worker/localfs"
 )
 
@@ -177,8 +178,8 @@ func TestHeavySlot(t *testing.T) {
 		for _, op := range []string{"restic_find", "restic_diff", "restic_measure", "measure_remote"} {
 			res := e.Probe(t.Context(), probeOf(op, 0))
 			mustFail(t, res, syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY)
-			if !strings.Contains(res.GetError().GetMessage(), "already measuring") {
-				t.Errorf("%s: message = %q", op, res.GetError().GetMessage())
+			if !link.IsHeavyBusy(res.GetError().GetMessage()) {
+				t.Errorf("%s: message = %q, want the heavy slot's", op, res.GetError().GetMessage())
 			}
 		}
 		if res := e.Probe(t.Context(), probeOf("about", 0)); res.GetStatus() != syncrv1.ProbeStatus_PROBE_STATUS_OK {
@@ -216,12 +217,17 @@ func TestHeavySlotsAreConfigurable(t *testing.T) {
 		wg.Wait()
 
 		// With every normal slot taken a heavy probe is BUSY and leaves
-		// the heavy slots alone.
+		// the heavy slots alone. Its message says the slots are full, so
+		// the controller does not word it as "already measuring".
 		tools := &fakeTools{delay: time.Hour}
 		e = newExecutor(t, tools, nil, func(c *Config) { c.MaxConcurrent = 1 })
 		go e.Probe(t.Context(), probeOf("about", 0))
 		synctest.Wait()
-		mustFail(t, e.Probe(t.Context(), probeOf("restic_find", 0)), syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY)
+		res := e.Probe(t.Context(), probeOf("restic_find", 0))
+		mustFail(t, res, syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY)
+		if msg := res.GetError().GetMessage(); link.IsHeavyBusy(msg) || !strings.Contains(msg, link.ProbeBusySlots) {
+			t.Errorf("slots full: message = %q", msg)
+		}
 		if n := len(e.heavy); n != 0 {
 			t.Errorf("%d heavy slots held after a refused probe", n)
 		}

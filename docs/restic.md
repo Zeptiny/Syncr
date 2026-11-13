@@ -165,8 +165,9 @@ chosen worker's `local_roots` is refused. The job restores that folder of
 the snapshot (`restic restore <snapshot>:/srv/photos`) with only the
 selected items (`--include`), so they land at their own paths and nothing
 else is written. This needs a worker of 2.1 or later (the
-`restic.restore_subfolder_paths` feature): a job sent to an older worker
-fails with `worker_outdated`.
+`restic.restore_subfolder_paths` feature): the restore sheet proposes only
+such a worker and shows older ones as outdated, and a job sent to an older
+worker through the API fails with `worker_outdated`.
 
 ### Search and file versions
 
@@ -197,6 +198,12 @@ snapshots that hold it, a link to its folder in one of them, and
 one file, in a side sheet: every snapshot that has that exact path,
 grouped by version. Folders have no versions: compare snapshots instead.
 
+The search is in the page's address, so it can be bookmarked or shared.
+Opening such an address, or reloading the page, fills in the form and
+waits for **Search**: a search reads every snapshot, so a link never
+starts one on a worker by itself. From the app (the form, the snapshot
+browser) it runs at once.
+
 A search stops at 1,000 matches (the result says so, and how many
 snapshots it searched), and like folder sizes it stops at
 `probe.scan_timeout` with what it found so far. Narrow the pattern, or
@@ -220,6 +227,9 @@ text. Each path opens its folder in the snapshot that has it.
 - At most 2,000 changes are listed; the totals still cover all of them.
   A comparison that reaches `probe.scan_timeout` stops with the changes
   found so far and no totals, and says so.
+- Like a search, a comparison opened from an address (a shared link, a
+  reload) waits for **Compare**; from the snapshot list or **Compare
+  with…** in the snapshot browser it runs at once.
 
 ## Browsing and testing
 

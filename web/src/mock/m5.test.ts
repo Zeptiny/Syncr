@@ -327,13 +327,14 @@ describe("mock transport, milestone 5", { timeout: 20_000 }, () => {
     const jobs = createClient(JobService, t);
     const workers = await createClient(WorkerAdminService, t).listWorkers({});
     const nas = workers.workers.find((w) => w.id === fx.ids.nas)!;
-    // The hooks and two-way sync mocks add their features to the up-to-date workers.
+    // The hooks, two-way sync and browser mocks add their features to the up-to-date workers.
     expect(nas.info?.features).toEqual([
       "probe",
       "restic.v2",
       "restic.delete",
       "job.hooks",
       "rclone.bisync",
+      "restic.restore_subfolder_paths",
     ]);
     // Milestone 6 adds sftp_host_keys to the seven probe operations of m5,
     // and milestone 7 its five scans (sizes, search, compare).

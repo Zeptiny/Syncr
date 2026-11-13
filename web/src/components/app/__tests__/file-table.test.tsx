@@ -128,13 +128,14 @@ describe("FileTable", () => {
     expect(
       screen.getByText("Selected all 3 matching the filter, not only the 2 shown."),
     ).toBeInTheDocument();
-    // Escape clears the filter first, then the selection.
+    // Escape clears the filter, and never the selection (it may span
+    // folders; the tray's Clear drops it).
     act(() => bodyRows()[0].focus());
     await user.keyboard("{Escape}");
     expect(screen.getByLabelText("Filter this folder")).toHaveValue("");
     act(() => bodyRows()[0].focus());
     await user.keyboard("{Escape}");
-    expect(selectedText()).toBe("");
+    expect(selectedText()).toBe("/srv/docs,/srv/photos,/srv/c.log");
     // Ctrl+A ticks every row.
     act(() => bodyRows()[0].focus());
     await user.keyboard("{Control>}a{/Control}");

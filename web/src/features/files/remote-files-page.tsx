@@ -5,7 +5,6 @@ import { FolderInput, Pencil } from "lucide-react";
 import { ErrorState } from "@/components/app/error-state";
 import { FileBrowser } from "@/components/app/file-browser/file-browser";
 import { copyPathItem } from "@/components/app/file-browser/helpers";
-import { commonParent, uncovered } from "@/components/app/file-browser/selection";
 import { useBrowserSelection } from "@/components/app/file-browser/use-selection";
 import { PageHeader } from "@/components/app/page-header";
 import { Button } from "@/components/ui/button";
@@ -65,7 +64,6 @@ export function RemoteFilesPage({
       </div>
     );
 
-  const items = uncovered(selection, "remote");
   return (
     <>
       <PageHeader
@@ -100,16 +98,13 @@ export function RemoteFilesPage({
         rootLabel={remote.name}
         measure={measure}
         rowMenu={(e) => [transfer.rowItem(e), copyPathItem(e)]}
-        toolbarActions={
+        toolbarActions={(ctx) =>
           waiting ? undefined : (
             <JobDraftMenu
               target={{
                 place,
-                items,
-                parent: commonParent(
-                  items.map((i) => i.path),
-                  "remote",
-                ),
+                items: ctx.items,
+                parent: ctx.parent,
                 folder: open,
                 workerId: worker ?? listing.workerId ?? "",
               }}

@@ -32,7 +32,7 @@ func (p *scanProber) Probe(_ context.Context, rp *syncrv1.RunProbe) *syncrv1.Pro
 	p.timeouts <- rp.GetTimeout().AsDuration()
 	if p.busy.Load() {
 		return &syncrv1.ProbeResult{Status: syncrv1.ProbeStatus_PROBE_STATUS_FAILED, Error: &syncrv1.JobError{
-			Code: syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, Message: "the worker is already measuring, searching or comparing; try again in a moment",
+			Code: syncrv1.JobErrorCode_JOB_ERROR_CODE_BUSY, Message: link.ProbeBusyHeavy,
 		}}
 	}
 	path := rp.GetSpec().GetMeasureLocal().GetPath()

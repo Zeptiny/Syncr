@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Equal,
   FolderOpen,
+  GitCompareArrows,
   RefreshCw,
   TriangleAlert,
   X,
@@ -39,6 +40,7 @@ import {
   type ChangeKind,
 } from "./scans";
 import type { CompareSearch } from "./search";
+import { runScan, useRunRequested } from "./scan-run";
 import { findSnapshot, previousInGroup } from "./snapshot-groups";
 import { SnapshotMenu } from "./snapshot-menu";
 
@@ -74,7 +76,9 @@ export function ChangeBadge({ kind, className }: { kind: ChangeKind; className?:
  * early, which it says), then the changes, filtered by kind (only kinds
  * that occur) and by text. Each change opens its folder in the snapshot
  * that has it. The comparison is in the URL; without "from" the previous
- * snapshot of the same host and paths is proposed.
+ * snapshot of the same host and paths is proposed. Opening the URL alone
+ * (a link, a reload) does not compare: the comparison runs when the app
+ * asks for it (useRunRequested) or on the Compare button.
  */
 export function ComparePage({
   repositoryId,
@@ -98,6 +102,7 @@ export function ComparePage({
   // Without "from", the previous snapshot of the newer one's host and paths.
   const fromId = from ?? (toSnap ? previousInGroup(list, toSnap)?.id : undefined);
   const fromSnap = fromId ? findSnapshot(list, fromId) : undefined;
+  const requested = useRunRequested();
   const ready = !!repo && !!fromId && !!to && fromId !== to && (!local || !!worker);
   const diff = useQuery(
     ResticService.method.compareSnapshots,
@@ -108,19 +113,22 @@ export function ComparePage({
       path: path ?? "",
       workerId: worker ?? "",
     },
-    { enabled: ready, retry: false, staleTime: Infinity },
+    { enabled: ready && requested, retry: false, staleTime: Infinity },
   );
 
   const [kinds, setKinds] = useState<ReadonlySet<ChangeKind>>(new Set());
   const [text, setText] = useState("");
   const [shown, setShown] = useState(PAGE);
-  const go = (next: CompareSearch) => {
+  // Every change made on the page runs the comparison it asks for.
+  const go = (next: CompareSearch, replace = false) => {
     setKinds(new Set());
     setShown(PAGE);
     void navigate({
       to: "/repositories/$repositoryId/compare",
       params: { repositoryId },
       search: next,
+      state: runScan,
+      replace,
     });
   };
   const current: CompareSearch = { from: fromId, to, path, worker };
@@ -288,6 +296,19 @@ export function ComparePage({
             icon={ArrowLeftRight}
             title="Choose a worker first"
             description="This repository is on a worker's disk: only that worker can compare its snapshots."
+            className="rounded-lg border py-10"
+          />
+        ) : !requested && !diff.data && !diff.isFetching ? (
+          <EmptyState
+            icon={GitCompareArrows}
+            title="Ready to compare"
+            description={`Compare ${shortId(fromId)} with ${shortId(to)}${path ? ` in ${path}` : ""}. It can take up to a minute.`}
+            action={
+              <Button onClick={() => go(current, true)}>
+                <GitCompareArrows aria-hidden />
+                Compare
+              </Button>
+            }
             className="rounded-lg border py-10"
           />
         ) : diff.isFetching ? (

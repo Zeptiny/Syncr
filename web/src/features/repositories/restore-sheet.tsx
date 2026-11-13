@@ -35,7 +35,9 @@ import { Toggle } from "../jobs/transfer-editor";
 import {
   defaultRestoreTarget,
   emptyRestore,
+  cannotRestoreInPlace,
   hostWorker,
+  outdatedHost,
   loadRestoreTarget,
   originalParent,
   pickRestoreWorker,
@@ -65,6 +67,10 @@ export interface RestoreSheetProps {
   /** now dates the proposed target folder (tests pin it). */
   now?: Date;
 }
+
+// TOO_OLD says a worker lacks restic.restore_subfolder_paths (before 2.1).
+const TOO_OLD =
+  "This worker is too old to restore items back in place: upgrade it, or choose another.";
 
 /**
  * RestoreSheet starts a restore: what, onto which worker, into which
@@ -126,6 +132,9 @@ function Body({
   const worker = workers.find((w) => w.id === workerId);
   const os = worker?.info?.os;
   const roots = worker?.info?.localRoots ?? [];
+  // Back in place needs a worker of 2.1 (restic.restore_subfolder_paths).
+  const tooOld = toOriginal && !!worker && cannotRestoreInPlace(worker) !== undefined;
+  const oldHost = toOriginal && !proposal ? outdatedHost(workers, snapshot.host ?? "") : undefined;
   const defaultTarget =
     proposedTarget?.workerId === workerId
       ? proposedTarget.target
@@ -144,13 +153,15 @@ function Body({
   const showHooks = hasHooks(rest.hooks) || hooksEmptyText(rest.hooks, hooksTarget) === undefined;
   const original = what.mode === "folder" ? treeToLocal(what.folder, os) : undefined;
   const outside = target.trim() !== "" && roots.length > 0 && !isWithinRoots(target, roots, os);
-  // Back to the original location only where the worker may write.
-  const blocked = toOriginal && outside;
+  // Back to the original location only where the worker may write, and
+  // only by a worker that can.
+  const blocked = toOriginal && (outside || tooOld);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const local = validateRestore(what, state);
-    if (blocked && !local.target)
+    if (tooOld && !local.worker) local.worker = TOO_OLD;
+    else if (blocked && !local.target)
       local.target = "The original location is outside the worker's allowed folders.";
     setErrors(local);
     if (Object.keys(local).length) return;
@@ -223,11 +234,15 @@ function Body({
           label="Worker"
           error={errors.worker}
           help={
-            worker && !isOnline(worker)
-              ? `${worker.name} is offline: the restore waits until it is back.`
-              : toOriginal && !proposal
-                ? `No online worker is ${snapshot.host || "the machine this snapshot was taken on"}: choose where the files go back.`
-                : "The machine that receives the files."
+            tooOld
+              ? TOO_OLD
+              : worker && !isOnline(worker)
+                ? `${worker.name} is offline: the restore waits until it is back.`
+                : oldHost && !worker
+                  ? `${oldHost.name} took this snapshot, but it is too old to restore items back in place: upgrade it, or choose where the files go back.`
+                  : toOriginal && !proposal
+                    ? `No online worker is ${snapshot.host || "the machine this snapshot was taken on"}: choose where the files go back.`
+                    : "The machine that receives the files."
           }
         >
           <WorkerPicker
@@ -235,7 +250,8 @@ function Body({
             workers={workers}
             value={workerId}
             onChange={setChosenWorker}
-            invalid={!!errors.worker}
+            invalid={!!errors.worker || tooOld}
+            unavailable={toOriginal ? cannotRestoreInPlace : undefined}
             className="bg-card"
           />
         </FieldShell>

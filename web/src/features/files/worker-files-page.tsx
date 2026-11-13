@@ -5,7 +5,6 @@ import { FolderInput } from "lucide-react";
 import { ErrorState } from "@/components/app/error-state";
 import { FileBrowser } from "@/components/app/file-browser/file-browser";
 import { copyPathItem } from "@/components/app/file-browser/helpers";
-import { commonParent, uncovered } from "@/components/app/file-browser/selection";
 import { useBrowserSelection } from "@/components/app/file-browser/use-selection";
 import { PageHeader } from "@/components/app/page-header";
 import { StatusBadge } from "@/components/app/status-badge";
@@ -46,7 +45,6 @@ export function WorkerFilesPage({ workerId, path }: { workerId: string; path?: s
       </div>
     );
 
-  const items = uncovered(selection, "worker");
   return (
     <>
       <PageHeader
@@ -81,21 +79,18 @@ export function WorkerFilesPage({ workerId, path }: { workerId: string; path?: s
         rootLabel="Allowed folders"
         measure={measure}
         rowMenu={(e) => [transfer.rowItem(e), copyPathItem(e)]}
-        toolbarActions={
+        toolbarActions={(ctx) => (
           <JobDraftMenu
             target={{
               place,
-              items,
-              parent: commonParent(
-                items.map((i) => i.path),
-                "worker",
-              ),
+              items: ctx.items,
+              parent: ctx.parent,
               folder: open,
               workerId,
               worker: w,
             }}
           />
-        }
+        )}
         selectionActions={(ctx) => (
           <Button
             size="sm"

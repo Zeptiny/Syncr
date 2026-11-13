@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { DeletingBadge } from "./repositories-page";
 import { isLocalRepository, type RestoreWhat } from "./model";
 import { RestoreSheet, type RestoreSheetProps } from "./restore-sheet";
+import { runScan, useRunRequested } from "./scan-run";
 import { groupMatches, type FoundPath } from "./scans";
 import type { FindSearch } from "./search";
 import { SnapshotMenu } from "./snapshot-menu";
@@ -62,7 +63,9 @@ export function PatternHelp({ id }: { id?: string }) {
  * pattern, case ignored or not, in every snapshot or one. Matches are
  * grouped by path (how many snapshots have it, its newest size and time);
  * a path opens into its versions, each of which opens its folder in a
- * snapshot or is restored from it. The search is in the URL.
+ * snapshot or is restored from it. The search is in the URL, but opening
+ * the URL alone (a link, a reload) only fills the form: the search runs
+ * when the app asks for it (useRunRequested) or on the Search button.
  */
 export function SearchPage({
   repositoryId,
@@ -82,7 +85,8 @@ export function SearchPage({
   const repo = repoQ.data?.repository;
   const local = isLocalRepository(repo);
   const ignoreCase = icase !== false;
-  const enabled = !!repo && !!q && (!local || !!worker);
+  const requested = useRunRequested();
+  const enabled = requested && !!repo && !!q && (!local || !!worker);
   const find = useQuery(
     ResticService.method.findInRepository,
     {
@@ -107,13 +111,16 @@ export function SearchPage({
     { snapshot: RestoreSheetProps["snapshot"]; what: RestoreWhat } | undefined
   >();
 
-  const go = (next: FindSearch) => {
+  // Every change made on the page runs the search it asks for.
+  const go = (next: FindSearch, replace = false) => {
     setOpen(new Set());
     setShown(PAGE);
     void navigate({
       to: "/repositories/$repositoryId/search",
       params: { repositoryId },
       search: next,
+      state: runScan,
+      replace,
     });
   };
   const current: FindSearch = { q, snapshot, icase, worker };
@@ -184,8 +191,9 @@ export function SearchPage({
               e.preventDefault();
               const t = typed.trim();
               if (!t) return;
-              if (t === q) void find.refetch();
-              else go({ ...current, q: t });
+              if (t !== q) go({ ...current, q: t });
+              else if (requested) void find.refetch();
+              else go(current, true);
             }}
           >
             <div className="flex flex-col gap-2">
@@ -268,7 +276,14 @@ export function SearchPage({
             description="This repository is on a worker's disk: only that worker can search it."
             className="py-10"
           />
-        ) : !q ? null : find.isFetching ? (
+        ) : !q ? null : !requested && !find.data && !find.isFetching ? (
+          <EmptyState
+            icon={Search}
+            title="Ready to search"
+            description="Press Search to look through the snapshots. It can take up to a minute."
+            className="rounded-lg border py-10"
+          />
+        ) : find.isFetching ? (
           <div className="flex flex-col gap-3" role="status">
             <span className="text-[13px] text-muted-foreground">
               Searching {snapshot ? "the snapshot" : "every snapshot"}. This can take up to a

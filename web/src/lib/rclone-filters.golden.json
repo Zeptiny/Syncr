@@ -306,5 +306,14 @@
         "ünï dir/f.txt"
       ]
     }
+  ],
+  "resticFindAbout": "Exact-path patterns of restic find (exactPathPattern in features/repositories/scans.ts, used by Show versions): each snapshot tree path and the pattern that matches only it. The system test searches with them.",
+  "resticFind": [
+    { "path": "/notes [draft]*.txt", "pattern": "/notes [[]draft][*].txt" },
+    { "path": "/awkward/q?.txt", "pattern": "/awkward/q[?].txt" },
+    { "path": "/awkward/back\\slash.txt", "pattern": "/awkward/back[\\\\]slash.txt" },
+    { "path": "/awkward/[d]/in.txt", "pattern": "/awkward/[[]d]/in.txt" },
+    { "path": "/awkward/{a,b}.txt", "pattern": "/awkward/{a,b}.txt" },
+    { "path": "/ünï dir/f.txt", "pattern": "/ünï dir/f.txt" }
   ]
 }
