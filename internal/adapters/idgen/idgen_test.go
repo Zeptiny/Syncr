@@ -75,3 +75,15 @@ func TestMilestone5IDs(t *testing.T) {
 		t.Errorf("repository, probe ids = %s, %s", r, p)
 	}
 }
+
+func TestEnrollmentTokenIDs(t *testing.T) {
+	t.Parallel()
+	var g UUIDv7
+	if g.NewEnrollmentTokenID().IsZero() {
+		t.Error("zero id")
+	}
+	var s Sequential
+	if got := s.NewEnrollmentTokenID().String(); got != "00000000-0000-7000-8000-000000000001" {
+		t.Errorf("first enrollment token id = %s", got)
+	}
+}

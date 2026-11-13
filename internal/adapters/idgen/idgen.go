@@ -3,7 +3,7 @@
 // IDGenerator ports of internal/app/... and of the controller's probes
 // (NewWorkerID, NewJobID, NewUserID, NewAPITokenID, NewRemoteID,
 // NewScheduleID, NewScheduleRunID, NewContactID, NewDeliveryID,
-// NewResticRepoID, NewProbeID).
+// NewResticRepoID, NewProbeID, NewEnrollmentTokenID).
 //
 // Allowed dependencies: the standard library and internal/domain.
 package idgen
@@ -52,6 +52,9 @@ func (UUIDv7) NewResticRepoID() domain.ResticRepoID { return domain.NewResticRep
 // NewProbeID returns a new random ProbeID.
 func (UUIDv7) NewProbeID() domain.ProbeID { return domain.NewProbeID() }
 
+// NewEnrollmentTokenID returns a new random EnrollmentTokenID.
+func (UUIDv7) NewEnrollmentTokenID() domain.EnrollmentTokenID { return domain.NewEnrollmentTokenID() }
+
 // Sequential mints predictable, strictly increasing IDs of the form
 // 00000000-0000-7000-8000-00000000000n, sharing one counter across entity
 // kinds. The zero value starts at 1. Safe for concurrent use.
@@ -95,6 +98,11 @@ func (s *Sequential) NewResticRepoID() domain.ResticRepoID {
 
 // NewProbeID returns the next ProbeID.
 func (s *Sequential) NewProbeID() domain.ProbeID { return mint(domain.ParseProbeID, s.next()) }
+
+// NewEnrollmentTokenID returns the next EnrollmentTokenID.
+func (s *Sequential) NewEnrollmentTokenID() domain.EnrollmentTokenID {
+	return mint(domain.ParseEnrollmentTokenID, s.next())
+}
 
 func (s *Sequential) next() string {
 	return fmt.Sprintf("00000000-0000-7000-8000-%012x", s.n.Add(1))

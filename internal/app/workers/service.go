@@ -29,6 +29,12 @@ type Config struct {
 // MinTokenTTL is the shortest enrollment token lifetime accepted.
 const MinTokenTTL = time.Minute
 
+// KeepExpiredTokens is how long an expired enrollment token is kept before
+// CreateEnrollmentToken purges it, so a page that follows an enrollment
+// (GetEnrollmentToken) can still tell a used token from an unused one
+// after it expires.
+const KeepExpiredTokens = 24 * time.Hour
+
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
 	return Config{

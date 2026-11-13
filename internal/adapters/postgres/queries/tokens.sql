@@ -1,6 +1,9 @@
 -- name: CreateEnrollmentToken :exec
-INSERT INTO enrollment_tokens (hash, created_at, expires_at, used_at, used_by)
-VALUES (sqlc.arg(hash), sqlc.arg(created_at), sqlc.arg(expires_at), sqlc.arg(used_at), sqlc.arg(used_by));
+INSERT INTO enrollment_tokens (id, hash, created_at, expires_at, used_at, used_by)
+VALUES (sqlc.arg(id), sqlc.arg(hash), sqlc.arg(created_at), sqlc.arg(expires_at), sqlc.arg(used_at), sqlc.arg(used_by));
+
+-- name: GetEnrollmentToken :one
+SELECT * FROM enrollment_tokens WHERE id = sqlc.arg(id);
 
 -- name: ConsumeEnrollmentToken :one
 UPDATE enrollment_tokens SET used_at = sqlc.arg(at)::timestamptz, used_by = sqlc.arg(used_by)::uuid

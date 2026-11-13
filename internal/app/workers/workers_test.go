@@ -266,13 +266,95 @@ func TestCreateEnrollmentTokenTTL(t *testing.T) {
 			t.Errorf("ttl %v: (%+v, %v)", ttl, g, err)
 		}
 	}
-	// Expired tokens are purged when a new one is created.
+	// Tokens are purged when a new one is created, KeepExpiredTokens after
+	// they expired.
 	e.clock.Advance(2 * time.Minute)
 	if _, err := e.svc.CreateEnrollmentToken(ctx, 0); err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := e.store.DeleteEnrollmentTokens(ctx, e.clock.Now()); n != 0 {
-		t.Errorf("%d expired tokens were left behind", n)
+	if n, _ := e.store.DeleteEnrollmentTokens(ctx, e.clock.Now().Add(-workers.KeepExpiredTokens)); n != 0 {
+		t.Errorf("%d long expired tokens were left behind", n)
+	}
+	e.clock.Advance(workers.KeepExpiredTokens)
+	if _, err := e.svc.CreateEnrollmentToken(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := e.store.DeleteEnrollmentTokens(ctx, e.clock.Now().Add(-workers.KeepExpiredTokens)); n != 0 {
+		t.Errorf("%d long expired tokens were left behind", n)
+	}
+}
+
+func TestGetEnrollmentTokenFollowsTheEnrollment(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	g, err := e.svc.CreateEnrollmentToken(ctx, 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.ID.IsZero() {
+		t.Fatal("grant without an ID")
+	}
+	tok, err := e.svc.GetEnrollmentToken(ctx, g.ID)
+	if err != nil || tok.ID != g.ID || !tok.ExpiresAt.Equal(g.ExpiresAt) || e.svc.TokenState(tok) != workers.TokenWaiting {
+		t.Fatalf("new token = (%+v, %v), state %q", tok, err, e.svc.TokenState(tok))
+	}
+
+	en, err := e.svc.Enroll(ctx, workers.EnrollParams{Token: g.Token, Name: "nas", OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err = e.svc.GetEnrollmentToken(ctx, g.ID)
+	if err != nil || tok.UsedBy != en.Worker.ID || e.svc.TokenState(tok) != workers.TokenUsed {
+		t.Errorf("used token = (%+v, %v), state %q", tok, err, e.svc.TokenState(tok))
+	}
+	// A used token stays used once it has expired, and creating another
+	// token does not purge it yet.
+	e.clock.Advance(2 * time.Minute)
+	if _, err := e.svc.CreateEnrollmentToken(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if tok, err = e.svc.GetEnrollmentToken(ctx, g.ID); err != nil || e.svc.TokenState(tok) != workers.TokenUsed {
+		t.Errorf("used token after expiry = (%+v, %v), state %q", tok, err, e.svc.TokenState(tok))
+	}
+	e.clock.Advance(workers.KeepExpiredTokens + time.Second)
+	if _, err := e.svc.CreateEnrollmentToken(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.GetEnrollmentToken(ctx, g.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("purged token: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := e.svc.GetEnrollmentToken(ctx, domain.EnrollmentTokenID{}); !errors.Is(err, domain.ErrInvalidID) {
+		t.Errorf("zero ID: err = %v, want ErrInvalidID", err)
+	}
+	if _, err := e.svc.GetEnrollmentToken(ctx, domain.NewEnrollmentTokenID()); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("unknown ID: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestTokenState(t *testing.T) {
+	t.Parallel()
+	exp := time.Date(2026, 11, 4, 13, 0, 0, 0, time.UTC)
+	unused := workers.EnrollmentToken{ExpiresAt: exp}
+	used := workers.EnrollmentToken{ExpiresAt: exp, UsedAt: exp.Add(-time.Minute), UsedBy: domain.NewWorkerID()}
+	tests := []struct {
+		name string
+		tok  workers.EnrollmentToken
+		now  time.Time
+		want workers.TokenState
+	}{
+		{"unused before expiry", unused, exp.Add(-time.Nanosecond), workers.TokenWaiting},
+		// EnrollWorker accepts a token only while at < ExpiresAt.
+		{"unused at expiry", unused, exp, workers.TokenExpired},
+		{"unused after expiry", unused, exp.Add(time.Hour), workers.TokenExpired},
+		{"used before expiry", used, exp.Add(-time.Second), workers.TokenUsed},
+		{"used after expiry", used, exp.Add(time.Hour), workers.TokenUsed},
+	}
+	for _, tt := range tests {
+		if got := tt.tok.State(tt.now); got != tt.want {
+			t.Errorf("%s: State = %q, want %q", tt.name, got, tt.want)
+		}
 	}
 }
 

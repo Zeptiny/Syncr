@@ -142,6 +142,9 @@ const MaxPastEpochs = 16
 // EnrollmentToken is a stored enrollment token. The token itself is never
 // stored, only its hash.
 type EnrollmentToken struct {
+	// ID names the token in the admin API (GetEnrollmentToken), so the
+	// enrollment can be followed without the token itself.
+	ID        domain.EnrollmentTokenID
 	Hash      TokenHash
 	CreatedAt time.Time
 	ExpiresAt time.Time
@@ -155,8 +158,36 @@ type TokenHash [32]byte
 
 // EnrollmentGrant is a newly created enrollment token, returned once.
 type EnrollmentGrant struct {
+	ID        domain.EnrollmentTokenID
 	Token     string
 	ExpiresAt time.Time
+}
+
+// TokenState is where an enrollment token is in its life, as of a time.
+type TokenState string
+
+// Token states.
+const (
+	// TokenWaiting: unused and still accepted.
+	TokenWaiting TokenState = "waiting"
+	// TokenUsed: a worker enrolled with it (EnrollmentToken.UsedBy).
+	TokenUsed TokenState = "used"
+	// TokenExpired: unused and no longer accepted.
+	TokenExpired TokenState = "expired"
+)
+
+// State returns t's state at now. A token is accepted while now is before
+// ExpiresAt, as TokenRepository.EnrollWorker checks it; a used token stays
+// used after it expires.
+func (t EnrollmentToken) State(now time.Time) TokenState {
+	switch {
+	case !t.UsedAt.IsZero():
+		return TokenUsed
+	case now.Before(t.ExpiresAt):
+		return TokenWaiting
+	default:
+		return TokenExpired
+	}
 }
 
 // EnrollParams are the inputs of Enroll.

@@ -7,11 +7,13 @@ import (
 
 	"github.com/Zeptiny/Syncr/internal/adapters/postgres/db"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
+	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
 // CreateEnrollmentToken implements workers.TokenRepository.
 func (s *Store) CreateEnrollmentToken(ctx context.Context, t workers.EnrollmentToken) error {
 	err := s.q.CreateEnrollmentToken(ctx, db.CreateEnrollmentTokenParams{
+		ID:        pgOptID(t.ID), // a zero ID violates NOT NULL
 		Hash:      t.Hash[:],
 		CreatedAt: pgTime(t.CreatedAt),
 		ExpiresAt: pgTime(t.ExpiresAt),
@@ -19,6 +21,15 @@ func (s *Store) CreateEnrollmentToken(ctx context.Context, t workers.EnrollmentT
 		UsedBy:    pgOptID(t.UsedBy),
 	})
 	return mapErr("create enrollment token", err)
+}
+
+// GetEnrollmentToken implements workers.TokenRepository.
+func (s *Store) GetEnrollmentToken(ctx context.Context, id domain.EnrollmentTokenID) (workers.EnrollmentToken, error) {
+	row, err := s.q.GetEnrollmentToken(ctx, pgID(id))
+	if err != nil {
+		return workers.EnrollmentToken{}, mapErr(fmt.Sprintf("get enrollment token %s", id), err)
+	}
+	return tokenFrom(row)
 }
 
 // EnrollWorker implements workers.TokenRepository: one transaction of the

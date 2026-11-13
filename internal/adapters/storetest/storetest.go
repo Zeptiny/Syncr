@@ -196,6 +196,9 @@ func scheduleID(t *testing.T, n int) domain.ScheduleID { return id(t, domain.Par
 func contactID(t *testing.T, n int) domain.ContactID   { return id(t, domain.ParseContactID, 6000+n) }
 func runID(t *testing.T, n int) domain.ScheduleRunID   { return id(t, domain.ParseScheduleRunID, 7000+n) }
 func deliveryID(t *testing.T, n int) domain.DeliveryID { return id(t, domain.ParseDeliveryID, 8000+n) }
+func tokenID(t *testing.T, n int) domain.EnrollmentTokenID {
+	return id(t, domain.ParseEnrollmentTokenID, 9000+n)
+}
 
 // skipIfUnsupported skips the test when err says the adapter does not
 // implement the port yet (a stub returning errors.ErrUnsupported), naming
@@ -489,21 +492,34 @@ func testWorkerConcurrentLinkUpdates(t *testing.T, s Store) {
 func testEnrollmentTokens(t *testing.T, s Store) {
 	ctx := context.Background()
 	h1, h2, h3 := workers.TokenHash{1}, workers.TokenHash{2}, workers.TokenHash{3}
-	for _, tok := range []workers.EnrollmentToken{
+	for i, tok := range []workers.EnrollmentToken{
 		{Hash: h1, CreatedAt: t0(), ExpiresAt: t0().Add(time.Hour)},
 		{Hash: h2, CreatedAt: t0(), ExpiresAt: t0().Add(time.Minute)},
 		{Hash: h3, CreatedAt: t0(), ExpiresAt: t0().Add(48 * time.Hour)},
 	} {
+		tok.ID = tokenID(t, i+1)
 		if err := s.CreateEnrollmentToken(ctx, tok); err != nil {
 			t.Fatal(err)
 		}
 	}
-	wantErr(t, "duplicate token", s.CreateEnrollmentToken(ctx, workers.EnrollmentToken{Hash: h1}), domain.ErrAlreadyExists)
+	wantErr(t, "duplicate token hash", s.CreateEnrollmentToken(ctx, workers.EnrollmentToken{ID: tokenID(t, 9), Hash: h1}), domain.ErrAlreadyExists)
+	wantErr(t, "duplicate token ID", s.CreateEnrollmentToken(ctx, workers.EnrollmentToken{ID: tokenID(t, 1), Hash: workers.TokenHash{8}}), domain.ErrAlreadyExists)
+	wantErr(t, "token without an ID", s.CreateEnrollmentToken(ctx, workers.EnrollmentToken{Hash: workers.TokenHash{8}}), domain.ErrInvalidArgument)
+
+	if got, err := s.GetEnrollmentToken(ctx, tokenID(t, 1)); err != nil || got.ID != tokenID(t, 1) || got.Hash != h1 ||
+		!got.CreatedAt.Equal(t0()) || !got.ExpiresAt.Equal(t0().Add(time.Hour)) || !got.UsedAt.IsZero() || !got.UsedBy.IsZero() {
+		t.Errorf("GetEnrollmentToken(unused) = (%+v, %v)", got, err)
+	}
+	_, err := s.GetEnrollmentToken(ctx, tokenID(t, 9))
+	wantErr(t, "GetEnrollmentToken(unknown)", err, domain.ErrNotFound)
 
 	w1 := newWorker(t, 1)
 	got, err := s.EnrollWorker(ctx, h1, t0().Add(time.Minute), w1)
-	if err != nil || !got.UsedAt.Equal(t0().Add(time.Minute)) || got.UsedBy != w1.ID {
+	if err != nil || got.ID != tokenID(t, 1) || !got.UsedAt.Equal(t0().Add(time.Minute)) || got.UsedBy != w1.ID {
 		t.Errorf("EnrollWorker = (%+v, %v)", got, err)
+	}
+	if got, err := s.GetEnrollmentToken(ctx, tokenID(t, 1)); err != nil || !got.UsedAt.Equal(t0().Add(time.Minute)) || got.UsedBy != w1.ID {
+		t.Errorf("GetEnrollmentToken(used) = (%+v, %v)", got, err)
 	}
 	if w, err := s.GetWorker(ctx, w1.ID); err != nil || w.Name != w1.Name {
 		t.Errorf("GetWorker(enrolled) = (%+v, %v)", w, err)
@@ -524,6 +540,8 @@ func testEnrollmentTokens(t *testing.T, s Store) {
 	if err != nil || n != 2 {
 		t.Errorf("DeleteEnrollmentTokens = (%d, %v), want 2 (h1 used, h2 expired)", n, err)
 	}
+	_, err = s.GetEnrollmentToken(ctx, tokenID(t, 1))
+	wantErr(t, "GetEnrollmentToken(purged)", err, domain.ErrNotFound)
 	if _, err := s.EnrollWorker(ctx, h3, t0().Add(3*time.Hour), newWorker(t, 3)); err != nil {
 		t.Errorf("token h3 should survive the purge: %v", err)
 	}
@@ -536,7 +554,7 @@ func testEnrollmentTokenKeptOnFailedCreate(t *testing.T, s Store) {
 	taken := newWorker(t, 1)
 	mustCreateWorker(t, s, taken)
 	h := workers.TokenHash{5}
-	if err := s.CreateEnrollmentToken(ctx, workers.EnrollmentToken{Hash: h, CreatedAt: t0(), ExpiresAt: t0().Add(time.Hour)}); err != nil {
+	if err := s.CreateEnrollmentToken(ctx, workers.EnrollmentToken{ID: tokenID(t, 5), Hash: h, CreatedAt: t0(), ExpiresAt: t0().Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	sameName := newWorker(t, 2)
@@ -569,7 +587,7 @@ func testEnrollmentTokenRace(t *testing.T, s Store) {
 	taken := newWorker(t, 100)
 	mustCreateWorker(t, s, taken)
 	h := workers.TokenHash{7}
-	if err := s.CreateEnrollmentToken(ctx, workers.EnrollmentToken{Hash: h, CreatedAt: t0(), ExpiresAt: t0().Add(time.Hour)}); err != nil {
+	if err := s.CreateEnrollmentToken(ctx, workers.EnrollmentToken{ID: tokenID(t, 7), Hash: h, CreatedAt: t0(), ExpiresAt: t0().Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup

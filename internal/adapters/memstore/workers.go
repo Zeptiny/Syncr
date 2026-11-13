@@ -167,13 +167,41 @@ func (s *Store) updateWorker(id domain.WorkerID, fn func(*workers.Worker) error)
 
 // CreateEnrollmentToken implements workers.TokenRepository.
 func (s *Store) CreateEnrollmentToken(_ context.Context, t workers.EnrollmentToken) error {
+	if t.ID.IsZero() {
+		return fmt.Errorf("enrollment token: %w: no ID", domain.ErrInvalidArgument)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.tokens[t.Hash]; ok {
 		return fmt.Errorf("enrollment token: %w", domain.ErrAlreadyExists)
 	}
+	if _, ok := s.tokenByIDLocked(t.ID); ok {
+		return fmt.Errorf("enrollment token %s: %w", t.ID, domain.ErrAlreadyExists)
+	}
 	s.tokens[t.Hash] = t
 	return nil
+}
+
+// GetEnrollmentToken implements workers.TokenRepository.
+func (s *Store) GetEnrollmentToken(_ context.Context, id domain.EnrollmentTokenID) (workers.EnrollmentToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tokenByIDLocked(id)
+	if !ok {
+		return workers.EnrollmentToken{}, fmt.Errorf("enrollment token %s: %w", id, domain.ErrNotFound)
+	}
+	return t, nil
+}
+
+// tokenByIDLocked finds a token by ID. Tokens are few (expired ones are
+// purged), so a scan is enough.
+func (s *Store) tokenByIDLocked(id domain.EnrollmentTokenID) (workers.EnrollmentToken, bool) {
+	for _, t := range s.tokens {
+		if t.ID == id {
+			return t, true
+		}
+	}
+	return workers.EnrollmentToken{}, false
 }
 
 // EnrollWorker implements workers.TokenRepository: the token check, the

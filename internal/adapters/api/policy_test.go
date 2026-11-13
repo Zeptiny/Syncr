@@ -140,7 +140,8 @@ func TestPolicyLevels(t *testing.T) {
 			syncrv1connect.AuthServiceDeleteAPITokenProcedure,
 		},
 		admin: {
-			syncrv1connect.WorkerAdminServiceCreateEnrollmentTokenProcedure, syncrv1connect.WorkerAdminServiceGetPassiveInstallCommandsProcedure,
+			syncrv1connect.WorkerAdminServiceCreateEnrollmentTokenProcedure, syncrv1connect.WorkerAdminServiceGetEnrollmentTokenProcedure,
+			syncrv1connect.WorkerAdminServiceGetPassiveInstallCommandsProcedure,
 			syncrv1connect.WorkerAdminServiceRegisterPassiveWorkerProcedure, syncrv1connect.WorkerAdminServiceRenameWorkerProcedure,
 			syncrv1connect.WorkerAdminServiceRemoveWorkerProcedure, syncrv1connect.WorkerAdminServiceSetWorkerLabelsProcedure,
 			syncrv1connect.WorkerAdminServiceGetWorkerUpgradeCommandsProcedure,
@@ -250,6 +251,8 @@ func TestGuardChecksRoleAndMethod(t *testing.T) {
 	_, err := userWorkers.RenameWorker(t.Context(), connect.NewRequest(&syncrv1.RenameWorkerRequest{WorkerId: e.worker.String(), Name: "x"}))
 	wantCode(t, err, connect.CodePermissionDenied)
 	_, err = userWorkers.CreateEnrollmentToken(t.Context(), connect.NewRequest(&syncrv1.CreateEnrollmentTokenRequest{}))
+	wantCode(t, err, connect.CodePermissionDenied)
+	_, err = userWorkers.GetEnrollmentToken(t.Context(), connect.NewRequest(&syncrv1.GetEnrollmentTokenRequest{TokenId: domain.NewEnrollmentTokenID().String()}))
 	wantCode(t, err, connect.CodePermissionDenied)
 	adminWorkers := syncrv1connect.NewWorkerAdminServiceClient(as(testAdmin, "token"), e.srv.URL)
 	if _, err := adminWorkers.RenameWorker(t.Context(), connect.NewRequest(&syncrv1.RenameWorkerRequest{WorkerId: e.worker.String(), Name: "x"})); err != nil {

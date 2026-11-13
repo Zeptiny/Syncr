@@ -42,6 +42,9 @@ const (
 	// WorkerAdminServiceCreateEnrollmentTokenProcedure is the fully-qualified name of the
 	// WorkerAdminService's CreateEnrollmentToken RPC.
 	WorkerAdminServiceCreateEnrollmentTokenProcedure = "/syncr.v1.WorkerAdminService/CreateEnrollmentToken"
+	// WorkerAdminServiceGetEnrollmentTokenProcedure is the fully-qualified name of the
+	// WorkerAdminService's GetEnrollmentToken RPC.
+	WorkerAdminServiceGetEnrollmentTokenProcedure = "/syncr.v1.WorkerAdminService/GetEnrollmentToken"
 	// WorkerAdminServiceGetPassiveInstallCommandsProcedure is the fully-qualified name of the
 	// WorkerAdminService's GetPassiveInstallCommands RPC.
 	WorkerAdminServiceGetPassiveInstallCommandsProcedure = "/syncr.v1.WorkerAdminService/GetPassiveInstallCommands"
@@ -163,6 +166,12 @@ type WorkerAdminServiceClient interface {
 	// `syncr-worker setup --token`, with ready-to-copy install commands. The
 	// token is returned once; the controller stores only its hash.
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
+	// GetEnrollmentToken returns where an enrollment token is: waiting to be
+	// used, used (with the worker it enrolled) or expired. The page that
+	// created the token follows the enrollment with it, then with GetWorker.
+	// Tokens are kept for a day after they expire; NOT_FOUND for an unknown
+	// ID or a token deleted since.
+	GetEnrollmentToken(context.Context, *connect.Request[v1.GetEnrollmentTokenRequest]) (*connect.Response[v1.GetEnrollmentTokenResponse], error)
 	// GetPassiveInstallCommands returns the commands that install a passive
 	// worker (`syncr-worker setup --passive`), which then prints the URL,
 	// fingerprint and pairing secret for RegisterPassiveWorker.
@@ -212,6 +221,13 @@ func NewWorkerAdminServiceClient(httpClient connect.HTTPClient, baseURL string, 
 			httpClient,
 			baseURL+WorkerAdminServiceCreateEnrollmentTokenProcedure,
 			connect.WithSchema(workerAdminServiceMethods.ByName("CreateEnrollmentToken")),
+			connect.WithClientOptions(opts...),
+		),
+		getEnrollmentToken: connect.NewClient[v1.GetEnrollmentTokenRequest, v1.GetEnrollmentTokenResponse](
+			httpClient,
+			baseURL+WorkerAdminServiceGetEnrollmentTokenProcedure,
+			connect.WithSchema(workerAdminServiceMethods.ByName("GetEnrollmentToken")),
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 			connect.WithClientOptions(opts...),
 		),
 		getPassiveInstallCommands: connect.NewClient[v1.GetPassiveInstallCommandsRequest, v1.GetPassiveInstallCommandsResponse](
@@ -275,6 +291,7 @@ func NewWorkerAdminServiceClient(httpClient connect.HTTPClient, baseURL string, 
 // workerAdminServiceClient implements WorkerAdminServiceClient.
 type workerAdminServiceClient struct {
 	createEnrollmentToken     *connect.Client[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse]
+	getEnrollmentToken        *connect.Client[v1.GetEnrollmentTokenRequest, v1.GetEnrollmentTokenResponse]
 	getPassiveInstallCommands *connect.Client[v1.GetPassiveInstallCommandsRequest, v1.GetPassiveInstallCommandsResponse]
 	registerPassiveWorker     *connect.Client[v1.RegisterPassiveWorkerRequest, v1.RegisterPassiveWorkerResponse]
 	listWorkers               *connect.Client[v1.ListWorkersRequest, v1.ListWorkersResponse]
@@ -288,6 +305,11 @@ type workerAdminServiceClient struct {
 // CreateEnrollmentToken calls syncr.v1.WorkerAdminService.CreateEnrollmentToken.
 func (c *workerAdminServiceClient) CreateEnrollmentToken(ctx context.Context, req *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error) {
 	return c.createEnrollmentToken.CallUnary(ctx, req)
+}
+
+// GetEnrollmentToken calls syncr.v1.WorkerAdminService.GetEnrollmentToken.
+func (c *workerAdminServiceClient) GetEnrollmentToken(ctx context.Context, req *connect.Request[v1.GetEnrollmentTokenRequest]) (*connect.Response[v1.GetEnrollmentTokenResponse], error) {
+	return c.getEnrollmentToken.CallUnary(ctx, req)
 }
 
 // GetPassiveInstallCommands calls syncr.v1.WorkerAdminService.GetPassiveInstallCommands.
@@ -336,6 +358,12 @@ type WorkerAdminServiceHandler interface {
 	// `syncr-worker setup --token`, with ready-to-copy install commands. The
 	// token is returned once; the controller stores only its hash.
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
+	// GetEnrollmentToken returns where an enrollment token is: waiting to be
+	// used, used (with the worker it enrolled) or expired. The page that
+	// created the token follows the enrollment with it, then with GetWorker.
+	// Tokens are kept for a day after they expire; NOT_FOUND for an unknown
+	// ID or a token deleted since.
+	GetEnrollmentToken(context.Context, *connect.Request[v1.GetEnrollmentTokenRequest]) (*connect.Response[v1.GetEnrollmentTokenResponse], error)
 	// GetPassiveInstallCommands returns the commands that install a passive
 	// worker (`syncr-worker setup --passive`), which then prints the URL,
 	// fingerprint and pairing secret for RegisterPassiveWorker.
@@ -381,6 +409,13 @@ func NewWorkerAdminServiceHandler(svc WorkerAdminServiceHandler, opts ...connect
 		WorkerAdminServiceCreateEnrollmentTokenProcedure,
 		svc.CreateEnrollmentToken,
 		connect.WithSchema(workerAdminServiceMethods.ByName("CreateEnrollmentToken")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workerAdminServiceGetEnrollmentTokenHandler := connect.NewUnaryHandler(
+		WorkerAdminServiceGetEnrollmentTokenProcedure,
+		svc.GetEnrollmentToken,
+		connect.WithSchema(workerAdminServiceMethods.ByName("GetEnrollmentToken")),
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 		connect.WithHandlerOptions(opts...),
 	)
 	workerAdminServiceGetPassiveInstallCommandsHandler := connect.NewUnaryHandler(
@@ -442,6 +477,8 @@ func NewWorkerAdminServiceHandler(svc WorkerAdminServiceHandler, opts ...connect
 		switch r.URL.Path {
 		case WorkerAdminServiceCreateEnrollmentTokenProcedure:
 			workerAdminServiceCreateEnrollmentTokenHandler.ServeHTTP(w, r)
+		case WorkerAdminServiceGetEnrollmentTokenProcedure:
+			workerAdminServiceGetEnrollmentTokenHandler.ServeHTTP(w, r)
 		case WorkerAdminServiceGetPassiveInstallCommandsProcedure:
 			workerAdminServiceGetPassiveInstallCommandsHandler.ServeHTTP(w, r)
 		case WorkerAdminServiceRegisterPassiveWorkerProcedure:
@@ -469,6 +506,10 @@ type UnimplementedWorkerAdminServiceHandler struct{}
 
 func (UnimplementedWorkerAdminServiceHandler) CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.CreateEnrollmentToken is not implemented"))
+}
+
+func (UnimplementedWorkerAdminServiceHandler) GetEnrollmentToken(context.Context, *connect.Request[v1.GetEnrollmentTokenRequest]) (*connect.Response[v1.GetEnrollmentTokenResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.WorkerAdminService.GetEnrollmentToken is not implemented"))
 }
 
 func (UnimplementedWorkerAdminServiceHandler) GetPassiveInstallCommands(context.Context, *connect.Request[v1.GetPassiveInstallCommandsRequest]) (*connect.Response[v1.GetPassiveInstallCommandsResponse], error) {

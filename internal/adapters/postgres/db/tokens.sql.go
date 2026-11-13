@@ -14,7 +14,7 @@ import (
 const consumeEnrollmentToken = `-- name: ConsumeEnrollmentToken :one
 UPDATE enrollment_tokens SET used_at = $1::timestamptz, used_by = $2::uuid
 WHERE hash = $3 AND used_at IS NULL AND expires_at > $1::timestamptz
-RETURNING hash, created_at, expires_at, used_at, used_by
+RETURNING hash, created_at, expires_at, used_at, used_by, id
 `
 
 type ConsumeEnrollmentTokenParams struct {
@@ -32,16 +32,18 @@ func (q *Queries) ConsumeEnrollmentToken(ctx context.Context, arg ConsumeEnrollm
 		&i.ExpiresAt,
 		&i.UsedAt,
 		&i.UsedBy,
+		&i.ID,
 	)
 	return i, err
 }
 
 const createEnrollmentToken = `-- name: CreateEnrollmentToken :exec
-INSERT INTO enrollment_tokens (hash, created_at, expires_at, used_at, used_by)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO enrollment_tokens (id, hash, created_at, expires_at, used_at, used_by)
+VALUES ($1, $2, $3, $4, $5, $6)
 `
 
 type CreateEnrollmentTokenParams struct {
+	ID        pgtype.UUID
 	Hash      []byte
 	CreatedAt pgtype.Timestamptz
 	ExpiresAt pgtype.Timestamptz
@@ -51,6 +53,7 @@ type CreateEnrollmentTokenParams struct {
 
 func (q *Queries) CreateEnrollmentToken(ctx context.Context, arg CreateEnrollmentTokenParams) error {
 	_, err := q.db.Exec(ctx, createEnrollmentToken,
+		arg.ID,
 		arg.Hash,
 		arg.CreatedAt,
 		arg.ExpiresAt,
@@ -70,4 +73,22 @@ func (q *Queries) DeleteEnrollmentTokens(ctx context.Context, before pgtype.Time
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getEnrollmentToken = `-- name: GetEnrollmentToken :one
+SELECT hash, created_at, expires_at, used_at, used_by, id FROM enrollment_tokens WHERE id = $1
+`
+
+func (q *Queries) GetEnrollmentToken(ctx context.Context, id pgtype.UUID) (EnrollmentToken, error) {
+	row := q.db.QueryRow(ctx, getEnrollmentToken, id)
+	var i EnrollmentToken
+	err := row.Scan(
+		&i.Hash,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+		&i.UsedAt,
+		&i.UsedBy,
+		&i.ID,
+	)
+	return i, err
 }

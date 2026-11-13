@@ -259,6 +259,9 @@ func tokenFrom(r db.EnrollmentToken) (workers.EnrollmentToken, error) {
 		return workers.EnrollmentToken{}, fmt.Errorf("decode token: hash is %d bytes, want %d", len(r.Hash), len(t.Hash))
 	}
 	copy(t.Hash[:], r.Hash)
+	if err := decodeID(&t.ID, r.ID); err != nil {
+		return workers.EnrollmentToken{}, err
+	}
 	if err := decodeID(&t.UsedBy, r.UsedBy); err != nil {
 		return workers.EnrollmentToken{}, err
 	}
