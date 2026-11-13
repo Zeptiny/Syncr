@@ -57,10 +57,14 @@ rclone (1.75.2) that has it. Running it showed what shapes the design:
   transfer can also leave a `.partial` file on the receiving side, which
   the next run copies across and the run after removes.
 - On SIGINT, bisync lets the transfers under way finish for up to 30
-  seconds before it cancels them. When the signal arrives just as a
-  transfer ends, its clean-up can remove the `.partial` file the copy is
-  still finishing, and it reports that as a critical error: rarely, a
-  cancelled run leaves a pair that needs a resync.
+  seconds before it cancels them. But rclone runs its exit handlers in
+  random order, and the one that removes a copy's `.partial` file can run
+  first, at the signal: the transfer then finishes into the deleted file,
+  fails, and bisync reports a critical error. That happens in about one
+  stop in ten during a transfer, whatever the timing. `--recover` goes on
+  from the previous listings (`-old`), which only a normal run leaves: a
+  stop on the first normal run after a resync leaves a pair that needs a
+  resync.
 - A dry run keeps its listings apart (`.lst-dry`) and changes no state.
 - "New or changed in both paths" is logged for every file new or changed
   on both sides, also when both versions are equal; only the rename or
@@ -336,9 +340,10 @@ constant, not a setting. A pruned pair resyncs on its next run.
 - A cancel, a time limit or a worker stop gives rclone the supervisor's
   10 seconds; a transfer that needs longer is killed, and the next run
   finishes it with `--recover` (one more run may be needed to remove a
-  `.partial` file). On Windows every cancel is a kill. Rarely, a cancel
-  just as a transfer ends is recorded as a critical error (an rclone
-  race); the next run goes on from the last good state.
+  `.partial` file). On Windows every cancel is a kill. On Linux, about one
+  stop in ten during a transfer is recorded as a critical error (rclone's
+  exit handlers run in random order); the next run goes on from the
+  previous listings, except right after a resync, where it needs one.
 - Interrupt delivery and long work-directory paths on Windows can only be
   verified in CI.
 
