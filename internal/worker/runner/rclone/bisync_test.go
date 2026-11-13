@@ -47,10 +47,7 @@ type bisyncFixture struct {
 
 func newBisyncFixture(t *testing.T, sup *fakeSupervisor) *bisyncFixture {
 	t.Helper()
-	base, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := shortBase(t)
 	f := &bisyncFixture{scratch: filepath.Join(base, "scratch"), data: filepath.Join(base, "data"), sup: sup}
 	f.hook = &hookSupervisor{fakeSupervisor: sup}
 	for _, d := range []string{filepath.Join(f.data, "a"), filepath.Join(f.data, "b")} {
