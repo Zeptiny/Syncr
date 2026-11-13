@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
@@ -182,6 +183,15 @@ type execution struct {
 	cmd     command
 	emit    runner.EmitFunc
 	secrets []string
+	// stdout, if set, reads restic's standard output instead of the
+	// session, which still reads standard error (where restic --json
+	// writes its errors); with chunks, in pieces as restic writes them
+	// rather than lines (proc.Spec.StdoutChunks). grace, if positive,
+	// bounds how long restic may take to stop once ctx ends
+	// (proc.Spec.GracePeriod). The probes that walk whole trees use them.
+	stdout func(proc.Line)
+	chunks bool
+	grace  time.Duration
 }
 
 // exec runs a planned command. It returns the session that read restic's
@@ -237,13 +247,19 @@ func (e *engine) exec(ctx context.Context, x execution) (runner.Result, *session
 	argv = append(argv, cmd.verb)
 	argv = append(argv, cmd.args...)
 
+	stdout := s.stdout
+	if x.stdout != nil {
+		stdout = x.stdout
+	}
 	pres, err := e.cfg.Supervisor.Run(ctx, proc.Spec{
-		Path:   e.cfg.ResticPath,
-		Args:   argv,
-		Dir:    e.cfg.ScratchRoot,
-		Env:    env,
-		Stdout: s.stdout,
-		Stderr: s.line,
+		Path:         e.cfg.ResticPath,
+		Args:         argv,
+		Dir:          e.cfg.ScratchRoot,
+		Env:          env,
+		Stdout:       stdout,
+		Stderr:       s.line,
+		StdoutChunks: x.chunks,
+		GracePeriod:  x.grace,
 	})
 	res.ExitCode = pres.ExitCode
 	res.Stats = s.stats()

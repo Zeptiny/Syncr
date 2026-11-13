@@ -1,0 +1,10 @@
+{"message_type":"change","path":"/srv/data/a.txt","modifier":"M"}
+{"message_type":"change","path":"/srv/data/docs/new.txt","modifier":"+"}
+{"message_type":"change","path":"/srv/data/docs/readme.md","modifier":"-"}
+{"message_type":"change","path":"/srv/data/link","modifier":"T"}
+{"message_type":"change","path":"/srv/data/music/","modifier":"+"}
+{"message_type":"change","path":"/srv/data/music/song.mp3","modifier":"+"}
+{"message_type":"change","path":"/srv/data/notes/","modifier":"+"}
+{"message_type":"change","path":"/srv/data/notes/n.txt","modifier":"+"}
+{"message_type":"change","path":"/srv/data/notes.txt","modifier":"-"}
+{"message_type":"statistics","source_snapshot":"aaccfc378cedc448695f508ada61bfdded73217851f07cc9d2374370d643390a","target_snapshot":"db00132fa3811fd9acfb2c5cf52d18f53de1c847bda7685498cb0fe34df8c82b","changed_files":1,"added":{"files":3,"dirs":2,"others":0,"data_blobs":5,"tree_blobs":8,"bytes":6148},"removed":{"files":2,"dirs":0,"others":0,"data_blobs":3,"tree_blobs":6,"bytes":4983}}

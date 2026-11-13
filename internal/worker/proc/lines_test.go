@@ -75,3 +75,31 @@ func TestNilLineWriterFlush(t *testing.T) {
 	var w *lineWriter
 	w.flush() // must not panic
 }
+
+func TestLineWriterChunks(t *testing.T) {
+	t.Parallel()
+	var got []string
+	out := make(chan streamLine, 16)
+	w := newLineWriter(func(l Line) {
+		if l.Truncated {
+			t.Error("a chunk is marked truncated")
+		}
+		got = append(got, string(l.Data))
+	}, 4, out)
+	w.chunks = true
+	for _, s := range []string{"ab\ncd", "", "efghij\r\n"} {
+		if n, err := w.Write([]byte(s)); n != len(s) || err != nil {
+			t.Fatalf("Write(%q) = (%d, %v)", s, n, err)
+		}
+	}
+	close(out)
+	for l := range out {
+		l.deliver()
+	}
+	w.flush()
+	// Chunks keep newlines and carriage returns, follow the writes and
+	// are at most max bytes.
+	if want := []string{"ab\nc", "d", "efgh", "ij\r\n"}; !slices.Equal(got, want) {
+		t.Errorf("chunks = %q, want %q", got, want)
+	}
+}

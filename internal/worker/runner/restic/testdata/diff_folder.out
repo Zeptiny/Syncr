@@ -1,0 +1,3 @@
+{"message_type":"change","path":"/new.txt","modifier":"+"}
+{"message_type":"change","path":"/readme.md","modifier":"-"}
+{"message_type":"statistics","source_snapshot":"aaccfc378cedc448695f508ada61bfdded73217851f07cc9d2374370d643390a:/srv/data/docs","target_snapshot":"db00132fa3811fd9acfb2c5cf52d18f53de1c847bda7685498cb0fe34df8c82b:/srv/data/docs","changed_files":0,"added":{"files":1,"dirs":0,"others":0,"data_blobs":1,"tree_blobs":1,"bytes":693},"removed":{"files":1,"dirs":0,"others":0,"data_blobs":1,"tree_blobs":1,"bytes":675}}

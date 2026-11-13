@@ -1,0 +1,15 @@
+[
+{"Path":"a.txt","Name":"a.txt","Size":4,"ModTime":"","IsDir":false},
+{"Path":"docs","Name":"docs","Size":80,"ModTime":"","IsDir":true},
+{"Path":"empty","Name":"empty","Size":40,"ModTime":"","IsDir":true},
+{"Path":"locked","Name":"locked","Size":60,"ModTime":"","IsDir":true},
+{"Path":"photos","Name":"photos","Size":60,"ModTime":"","IsDir":true},
+{"Path":"photos/2025","Name":"2025","Size":80,"ModTime":"","IsDir":true},
+{"Path":"locked/inner","Name":"inner","Size":60,"ModTime":"","IsDir":true},
+{"Path":"docs/deep","Name":"deep","Size":60,"ModTime":"","IsDir":true},
+{"Path":"docs/readme.md","Name":"readme.md","Size":5,"ModTime":"","IsDir":false},
+{"Path":"locked/inner/l.txt","Name":"l.txt","Size":2,"ModTime":"","IsDir":false},
+{"Path":"photos/2025/IMG2.JPG","Name":"IMG2.JPG","Size":5000,"ModTime":"","IsDir":false},
+{"Path":"photos/2025/img1.jpg","Name":"img1.jpg","Size":3000,"ModTime":"","IsDir":false},
+{"Path":"docs/deep/e.txt","Name":"e.txt","Size":5,"ModTime":"","IsDir":false}
+]

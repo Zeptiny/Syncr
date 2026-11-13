@@ -2,7 +2,8 @@
 // restic_init, restic_backup, restic_forget, restic_prune, restic_check,
 // restic_restore, restic_snapshots and restic_delete_data, and the Prober
 // that answers the restic probe operations (snapshot listings, browsing a
-// snapshot, creating a repository and reading its config) with the same
+// snapshot, creating a repository and reading its config; measuring a
+// snapshot's folder, searching and comparing snapshots) with the same
 // engine.
 //
 // Every job runs one child process of the pinned restic binary through the

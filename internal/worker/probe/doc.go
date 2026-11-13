@@ -12,14 +12,24 @@
 // with the controller), bounds on listing sizes and on the encoded result,
 // and the mapping of failures to wire error codes.
 //
+// The heavy operations (link.HeavyProbeOps: measuring a folder, searching
+// and comparing snapshots) walk whole trees. Each also holds one of the
+// MaxHeavy slots (one by default), so a worker measures or searches one
+// thing at a time, and ends at a soft deadline before the probe's timeout
+// (SoftMargin): it then answers OK with what it found and complete=false,
+// so that a long walk still returns something within a proxy's timeout.
+// Their results are bounded too: child folders by MaxEntries, matches and
+// changes by the request (DefaultMatches, DefaultChanges) and the caps
+// MaxMatches and MaxChanges.
+//
 // Every operation stops with its context: the tools' child processes are
-// ended, and a local listing checks its context between batches of
-// directory entries and between stats. A filesystem call blocked in the
-// kernel (a hung network mount) cannot be interrupted, so a local listing
-// runs in a goroutine that holds the probe's slot: the probe answers at its
-// deadline or cancellation, and the slot comes back when the call returns.
-// Stuck listings therefore never exceed the slots, and while every slot is
-// stuck the worker answers BUSY.
+// ended, and a local listing or measurement checks its context between
+// batches of directory entries and between stats. A filesystem call
+// blocked in the kernel (a hung network mount) cannot be interrupted, so a
+// local operation runs in a goroutine that holds the probe's slots: the
+// probe answers at its deadline or cancellation, and the slots come back
+// when the call returns. Stuck operations therefore never exceed the
+// slots, and while every slot is stuck the worker answers BUSY.
 //
 // A probe never returns a Go error: its outcome, including failures and
 // cancellation, is a ProbeResult. Nothing about a probe is stored, and

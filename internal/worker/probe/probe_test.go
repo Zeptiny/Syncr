@@ -240,28 +240,15 @@ func mustFail(t *testing.T, res *syncrv1.ProbeResult, code syncrv1.JobErrorCode)
 	}
 }
 
-// runOps are the probe ops this executor runs: every op of the contract
-// but the Milestone 7 heavy ones, which it does not advertise until it
-// implements them.
-func runOps() []string {
-	return slices.DeleteFunc(link.ProbeOps(), link.IsHeavyProbeOp)
-}
-
 func TestEveryOpIsDispatched(t *testing.T) {
 	t.Parallel()
 	tools := &fakeTools{entries: 2, snapshots: 2}
 	local := &fakeLocal{listing: localfs.Listing{Entries: []localfs.Entry{{Name: "a", Path: "/srv/a", Dir: true}}}}
 	e := newExecutor(t, tools, local)
-	if !slices.Equal(e.Ops(), runOps()) {
-		t.Errorf("Ops() = %v, want every op of the contract but the heavy ones %v", e.Ops(), runOps())
+	if !slices.Equal(e.Ops(), link.ProbeOps()) {
+		t.Errorf("Ops() = %v, want every op of the contract %v", e.Ops(), link.ProbeOps())
 	}
-	for _, op := range link.HeavyProbeOps() {
-		mustFail(t, e.Probe(t.Context(), probeOf(op, 0)), syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSUPPORTED_KIND)
-	}
-	if len(tools.calls) != 0 {
-		t.Errorf("heavy ops reached a tool: %v", tools.calls)
-	}
-	for _, op := range runOps() {
+	for _, op := range link.ProbeOps() {
 		res := e.Probe(t.Context(), probeOf(op, 0))
 		if res.GetStatus() != syncrv1.ProbeStatus_PROBE_STATUS_OK || res.GetProbeId() != "p-"+op || res.GetError() != nil || res.GetElapsed() == nil {
 			t.Errorf("%s: result = %v", op, res)
@@ -286,6 +273,16 @@ func TestEveryOpIsDispatched(t *testing.T) {
 		case "sftp_host_keys":
 			keys := res.GetSftpHostKeys().GetKeys()
 			ok = len(keys) == 2 && keys[0].GetKey() == "AAAAsftp.example.com" && tools.bound == 22
+		case "measure_local":
+			ok = res.GetMeasurement().GetPath() == "/srv" && res.GetMeasurement().GetComplete() && local.limit == DefaultMaxEntries
+		case "measure_remote":
+			ok = res.GetMeasurement().GetPath() == "bucket" && res.GetMeasurement().GetComplete() && tools.bound == DefaultMaxEntries
+		case "restic_measure":
+			ok = res.GetMeasurement().GetPath() == "/" && res.GetMeasurement().GetComplete() && tools.bound == DefaultMaxEntries
+		case "restic_find":
+			ok = res.GetFind().GetComplete() && tools.bound == DefaultMatches
+		case "restic_diff":
+			ok = res.GetDiff().GetComplete() && res.GetDiff().GetStats() != nil && tools.bound == DefaultChanges
 		}
 		if !ok {
 			t.Errorf("%s: output = %v", op, res.GetOutput())
@@ -307,9 +304,12 @@ func TestOpsFollowTheAvailableTools(t *testing.T) {
 		want []string
 	}{
 		{"nothing", Config{}, []string{"sftp_host_keys"}},
-		{"local only", Config{Local: &fakeLocal{}}, []string{"list_local", "sftp_host_keys"}},
-		{"rclone only", Config{Rclone: fakeRclone{tools}}, []string{"list_remote", "about", "sftp_host_keys"}},
-		{"restic only", Config{Restic: tools}, []string{"restic_snapshots", "restic_ls", "restic_init", "restic_config", "sftp_host_keys"}},
+		{"local only", Config{Local: &fakeLocal{}}, []string{"list_local", "sftp_host_keys", "measure_local"}},
+		{"rclone only", Config{Rclone: fakeRclone{tools}}, []string{"list_remote", "about", "sftp_host_keys", "measure_remote"}},
+		{"restic only", Config{Restic: tools}, []string{
+			"restic_snapshots", "restic_ls", "restic_init", "restic_config", "sftp_host_keys",
+			"restic_measure", "restic_find", "restic_diff",
+		}},
 	}
 	for _, tc := range tests {
 		tc.cfg.HostKeys = hostKeys
