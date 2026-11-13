@@ -5,16 +5,19 @@ import { KeyValueList } from "@/components/app/key-value-list";
 import { Panel } from "@/components/app/panel";
 import { ShortId } from "@/components/app/short-id";
 import type { Job } from "@/gen/syncr/v1/api_pb";
-import type {
-  ResticBackupOutput,
-  ResticCheckOutput,
-  ResticDeleteDataOutput,
-  ResticForgetOutput,
-  ResticRestoreOutput,
+import {
+  BisyncResyncReason,
+  type RcloneBisyncOutput,
+  type ResticBackupOutput,
+  type ResticCheckOutput,
+  type ResticDeleteDataOutput,
+  type ResticForgetOutput,
+  type ResticRestoreOutput,
 } from "@/gen/syncr/v1/link_pb";
 import { formatBytes, formatCount, toNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+import { bisyncOf, conflictsSummary, resyncModeLabel } from "./bisync-definition";
 import { resticSummary } from "./model";
 
 function Figure({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
@@ -275,6 +278,77 @@ export function DeleteDataCard({ out }: { out: ResticDeleteDataOutput }) {
   );
 }
 
+/** BisyncCard shows what a two-way sync did: a resync and why, and the files changed on both sides. */
+export function BisyncCard({ out, job }: { out: RcloneBisyncOutput; job: Job }) {
+  const b = bisyncOf(job.definition);
+  const conflicts = toNumber(out.conflicts);
+  const more = conflicts - out.conflictPaths.length;
+  const resync = out.resyncReason !== BisyncResyncReason.UNSPECIFIED;
+  const keep = resyncModeLabel(b?.options?.resyncMode);
+  return (
+    <Panel title="Two-way sync result">
+      <div className="flex flex-col gap-5">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          <Figure
+            label="Run"
+            value={resync ? "Resync" : "Normal"}
+            sub={
+              out.resyncReason === BisyncResyncReason.FIRST_RUN
+                ? "first run on this worker"
+                : out.resyncReason === BisyncResyncReason.REQUESTED
+                  ? "asked for"
+                  : "changes spread both ways"
+            }
+          />
+          <Figure
+            label="Conflicts"
+            value={formatCount(conflicts)}
+            sub={conflicts > 0 ? "changed on both sides" : "none"}
+          />
+          {out.dryRun && <Figure label="Changes" value="None" sub="dry run" />}
+        </div>
+        {resync && (
+          <p className="text-[13px] leading-5">
+            {out.resyncReason === BisyncResyncReason.FIRST_RUN
+              ? "This worker had no state for the pair yet, so the run was a resync."
+              : "This run was a resync, as asked."}{" "}
+            It merged both folders: each got the files it lacked, nothing was deleted, and where a
+            file differed {keep} was kept.
+          </p>
+        )}
+        {out.dryRun && (
+          <p className="text-[13px] leading-5 text-muted-foreground">
+            A dry run: nothing was changed and the pair's state was kept as it was. The conflicts
+            are the ones it found.
+          </p>
+        )}
+        {conflicts > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs text-muted-foreground">
+              Changed on both sides: {conflictsSummary(b)}
+            </span>
+            <ul className="flex flex-col gap-1" aria-label="Conflicts">
+              {out.conflictPaths.map((p) => (
+                <li
+                  key={p}
+                  className="w-fit max-w-full rounded bg-warning-soft px-1.5 py-0.5 font-mono text-[12.5px] break-all"
+                >
+                  {p}
+                </li>
+              ))}
+              {more > 0 && (
+                <li className="px-1.5 py-0.5 text-[13px] text-muted-foreground">
+                  and {formatCount(more)} more
+                </li>
+              )}
+            </ul>
+          </div>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
 /**
  * JobOutputCards renders what a finished job reported: the card of its
  * kind, then the controller's summary lines for any kind.
@@ -283,6 +357,7 @@ export function JobOutputCards({ job }: { job: Job }) {
   const out = job.output?.output;
   return (
     <>
+      {out?.case === "rcloneBisync" && <BisyncCard out={out.value} job={job} />}
       {out?.case === "resticBackup" && <BackupSummaryCard out={out.value} job={job} />}
       {out?.case === "resticForget" && <RetentionCard out={out.value} />}
       {out?.case === "resticCheck" && <CheckCard out={out.value} />}

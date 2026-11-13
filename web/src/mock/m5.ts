@@ -51,6 +51,7 @@ import {
 import type { User } from "@/gen/syncr/v1/users_pb";
 import * as fx from "@/test/fixtures";
 
+import * as bisync from "./bisync";
 import { next } from "./cron";
 
 type Violation = { field: string; message: string };
@@ -237,7 +238,12 @@ const repoDir: Tree = {
 export function workerTrees(): Record<string, Record<string, Tree>> {
   return {
     [fx.ids.nas]: {
-      "/srv": { photos: photos(), docs, backup: { "db-2026-11-09.sql.gz": 86 * MiB } },
+      "/srv": {
+        photos: photos(),
+        docs,
+        shared: bisync.sharedTree(),
+        backup: { "db-2026-11-09.sql.gz": 86 * MiB },
+      },
       "/mnt": { media },
     },
     [fx.ids.backupHost]: {
@@ -269,6 +275,7 @@ export function remoteTrees(): Record<string, Tree> {
     [fx.ids.nextcloud]: { Documents: {}, Projects: {} },
     [fx.ids.photos]: photos(),
     [fx.ids.media]: media,
+    [bisync.ids.r2]: { shared: bisync.sharedTree() },
   };
 }
 

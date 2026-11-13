@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@connectrpc/connect-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
-  ArrowRight,
+  AlertTriangle,
   CirclePause,
   Copy,
   ListFilter,
@@ -26,18 +26,27 @@ import { RelativeTime } from "@/components/app/relative-time";
 import { StatusPill } from "@/components/app/status-badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { WorkerAdminService, type Job } from "@/gen/syncr/v1/api_pb";
+import {
+  JobService,
+  JobStatus,
+  WorkerAdminService,
+  type Job,
+  type Worker,
+} from "@/gen/syncr/v1/api_pb";
+import { JobErrorCode } from "@/gen/syncr/v1/link_pb";
 import { DashboardService } from "@/gen/syncr/v1/dashboard_pb";
 import { ScheduleService, type Schedule } from "@/gen/syncr/v1/schedules_pb";
 import { useKeysetPager } from "@/hooks/use-keyset-pager";
 import { cronText } from "@/lib/cron";
 import { formatDateTime, tsDate } from "@/lib/format";
 import { invalidateService } from "@/lib/invalidate";
-import { eventMeta, pausedReasonLabel, transferModeLabel } from "@/lib/status";
+import { errorCodeLabel, eventMeta, pausedReasonLabel } from "@/lib/status";
 import { hasOffsetChange, zoneLabel } from "@/lib/timezones";
 
-import { Endpoint } from "../jobs/endpoint";
-import { endpoint, resticSummary, transferOf } from "../jobs/model";
+import { bisyncOf, bisyncOptionSummary, recoveryFor } from "../jobs/bisync-definition";
+import { BisyncRecovery } from "../jobs/bisync-recovery";
+import { RouteEndpoints } from "../jobs/endpoint";
+import { jobRoute, resticSummary, transferOf } from "../jobs/model";
 import { useScheduleActions } from "./actions";
 import { missedSummary, overlapLabel } from "./model";
 import { ScheduleRunsTable } from "./runs-table";
@@ -51,6 +60,8 @@ function asJob(s: Schedule): Job {
 function JobSummary({ schedule }: { schedule: Schedule }) {
   const job = asJob(schedule);
   const t = transferOf(job);
+  const bisync = bisyncOf(schedule.definition);
+  const route = jobRoute(job);
   const restic = resticSummary(schedule.definition, schedule.repository);
   if (restic)
     return (
@@ -68,22 +79,68 @@ function JobSummary({ schedule }: { schedule: Schedule }) {
         )}
       </div>
     );
-  if (!t) return <span className="text-muted-foreground">No transfer</span>;
+  if (!route) return <span className="text-muted-foreground">No transfer</span>;
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <Endpoint e={endpoint(job, t.source)} />
-        <ArrowRight className="size-3.5 shrink-0 text-muted-foreground" aria-label="to" />
-        <Endpoint e={endpoint(job, t.destination)} />
-      </div>
+      <RouteEndpoints route={route} className="flex-wrap" />
       <span className="text-xs text-muted-foreground">
-        {transferModeLabel(t.mode)}
-        {t.options?.dryRun ? ", dry run" : ""}
-        {t.options?.checksum ? ", compares checksums" : ""}
-        {t.options?.filters.length
+        {route.mode}
+        {bisync && `, ${bisyncOptionSummary(bisync)}`}
+        {t?.options?.dryRun ? ", dry run" : ""}
+        {t?.options?.checksum ? ", compares checksums" : ""}
+        {t?.options?.filters.length
           ? `, ${t.options.filters.length} ${t.options.filters.length === 1 ? "filter" : "filters"}`
           : ""}
       </span>
+    </div>
+  );
+}
+
+/**
+ * LastRunProblem shows what went wrong in the schedule's last run when it
+ * was a two-way sync that needs a decision (a resync, or a run past the
+ * safety check) or a fix (a folder that looked unavailable), with the
+ * same actions as the job page.
+ */
+function LastRunProblem({
+  schedule,
+  workers,
+}: {
+  schedule: Schedule;
+  workers: Map<string, Worker>;
+}) {
+  const last = schedule.lastRun;
+  const failed = !!last?.jobId && last.jobStatus === JobStatus.FAILED;
+  const q = useQuery(
+    JobService.method.getJob,
+    { jobId: last?.jobId ?? "" },
+    { enabled: failed && !!bisyncOf(schedule.definition) },
+  );
+  const job = failed ? q.data?.job : undefined;
+  if (!job || job.id !== last?.jobId || !recoveryFor(job.error?.code) || !bisyncOf(job.definition))
+    return null;
+  return (
+    <div
+      role="alert"
+      className="mb-6 flex gap-3 rounded-lg border border-danger/30 bg-danger-soft px-4 py-3.5"
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <div className="text-[13px] font-semibold text-danger">
+            Last run: {errorCodeLabel(job.error?.code ?? JobErrorCode.UNSPECIFIED)}
+          </div>
+          <Link
+            to="/jobs/$jobId"
+            params={{ jobId: job.id }}
+            className="text-[13px] font-medium text-primary hover:underline"
+          >
+            Open the job
+          </Link>
+        </div>
+        <p className="mt-0.5 font-mono text-[12.5px] leading-5 break-words">{job.error?.message}</p>
+        <BisyncRecovery job={job} canRun workerName={workers.get(job.workerId)?.name} />
+      </div>
     </div>
   );
 }
@@ -208,6 +265,8 @@ export function ScheduleDetailPage({ scheduleId }: { scheduleId: string }) {
           </div>
         </div>
       )}
+
+      <LastRunProblem schedule={s} workers={workerMap} />
 
       <div className="flex flex-col gap-6">
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">

@@ -34,6 +34,7 @@ import {
 import { UserRole, UserSchema, UserService } from "@/gen/syncr/v1/users_pb";
 import * as fx from "@/test/fixtures";
 
+import * as bisyncMock from "./bisync";
 import * as hooksMock from "./hooks";
 import { registerM4 } from "./m4";
 import * as m5mock from "./m5";
@@ -78,13 +79,20 @@ export function createMockTransport(): Transport {
   const workers = m5mock.workers(now);
   m6.applyWorkers(workers);
   hooksMock.applyWorkers(workers);
+  bisyncMock.applyWorkers(workers);
   workers.push(m6.atticWorker(now));
-  let remotes = [...fx.remotes(now), m6.verifiedRemote(now)].sort((a, b) =>
-    a.name.localeCompare(b.name),
+  let remotes = [...fx.remotes(now), m6.verifiedRemote(now), bisyncMock.r2Remote(now)].sort(
+    (a, b) => a.name.localeCompare(b.name),
   );
   const hist = fx.history(now);
   const m5data = m5mock.data(now);
   hist.schedules.push(...m5data.schedules);
+  const twoWay = bisyncMock.history(now);
+  hist.schedules.push(twoWay.schedule);
+  hist.runs.push(...twoWay.runs);
+  hist.runs.sort((a, b) =>
+    Number((b.scheduledFor?.seconds ?? 0n) - (a.scheduledFor?.seconds ?? 0n)),
+  );
   const limited = m6.timeLimitJob(now);
   const jobs = [
     ...fx.jobs(now),
@@ -92,6 +100,7 @@ export function createMockTransport(): Transport {
     ...m5data.jobs,
     limited.job,
     ...hooksMock.jobs(now),
+    ...twoWay.jobs,
   ].sort(
     (a, b) =>
       timestampMs(b.createdAt ?? timestampFromMs(0)) -
@@ -173,6 +182,7 @@ export function createMockTransport(): Transport {
     if (bytes >= total) {
       j.status = JobStatus.SUCCEEDED;
       j.finishedAt = timestampFromMs(Date.now());
+      bisyncMock.finish(j);
       m5.settle();
     }
   };
@@ -187,21 +197,24 @@ export function createMockTransport(): Transport {
   }): Job => {
     const op = p.definition?.operation;
     const restic = m5.describe(p.definition);
+    const twoWay = bisyncMock.describe(p.definition, remotes);
     const refs = restic
       ? restic.remotes
-      : op?.case === "rcloneTransfer"
-        ? [op.value.source?.remoteId, op.value.destination?.remoteId]
-            .filter((id): id is string => !!id)
-            .map((id) => {
-              const r = remotes.find((x) => x.id === id);
-              return { id, name: r?.name ?? "?", backendType: r?.backendType ?? "" };
-            })
-        : [];
+      : twoWay
+        ? twoWay.remotes
+        : op?.case === "rcloneTransfer"
+          ? [op.value.source?.remoteId, op.value.destination?.remoteId]
+              .filter((id): id is string => !!id)
+              .map((id) => {
+                const r = remotes.find((x) => x.id === id);
+                return { id, name: r?.name ?? "?", backendType: r?.backendType ?? "" };
+              })
+          : [];
     const j = create(JobSchema, {
       id: uuid(),
       workerId: p.workerId,
-      kind: restic?.kind ?? "rclone_transfer",
-      title: restic?.title ?? "",
+      kind: restic?.kind ?? (twoWay ? bisyncMock.KIND : "rclone_transfer"),
+      title: restic?.title ?? twoWay?.title ?? "",
       repository: restic?.repository,
       status: JobStatus.QUEUED,
       ownerId: p.ownerId,
@@ -225,7 +238,7 @@ export function createMockTransport(): Transport {
       j.stats = {
         $typeName: "syncr.v1.JobStats",
         bytes: 0n,
-        totalBytes: BigInt(6 * 1024 ** 3),
+        totalBytes: BigInt((twoWay ? 1.2 : 6) * 1024 ** 3),
         files: 0n,
         totalFiles: 1500n,
         checks: 0n,
@@ -567,6 +580,9 @@ export function createMockTransport(): Transport {
               op?.case === "rcloneTransfer"
                 ? `${op.value.source?.path} ${op.value.destination?.path}`
                 : "",
+              op?.case === "rcloneBisync"
+                ? `bisync two-way ${op.value.path1?.path} ${op.value.path2?.path}`
+                : "",
             ]
               .join(" ")
               .toLowerCase();
@@ -592,7 +608,7 @@ export function createMockTransport(): Transport {
         } else if (j.status === JobStatus.RUNNING || j.status === JobStatus.DISPATCHED) {
           j.cancelRequested = true;
           // Nothing streams a restic job in the mock, so stop it here.
-          if (j.kind !== "rclone_transfer") {
+          if (j.kind !== "rclone_transfer" && j.kind !== bisyncMock.KIND) {
             j.status = JobStatus.CANCELLED;
             j.finishedAt = timestampFromMs(Date.now());
           }
@@ -606,6 +622,7 @@ export function createMockTransport(): Transport {
         const problems = [
           ...m5.check(req.definition, false, req.workerId),
           ...hooksMock.check(req.definition, workers, req.workerId),
+          ...bisyncMock.check(req.definition, { forSchedule: false }),
         ];
         if (problems.length) throw invalid(problems);
         if (op?.case === undefined)

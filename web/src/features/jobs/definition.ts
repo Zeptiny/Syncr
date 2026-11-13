@@ -5,6 +5,15 @@ import type { FieldViolation, JobDefinition, JobDefinitionSchema } from "@/gen/s
 import { FilterAction, RcloneTransferMode } from "@/gen/syncr/v1/link_pb";
 import { toNumber } from "@/lib/format";
 
+import {
+  bisyncError,
+  bisyncState,
+  emptyBisync,
+  toBisync,
+  validateBisync,
+  type BisyncErrorKey,
+  type BisyncState,
+} from "./bisync-definition";
 import { emptyHooks, hooksError, hooksState, toHooks, type HooksState } from "./hooks";
 import {
   backupState,
@@ -79,7 +88,8 @@ export interface TransferState {
 /**
  * DefinitionErrors are the definition's problems, by form section. The
  * first four belong to transfers; repository, paths, excludes, policy and
- * readData to the restic kinds; options, timeLimit and hooks to every kind.
+ * readData to the restic kinds; the BisyncErrorKey ones to two-way syncs;
+ * options, timeLimit and hooks to every kind.
  */
 export type DefinitionErrors = Partial<
   Record<
@@ -94,7 +104,8 @@ export type DefinitionErrors = Partial<
     | "policy"
     | "readData"
     | "timeLimit"
-    | "hooks",
+    | "hooks"
+    | BisyncErrorKey,
     string
   >
 >;
@@ -242,7 +253,8 @@ export function toTransferDefinition(
 /**
  * definitionError places one API violation on a definition section, or
  * returns false when the field is not part of the definition. Paths look
- * like definition.rclone_transfer.source.path or
+ * like definition.rclone_transfer.source.path,
+ * definition.rclone_bisync.options.max_delete_percent or
  * definition.restic_backup.paths[0].
  */
 export function definitionError(v: FieldViolation, errors: DefinitionErrors): boolean {
@@ -255,6 +267,11 @@ export function definitionError(v: FieldViolation, errors: DefinitionErrors): bo
   if (hooks !== undefined) {
     // Several hooks can be wrong at once: keep every message.
     errors.hooks = errors.hooks ? `${errors.hooks} ${hooks}` : hooks;
+    return true;
+  }
+  const bisync = bisyncError(v);
+  if (bisync !== undefined) {
+    errors[bisync] = v.message;
     return true;
   }
   if (f.includes(".restic_")) {
@@ -283,6 +300,7 @@ export function definitionError(v: FieldViolation, errors: DefinitionErrors): bo
  */
 export type JobDefinitionState = (
   | { kind: "rclone_transfer"; transfer: TransferState }
+  | { kind: "rclone_bisync"; bisync: BisyncState }
   | { kind: "restic_backup"; backup: BackupState }
   | { kind: "restic_forget"; retention: RetentionState }
   | { kind: "restic_check"; check: CheckState }
@@ -331,6 +349,7 @@ export type EditableKind = JobDefinitionState["kind"];
 /** editableKinds are the kinds of JobDefinitionState, in display order. */
 export const editableKinds: EditableKind[] = [
   "rclone_transfer",
+  "rclone_bisync",
   "restic_backup",
   "restic_forget",
   "restic_check",
@@ -352,6 +371,8 @@ export function emptyDefinition(
 ): JobDefinitionState {
   const common = { timeLimit: emptyTimeLimit(), hooks: emptyHooks() };
   switch (kind) {
+    case "rclone_bisync":
+      return { kind, bisync: emptyBisync(), ...common };
     case "restic_backup":
       return { kind, backup: { ...emptyBackup(), repositoryId }, ...common };
     case "restic_forget":
@@ -381,14 +402,26 @@ export function definitionRepositoryId(s: JobDefinitionState): string {
   }
 }
 
-/** withKind switches the form to another kind, keeping the repository, the time limit and the hooks. */
+/**
+ * withKind switches the form to another kind, keeping the repository, the
+ * time limit and the hooks. Between a transfer and a two-way sync it also
+ * keeps the two locations (source as Folder A) and the filters.
+ */
 export function withKind(s: JobDefinitionState, kind: EditableKind): JobDefinitionState {
   if (s.kind === kind) return s;
-  return {
+  const next: JobDefinitionState = {
     ...emptyDefinition(kind, definitionRepositoryId(s)),
     timeLimit: s.timeLimit,
     hooks: s.hooks,
   };
+  if (s.kind === "rclone_transfer" && next.kind === "rclone_bisync") {
+    const t = s.transfer;
+    next.bisync = { ...next.bisync, path1: t.source, path2: t.destination, filters: t.filters };
+  } else if (s.kind === "rclone_bisync" && next.kind === "rclone_transfer") {
+    const b = s.bisync;
+    next.transfer = { ...next.transfer, source: b.path1, destination: b.path2, filters: b.filters };
+  }
+  return next;
 }
 
 /**
@@ -399,6 +432,8 @@ export function definitionState(def: JobDefinition | undefined): JobDefinitionSt
   const op = def?.operation;
   const common = { timeLimit: timeLimitState(def), hooks: hooksState(def) };
   switch (op?.case) {
+    case "rcloneBisync":
+      return { kind: "rclone_bisync", bisync: bisyncState(op.value), ...common };
     case "resticBackup":
       return { kind: "restic_backup", backup: backupState(op.value), ...common };
     case "resticForget":
@@ -421,6 +456,8 @@ export function validateDefinition(s: JobDefinitionState): DefinitionErrors {
 
 function validateKind(s: JobDefinitionState): DefinitionErrors {
   switch (s.kind) {
+    case "rclone_bisync":
+      return validateBisync(s.bisync);
     case "restic_backup":
       return validateBackup(s.backup);
     case "restic_forget":
@@ -447,6 +484,8 @@ export function toDefinition(s: JobDefinitionState): MessageInitShape<typeof Job
 
 function kindDefinition(s: JobDefinitionState): MessageInitShape<typeof JobDefinitionSchema> {
   switch (s.kind) {
+    case "rclone_bisync":
+      return { operation: { case: "rcloneBisync", value: toBisync(s.bisync) } };
     case "restic_backup":
       return { operation: { case: "resticBackup", value: toBackup(s.backup) } };
     case "restic_forget":
@@ -463,6 +502,8 @@ function kindDefinition(s: JobDefinitionState): MessageInitShape<typeof JobDefin
 /** isDryRun reports whether the definition only reports what it would do. */
 export function isDryRun(s: JobDefinitionState): boolean {
   switch (s.kind) {
+    case "rclone_bisync":
+      return s.bisync.dryRun;
     case "restic_backup":
       return s.backup.dryRun;
     case "restic_forget":

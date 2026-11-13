@@ -1,10 +1,9 @@
-import { ArrowDown, ArrowRight, ChevronRight, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowRight, ChevronRight } from "lucide-react";
 import { useState } from "react";
 
 import { FieldShell } from "@/components/app/descriptor-form";
 import { LocationEditor } from "@/components/app/location-editor";
 import { Panel } from "@/components/app/panel";
-import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,12 +16,13 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import type { Worker } from "@/gen/syncr/v1/api_pb";
-import { FilterAction, RcloneTransferMode } from "@/gen/syncr/v1/link_pb";
+import { RcloneTransferMode } from "@/gen/syncr/v1/link_pb";
 import type { Backend, Remote } from "@/gen/syncr/v1/remotes_pb";
 import { transferModes } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 import type { Compare, DefinitionErrors, TransferState } from "./definition";
+import { FilterRuleList } from "./pattern-list";
 import { byteUnits, durationUnits } from "./units";
 
 /** Toggle is a labelled switch with optional help. */
@@ -59,7 +59,7 @@ export function Toggle({
   );
 }
 
-/** NumberInput is a numeric text field with an optional unit. */
+/** NumberInput is a numeric text field with an optional unit, help and error. */
 export function NumberInput({
   id,
   label,
@@ -67,6 +67,8 @@ export function NumberInput({
   onChange,
   unit,
   placeholder,
+  help,
+  error,
 }: {
   id: string;
   label: string;
@@ -74,9 +76,11 @@ export function NumberInput({
   onChange: (v: string) => void;
   unit?: string;
   placeholder?: string;
+  help?: React.ReactNode;
+  error?: string;
 }) {
   return (
-    <FieldShell id={id} label={label}>
+    <FieldShell id={id} label={label} help={help} error={error}>
       <div className="relative">
         <Input
           id={id}
@@ -84,6 +88,8 @@ export function NumberInput({
           className={cn("tabular bg-card", unit && "pr-14")}
           value={value}
           placeholder={placeholder ?? "Default"}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : help ? `${id}-help` : undefined}
           onChange={(e) => onChange(e.target.value.trim())}
         />
         {unit && (
@@ -424,83 +430,16 @@ export function TransferEditor({
                     placeholder="10"
                   />
                 </div>
-                <div className="flex flex-col gap-2">
-                  <div>
-                    <div className="text-[13px] font-medium">Filters</div>
-                    <p className="text-xs leading-5 text-muted-foreground">
+                <FilterRuleList
+                  value={s.filters}
+                  onChange={(v) => set("filters", v)}
+                  help={
+                    <>
                       rclone filter patterns, applied in order. The first match decides; for example
                       exclude <code className="rounded bg-muted px-1">*.tmp</code>.
-                    </p>
-                  </div>
-                  {s.filters.map((f, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <Select
-                        value={String(f.action)}
-                        onValueChange={(v) =>
-                          set(
-                            "filters",
-                            s.filters.map((x, j) => (j === i ? { ...x, action: Number(v) } : x)),
-                          )
-                        }
-                      >
-                        <SelectTrigger
-                          className="w-32 bg-card"
-                          aria-label={`Filter ${i + 1} action`}
-                        >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={String(FilterAction.EXCLUDE)}>Exclude</SelectItem>
-                          <SelectItem value={String(FilterAction.INCLUDE)}>Include</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <Input
-                        aria-label={`Filter ${i + 1} pattern`}
-                        className="bg-card font-mono text-[13px]"
-                        value={f.pattern}
-                        placeholder="*.tmp"
-                        onChange={(e) =>
-                          set(
-                            "filters",
-                            s.filters.map((x, j) =>
-                              j === i ? { ...x, pattern: e.target.value } : x,
-                            ),
-                          )
-                        }
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`Remove filter ${i + 1}`}
-                        onClick={() =>
-                          set(
-                            "filters",
-                            s.filters.filter((_, j) => j !== i),
-                          )
-                        }
-                      >
-                        <Trash2 aria-hidden />
-                      </Button>
-                    </div>
-                  ))}
-                  <div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        set("filters", [
-                          ...s.filters,
-                          { action: FilterAction.EXCLUDE, pattern: "" },
-                        ])
-                      }
-                    >
-                      <Plus aria-hidden />
-                      Add filter
-                    </Button>
-                  </div>
-                </div>
+                    </>
+                  }
+                />
               </div>
             </CollapsibleContent>
           </Collapsible>

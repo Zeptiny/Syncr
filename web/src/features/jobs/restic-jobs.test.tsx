@@ -10,7 +10,7 @@ import { m5Api } from "@/test/m5-api";
 import { renderApp } from "@/test/render";
 
 const now = Date.now();
-const kinds = ["Transfer", "Backup", "Retention", "Check", "Prune"];
+const kinds = ["Transfer", "Two-way sync", "Backup", "Retention", "Check", "Prune"];
 
 function kindLabels(): (string | undefined)[] {
   const group = screen.getByRole("radiogroup", { name: "Kind of job" });
@@ -22,7 +22,7 @@ function kindLabels(): (string | undefined)[] {
 // These tests drive whole pages through the router, which is slow under a
 // parallel run.
 describe("restic jobs in the forms and the jobs pages", { timeout: 30_000 }, () => {
-  it("offers five kinds to Run a job: never a restore or a data deletion", async () => {
+  it("offers six kinds to Run a job: never a restore or a data deletion", async () => {
     const api = m5Api(now);
     const { router } = renderApp("/jobs/new", api.transport);
     await screen.findByRole("radiogroup", { name: "Kind of job" });

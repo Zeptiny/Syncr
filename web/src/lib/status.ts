@@ -106,6 +106,7 @@ export function transferModeLabel(mode: RcloneTransferMode): string {
  */
 export const jobKinds: string[] = [
   "rclone_transfer",
+  "rclone_bisync",
   "restic_backup",
   "restic_forget",
   "restic_check",
@@ -124,6 +125,8 @@ export function kindLabel(kind: string): string {
   switch (kind) {
     case "rclone_transfer":
       return "Transfer";
+    case "rclone_bisync":
+      return "Two-way sync";
     case "restic_backup":
       return "Backup";
     case "restic_forget":
@@ -169,6 +172,9 @@ const errorCodes: Partial<Record<JobErrorCode, string>> = {
   [JobErrorCode.WORKER_OUTDATED]: "Worker outdated",
   [JobErrorCode.TIME_LIMIT]: "Time limit reached",
   [JobErrorCode.HOOK_FAILED]: "A hook failed",
+  [JobErrorCode.RESYNC_REQUIRED]: "Resync required",
+  [JobErrorCode.SAFETY_ABORT]: "Safety check stopped the sync",
+  [JobErrorCode.SIDE_UNAVAILABLE]: "A folder looked unavailable",
 };
 
 /** errorCodeLabel names a job error code. */

@@ -5,6 +5,8 @@ import type { Backend, Remote } from "@/gen/syncr/v1/remotes_pb";
 import type { Repository } from "@/gen/syncr/v1/restic_pb";
 
 import { BackupEditor } from "./backup-editor";
+import { filtersNeedResync } from "./bisync-definition";
+import { BisyncEditor } from "./bisync-editor";
 import { CheckEditor } from "./check-editor";
 import type { HooksTarget } from "./hooks";
 import { HooksPanel } from "./hooks-editor";
@@ -49,6 +51,12 @@ export interface JobDefinitionEditorProps {
   kinds?: EditableKind[];
   /** onKindChange is told when the user picks another kind (e.g. to update the URL). */
   onKindChange?: (kind: EditableKind) => void;
+  /**
+   * saved is the stored definition being changed (a schedule's, or the job
+   * of "Edit and run"), so the form can say what a change means: changed
+   * filters of the same two-way sync pair need a resync.
+   */
+  saved?: JobDefinitionState;
 }
 
 /**
@@ -72,6 +80,7 @@ export function JobDefinitionEditor({
   idPrefix = "run",
   kinds = editableKinds,
   onKindChange,
+  saved,
 }: JobDefinitionEditorProps) {
   const restic = { errors, repositories, idPrefix: `${idPrefix}-${s.kind}` };
   return (
@@ -103,9 +112,30 @@ export function JobDefinitionEditor({
       ) : (
         <>
           {how !== undefined && (
-            <Panel title="Where it runs">
+            <Panel
+              title="Where it runs"
+              description={
+                s.kind === "rclone_bisync"
+                  ? "A two-way sync keeps its state on the worker that runs it. Its first run on a worker is a resync: it merges both folders and deletes nothing."
+                  : undefined
+              }
+            >
               <div className="max-w-md">{how}</div>
             </Panel>
+          )}
+          {s.kind === "rclone_bisync" && (
+            <BisyncEditor
+              value={s.bisync}
+              onChange={(bisync) => onChange({ ...s, bisync })}
+              errors={errors}
+              remotes={remotes}
+              backends={backends}
+              worker={worker}
+              filtersNeedResync={
+                saved?.kind === "rclone_bisync" && filtersNeedResync(saved.bisync, s.bisync)
+              }
+              idPrefix={idPrefix}
+            />
           )}
           {s.kind === "restic_backup" && (
             <BackupEditor

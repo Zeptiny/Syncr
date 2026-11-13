@@ -8,8 +8,8 @@
 //                           01-setup (default: skipped unless SYNCR_UI_MOCK=1)
 //   SYNCR_UI_USER           sign-in user (default admin)
 //   SYNCR_UI_PASSWORD       sign-in password (default syncr-demo-admin)
-//   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3, hooks or readme: which
-//                           shot list
+//   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3, hooks, bisync or readme:
+//                           which shot list
 //   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/<set>)
 //   SYNCR_SCREENSHOT_ONLY   comma-separated shot names to take (default all)
 //   SYNCR_SCREENSHOT_MOBILE 1 to also take 390px-wide shots
@@ -33,7 +33,9 @@ const mock = process.env.SYNCR_UI_MOCK === "1";
 const setupUrl = (process.env.SYNCR_SETUP_URL ?? (mock ? base : "")).replace(/\/$/, "");
 const user = process.env.SYNCR_UI_USER ?? "admin";
 const password = process.env.SYNCR_UI_PASSWORD ?? "syncr-demo-admin";
-const set = ["m3", "m4", "m5", "hooks", "readme"].includes(process.env.SYNCR_SCREENSHOT_SET)
+const set = ["m3", "m4", "m5", "hooks", "bisync", "readme"].includes(
+  process.env.SYNCR_SCREENSHOT_SET,
+)
   ? process.env.SYNCR_SCREENSHOT_SET
   : "m6";
 const outDir = resolve(
@@ -658,6 +660,153 @@ async function hooks(browser) {
   }
 }
 
+// bisyncJob opens the newest two-way sync job of the signed-in user that
+// matches want: "conflicts" (a run that kept conflicting versions) or an
+// error code name such as "RESYNC_REQUIRED". It asks the controller's API
+// (same origin), so it needs a real controller, not the in-browser mock.
+async function bisyncJob(page, want) {
+  await page.goto(`${base}/jobs`);
+  await settle(page);
+  const id = await page.evaluate(async (want) => {
+    const res = await fetch("/syncr.v1.JobService/ListJobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Syncr-CSRF": "1" },
+      body: JSON.stringify({ kinds: ["rclone_bisync"], pageSize: 100 }),
+    });
+    if (!res.ok) throw new Error(`ListJobs: HTTP ${res.status}`);
+    const { jobs = [] } = await res.json();
+    const job = jobs.find((j) =>
+      want === "conflicts"
+        ? Number(j.output?.rcloneBisync?.conflicts ?? 0) > 0
+        : j.error?.code === `JOB_ERROR_CODE_${want}`,
+    );
+    return job?.id;
+  }, want);
+  if (!id) throw new Error(`no two-way sync job with ${want}`);
+  await page.goto(`${base}/jobs/${id}`);
+  await settle(page);
+}
+
+// bisyncForm opens "Run a job" on the Two-way sync kind for nas-01 and,
+// with filled, fills the dev seed's pair: /srv/shared and Cloudflare R2's
+// shared folder, with filters, a lower delete limit and check access.
+async function bisyncForm(page, filled) {
+  await page.goto(`${base}/jobs/new?kind=rclone_bisync`);
+  await settle(page);
+  await page.getByRole("combobox", { name: /^Worker/ }).click();
+  await page.getByRole("option", { name: /nas-01/ }).click();
+  if (!filled) return;
+  await page.locator("#run-a-path").fill("/srv/shared");
+  await page.locator("#run-b-remote").click();
+  await page.getByRole("option", { name: /^Cloudflare R2/ }).click();
+  await page.locator("#run-b-path").fill("shared");
+  await page.locator("#run-bisync-max-delete").fill("30");
+  await page.getByRole("switch", { name: "Check access" }).click();
+  for (const [i, pattern] of ["*.tmp", ".~lock.*#"].entries()) {
+    await page.getByRole("button", { name: "Add filter" }).click();
+    await page.getByLabel(`Filter ${i + 1} pattern`).fill(pattern);
+  }
+  await settle(page, 300);
+}
+
+// The two-way sync shots. They expect the dev seed (see the step B
+// report): the schedule "Shared folder ⇄ R2" on nas-01 between /srv/shared
+// and the remote "Cloudflare R2", with a run that kept two conflicts, runs
+// that failed with RESYNC_REQUIRED, SIDE_UNAVAILABLE and (the newest)
+// SAFETY_ABORT.
+const bisyncShots = [
+  [
+    "01-editor",
+    async (p) => {
+      await bisyncForm(p, false);
+      await scrollTo(p, p.getByRole("heading", { name: "What kind of job" }));
+    },
+  ],
+  [
+    "02-editor-folders",
+    async (p) => {
+      await bisyncForm(p, true);
+      await scrollTo(p, p.getByRole("heading", { name: "Folders" }));
+    },
+  ],
+  [
+    "03-editor-options",
+    async (p) => {
+      await bisyncForm(p, true);
+      await scrollTo(p, p.getByRole("heading", { name: "Safety" }));
+    },
+  ],
+  [
+    "04-job-conflicts",
+    async (p) => {
+      await bisyncJob(p, "conflicts");
+      await scrollTo(p, p.getByRole("heading", { name: "Two-way sync result" }), 260);
+    },
+  ],
+  [
+    "05-job-resync-dialog",
+    async (p) => {
+      await bisyncJob(p, "RESYNC_REQUIRED");
+      await p.getByRole("button", { name: "Resync now" }).click();
+      await p.getByRole("alertdialog").waitFor();
+      await settle(p, 300);
+    },
+  ],
+  [
+    "06-job-safety-abort-dialog",
+    async (p) => {
+      await bisyncJob(p, "SAFETY_ABORT");
+      await p.getByRole("button", { name: "Run once anyway" }).click();
+      await p.getByRole("alertdialog").waitFor();
+      await settle(p, 300);
+    },
+  ],
+  ["07-job-side-unavailable", async (p) => bisyncJob(p, "SIDE_UNAVAILABLE")],
+  [
+    "08-schedule",
+    async (p) => {
+      await openRow(p, "/schedules", "Shared folder ⇄ R2");
+      await p.getByText(/^Last run: /).waitFor();
+      await settle(p, 300);
+    },
+  ],
+  [
+    "09-schedule-runs",
+    async (p) => {
+      await openRow(p, "/schedules", "Shared folder ⇄ R2");
+      await scrollTo(p, p.getByRole("heading", { name: "Run history" }), 96);
+    },
+  ],
+  [
+    "10-schedule-form-target",
+    async (p) => {
+      await p.goto(`${base}/schedules/new?kind=rclone_bisync`);
+      await settle(p);
+      await p.locator("#sched-name").fill("Shared folder ⇄ R2 (laptop)");
+      await scrollTo(p, p.getByRole("heading", { name: "Where it runs" }), 96);
+    },
+  ],
+];
+
+// bisync takes the two-way sync shots, light at 1440×900 (and every shot
+// at 390 px with MOBILE=1).
+async function bisync(browser) {
+  const variants = [{ suffix: "", width: 1440, height: 900 }];
+  if (mobile) variants.push({ suffix: "-mobile", width: 390, height: 844 });
+  for (const v of variants) {
+    const p = await newPage(browser, v);
+    await signIn(p);
+    for (const [name, go] of bisyncShots) {
+      if (!wanted(name)) continue;
+      await go(p);
+      await shot(p, name + v.suffix);
+      // Close a dialog a shot left open before the next page.
+      await p.keyboard.press("Escape");
+    }
+    await p.context().close();
+  }
+}
+
 // The README shots: one page per feature from the same seeded controller,
 // each in light and dark so the README can follow the reader's theme.
 const readmeShots = [
@@ -713,6 +862,10 @@ async function main() {
     }
     if (set === "hooks") {
       await hooks(browser);
+      return;
+    }
+    if (set === "bisync") {
+      await bisync(browser);
       return;
     }
     if (set === "m5") {

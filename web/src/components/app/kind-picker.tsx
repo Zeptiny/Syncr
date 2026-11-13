@@ -1,6 +1,7 @@
 import {
   ArrowRightLeft,
   Archive,
+  FolderSync,
   Scissors,
   ShieldCheck,
   Sparkles,
@@ -24,6 +25,12 @@ const kindOptions: KindOption[] = [
     label: "Transfer",
     help: "Copy, sync or move files between two places.",
     icon: ArrowRightLeft,
+  },
+  {
+    kind: "rclone_bisync",
+    label: "Two-way sync",
+    help: "Keep two folders in step both ways, deletions included (rclone bisync).",
+    icon: FolderSync,
   },
   {
     kind: "restic_backup",
@@ -64,7 +71,7 @@ export function KindPicker({
 }: {
   value: string;
   onChange: (kind: string) => void;
-  /** kinds limits the offered kinds (default: all five). */
+  /** kinds limits the offered kinds (default: all six). */
   kinds?: string[];
   labelId?: string;
 }) {
@@ -75,7 +82,7 @@ export function KindPicker({
       labelId={labelId}
       value={value}
       onChange={onChange}
-      className="sm:grid-cols-2 lg:grid-cols-5"
+      className="sm:grid-cols-2 lg:grid-cols-3"
       options={offered.map((o) => ({
         value: o.kind,
         label: (

@@ -52,6 +52,7 @@ import { FieldKind } from "@/gen/syncr/v1/remotes_pb";
 import * as fx from "@/test/fixtures";
 
 import { CronError, nextRuns, parseCron } from "./cron";
+import { check as checkBisync } from "./bisync";
 import { check as checkHooks } from "./hooks";
 import type { M5 } from "./m5";
 
@@ -191,8 +192,16 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
     v.push(
       ...checkHooks(input.definition, d.workers, t?.case === "workerId" ? t.value : undefined),
     );
+    v.push(
+      ...checkBisync(input.definition, {
+        forSchedule: true,
+        label: t?.case === "workerLabel",
+      }),
+    );
     const op = input.definition?.operation;
-    if (op?.case !== "rcloneTransfer") {
+    if (op?.case === "rcloneBisync") {
+      // Checked above.
+    } else if (op?.case !== "rcloneTransfer") {
       if (op?.case === undefined || !d.m5)
         v.push({ field: "definition", message: "Choose what to transfer." });
       else
@@ -223,7 +232,9 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
         ? [op.value.source?.remoteId, op.value.destination?.remoteId].filter(
             (x): x is string => !!x,
           )
-        : [];
+        : op?.case === "rcloneBisync"
+          ? [op.value.path1?.remoteId, op.value.path2?.remoteId].filter((x): x is string => !!x)
+          : [];
     const restic = d.m5?.describe(input.definition);
     return create(ScheduleSchema, {
       ...base,
