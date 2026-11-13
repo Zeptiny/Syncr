@@ -481,6 +481,22 @@ func TestIntegrationRepositoryErrors(t *testing.T) {
 		}
 	})
 
+	t.Run("rclone error is named", func(t *testing.T) {
+		// rclone cannot create a repository folder below a regular file;
+		// restic reports only the HTTP status rclone answers (500), so the
+		// message must carry the error rclone logged.
+		file := filepath.Join(filepath.Dir(h.repoDir), "not-a-folder")
+		writeFile(t, file, []byte("x"))
+		repo := &syncrv1.ResticRepository{Location: &syncrv1.Location{Remote: "repo", Path: filepath.Join(file, "repo")}, Password: itPassword}
+		_, err := h.prober().Init(t.Context(), "rclone-error", h.remotes(), &syncrv1.ProbeResticInit{Repository: repo})
+		mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED)
+		for _, want := range []string{"unexpected HTTP response (500)", "; rclone: Create repo failed to Mkdir: "} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %q, want it to contain %q", err, want)
+			}
+		}
+	})
+
 	t.Run("repository outside local_roots", func(t *testing.T) {
 		outside := filepath.Join(filepath.Dir(h.root), "elsewhere")
 		repo := &syncrv1.ResticRepository{Location: &syncrv1.Location{Path: outside}, Password: itPassword}
