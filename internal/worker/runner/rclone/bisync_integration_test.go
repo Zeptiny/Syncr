@@ -734,13 +734,16 @@ func TestIntegrationBisyncRemoteSide(t *testing.T) {
 // with a file of 12 MiB: about 6 s of transfer. On SIGINT, rclone 1.75.2
 // bisync lets transfers in flight finish for up to 30 s before it cancels
 // them, so the graceful stop ends with that file, within proc's 10 s grace
-// period. The margin to the end of the transfer matters: when SIGINT
-// arrives just as a file's transfer ends, rclone's clean-up removes the
-// ".partial" file it is still setting the time of, and it reports that as
-// a critical error ("Must run --resync"): the run after it goes on from the
-// previous listings, or, right after a resync, needs one. That race is a
-// real, rare effect of a cancel (docs/bisync.md), not what these tests are
-// about; a 6 MiB file left too little margin on a loaded machine.
+// period.
+//
+// Unless the copy's own exit handler runs first: rclone runs its exit
+// handlers in random order, and the one that removes a copy's ".partial"
+// file can run before bisync's graceful stop, at the signal. The transfer
+// then finishes into the deleted file, fails to set its time, and rclone
+// reports a critical error ("Must run --resync"). That happens in about one
+// cancel in ten, whatever the timing or the load. The run after it goes on
+// from the previous listings ("-old"); right after a resync there are none,
+// and it needs a resync (docs/bisync.md).
 func startBig(t *testing.T, it *bisyncITest, size int) *syncrv1.RcloneBisyncOptions {
 	t.Helper()
 	writeFiles(t, it.a, map[string]int{"big.bin": size})
@@ -789,14 +792,23 @@ func TestIntegrationBisyncInterrupted(t *testing.T) {
 			it := newBisyncITest(t)
 			put(t, it.a, map[string]string{"k1.txt": "1", "k2.txt": "2", "k3.txt": "3"})
 			it.start(t)
+			// A normal run leaves previous listings ("-old"): a cancel that
+			// rclone records as a critical error (startBig) can only be
+			// recovered from them, and a resync leaves none.
+			if out, _ := it.sync(t, it.spec(nil)); out.GetResyncReason() != reasonNone {
+				t.Fatalf("the run after the resync: %v", out)
+			}
 
 			opts := startBig(t, it, 12<<20)
 			cfg := it.cfg
 			cfg.Supervisor = proc.New(proc.Options{GracePeriod: tt.grace})
 			res := interrupt(t, it, it.newRunner(t, cfg), it.spec(opts))
 			killed := tt.name == "killed" || runtime.GOOS == "windows"
-			if !killed && res.ExitCode != 130 {
-				t.Errorf("exit code %d, want 130 (rclone stopped gracefully on SIGINT)", res.ExitCode)
+			// A graceful stop exits with 130, or rarely 0: after a stop
+			// that completed, rclone's main goroutine and its signal
+			// handler race to exit, with 0 and 130.
+			if !killed && res.ExitCode != 130 && res.ExitCode != 0 {
+				t.Errorf("exit code %d, want 130 or 0 (rclone stopped gracefully on SIGINT)", res.ExitCode)
 			}
 			// A killed rclone leaves its lock file; the next run removes it.
 			if locks, _ := filepath.Glob(filepath.Join(it.workDir(), "*.lck")); killed != (len(locks) == 1) {

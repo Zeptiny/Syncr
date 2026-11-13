@@ -263,9 +263,11 @@ retried three times, then stops the run with a critical error: the job
 fails (`execution_failed`) and names the file. rclone keeps the listings of
 the last good run, and once the file is fixed the next run goes on from
 them, with no resync. Until then every run fails the same way: one
-unreadable file stops the whole pair. Rarely, **a run stopped** (cancel,
-time limit, worker stop) just as a file finished copying is recorded as a
-critical error too; the next run goes on the same way.
+unreadable file stops the whole pair. **A run stopped** (cancel, time
+limit, worker stop) while a file is copying is sometimes recorded as a
+critical error too, about one time in ten on Linux (an rclone quirk). The
+next run goes on the same way, unless the stopped run was the first normal
+run after a resync: then the pair needs a resync, as above.
 
 ## Filters and resync
 
