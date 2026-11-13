@@ -20,29 +20,45 @@ import (
 )
 
 // Restic runs the restic probe operations (*restic.Prober).
+//
+// Measure, Find and Diff are heavy (link.HeavyProbeOps): their ctx carries
+// a soft deadline, earlier than the probe's own. When that deadline passes
+// they return what they found so far with complete=false and no error; when
+// ctx is cancelled they return its error. Measure returns at most
+// maxChildren child folders (children_truncated beyond) and counts the
+// entries it could not read (unreadable) instead of failing.
 type Restic interface {
 	Snapshots(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeResticSnapshots) (*syncrv1.ResticSnapshotsOutput, error)
 	Ls(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeResticLs) (*syncrv1.ProbeListing, error)
 	Init(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeResticInit) (*syncrv1.ResticRepositoryConfig, error)
 	Config(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeResticConfig) (*syncrv1.ResticRepositoryConfig, error)
+	Measure(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeResticMeasure, maxChildren int) (*syncrv1.ProbeMeasurement, error)
+	Find(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeResticFind) (*syncrv1.ResticFindOutput, error)
+	Diff(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeResticDiff) (*syncrv1.ResticDiffOutput, error)
 }
 
-// Rclone runs the rclone probe operations (*rclone.Prober).
+// Rclone runs the rclone probe operations (*rclone.Prober). Measure is
+// heavy and ends at its ctx's deadline as Restic's heavy operations do.
 type Rclone interface {
 	List(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeListRemote) (*syncrv1.ProbeListing, error)
 	About(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeAbout) (*syncrv1.ProbeUsage, error)
+	Measure(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeMeasureRemote, maxChildren int) (*syncrv1.ProbeMeasurement, error)
 }
 
-// Local lists folders inside the worker's local_roots (*localfs.Policy). List
-// should return ctx's error soon after ctx ends; a call it cannot interrupt
-// is handled by the Executor (see Probe).
+// Local lists and measures folders inside the worker's local_roots
+// (*localfs.Policy). List should return ctx's error soon after ctx ends; a
+// call it cannot interrupt is handled by the Executor (see Probe). Measure
+// is heavy and ends at its ctx's deadline as Restic's heavy operations do
+// (localfs.Measurement.Complete false).
 type Local interface {
 	List(ctx context.Context, path string, limit int, dirsOnly bool) (localfs.Listing, error)
+	Measure(ctx context.Context, path string, maxChildren int) (localfs.Measurement, error)
 }
 
 // Defaults of Config.
 const (
 	DefaultMaxConcurrent  = 4
+	DefaultMaxHeavy       = 1
 	DefaultTimeout        = 30 * time.Second
 	DefaultMaxEntries     = 5000
 	DefaultEntries        = 2000
@@ -65,6 +81,11 @@ type Config struct {
 	// MaxConcurrent is how many probes run at once; more are refused as
 	// BUSY. Zero means DefaultMaxConcurrent.
 	MaxConcurrent int
+	// MaxHeavy is how many heavy probes (link.HeavyProbeOps: measuring,
+	// searching, comparing) run at once, each also holding one of the
+	// MaxConcurrent slots; more are refused as BUSY. Zero means
+	// DefaultMaxHeavy.
+	MaxHeavy int
 	// DefaultTimeout applies when RunProbe.timeout is unset, MaxTimeout
 	// caps it. Zero means DefaultTimeout and link.MaxProbeTimeout, the cap
 	// the controller applies too; MaxTimeout may not exceed it.
@@ -96,7 +117,7 @@ type Executor struct {
 // New returns an Executor for cfg.
 func New(cfg Config) (*Executor, error) {
 	for name, v := range map[string]int{
-		"MaxConcurrent": cfg.MaxConcurrent, "MaxEntries": cfg.MaxEntries,
+		"MaxConcurrent": cfg.MaxConcurrent, "MaxHeavy": cfg.MaxHeavy, "MaxEntries": cfg.MaxEntries,
 		"MaxSnapshots": cfg.MaxSnapshots, "MaxResultBytes": cfg.MaxResultBytes,
 	} {
 		if v < 0 {
@@ -111,6 +132,9 @@ func New(cfg Config) (*Executor, error) {
 	}
 	if cfg.MaxConcurrent == 0 {
 		cfg.MaxConcurrent = DefaultMaxConcurrent
+	}
+	if cfg.MaxHeavy == 0 {
+		cfg.MaxHeavy = DefaultMaxHeavy
 	}
 	if cfg.DefaultTimeout == 0 {
 		cfg.DefaultTimeout = DefaultTimeout
@@ -150,6 +174,12 @@ func (e *Executor) Ops() []string {
 }
 
 func (e *Executor) supported(op string) bool {
+	if link.IsHeavyProbeOp(op) {
+		// Milestone 7: in the wire contract, but this executor does not
+		// run them yet. Leaving them out of Ops keeps them out of Hello,
+		// so no controller picks this worker for them.
+		return false
+	}
 	switch op {
 	case "list_local":
 		return e.cfg.Local != nil

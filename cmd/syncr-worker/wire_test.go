@@ -151,9 +151,10 @@ func TestBuildWorkerRegistersEveryRunner(t *testing.T) {
 		t.Errorf("Kinds() = %v, want every kind of the contract %v", got, all)
 	}
 
-	// The probe executor runs every probe operation with the same tools.
-	if w.probes == nil || !slices.Equal(w.probes.Ops(), link.ProbeOps()) {
-		t.Errorf("probes = %v, want every operation %v", w.probes, link.ProbeOps())
+	// The probe executor runs every probe operation with the same tools,
+	// but the Milestone 7 heavy ones until it implements them.
+	if ops := slices.DeleteFunc(link.ProbeOps(), link.IsHeavyProbeOp); w.probes == nil || !slices.Equal(w.probes.Ops(), ops) {
+		t.Errorf("probes = %v, want every operation %v", w.probes, ops)
 	}
 
 	for _, tool := range []string{toolRclone, toolRestic} {

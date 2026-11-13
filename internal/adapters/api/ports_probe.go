@@ -35,4 +35,19 @@ type ProbeService interface {
 	// reached or does not speak SSH is ErrFailedPrecondition with a message
 	// for people.
 	GetSftpHostKeys(ctx context.Context, actor domain.Actor, host string, port int, workerID domain.WorkerID) (*syncrv1.GetSftpHostKeysResponse, error)
+
+	// MeasureWorkerFolder measures a folder of a worker's filesystem (path
+	// required, inside its local_roots): its totals and each child
+	// folder's. A heavy probe, bounded by the scan timeout: at that
+	// deadline the measurement is partial (complete=false). A worker
+	// already measuring or searching is ErrUnavailable.
+	MeasureWorkerFolder(ctx context.Context, actor domain.Actor, workerID domain.WorkerID, path string) (*syncrv1.MeasureWorkerFolderResponse, error)
+	// MeasureRemoteFolder measures a folder of one of the actor's remotes,
+	// as MeasureWorkerFolder does, through workerID or, if zero, a worker
+	// the controller chooses.
+	MeasureRemoteFolder(ctx context.Context, actor domain.Actor, remoteID domain.RemoteID, path string, workerID domain.WorkerID) (*syncrv1.MeasureRemoteFolderResponse, error)
+	// RemoteUsage asks one of the actor's remotes for its usage, through
+	// workerID or, if zero, a worker the controller chooses. A backend that
+	// cannot tell is not an error (usage.unsupported).
+	RemoteUsage(ctx context.Context, actor domain.Actor, remoteID domain.RemoteID, workerID domain.WorkerID) (*syncrv1.GetRemoteUsageResponse, error)
 }

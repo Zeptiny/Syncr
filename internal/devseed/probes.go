@@ -128,6 +128,10 @@ func (p *Probes) Probe(ctx context.Context, workerID domain.WorkerID, run *syncr
 		if k, err = hostKeys(op.SftpHostKeys); err == nil {
 			res.Output = &syncrv1.ProbeResult_SftpHostKeys{SftpHostKeys: k}
 		}
+	case *syncrv1.ProbeSpec_MeasureLocal, *syncrv1.ProbeSpec_MeasureRemote, *syncrv1.ProbeSpec_ResticMeasure,
+		*syncrv1.ProbeSpec_ResticFind, *syncrv1.ProbeSpec_ResticDiff:
+		// Milestone 7's scans have no canned answers yet.
+		err = failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSUPPORTED_KIND, "the demo has no folder sizes, searches or comparisons yet")
 	default:
 		err = failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSUPPORTED_KIND, "the demo does not answer this probe")
 	}

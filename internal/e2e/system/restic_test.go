@@ -49,7 +49,9 @@ func newResticEnv(t *testing.T, passive bool) *resticEnv {
 			t.Fatalf("the worker does not report the feature %q: %v", f, info.GetInfo().GetFeatures())
 		}
 	}
-	if got, want := info.GetInfo().GetProbeOps(), link.ProbeOps(); !slices.Equal(got, want) {
+	// Every operation but the Milestone 7 heavy ones, which the worker does
+	// not advertise until its executor runs them.
+	if got, want := info.GetInfo().GetProbeOps(), slices.DeleteFunc(link.ProbeOps(), link.IsHeavyProbeOp); !slices.Equal(got, want) {
 		t.Fatalf("the worker reports the probe operations %v, want all of %v", got, want)
 	}
 	return &resticEnv{

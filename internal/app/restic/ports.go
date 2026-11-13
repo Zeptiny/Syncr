@@ -166,6 +166,21 @@ type Prober interface {
 	// List lists the directory path (a tree path) of snapshot snapshotID
 	// (restic --no-lock ls).
 	List(ctx context.Context, owner domain.UserID, t Target, snapshotID, path string) (Listing, error)
+
+	// Measure, Find and Diff (Milestone 7) are heavy probes, bounded by the
+	// controller's scan timeout: at that deadline the worker answers with
+	// what it found (Complete false). A worker already running one is
+	// busy (domain.ErrUnavailable).
+
+	// Measure measures the folder path (a tree path) of snapshot
+	// snapshotID (restic --no-lock ls --recursive).
+	Measure(ctx context.Context, owner domain.UserID, t Target, snapshotID, path string) (Measurement, error)
+	// Find searches t's snapshots (restic --no-lock find).
+	Find(ctx context.Context, owner domain.UserID, t Target, q FindQuery) (FindResult, error)
+	// Diff compares snapshot fromID with snapshot toID, the whole tree or
+	// the folder path (a tree path; "/" is the whole tree) (restic
+	// --no-lock diff).
+	Diff(ctx context.Context, owner domain.UserID, t Target, fromID, toID, path string) (Comparison, error)
 }
 
 // ProbeError is a failure reported by the worker. Code is a link error code

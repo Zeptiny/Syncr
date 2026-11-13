@@ -53,9 +53,12 @@ const localRemoteHint = "choose the worker whose disk holds this remote"
 // Config tunes a Runner. Zero fields take the DefaultConfig values.
 type Config struct {
 	// Timeout bounds listings and usage requests, ResticTimeout the restic
-	// operations; each between MinTimeout and link.MaxProbeTimeout.
+	// operations, ScanTimeout the heavy probes (link.HeavyProbeOps:
+	// measuring, searching, comparing); each between MinTimeout and
+	// link.MaxProbeTimeout.
 	Timeout       time.Duration
 	ResticTimeout time.Duration
+	ScanTimeout   time.Duration
 	// MaxEntries is the most entries a listing returns (at most
 	// MaxListEntries); MaxSnapshots the most (newest) snapshots.
 	MaxEntries   int
@@ -63,9 +66,9 @@ type Config struct {
 }
 
 // DefaultConfig returns the defaults: 30 s for listings, 60 s for restic,
-// 2000 entries and 5000 snapshots.
+// 45 s for scans, 2000 entries and 5000 snapshots.
 func DefaultConfig() Config {
-	return Config{Timeout: 30 * time.Second, ResticTimeout: 60 * time.Second, MaxEntries: 2000, MaxSnapshots: 5000}
+	return Config{Timeout: 30 * time.Second, ResticTimeout: 60 * time.Second, ScanTimeout: 45 * time.Second, MaxEntries: 2000, MaxSnapshots: 5000}
 }
 
 // Deps are a Runner's collaborators. All are required except Logger.
@@ -103,9 +106,10 @@ func NewRunner(d Deps, cfg Config) (*Runner, error) {
 	def := DefaultConfig()
 	cfg.Timeout = cmp.Or(cfg.Timeout, def.Timeout)
 	cfg.ResticTimeout = cmp.Or(cfg.ResticTimeout, def.ResticTimeout)
+	cfg.ScanTimeout = cmp.Or(cfg.ScanTimeout, def.ScanTimeout)
 	cfg.MaxEntries = cmp.Or(cfg.MaxEntries, def.MaxEntries)
 	cfg.MaxSnapshots = cmp.Or(cfg.MaxSnapshots, def.MaxSnapshots)
-	for _, t := range []time.Duration{cfg.Timeout, cfg.ResticTimeout} {
+	for _, t := range []time.Duration{cfg.Timeout, cfg.ResticTimeout, cfg.ScanTimeout} {
 		if t < MinTimeout || t > link.MaxProbeTimeout {
 			return nil, fmt.Errorf("probe: invalid config: timeout %v is not between %v and %v", t, MinTimeout, link.MaxProbeTimeout)
 		}

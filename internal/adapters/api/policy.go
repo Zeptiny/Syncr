@@ -168,6 +168,11 @@ func newPolicy() map[string]access {
 		syncrv1connect.ResticServiceDeleteRepositoryProcedure: user,
 		syncrv1connect.ResticServiceListSnapshotsProcedure:    user,
 		syncrv1connect.ResticServiceBrowseSnapshotProcedure:   user,
+		// Milestone 7: measuring, searching and comparing snapshots, owner
+		// only like browsing them.
+		syncrv1connect.ResticServiceMeasureSnapshotFolderProcedure: user,
+		syncrv1connect.ResticServiceFindInRepositoryProcedure:      user,
+		syncrv1connect.ResticServiceCompareSnapshotsProcedure:      user,
 
 		// Any user may browse a worker's local roots; remotes are the
 		// caller's own. The probe use cases scope and rate limit the calls.
@@ -177,6 +182,11 @@ func newPolicy() map[string]access {
 		// Milestone 6: any user may fetch a server's host keys (rate
 		// limited by the probe use cases, like the probes above).
 		syncrv1connect.ProbeServiceGetSftpHostKeysProcedure: user,
+		// Milestone 7: any user may measure any worker's folders, as they
+		// may list them; remotes stay the caller's own.
+		syncrv1connect.ProbeServiceMeasureWorkerFolderProcedure: user,
+		syncrv1connect.ProbeServiceMeasureRemoteFolderProcedure: user,
+		syncrv1connect.ProbeServiceGetRemoteUsageProcedure:      user,
 	}
 }
 

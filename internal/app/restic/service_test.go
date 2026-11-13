@@ -98,6 +98,20 @@ func (p *fakeProber) List(_ context.Context, _ domain.UserID, t restic.Target, s
 	return p.listing, nil
 }
 
+// Measure, Find and Diff are not used by the service yet.
+
+func (p *fakeProber) Measure(context.Context, domain.UserID, restic.Target, string, string) (restic.Measurement, error) {
+	return restic.Measurement{}, errors.ErrUnsupported
+}
+
+func (p *fakeProber) Find(context.Context, domain.UserID, restic.Target, restic.FindQuery) (restic.FindResult, error) {
+	return restic.FindResult{}, errors.ErrUnsupported
+}
+
+func (p *fakeProber) Diff(context.Context, domain.UserID, restic.Target, string, string, string) (restic.Comparison, error) {
+	return restic.Comparison{}, errors.ErrUnsupported
+}
+
 // fakeDeletions is a restic.Deletions recording its calls.
 type fakeDeletions struct {
 	mu                sync.Mutex

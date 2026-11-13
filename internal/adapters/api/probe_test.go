@@ -98,6 +98,21 @@ func (f *fakeProbes) GetSftpHostKeys(_ context.Context, actor domain.Actor, host
 	}, nil
 }
 
+// MeasureWorkerFolder, MeasureRemoteFolder and RemoteUsage are not called
+// by the handlers yet.
+
+func (f *fakeProbes) MeasureWorkerFolder(context.Context, domain.Actor, domain.WorkerID, string) (*syncrv1.MeasureWorkerFolderResponse, error) {
+	return nil, errors.ErrUnsupported
+}
+
+func (f *fakeProbes) MeasureRemoteFolder(context.Context, domain.Actor, domain.RemoteID, string, domain.WorkerID) (*syncrv1.MeasureRemoteFolderResponse, error) {
+	return nil, errors.ErrUnsupported
+}
+
+func (f *fakeProbes) RemoteUsage(context.Context, domain.Actor, domain.RemoteID, domain.WorkerID) (*syncrv1.GetRemoteUsageResponse, error) {
+	return nil, errors.ErrUnsupported
+}
+
 func (e *testEnv) probesFor(a domain.Actor) syncrv1connect.ProbeServiceClient {
 	return syncrv1connect.NewProbeServiceClient(e.clientWith(testActorHeader, actorHeader(a, "session")), e.srv.URL)
 }

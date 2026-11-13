@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package syncr.v1;
 
+import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 import "syncr/v1/api.proto";
 import "syncr/v1/link.proto";
@@ -12,16 +13,18 @@ import "syncr/v1/probe.proto";
 // browser over it. Backups, retention, checks and restores of a repository
 // are jobs (JobDefinition.restic_*).
 
-// ResticService manages the caller's restic repositories and browses their
-// snapshots.
+// ResticService manages the caller's restic repositories and browses,
+// measures, searches and compares their snapshots.
 //
 // Repositories are private to their owner, admins included (NOT_FOUND
 // otherwise). The password is write-only: it is stored encrypted and never
 // returned. Calls that need a worker (creating, changing the password,
-// refreshing and browsing snapshots) map its failures as ProbeService
-// does. Invalid input fails with INVALID_ARGUMENT carrying a
-// ValidationError detail; field paths: "name", "description", "remote_id",
-// "path", "password", "mode", "worker_id", "snapshot_id", "confirm_name".
+// refreshing, browsing, measuring, searching and comparing snapshots) map
+// its failures as ProbeService does. Invalid input fails with
+// INVALID_ARGUMENT carrying a ValidationError detail; field paths: "name",
+// "description", "remote_id", "path", "password", "mode", "worker_id",
+// "snapshot_id", "confirm_name", "patterns", "snapshot_ids",
+// "from_snapshot_id", "to_snapshot_id".
 service ResticService {
   // ListRepositories lists the caller's repositories, by name. Repositories
   // whose data is being deleted are included (deleting=true).
@@ -63,6 +66,23 @@ service ResticService {
   rpc BrowseSnapshot(BrowseSnapshotRequest) returns (BrowseSnapshotResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
+
+  // MeasureSnapshotFolder measures a folder of a snapshot (Milestone 7):
+  // its totals and each child folder's, as ProbeService.MeasureWorkerFolder
+  // does (partial at the scan timeout, UNAVAILABLE while the worker is
+  // already measuring or searching). POST only.
+  rpc MeasureSnapshotFolder(MeasureSnapshotFolderRequest) returns (MeasureSnapshotFolderResponse) {}
+
+  // FindInRepository searches the repository's snapshots (restic find):
+  // all of them, or the snapshot_ids given. It stops at the scan timeout
+  // or at the most matches a worker returns (complete and truncated say
+  // so). POST only.
+  rpc FindInRepository(FindInRepositoryRequest) returns (FindInRepositoryResponse) {}
+
+  // CompareSnapshots compares two snapshots (restic diff), the whole tree
+  // or one folder. A snapshot compared with itself is INVALID_ARGUMENT.
+  // POST only.
+  rpc CompareSnapshots(CompareSnapshotsRequest) returns (CompareSnapshotsResponse) {}
 }
 
 // RepositoryCreateMode is how CreateRepository finds the repository.
@@ -360,4 +380,120 @@ message BrowseSnapshotResponse {
   ProbeWorkerRef worker = 4;
 
   reserved 5 to 9;
+}
+
+// MeasureSnapshotFolderRequest names the snapshot folder to measure.
+message MeasureSnapshotFolderRequest {
+  string repository_id = 1;
+
+  // Snapshot ID: 8 to 64 hex digits.
+  string snapshot_id = 2;
+
+  // Snapshot tree path of the folder: "/" (or empty) is the root, always
+  // forward slashes.
+  string path = 3;
+
+  // The worker to measure through; empty lets the controller choose.
+  string worker_id = 4;
+
+  reserved 5 to 9;
+}
+
+// MeasureSnapshotFolderResponse is the measured folder.
+message MeasureSnapshotFolderResponse {
+  // The totals and each child folder's; measurement.path is the measured
+  // tree path.
+  ProbeMeasurement measurement = 1;
+
+  // The worker that measured it.
+  ProbeWorkerRef worker = 2;
+
+  // How long the measurement ran on the worker.
+  google.protobuf.Duration elapsed = 3;
+
+  reserved 4 to 9;
+}
+
+// FindInRepositoryRequest is a search of a repository's snapshots.
+message FindInRepositoryRequest {
+  string repository_id = 1;
+
+  // Glob patterns as restic find takes them: matched against the base
+  // name, or against the whole path when they contain "/". 1 to 10, each
+  // 1 to 256 bytes of valid UTF-8 without NUL or line breaks.
+  repeated string patterns = 2;
+
+  // Match case-insensitively.
+  bool ignore_case = 3;
+
+  // Only these snapshots (8 to 64 hex digits each); empty searches all of
+  // them.
+  repeated string snapshot_ids = 4;
+
+  // The worker to search through; empty lets the controller choose.
+  string worker_id = 5;
+
+  reserved 6 to 9;
+}
+
+// FindInRepositoryResponse is what the search found.
+message FindInRepositoryResponse {
+  // One per matching path and snapshot.
+  repeated ResticFindMatch matches = 1;
+
+  // The most matches a worker returns, or its result size cap, was
+  // reached.
+  bool truncated = 2;
+
+  // Every requested snapshot was searched (false: the search stopped at
+  // the scan timeout).
+  bool complete = 3;
+
+  // How many snapshots were searched.
+  int32 snapshots_searched = 4;
+
+  // The worker that searched.
+  ProbeWorkerRef worker = 5;
+
+  reserved 6 to 9;
+}
+
+// CompareSnapshotsRequest names the two snapshots to compare.
+message CompareSnapshotsRequest {
+  string repository_id = 1;
+
+  // The older and the newer snapshot (8 to 64 hex digits each); they must
+  // differ.
+  string from_snapshot_id = 2;
+  string to_snapshot_id = 3;
+
+  // Snapshot tree path of the folder to compare; empty or "/" is the
+  // whole tree.
+  string path = 4;
+
+  // The worker to compare through; empty lets the controller choose.
+  string worker_id = 5;
+
+  reserved 6 to 9;
+}
+
+// CompareSnapshotsResponse is the comparison.
+message CompareSnapshotsResponse {
+  // The changed paths, in restic's order.
+  repeated ResticDiffChange changes = 1;
+
+  // restic's totals; unset when the comparison stopped early.
+  ResticDiffStats stats = 2;
+
+  // The most changes a worker returns, or its result size cap, was
+  // reached.
+  bool truncated = 3;
+
+  // restic finished (stats is set).
+  bool complete = 4;
+
+  // The worker that compared them.
+  ProbeWorkerRef worker = 5;
+
+  reserved 6 to 9;
 }

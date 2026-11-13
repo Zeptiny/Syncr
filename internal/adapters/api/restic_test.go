@@ -128,6 +128,20 @@ func (p *apiProber) List(_ context.Context, _ domain.UserID, t restic.Target, _,
 	return l, nil
 }
 
+// Measure, Find and Diff are not called by the handlers yet.
+
+func (p *apiProber) Measure(context.Context, domain.UserID, restic.Target, string, string) (restic.Measurement, error) {
+	return restic.Measurement{}, errors.ErrUnsupported
+}
+
+func (p *apiProber) Find(context.Context, domain.UserID, restic.Target, restic.FindQuery) (restic.FindResult, error) {
+	return restic.FindResult{}, errors.ErrUnsupported
+}
+
+func (p *apiProber) Diff(context.Context, domain.UserID, restic.Target, string, string, string) (restic.Comparison, error) {
+	return restic.Comparison{}, errors.ErrUnsupported
+}
+
 // apiDeletions is the restic.Deletions of the API tests: it picks the
 // env's worker and records the jobs it was asked to start.
 type apiDeletions struct {
@@ -689,6 +703,9 @@ func TestProbeProcedures(t *testing.T) {
 		syncrv1connect.ResticServiceCreateRepositoryProcedure,
 		syncrv1connect.ResticServiceUpdateRepositoryProcedure, syncrv1connect.ResticServiceListSnapshotsProcedure,
 		syncrv1connect.ResticServiceBrowseSnapshotProcedure,
+		syncrv1connect.ProbeServiceMeasureWorkerFolderProcedure, syncrv1connect.ProbeServiceMeasureRemoteFolderProcedure,
+		syncrv1connect.ProbeServiceGetRemoteUsageProcedure, syncrv1connect.ResticServiceMeasureSnapshotFolderProcedure,
+		syncrv1connect.ResticServiceFindInRepositoryProcedure, syncrv1connect.ResticServiceCompareSnapshotsProcedure,
 	}
 	for _, p := range slow {
 		if !probeProcedure(p) {

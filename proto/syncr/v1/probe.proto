@@ -7,12 +7,14 @@ import "syncr/v1/link.proto";
 import "syncr/v1/remotes.proto";
 
 // Browsing worker folders and remotes, and testing remotes, through a worker
-// (Milestone 5), and fetching an SFTP server's host keys (Milestone 6). Each
+// (Milestone 5), fetching an SFTP server's host keys (Milestone 6), and
+// measuring folders and asking a remote for its usage (Milestone 7). Each
 // call runs a probe on a worker (see link.proto) and waits for its result,
 // up to the controller's probe timeout.
 
-// ProbeService browses workers and remotes, tests remotes and fetches SFTP
-// host keys, through a worker.
+// ProbeService browses workers and remotes, tests remotes, fetches SFTP
+// host keys, measures folders and asks remotes for their usage, through a
+// worker.
 //
 // Remotes are the caller's (NOT_FOUND otherwise, admins included); any user
 // may browse any worker's local roots (workers are shared). Worker-side
@@ -51,6 +53,25 @@ service ProbeService {
   // server the worker cannot reach, or one that does not speak SSH, is
   // FAILED_PRECONDITION with the worker's message.
   rpc GetSftpHostKeys(GetSftpHostKeysRequest) returns (GetSftpHostKeysResponse) {}
+
+  // MeasureWorkerFolder measures a folder on a worker (Milestone 7): its
+  // totals and each child folder's. Any user may measure any worker's
+  // folders, as they may list them. The walk ends at the controller's scan
+  // timeout with what it found (complete=false). A worker already
+  // measuring or searching is UNAVAILABLE. Rate limited; POST only, so a
+  // cross-site link cannot start a scan.
+  rpc MeasureWorkerFolder(MeasureWorkerFolderRequest) returns (MeasureWorkerFolderResponse) {}
+
+  // MeasureRemoteFolder measures a folder of one of the caller's remotes,
+  // as MeasureWorkerFolder does. A remote on a worker's local filesystem
+  // needs worker_id. POST only.
+  rpc MeasureRemoteFolder(MeasureRemoteFolderRequest) returns (MeasureRemoteFolderResponse) {}
+
+  // GetRemoteUsage asks one of the caller's remotes for its usage (rclone
+  // about). A backend that cannot tell answers with usage.unsupported.
+  rpc GetRemoteUsage(GetRemoteUsageRequest) returns (GetRemoteUsageResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
 }
 
 // ProbeWorkerRef names the worker that ran a probe.
@@ -210,6 +231,85 @@ message GetSftpHostKeysResponse {
   repeated SftpHostKey keys = 1;
 
   // The worker that connected to the server.
+  ProbeWorkerRef worker = 2;
+
+  reserved 3 to 9;
+}
+
+// MeasureWorkerFolderRequest names the folder to measure.
+message MeasureWorkerFolderRequest {
+  // The worker (required).
+  string worker_id = 1;
+
+  // Absolute local path inside the worker's local_roots (required).
+  string path = 2;
+
+  reserved 3 to 9;
+}
+
+// MeasureWorkerFolderResponse is the measured folder.
+message MeasureWorkerFolderResponse {
+  // The totals and each child folder's; measurement.path is the measured
+  // local path (normalized by the worker).
+  ProbeMeasurement measurement = 1;
+
+  // The worker that measured it.
+  ProbeWorkerRef worker = 2;
+
+  // How long the measurement ran on the worker.
+  google.protobuf.Duration elapsed = 3;
+
+  reserved 4 to 9;
+}
+
+// MeasureRemoteFolderRequest names the folder to measure.
+message MeasureRemoteFolderRequest {
+  // One of the caller's remotes (required).
+  string remote_id = 1;
+
+  // Path on the remote, relative to its root; empty is the root.
+  string path = 2;
+
+  // The worker to measure through; empty lets the controller choose
+  // (required for a remote on a worker's local filesystem).
+  string worker_id = 3;
+
+  reserved 4 to 9;
+}
+
+// MeasureRemoteFolderResponse is the measured folder.
+message MeasureRemoteFolderResponse {
+  // The totals and each child folder's; measurement.path is the measured
+  // path relative to the remote's root.
+  ProbeMeasurement measurement = 1;
+
+  // The worker that measured it.
+  ProbeWorkerRef worker = 2;
+
+  // How long the measurement ran on the worker.
+  google.protobuf.Duration elapsed = 3;
+
+  reserved 4 to 9;
+}
+
+// GetRemoteUsageRequest names the remote.
+message GetRemoteUsageRequest {
+  // One of the caller's remotes (required).
+  string remote_id = 1;
+
+  // The worker to ask through; empty lets the controller choose.
+  string worker_id = 2;
+
+  reserved 3 to 9;
+}
+
+// GetRemoteUsageResponse is the remote's usage.
+message GetRemoteUsageResponse {
+  // Unset fields are unknown to the backend; unsupported says it cannot
+  // tell at all.
+  ProbeUsage usage = 1;
+
+  // The worker that asked.
   ProbeWorkerRef worker = 2;
 
   reserved 3 to 9;

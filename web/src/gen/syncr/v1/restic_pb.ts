@@ -4,11 +4,11 @@
 
 import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
-import type { Timestamp } from "@bufbuild/protobuf/wkt";
-import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
+import type { Duration, Timestamp } from "@bufbuild/protobuf/wkt";
+import { file_google_protobuf_duration, file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { JobRemoteRef, JobStatus } from "./api_pb";
 import { file_syncr_v1_api } from "./api_pb";
-import type { ProbeEntry, ResticSnapshot } from "./link_pb";
+import type { ProbeEntry, ProbeMeasurement, ResticDiffChange, ResticDiffStats, ResticFindMatch, ResticSnapshot } from "./link_pb";
 import { file_syncr_v1_link } from "./link_pb";
 import type { ProbeWorkerRef } from "./probe_pb";
 import { file_syncr_v1_probe } from "./probe_pb";
@@ -18,7 +18,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file syncr/v1/restic.proto.
  */
 export const file_syncr_v1_restic: GenFile = /*@__PURE__*/
-  fileDesc("ChVzeW5jci92MS9yZXN0aWMucHJvdG8SCHN5bmNyLnYxIo0ECgpSZXBvc2l0b3J5EgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSEwoLZGVzY3JpcHRpb24YAyABKAkSEQoJcmVtb3RlX2lkGAQgASgJEgwKBHBhdGgYBSABKAkSJgoGcmVtb3RlGAYgASgLMhYuc3luY3IudjEuSm9iUmVtb3RlUmVmEhEKCXJlc3RpY19pZBgHIAEoCRIWCg5mb3JtYXRfdmVyc2lvbhgIIAEoBRIoCgVzdGF0cxgJIAEoCzIZLnN5bmNyLnYxLlJlcG9zaXRvcnlTdGF0cxIuCgpjcmVhdGVkX2F0GAogASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAsgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIPCgd2ZXJzaW9uGAwgASgDEhAKCGRlbGV0aW5nGA0gASgIEhcKD2RlbGV0aW9uX2pvYl9pZBgOIAEoCRI5ChVkZWxldGlvbl9yZXF1ZXN0ZWRfYXQYDyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhYKDmRlbGV0aW9uX2Vycm9yGBAgASgJEj0KEGRlbGV0aW9uX291dGNvbWUYESABKA4yIy5zeW5jci52MS5SZXBvc2l0b3J5RGVsZXRpb25PdXRjb21lSgQIEhAeIq4BChBSZXBvc2l0b3J5Sm9iUmVmEg4KBmpvYl9pZBgBIAEoCRIjCgZzdGF0dXMYAiABKA4yEy5zeW5jci52MS5Kb2JTdGF0dXMSLgoKY3JlYXRlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLZmluaXNoZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSgQIBRAKIvECCg9SZXBvc2l0b3J5U3RhdHMSFgoOc25hcHNob3RfY291bnQYASABKAUSNgoSbGF0ZXN0X3NuYXBzaG90X2F0GAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIdChVsYXRlc3Rfc25hcHNob3RfYnl0ZXMYAyABKAMSOgoWc25hcHNob3RzX3JlZnJlc2hlZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASFwoPc25hcHNob3RzX3N0YWxlGAUgASgIEhsKE3NuYXBzaG90c190cnVuY2F0ZWQYBiABKAgSLwoLbGFzdF9iYWNrdXAYByABKAsyGi5zeW5jci52MS5SZXBvc2l0b3J5Sm9iUmVmEi4KCmxhc3RfY2hlY2sYCCABKAsyGi5zeW5jci52MS5SZXBvc2l0b3J5Sm9iUmVmEhYKDnNjaGVkdWxlX2NvdW50GAkgASgFSgQIChAUIq4BCg9SZXBvc2l0b3J5SW5wdXQSDAoEbmFtZRgBIAEoCRITCgtkZXNjcmlwdGlvbhgCIAEoCRIRCglyZW1vdGVfaWQYAyABKAkSDAoEcGF0aBgEIAEoCRIQCghwYXNzd29yZBgFIAEoCRIsCgRtb2RlGAYgASgOMh4uc3luY3IudjEuUmVwb3NpdG9yeUNyZWF0ZU1vZGUSEQoJd29ya2VyX2lkGAcgASgJSgQICBAQIjIKF0xpc3RSZXBvc2l0b3JpZXNSZXF1ZXN0EhEKCXJlbW90ZV9pZBgBIAEoCUoECAIQCiJGChhMaXN0UmVwb3NpdG9yaWVzUmVzcG9uc2USKgoMcmVwb3NpdG9yaWVzGAEgAygLMhQuc3luY3IudjEuUmVwb3NpdG9yeSItChRHZXRSZXBvc2l0b3J5UmVxdWVzdBIVCg1yZXBvc2l0b3J5X2lkGAEgASgJIkEKFUdldFJlcG9zaXRvcnlSZXNwb25zZRIoCgpyZXBvc2l0b3J5GAEgASgLMhQuc3luY3IudjEuUmVwb3NpdG9yeSJDChdDcmVhdGVSZXBvc2l0b3J5UmVxdWVzdBIoCgVpbnB1dBgBIAEoCzIZLnN5bmNyLnYxLlJlcG9zaXRvcnlJbnB1dCJuChhDcmVhdGVSZXBvc2l0b3J5UmVzcG9uc2USKAoKcmVwb3NpdG9yeRgBIAEoCzIULnN5bmNyLnYxLlJlcG9zaXRvcnkSKAoGd29ya2VyGAIgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWYijwEKF1VwZGF0ZVJlcG9zaXRvcnlSZXF1ZXN0EhUKDXJlcG9zaXRvcnlfaWQYASABKAkSDwoHdmVyc2lvbhgCIAEoAxIMCgRuYW1lGAMgASgJEhMKC2Rlc2NyaXB0aW9uGAQgASgJEhAKCHBhc3N3b3JkGAUgASgJEhEKCXdvcmtlcl9pZBgGIAEoCUoECAcQCiJEChhVcGRhdGVSZXBvc2l0b3J5UmVzcG9uc2USKAoKcmVwb3NpdG9yeRgBIAEoCzIULnN5bmNyLnYxLlJlcG9zaXRvcnkidAoXRGVsZXRlUmVwb3NpdG9yeVJlcXVlc3QSFQoNcmVwb3NpdG9yeV9pZBgBIAEoCRITCgtkZWxldGVfZGF0YRgCIAEoCBIUCgxjb25maXJtX25hbWUYAyABKAkSEQoJd29ya2VyX2lkGAQgASgJSgQIBRAKImMKGERlbGV0ZVJlcG9zaXRvcnlSZXNwb25zZRIXCg9kZWxldGlvbl9qb2JfaWQYASABKAkSKAoGd29ya2VyGAIgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgDEAoiVwoUTGlzdFNuYXBzaG90c1JlcXVlc3QSFQoNcmVwb3NpdG9yeV9pZBgBIAEoCRIPCgdyZWZyZXNoGAIgASgIEhEKCXdvcmtlcl9pZBgDIAEoCUoECAQQCiLfAQoVTGlzdFNuYXBzaG90c1Jlc3BvbnNlEisKCXNuYXBzaG90cxgBIAMoCzIYLnN5bmNyLnYxLlJlc3RpY1NuYXBzaG90EjAKDHJlZnJlc2hlZF9hdBgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDQoFc3RhbGUYAyABKAgSEQoJdHJ1bmNhdGVkGAQgASgIEhUKDXJlZnJlc2hfZXJyb3IYBSABKAkSKAoGd29ya2VyGAYgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgHEAoiagoVQnJvd3NlU25hcHNob3RSZXF1ZXN0EhUKDXJlcG9zaXRvcnlfaWQYASABKAkSEwoLc25hcHNob3RfaWQYAiABKAkSDAoEcGF0aBgDIAEoCRIRCgl3b3JrZXJfaWQYBCABKAlKBAgFEAoikAEKFkJyb3dzZVNuYXBzaG90UmVzcG9uc2USDAoEcGF0aBgBIAEoCRIlCgdlbnRyaWVzGAIgAygLMhQuc3luY3IudjEuUHJvYmVFbnRyeRIRCgl0cnVuY2F0ZWQYAyABKAgSKAoGd29ya2VyGAQgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgFEAoqgwEKFFJlcG9zaXRvcnlDcmVhdGVNb2RlEiYKIlJFUE9TSVRPUllfQ1JFQVRFX01PREVfVU5TUEVDSUZJRUQQABIfChtSRVBPU0lUT1JZX0NSRUFURV9NT0RFX0lOSVQQARIiCh5SRVBPU0lUT1JZX0NSRUFURV9NT0RFX0NPTk5FQ1QQAiqbAQoZUmVwb3NpdG9yeURlbGV0aW9uT3V0Y29tZRIrCidSRVBPU0lUT1JZX0RFTEVUSU9OX09VVENPTUVfVU5TUEVDSUZJRUQQABImCiJSRVBPU0lUT1JZX0RFTEVUSU9OX09VVENPTUVfRkFJTEVEEAESKQolUkVQT1NJVE9SWV9ERUxFVElPTl9PVVRDT01FX0NBTkNFTExFRBACMo4FCg1SZXN0aWNTZXJ2aWNlEl4KEExpc3RSZXBvc2l0b3JpZXMSIS5zeW5jci52MS5MaXN0UmVwb3NpdG9yaWVzUmVxdWVzdBoiLnN5bmNyLnYxLkxpc3RSZXBvc2l0b3JpZXNSZXNwb25zZSIDkAIBElUKDUdldFJlcG9zaXRvcnkSHi5zeW5jci52MS5HZXRSZXBvc2l0b3J5UmVxdWVzdBofLnN5bmNyLnYxLkdldFJlcG9zaXRvcnlSZXNwb25zZSIDkAIBElsKEENyZWF0ZVJlcG9zaXRvcnkSIS5zeW5jci52MS5DcmVhdGVSZXBvc2l0b3J5UmVxdWVzdBoiLnN5bmNyLnYxLkNyZWF0ZVJlcG9zaXRvcnlSZXNwb25zZSIAElsKEFVwZGF0ZVJlcG9zaXRvcnkSIS5zeW5jci52MS5VcGRhdGVSZXBvc2l0b3J5UmVxdWVzdBoiLnN5bmNyLnYxLlVwZGF0ZVJlcG9zaXRvcnlSZXNwb25zZSIAEl4KEERlbGV0ZVJlcG9zaXRvcnkSIS5zeW5jci52MS5EZWxldGVSZXBvc2l0b3J5UmVxdWVzdBoiLnN5bmNyLnYxLkRlbGV0ZVJlcG9zaXRvcnlSZXNwb25zZSIDkAICElIKDUxpc3RTbmFwc2hvdHMSHi5zeW5jci52MS5MaXN0U25hcHNob3RzUmVxdWVzdBofLnN5bmNyLnYxLkxpc3RTbmFwc2hvdHNSZXNwb25zZSIAElgKDkJyb3dzZVNuYXBzaG90Eh8uc3luY3IudjEuQnJvd3NlU25hcHNob3RSZXF1ZXN0GiAuc3luY3IudjEuQnJvd3NlU25hcHNob3RSZXNwb25zZSIDkAIBQo4BCgxjb20uc3luY3IudjFCC1Jlc3RpY1Byb3RvUAFaMGdpdGh1Yi5jb20vWmVwdGlueS9TeW5jci9nZW4vZ28vc3luY3IvdjE7c3luY3J2MaICA1NYWKoCCFN5bmNyLlYxygIIU3luY3JcVjHiAhRTeW5jclxWMVxHUEJNZXRhZGF0YeoCCVN5bmNyOjpWMWIGcHJvdG8z", [file_google_protobuf_timestamp, file_syncr_v1_api, file_syncr_v1_link, file_syncr_v1_probe]);
+  fileDesc("ChVzeW5jci92MS9yZXN0aWMucHJvdG8SCHN5bmNyLnYxIo0ECgpSZXBvc2l0b3J5EgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSEwoLZGVzY3JpcHRpb24YAyABKAkSEQoJcmVtb3RlX2lkGAQgASgJEgwKBHBhdGgYBSABKAkSJgoGcmVtb3RlGAYgASgLMhYuc3luY3IudjEuSm9iUmVtb3RlUmVmEhEKCXJlc3RpY19pZBgHIAEoCRIWCg5mb3JtYXRfdmVyc2lvbhgIIAEoBRIoCgVzdGF0cxgJIAEoCzIZLnN5bmNyLnYxLlJlcG9zaXRvcnlTdGF0cxIuCgpjcmVhdGVkX2F0GAogASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAsgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIPCgd2ZXJzaW9uGAwgASgDEhAKCGRlbGV0aW5nGA0gASgIEhcKD2RlbGV0aW9uX2pvYl9pZBgOIAEoCRI5ChVkZWxldGlvbl9yZXF1ZXN0ZWRfYXQYDyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhYKDmRlbGV0aW9uX2Vycm9yGBAgASgJEj0KEGRlbGV0aW9uX291dGNvbWUYESABKA4yIy5zeW5jci52MS5SZXBvc2l0b3J5RGVsZXRpb25PdXRjb21lSgQIEhAeIq4BChBSZXBvc2l0b3J5Sm9iUmVmEg4KBmpvYl9pZBgBIAEoCRIjCgZzdGF0dXMYAiABKA4yEy5zeW5jci52MS5Kb2JTdGF0dXMSLgoKY3JlYXRlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLZmluaXNoZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSgQIBRAKIvECCg9SZXBvc2l0b3J5U3RhdHMSFgoOc25hcHNob3RfY291bnQYASABKAUSNgoSbGF0ZXN0X3NuYXBzaG90X2F0GAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIdChVsYXRlc3Rfc25hcHNob3RfYnl0ZXMYAyABKAMSOgoWc25hcHNob3RzX3JlZnJlc2hlZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASFwoPc25hcHNob3RzX3N0YWxlGAUgASgIEhsKE3NuYXBzaG90c190cnVuY2F0ZWQYBiABKAgSLwoLbGFzdF9iYWNrdXAYByABKAsyGi5zeW5jci52MS5SZXBvc2l0b3J5Sm9iUmVmEi4KCmxhc3RfY2hlY2sYCCABKAsyGi5zeW5jci52MS5SZXBvc2l0b3J5Sm9iUmVmEhYKDnNjaGVkdWxlX2NvdW50GAkgASgFSgQIChAUIq4BCg9SZXBvc2l0b3J5SW5wdXQSDAoEbmFtZRgBIAEoCRITCgtkZXNjcmlwdGlvbhgCIAEoCRIRCglyZW1vdGVfaWQYAyABKAkSDAoEcGF0aBgEIAEoCRIQCghwYXNzd29yZBgFIAEoCRIsCgRtb2RlGAYgASgOMh4uc3luY3IudjEuUmVwb3NpdG9yeUNyZWF0ZU1vZGUSEQoJd29ya2VyX2lkGAcgASgJSgQICBAQIjIKF0xpc3RSZXBvc2l0b3JpZXNSZXF1ZXN0EhEKCXJlbW90ZV9pZBgBIAEoCUoECAIQCiJGChhMaXN0UmVwb3NpdG9yaWVzUmVzcG9uc2USKgoMcmVwb3NpdG9yaWVzGAEgAygLMhQuc3luY3IudjEuUmVwb3NpdG9yeSItChRHZXRSZXBvc2l0b3J5UmVxdWVzdBIVCg1yZXBvc2l0b3J5X2lkGAEgASgJIkEKFUdldFJlcG9zaXRvcnlSZXNwb25zZRIoCgpyZXBvc2l0b3J5GAEgASgLMhQuc3luY3IudjEuUmVwb3NpdG9yeSJDChdDcmVhdGVSZXBvc2l0b3J5UmVxdWVzdBIoCgVpbnB1dBgBIAEoCzIZLnN5bmNyLnYxLlJlcG9zaXRvcnlJbnB1dCJuChhDcmVhdGVSZXBvc2l0b3J5UmVzcG9uc2USKAoKcmVwb3NpdG9yeRgBIAEoCzIULnN5bmNyLnYxLlJlcG9zaXRvcnkSKAoGd29ya2VyGAIgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWYijwEKF1VwZGF0ZVJlcG9zaXRvcnlSZXF1ZXN0EhUKDXJlcG9zaXRvcnlfaWQYASABKAkSDwoHdmVyc2lvbhgCIAEoAxIMCgRuYW1lGAMgASgJEhMKC2Rlc2NyaXB0aW9uGAQgASgJEhAKCHBhc3N3b3JkGAUgASgJEhEKCXdvcmtlcl9pZBgGIAEoCUoECAcQCiJEChhVcGRhdGVSZXBvc2l0b3J5UmVzcG9uc2USKAoKcmVwb3NpdG9yeRgBIAEoCzIULnN5bmNyLnYxLlJlcG9zaXRvcnkidAoXRGVsZXRlUmVwb3NpdG9yeVJlcXVlc3QSFQoNcmVwb3NpdG9yeV9pZBgBIAEoCRITCgtkZWxldGVfZGF0YRgCIAEoCBIUCgxjb25maXJtX25hbWUYAyABKAkSEQoJd29ya2VyX2lkGAQgASgJSgQIBRAKImMKGERlbGV0ZVJlcG9zaXRvcnlSZXNwb25zZRIXCg9kZWxldGlvbl9qb2JfaWQYASABKAkSKAoGd29ya2VyGAIgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgDEAoiVwoUTGlzdFNuYXBzaG90c1JlcXVlc3QSFQoNcmVwb3NpdG9yeV9pZBgBIAEoCRIPCgdyZWZyZXNoGAIgASgIEhEKCXdvcmtlcl9pZBgDIAEoCUoECAQQCiLfAQoVTGlzdFNuYXBzaG90c1Jlc3BvbnNlEisKCXNuYXBzaG90cxgBIAMoCzIYLnN5bmNyLnYxLlJlc3RpY1NuYXBzaG90EjAKDHJlZnJlc2hlZF9hdBgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDQoFc3RhbGUYAyABKAgSEQoJdHJ1bmNhdGVkGAQgASgIEhUKDXJlZnJlc2hfZXJyb3IYBSABKAkSKAoGd29ya2VyGAYgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgHEAoiagoVQnJvd3NlU25hcHNob3RSZXF1ZXN0EhUKDXJlcG9zaXRvcnlfaWQYASABKAkSEwoLc25hcHNob3RfaWQYAiABKAkSDAoEcGF0aBgDIAEoCRIRCgl3b3JrZXJfaWQYBCABKAlKBAgFEAoikAEKFkJyb3dzZVNuYXBzaG90UmVzcG9uc2USDAoEcGF0aBgBIAEoCRIlCgdlbnRyaWVzGAIgAygLMhQuc3luY3IudjEuUHJvYmVFbnRyeRIRCgl0cnVuY2F0ZWQYAyABKAgSKAoGd29ya2VyGAQgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgFEAoicQocTWVhc3VyZVNuYXBzaG90Rm9sZGVyUmVxdWVzdBIVCg1yZXBvc2l0b3J5X2lkGAEgASgJEhMKC3NuYXBzaG90X2lkGAIgASgJEgwKBHBhdGgYAyABKAkSEQoJd29ya2VyX2lkGAQgASgJSgQIBRAKIqwBCh1NZWFzdXJlU25hcHNob3RGb2xkZXJSZXNwb25zZRIvCgttZWFzdXJlbWVudBgBIAEoCzIaLnN5bmNyLnYxLlByb2JlTWVhc3VyZW1lbnQSKAoGd29ya2VyGAIgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWYSKgoHZWxhcHNlZBgDIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbkoECAQQCiKGAQoXRmluZEluUmVwb3NpdG9yeVJlcXVlc3QSFQoNcmVwb3NpdG9yeV9pZBgBIAEoCRIQCghwYXR0ZXJucxgCIAMoCRITCgtpZ25vcmVfY2FzZRgDIAEoCBIUCgxzbmFwc2hvdF9pZHMYBCADKAkSEQoJd29ya2VyX2lkGAUgASgJSgQIBhAKIrcBChhGaW5kSW5SZXBvc2l0b3J5UmVzcG9uc2USKgoHbWF0Y2hlcxgBIAMoCzIZLnN5bmNyLnYxLlJlc3RpY0ZpbmRNYXRjaBIRCgl0cnVuY2F0ZWQYAiABKAgSEAoIY29tcGxldGUYAyABKAgSGgoSc25hcHNob3RzX3NlYXJjaGVkGAQgASgFEigKBndvcmtlchgFIAEoCzIYLnN5bmNyLnYxLlByb2JlV29ya2VyUmVmSgQIBhAKIokBChdDb21wYXJlU25hcHNob3RzUmVxdWVzdBIVCg1yZXBvc2l0b3J5X2lkGAEgASgJEhgKEGZyb21fc25hcHNob3RfaWQYAiABKAkSFgoOdG9fc25hcHNob3RfaWQYAyABKAkSDAoEcGF0aBgEIAEoCRIRCgl3b3JrZXJfaWQYBSABKAlKBAgGEAoixgEKGENvbXBhcmVTbmFwc2hvdHNSZXNwb25zZRIrCgdjaGFuZ2VzGAEgAygLMhouc3luY3IudjEuUmVzdGljRGlmZkNoYW5nZRIoCgVzdGF0cxgCIAEoCzIZLnN5bmNyLnYxLlJlc3RpY0RpZmZTdGF0cxIRCgl0cnVuY2F0ZWQYAyABKAgSEAoIY29tcGxldGUYBCABKAgSKAoGd29ya2VyGAUgASgLMhguc3luY3IudjEuUHJvYmVXb3JrZXJSZWZKBAgGEAoqgwEKFFJlcG9zaXRvcnlDcmVhdGVNb2RlEiYKIlJFUE9TSVRPUllfQ1JFQVRFX01PREVfVU5TUEVDSUZJRUQQABIfChtSRVBPU0lUT1JZX0NSRUFURV9NT0RFX0lOSVQQARIiCh5SRVBPU0lUT1JZX0NSRUFURV9NT0RFX0NPTk5FQ1QQAiqbAQoZUmVwb3NpdG9yeURlbGV0aW9uT3V0Y29tZRIrCidSRVBPU0lUT1JZX0RFTEVUSU9OX09VVENPTUVfVU5TUEVDSUZJRUQQABImCiJSRVBPU0lUT1JZX0RFTEVUSU9OX09VVENPTUVfRkFJTEVEEAESKQolUkVQT1NJVE9SWV9ERUxFVElPTl9PVVRDT01FX0NBTkNFTExFRBACMrQHCg1SZXN0aWNTZXJ2aWNlEl4KEExpc3RSZXBvc2l0b3JpZXMSIS5zeW5jci52MS5MaXN0UmVwb3NpdG9yaWVzUmVxdWVzdBoiLnN5bmNyLnYxLkxpc3RSZXBvc2l0b3JpZXNSZXNwb25zZSIDkAIBElUKDUdldFJlcG9zaXRvcnkSHi5zeW5jci52MS5HZXRSZXBvc2l0b3J5UmVxdWVzdBofLnN5bmNyLnYxLkdldFJlcG9zaXRvcnlSZXNwb25zZSIDkAIBElsKEENyZWF0ZVJlcG9zaXRvcnkSIS5zeW5jci52MS5DcmVhdGVSZXBvc2l0b3J5UmVxdWVzdBoiLnN5bmNyLnYxLkNyZWF0ZVJlcG9zaXRvcnlSZXNwb25zZSIAElsKEFVwZGF0ZVJlcG9zaXRvcnkSIS5zeW5jci52MS5VcGRhdGVSZXBvc2l0b3J5UmVxdWVzdBoiLnN5bmNyLnYxLlVwZGF0ZVJlcG9zaXRvcnlSZXNwb25zZSIAEl4KEERlbGV0ZVJlcG9zaXRvcnkSIS5zeW5jci52MS5EZWxldGVSZXBvc2l0b3J5UmVxdWVzdBoiLnN5bmNyLnYxLkRlbGV0ZVJlcG9zaXRvcnlSZXNwb25zZSIDkAICElIKDUxpc3RTbmFwc2hvdHMSHi5zeW5jci52MS5MaXN0U25hcHNob3RzUmVxdWVzdBofLnN5bmNyLnYxLkxpc3RTbmFwc2hvdHNSZXNwb25zZSIAElgKDkJyb3dzZVNuYXBzaG90Eh8uc3luY3IudjEuQnJvd3NlU25hcHNob3RSZXF1ZXN0GiAuc3luY3IudjEuQnJvd3NlU25hcHNob3RSZXNwb25zZSIDkAIBEmoKFU1lYXN1cmVTbmFwc2hvdEZvbGRlchImLnN5bmNyLnYxLk1lYXN1cmVTbmFwc2hvdEZvbGRlclJlcXVlc3QaJy5zeW5jci52MS5NZWFzdXJlU25hcHNob3RGb2xkZXJSZXNwb25zZSIAElsKEEZpbmRJblJlcG9zaXRvcnkSIS5zeW5jci52MS5GaW5kSW5SZXBvc2l0b3J5UmVxdWVzdBoiLnN5bmNyLnYxLkZpbmRJblJlcG9zaXRvcnlSZXNwb25zZSIAElsKEENvbXBhcmVTbmFwc2hvdHMSIS5zeW5jci52MS5Db21wYXJlU25hcHNob3RzUmVxdWVzdBoiLnN5bmNyLnYxLkNvbXBhcmVTbmFwc2hvdHNSZXNwb25zZSIAQo4BCgxjb20uc3luY3IudjFCC1Jlc3RpY1Byb3RvUAFaMGdpdGh1Yi5jb20vWmVwdGlueS9TeW5jci9nZW4vZ28vc3luY3IvdjE7c3luY3J2MaICA1NYWKoCCFN5bmNyLlYxygIIU3luY3JcVjHiAhRTeW5jclxWMVxHUEJNZXRhZGF0YeoCCVN5bmNyOjpWMWIGcHJvdG8z", [file_google_protobuf_duration, file_google_protobuf_timestamp, file_syncr_v1_api, file_syncr_v1_link, file_syncr_v1_probe]);
 
 /**
  * Repository is one of the caller's restic repositories. The password is
@@ -756,6 +756,281 @@ export const BrowseSnapshotResponseSchema: GenMessage<BrowseSnapshotResponse> = 
   messageDesc(file_syncr_v1_restic, 17);
 
 /**
+ * MeasureSnapshotFolderRequest names the snapshot folder to measure.
+ *
+ * @generated from message syncr.v1.MeasureSnapshotFolderRequest
+ */
+export type MeasureSnapshotFolderRequest = Message<"syncr.v1.MeasureSnapshotFolderRequest"> & {
+  /**
+   * @generated from field: string repository_id = 1;
+   */
+  repositoryId: string;
+
+  /**
+   * Snapshot ID: 8 to 64 hex digits.
+   *
+   * @generated from field: string snapshot_id = 2;
+   */
+  snapshotId: string;
+
+  /**
+   * Snapshot tree path of the folder: "/" (or empty) is the root, always
+   * forward slashes.
+   *
+   * @generated from field: string path = 3;
+   */
+  path: string;
+
+  /**
+   * The worker to measure through; empty lets the controller choose.
+   *
+   * @generated from field: string worker_id = 4;
+   */
+  workerId: string;
+};
+
+/**
+ * Describes the message syncr.v1.MeasureSnapshotFolderRequest.
+ * Use `create(MeasureSnapshotFolderRequestSchema)` to create a new message.
+ */
+export const MeasureSnapshotFolderRequestSchema: GenMessage<MeasureSnapshotFolderRequest> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_restic, 18);
+
+/**
+ * MeasureSnapshotFolderResponse is the measured folder.
+ *
+ * @generated from message syncr.v1.MeasureSnapshotFolderResponse
+ */
+export type MeasureSnapshotFolderResponse = Message<"syncr.v1.MeasureSnapshotFolderResponse"> & {
+  /**
+   * The totals and each child folder's; measurement.path is the measured
+   * tree path.
+   *
+   * @generated from field: syncr.v1.ProbeMeasurement measurement = 1;
+   */
+  measurement?: ProbeMeasurement | undefined;
+
+  /**
+   * The worker that measured it.
+   *
+   * @generated from field: syncr.v1.ProbeWorkerRef worker = 2;
+   */
+  worker?: ProbeWorkerRef | undefined;
+
+  /**
+   * How long the measurement ran on the worker.
+   *
+   * @generated from field: google.protobuf.Duration elapsed = 3;
+   */
+  elapsed?: Duration | undefined;
+};
+
+/**
+ * Describes the message syncr.v1.MeasureSnapshotFolderResponse.
+ * Use `create(MeasureSnapshotFolderResponseSchema)` to create a new message.
+ */
+export const MeasureSnapshotFolderResponseSchema: GenMessage<MeasureSnapshotFolderResponse> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_restic, 19);
+
+/**
+ * FindInRepositoryRequest is a search of a repository's snapshots.
+ *
+ * @generated from message syncr.v1.FindInRepositoryRequest
+ */
+export type FindInRepositoryRequest = Message<"syncr.v1.FindInRepositoryRequest"> & {
+  /**
+   * @generated from field: string repository_id = 1;
+   */
+  repositoryId: string;
+
+  /**
+   * Glob patterns as restic find takes them: matched against the base
+   * name, or against the whole path when they contain "/". 1 to 10, each
+   * 1 to 256 bytes of valid UTF-8 without NUL or line breaks.
+   *
+   * @generated from field: repeated string patterns = 2;
+   */
+  patterns: string[];
+
+  /**
+   * Match case-insensitively.
+   *
+   * @generated from field: bool ignore_case = 3;
+   */
+  ignoreCase: boolean;
+
+  /**
+   * Only these snapshots (8 to 64 hex digits each); empty searches all of
+   * them.
+   *
+   * @generated from field: repeated string snapshot_ids = 4;
+   */
+  snapshotIds: string[];
+
+  /**
+   * The worker to search through; empty lets the controller choose.
+   *
+   * @generated from field: string worker_id = 5;
+   */
+  workerId: string;
+};
+
+/**
+ * Describes the message syncr.v1.FindInRepositoryRequest.
+ * Use `create(FindInRepositoryRequestSchema)` to create a new message.
+ */
+export const FindInRepositoryRequestSchema: GenMessage<FindInRepositoryRequest> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_restic, 20);
+
+/**
+ * FindInRepositoryResponse is what the search found.
+ *
+ * @generated from message syncr.v1.FindInRepositoryResponse
+ */
+export type FindInRepositoryResponse = Message<"syncr.v1.FindInRepositoryResponse"> & {
+  /**
+   * One per matching path and snapshot.
+   *
+   * @generated from field: repeated syncr.v1.ResticFindMatch matches = 1;
+   */
+  matches: ResticFindMatch[];
+
+  /**
+   * The most matches a worker returns, or its result size cap, was
+   * reached.
+   *
+   * @generated from field: bool truncated = 2;
+   */
+  truncated: boolean;
+
+  /**
+   * Every requested snapshot was searched (false: the search stopped at
+   * the scan timeout).
+   *
+   * @generated from field: bool complete = 3;
+   */
+  complete: boolean;
+
+  /**
+   * How many snapshots were searched.
+   *
+   * @generated from field: int32 snapshots_searched = 4;
+   */
+  snapshotsSearched: number;
+
+  /**
+   * The worker that searched.
+   *
+   * @generated from field: syncr.v1.ProbeWorkerRef worker = 5;
+   */
+  worker?: ProbeWorkerRef | undefined;
+};
+
+/**
+ * Describes the message syncr.v1.FindInRepositoryResponse.
+ * Use `create(FindInRepositoryResponseSchema)` to create a new message.
+ */
+export const FindInRepositoryResponseSchema: GenMessage<FindInRepositoryResponse> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_restic, 21);
+
+/**
+ * CompareSnapshotsRequest names the two snapshots to compare.
+ *
+ * @generated from message syncr.v1.CompareSnapshotsRequest
+ */
+export type CompareSnapshotsRequest = Message<"syncr.v1.CompareSnapshotsRequest"> & {
+  /**
+   * @generated from field: string repository_id = 1;
+   */
+  repositoryId: string;
+
+  /**
+   * The older and the newer snapshot (8 to 64 hex digits each); they must
+   * differ.
+   *
+   * @generated from field: string from_snapshot_id = 2;
+   */
+  fromSnapshotId: string;
+
+  /**
+   * @generated from field: string to_snapshot_id = 3;
+   */
+  toSnapshotId: string;
+
+  /**
+   * Snapshot tree path of the folder to compare; empty or "/" is the
+   * whole tree.
+   *
+   * @generated from field: string path = 4;
+   */
+  path: string;
+
+  /**
+   * The worker to compare through; empty lets the controller choose.
+   *
+   * @generated from field: string worker_id = 5;
+   */
+  workerId: string;
+};
+
+/**
+ * Describes the message syncr.v1.CompareSnapshotsRequest.
+ * Use `create(CompareSnapshotsRequestSchema)` to create a new message.
+ */
+export const CompareSnapshotsRequestSchema: GenMessage<CompareSnapshotsRequest> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_restic, 22);
+
+/**
+ * CompareSnapshotsResponse is the comparison.
+ *
+ * @generated from message syncr.v1.CompareSnapshotsResponse
+ */
+export type CompareSnapshotsResponse = Message<"syncr.v1.CompareSnapshotsResponse"> & {
+  /**
+   * The changed paths, in restic's order.
+   *
+   * @generated from field: repeated syncr.v1.ResticDiffChange changes = 1;
+   */
+  changes: ResticDiffChange[];
+
+  /**
+   * restic's totals; unset when the comparison stopped early.
+   *
+   * @generated from field: syncr.v1.ResticDiffStats stats = 2;
+   */
+  stats?: ResticDiffStats | undefined;
+
+  /**
+   * The most changes a worker returns, or its result size cap, was
+   * reached.
+   *
+   * @generated from field: bool truncated = 3;
+   */
+  truncated: boolean;
+
+  /**
+   * restic finished (stats is set).
+   *
+   * @generated from field: bool complete = 4;
+   */
+  complete: boolean;
+
+  /**
+   * The worker that compared them.
+   *
+   * @generated from field: syncr.v1.ProbeWorkerRef worker = 5;
+   */
+  worker?: ProbeWorkerRef | undefined;
+};
+
+/**
+ * Describes the message syncr.v1.CompareSnapshotsResponse.
+ * Use `create(CompareSnapshotsResponseSchema)` to create a new message.
+ */
+export const CompareSnapshotsResponseSchema: GenMessage<CompareSnapshotsResponse> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_restic, 23);
+
+/**
  * RepositoryCreateMode is how CreateRepository finds the repository.
  *
  * @generated from enum syncr.v1.RepositoryCreateMode
@@ -823,16 +1098,18 @@ export const RepositoryDeletionOutcomeSchema: GenEnum<RepositoryDeletionOutcome>
   enumDesc(file_syncr_v1_restic, 1);
 
 /**
- * ResticService manages the caller's restic repositories and browses their
- * snapshots.
+ * ResticService manages the caller's restic repositories and browses,
+ * measures, searches and compares their snapshots.
  *
  * Repositories are private to their owner, admins included (NOT_FOUND
  * otherwise). The password is write-only: it is stored encrypted and never
  * returned. Calls that need a worker (creating, changing the password,
- * refreshing and browsing snapshots) map its failures as ProbeService
- * does. Invalid input fails with INVALID_ARGUMENT carrying a
- * ValidationError detail; field paths: "name", "description", "remote_id",
- * "path", "password", "mode", "worker_id", "snapshot_id", "confirm_name".
+ * refreshing, browsing, measuring, searching and comparing snapshots) map
+ * its failures as ProbeService does. Invalid input fails with
+ * INVALID_ARGUMENT carrying a ValidationError detail; field paths: "name",
+ * "description", "remote_id", "path", "password", "mode", "worker_id",
+ * "snapshot_id", "confirm_name", "patterns", "snapshot_ids",
+ * "from_snapshot_id", "to_snapshot_id".
  *
  * @generated from service syncr.v1.ResticService
  */
@@ -918,6 +1195,44 @@ export const ResticService: GenService<{
     methodKind: "unary";
     input: typeof BrowseSnapshotRequestSchema;
     output: typeof BrowseSnapshotResponseSchema;
+  },
+  /**
+   * MeasureSnapshotFolder measures a folder of a snapshot (Milestone 7):
+   * its totals and each child folder's, as ProbeService.MeasureWorkerFolder
+   * does (partial at the scan timeout, UNAVAILABLE while the worker is
+   * already measuring or searching). POST only.
+   *
+   * @generated from rpc syncr.v1.ResticService.MeasureSnapshotFolder
+   */
+  measureSnapshotFolder: {
+    methodKind: "unary";
+    input: typeof MeasureSnapshotFolderRequestSchema;
+    output: typeof MeasureSnapshotFolderResponseSchema;
+  },
+  /**
+   * FindInRepository searches the repository's snapshots (restic find):
+   * all of them, or the snapshot_ids given. It stops at the scan timeout
+   * or at the most matches a worker returns (complete and truncated say
+   * so). POST only.
+   *
+   * @generated from rpc syncr.v1.ResticService.FindInRepository
+   */
+  findInRepository: {
+    methodKind: "unary";
+    input: typeof FindInRepositoryRequestSchema;
+    output: typeof FindInRepositoryResponseSchema;
+  },
+  /**
+   * CompareSnapshots compares two snapshots (restic diff), the whole tree
+   * or one folder. A snapshot compared with itself is INVALID_ARGUMENT.
+   * POST only.
+   *
+   * @generated from rpc syncr.v1.ResticService.CompareSnapshots
+   */
+  compareSnapshots: {
+    methodKind: "unary";
+    input: typeof CompareSnapshotsRequestSchema;
+    output: typeof CompareSnapshotsResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_syncr_v1_restic, 0);
