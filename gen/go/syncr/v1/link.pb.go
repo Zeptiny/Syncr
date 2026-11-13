@@ -900,9 +900,12 @@ type BisyncResyncReason int32
 const (
 	// The run was not a resync.
 	BisyncResyncReason_BISYNC_RESYNC_REASON_UNSPECIFIED BisyncResyncReason = 0
-	// The worker had no state for the pair (its first run on that worker, a
-	// new state_key, or state removed after 180 days without a run), so it
-	// resynced on its own.
+	// The pair had no baseline on the worker, so it resynced on its own: no
+	// listing from a completed run that holds entries (its first run on that
+	// worker, a new state_key, state removed after 180 days without a run, a
+	// first resync that was cancelled or killed part-way, or a resync of two
+	// empty sides). Dry-run listings never count as a baseline; listings
+	// renamed after a critical error always do (RESYNC_REQUIRED instead).
 	BisyncResyncReason_BISYNC_RESYNC_REASON_FIRST_RUN BisyncResyncReason = 1
 	// The spec asked for it (RcloneBisync.resync).
 	BisyncResyncReason_BISYNC_RESYNC_REASON_REQUESTED BisyncResyncReason = 2
@@ -4252,12 +4255,17 @@ func (x *FilterRule) GetPattern() string {
 //
 // The worker always runs rclone with --recover and --resilient, and always
 // passes the filters as a filters file (empty without rules), so rclone
-// notices any change of them. A run of a pair for which the worker has no
-// state (no listings other than a dry run's, which rclone keeps apart: its
-// first run there, a new state_key, or state removed for age) is a resync
-// even when resync is not set (RcloneBisyncOutput.resync_reason
-// FIRST_RUN). After a critical error the worker never resyncs on its own:
-// the job fails with RESYNC_REQUIRED.
+// notices any change of them. A run of a pair that has no baseline on the
+// worker is a resync even when resync is not set
+// (RcloneBisyncOutput.resync_reason FIRST_RUN). No baseline means no
+// listing from a completed run that holds entries: the pair's first run
+// there, a new state_key, state removed for age, a first resync that was
+// cancelled or killed part-way (it leaves only rclone's "-new" listings),
+// or a resync of two empty sides (listings without entries). Dry-run
+// listings never count as a baseline (rclone keeps them apart), and
+// listings renamed after a critical error ("-err") always do: after a
+// critical error the worker never resyncs on its own, and the job fails
+// with RESYNC_REQUIRED.
 type RcloneBisync struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The two sides, rclone's Path1 and Path2. Each is a path on a remote of
@@ -4560,8 +4568,9 @@ type RcloneBisyncOutput struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Why the run was a resync; UNSPECIFIED for a normal run.
 	ResyncReason BisyncResyncReason `protobuf:"varint,1,opt,name=resync_reason,json=resyncReason,proto3,enum=syncr.v1.BisyncResyncReason" json:"resync_reason,omitempty"`
-	// Files changed on both sides since the last run ("New or changed in
-	// both paths"), each kept or resolved as the options say.
+	// Files changed on both sides since the last run whose two versions
+	// differ, each kept or resolved as the options say. A file changed the
+	// same way on both sides is not a conflict.
 	Conflicts int64 `protobuf:"varint,2,opt,name=conflicts,proto3" json:"conflicts,omitempty"`
 	// The paths of the first conflicts, relative to the two sides, in the
 	// order rclone reported them: at most 20, each valid UTF-8 of at most 500

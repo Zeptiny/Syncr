@@ -90,7 +90,7 @@ The worker tells the command about the job it runs for:
 | `SYNCR_HOOK_NAME` | The hook's name. |
 | `SYNCR_HOOK_PHASE` | `before`, `on_success`, `on_failure` or `after`. |
 | `SYNCR_JOB_ID` | The job's ID, as in the URL of its page. |
-| `SYNCR_JOB_KIND` | `rclone_transfer`, `restic_backup`, `restic_restore`, `restic_forget`, `restic_prune`, `restic_check`. |
+| `SYNCR_JOB_KIND` | `rclone_transfer`, `rclone_bisync`, `restic_backup`, `restic_restore`, `restic_forget`, `restic_prune`, `restic_check`. |
 | `SYNCR_JOB_STATUS` | `running` for a hook before the job; afterwards `succeeded`, `failed` or `cancelled`. |
 | `SYNCR_JOB_ERROR_CODE` | Why the job failed or was cancelled (`execution_failed`, `hook_failed`, `time_limit`, `cancelled`, `worker_shutdown`, ...); empty otherwise. |
 

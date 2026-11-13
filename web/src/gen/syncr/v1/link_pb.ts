@@ -1792,12 +1792,17 @@ export const FilterRuleSchema: GenMessage<FilterRule> = /*@__PURE__*/
  *
  * The worker always runs rclone with --recover and --resilient, and always
  * passes the filters as a filters file (empty without rules), so rclone
- * notices any change of them. A run of a pair for which the worker has no
- * state (no listings other than a dry run's, which rclone keeps apart: its
- * first run there, a new state_key, or state removed for age) is a resync
- * even when resync is not set (RcloneBisyncOutput.resync_reason
- * FIRST_RUN). After a critical error the worker never resyncs on its own:
- * the job fails with RESYNC_REQUIRED.
+ * notices any change of them. A run of a pair that has no baseline on the
+ * worker is a resync even when resync is not set
+ * (RcloneBisyncOutput.resync_reason FIRST_RUN). No baseline means no
+ * listing from a completed run that holds entries: the pair's first run
+ * there, a new state_key, state removed for age, a first resync that was
+ * cancelled or killed part-way (it leaves only rclone's "-new" listings),
+ * or a resync of two empty sides (listings without entries). Dry-run
+ * listings never count as a baseline (rclone keeps them apart), and
+ * listings renamed after a critical error ("-err") always do: after a
+ * critical error the worker never resyncs on its own, and the job fails
+ * with RESYNC_REQUIRED.
  *
  * @generated from message syncr.v1.RcloneBisync
  */
@@ -2021,8 +2026,9 @@ export type RcloneBisyncOutput = Message<"syncr.v1.RcloneBisyncOutput"> & {
   resyncReason: BisyncResyncReason;
 
   /**
-   * Files changed on both sides since the last run ("New or changed in
-   * both paths"), each kept or resolved as the options say.
+   * Files changed on both sides since the last run whose two versions
+   * differ, each kept or resolved as the options say. A file changed the
+   * same way on both sides is not a conflict.
    *
    * @generated from field: int64 conflicts = 2;
    */
@@ -4555,9 +4561,12 @@ export enum BisyncResyncReason {
   UNSPECIFIED = 0,
 
   /**
-   * The worker had no state for the pair (its first run on that worker, a
-   * new state_key, or state removed after 180 days without a run), so it
-   * resynced on its own.
+   * The pair had no baseline on the worker, so it resynced on its own: no
+   * listing from a completed run that holds entries (its first run on that
+   * worker, a new state_key, state removed after 180 days without a run, a
+   * first resync that was cancelled or killed part-way, or a resync of two
+   * empty sides). Dry-run listings never count as a baseline; listings
+   * renamed after a critical error always do (RESYNC_REQUIRED instead).
    *
    * @generated from enum value: BISYNC_RESYNC_REASON_FIRST_RUN = 1;
    */

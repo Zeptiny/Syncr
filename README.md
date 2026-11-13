@@ -16,6 +16,10 @@ snapshots, and get notified when something fails.
 - **rclone transfers.** Copy, sync or move between S3 and compatibles,
   SFTP, Backblaze B2, WebDAV, a worker's local folders and unions of them,
   with live progress, speed and time left.
+- **Two-way sync.** Keep one folder in step on several machines through a
+  bucket or a server with rclone bisync: changes and deletions spread both
+  ways, conflicts keep both versions, and safety checks stop a run that
+  would empty a side.
 - **restic backups.** Create or connect repositories on any remote, back up
   a worker's folders, apply retention and check them. Browse snapshots and
   restore all of one, a folder or selected files.
@@ -121,8 +125,8 @@ back up the database and `SYNCR_SECRETS_KEY`: see
 - [Configuration](docs/configuration.md): every controller setting
 - Workers: [Linux](docs/setup-linux.md), [Windows](docs/setup-windows.md),
   [configuration](docs/worker-config.md), [upgrading](docs/upgrade.md)
-- [restic backups](docs/restic.md), [hooks](docs/hooks.md) and
-  [notifications](docs/notifications.md)
+- [Two-way sync](docs/bisync.md), [restic backups](docs/restic.md),
+  [hooks](docs/hooks.md) and [notifications](docs/notifications.md)
 - [Scripting the API](docs/api.md)
 - [Development](docs/development.md): building, testing and the architecture
 - [Release notes](docs/releases/) · [Security policy](SECURITY.md)

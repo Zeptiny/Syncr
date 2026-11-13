@@ -381,6 +381,24 @@ func TestIntegrationBisyncSideUnavailable(t *testing.T) {
 	it.sync(t, it.spec(access))
 }
 
+func TestIntegrationBisyncCheckAccessFirstRun(t *testing.T) {
+	it := newBisyncITest(t)
+	// A fresh pair with check_access and the RCLONE_TEST file on one side
+	// only: the first run's resync fails the access test. rclone also says
+	// "Must run --resync", but the missing file is the problem, so the
+	// code is SIDE_UNAVAILABLE, and the pair stays fresh.
+	put(t, it.a, map[string]string{"RCLONE_TEST": "", "k1.txt": "1"})
+	access := &syncrv1.RcloneBisyncOptions{CheckAccess: true}
+	it.fail(t, it.spec(access), syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE, "RCLONE_TEST files not found")
+	put(t, it.b, map[string]string{"RCLONE_TEST": ""})
+	if out, _ := it.sync(t, it.spec(access)); out.GetResyncReason() != reasonFirstRun {
+		t.Errorf("run once both files are there: %v", out)
+	}
+	if got := it.inStep(t); len(got) != 2 {
+		t.Errorf("in step: %v", got)
+	}
+}
+
 func TestIntegrationBisyncEmptyStart(t *testing.T) {
 	it := newBisyncITest(t)
 	// Two empty folders: the first run resyncs nothing. rclone cannot sync
@@ -523,7 +541,19 @@ func TestIntegrationBisyncRemoteSide(t *testing.T) {
 }
 
 // startBig writes a file of size bytes on side a and returns options that
-// make its transfer take a few seconds.
+// make its transfer take a few seconds (2 MiB/s).
+//
+// The callers cancel at the first progress with bytes, about a second in,
+// with a file of 12 MiB: about 6 s of transfer. On SIGINT, rclone 1.75.2
+// bisync lets transfers in flight finish for up to 30 s before it cancels
+// them, so the graceful stop ends with that file, within proc's 10 s grace
+// period. The margin to the end of the transfer matters: when SIGINT
+// arrives just as a file's transfer ends, rclone's clean-up removes the
+// ".partial" file it is still setting the time of, and it reports that as
+// a critical error ("Must run --resync"), so the run after it needs a
+// resync. That race is a real, rare effect of a cancel (docs/bisync.md),
+// not what these tests are about; a 6 MiB file left too little margin on a
+// loaded machine.
 func startBig(t *testing.T, it *bisyncITest, size int) *syncrv1.RcloneBisyncOptions {
 	t.Helper()
 	writeFiles(t, it.a, map[string]int{"big.bin": size})
@@ -573,7 +603,7 @@ func TestIntegrationBisyncInterrupted(t *testing.T) {
 			put(t, it.a, map[string]string{"k1.txt": "1", "k2.txt": "2", "k3.txt": "3"})
 			it.sync(t, it.spec(nil))
 
-			opts := startBig(t, it, 6<<20)
+			opts := startBig(t, it, 12<<20)
 			cfg := it.cfg
 			cfg.Supervisor = proc.New(proc.Options{GracePeriod: tt.grace})
 			res := interrupt(t, it, it.newRunner(t, cfg), it.spec(opts))
@@ -613,7 +643,7 @@ func TestIntegrationBisyncFirstRunInterrupted(t *testing.T) {
 			it := newBisyncITest(t)
 			put(t, it.a, map[string]string{"k1.txt": "1"})
 			put(t, it.b, map[string]string{"k2.txt": "2"})
-			opts := startBig(t, it, 6<<20)
+			opts := startBig(t, it, 12<<20)
 			cfg := it.cfg
 			cfg.Supervisor = proc.New(proc.Options{GracePeriod: tt.grace})
 			interrupt(t, it, it.newRunner(t, cfg), it.spec(opts))

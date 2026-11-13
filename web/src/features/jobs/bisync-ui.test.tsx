@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import type { RunJobRequest } from "@/gen/syncr/v1/api_pb";
+import { JobStatus, type RunJobRequest } from "@/gen/syncr/v1/api_pb";
 import { BisyncConflictLoser, JobErrorCode } from "@/gen/syncr/v1/link_pb";
 import type { CreateScheduleRequest } from "@/gen/syncr/v1/schedules_pb";
 import * as bisyncMock from "@/mock/bisync";
@@ -215,6 +215,22 @@ describe("two-way sync pages", { timeout: 30_000 }, () => {
     expect(screen.getByRole("status", { name: "" })).toHaveTextContent(
       "the pair's next run will stop with “Resync required”",
     );
+  });
+
+  it("marks a queued two-way sync that waits for an older one on the same folder", async () => {
+    const api = bisyncApi(now);
+    const [ahead, waiting] = api.jobs;
+    waiting.status = JobStatus.QUEUED;
+    waiting.waitingForJobId = ahead.id;
+    renderApp(`/jobs/${waiting.id}`, api.transport);
+
+    const chip = await screen.findByRole("link", { name: /Waiting for folder/ });
+    expect(chip).toHaveAttribute("href", `/jobs/${ahead.id}`);
+    expect(chip).toHaveAttribute(
+      "title",
+      expect.stringContaining("two-way sync of the same folder"),
+    );
+    expect(screen.queryByText(/Waiting for repository/)).toBeNull();
   });
 });
 

@@ -35,6 +35,7 @@ import (
 //	bisync_missing_side.jsonl           path1 removed (exit 7)
 //	bisync_check_access.jsonl           --check-access without RCLONE_TEST files (exit 7)
 //	bisync_check_access_one_side.jsonl  --check-access, RCLONE_TEST on path1 only (exit 7)
+//	bisync_check_access_resync.jsonl    --resync --check-access, RCLONE_TEST on path1 only: a fresh pair's first run (exit 7)
 //	bisync_prior_lock.jsonl             a lock file of another run in the work dir (exit 1)
 
 // readBisyncLog feeds a fixture through a tracker with a bisyncLog, as Run
@@ -109,6 +110,12 @@ func TestBisyncLogFixtures(t *testing.T) {
 		},
 		{
 			fixture: "bisync_check_access_one_side.jsonl", code: side,
+			message: "check_access failed: RCLONE_TEST files not found on both sides (Path1 count 1, Path2 count 0); is the drive mounted?",
+		},
+		{
+			// A resync that fails the access test also says "Must run
+			// --resync to recover", which would not help.
+			fixture: "bisync_check_access_resync.jsonl", code: side,
 			message: "check_access failed: RCLONE_TEST files not found on both sides (Path1 count 1, Path2 count 0); is the drive mounted?",
 		},
 		{

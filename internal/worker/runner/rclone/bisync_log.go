@@ -180,9 +180,13 @@ func sideName(side string) string {
 // then). Checked in this order:
 //
 //   - a lock file of another run: INTERNAL (Syncr removes stale ones);
+//   - the access test failed: SIDE_UNAVAILABLE, which force does not
+//     override. It comes before RESYNC_REQUIRED because a resync that
+//     fails it also says "Must run --resync", which cannot help: the
+//     RCLONE_TEST files are missing (a fresh pair stays fresh, so its next
+//     run resyncs again once they are there);
 //   - only a resync recovers: RESYNC_REQUIRED;
-//   - a side is empty or the access test failed: SIDE_UNAVAILABLE, which
-//     force does not override;
+//   - a side is empty: SIDE_UNAVAILABLE;
 //   - a side does not exist: NOT_FOUND;
 //   - the delete limit or "all files changed": SAFETY_ABORT, which force
 //     overrides.
@@ -194,6 +198,9 @@ func (l *bisyncLog) failure() (syncrv1.JobErrorCode, string, bool) {
 		code = syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL
 		msg = "rclone found a lock file of another run of this pair (prior lock file found), although the worker " +
 			"removes stale ones before each run; another rclone process may be using the pair's state"
+	case l.access != "":
+		code = syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE
+		msg = "check_access failed: RCLONE_TEST files not found on both sides (" + l.access + "); is the drive mounted?"
 	case l.resync:
 		code = syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED
 		msg = "a resync is required: " + l.resyncReason() +
@@ -205,9 +212,6 @@ func (l *bisyncLog) failure() (syncrv1.JobErrorCode, string, bool) {
 			side = "a side"
 		}
 		msg = side + " is empty; refusing to sync it with the other side (is the drive mounted and the path right?)"
-	case l.access != "":
-		code = syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE
-		msg = "check_access failed: RCLONE_TEST files not found on both sides (" + l.access + "); is the drive mounted?"
 	case l.rootMissing != "" || l.dirNotFound:
 		code = syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND
 		msg = "a side of the two-way sync does not exist"

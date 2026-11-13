@@ -53,20 +53,26 @@ export function ScheduleChip({ job }: { job: Job }) {
 
 /**
  * WaitingChip marks a queued job that waits for an older job on the same
- * repository, and links to that job.
+ * repository (or, for a two-way sync, the same folder), and links to that
+ * job.
  */
 export function WaitingChip({ job }: { job: Job }) {
   if (job.status !== JobStatus.QUEUED || !job.waitingForJobId) return null;
+  const twoWay = job.kind === "rclone_bisync";
   return (
     <Link
       to="/jobs/$jobId"
       params={{ jobId: job.waitingForJobId }}
       onClick={(e) => e.stopPropagation()}
       className="inline-flex w-fit items-center gap-1 rounded-md bg-warning-soft px-1.5 py-0.5 text-[12px] font-medium whitespace-nowrap text-warning hover:underline"
-      title="An older job on the same repository runs first. Open it."
+      title={
+        twoWay
+          ? "An older two-way sync of the same folder runs first. Open it."
+          : "An older job on the same repository runs first. Open it."
+      }
     >
       <Hourglass className="size-3 shrink-0" aria-hidden />
-      Waiting for repository
+      {twoWay ? "Waiting for folder" : "Waiting for repository"}
     </Link>
   );
 }

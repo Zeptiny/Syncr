@@ -1,6 +1,6 @@
 # ADR 0018: Two-way sync
 
-- Status: proposed (for v2.1.0)
+- Status: accepted (v2.1.0)
 - Date: 2026-11-12
 
 ## Context
@@ -30,12 +30,28 @@ rclone (1.75.2) that has it. Running it showed what shapes the design:
   `--max-delete` (for bisync, a percentage; default 50), every file
   changed on both sides, an empty side, missing `RCLONE_TEST` files with
   `--check-access`. `--force` runs past the first two. The state is kept.
-- Some errors are **critical**: the listings are renamed to `.lst-err` and
-  only a resync recovers. Changing the filters is one (rclone keeps an MD5
-  of the filters file next to it).
+- Some errors are **critical**, and only a resync recovers from them.
+  Changing the filters is one: rclone keeps an MD5 of the filters file
+  next to it, and with `--resilient` every later run fails with "(must run
+  --resync)" while the listings stay as they were. Others, such as a file
+  that still cannot be read after three tries, rename the listings to
+  `.lst-err` ("Must run --resync to recover").
 - A killed run leaves its `.lck` file behind; the next run with `--recover`
-  finishes without a resync once the lock is gone.
+  finishes without a resync once the lock is gone. A kill during a
+  transfer can also leave a `.partial` file on the receiving side, which
+  the next run copies across and the run after removes.
+- On SIGINT, bisync lets the transfers under way finish for up to 30
+  seconds before it cancels them. When the signal arrives just as a
+  transfer ends, its clean-up can remove the `.partial` file the copy is
+  still finishing, and it reports that as a critical error: rarely, a
+  cancelled run leaves a pair that needs a resync.
 - A dry run keeps its listings apart (`.lst-dry`) and changes no state.
+- "New or changed in both paths" is logged for every file new or changed
+  on both sides, also when both versions are equal; only the rename or
+  winner lines after it mark a real conflict.
+- On a backend without modification times, bisync warns and compares by
+  size only: an edit that keeps the size goes unnoticed, even with
+  checksums when the sides share no hash.
 
 Constraints from Syncr itself: the controller builds a secret-free
 definition into a spec at dispatch (ADR 0007), every user may run jobs on
@@ -61,16 +77,26 @@ that ran it: `syncr.lock` (Syncr's own lock), `work/` (rclone's
 
 The controller computes `state_key` and sends it in the spec: the SHA-256
 (64 lower-case hex digits) of a canonical encoding of a version tag and,
-per side in order, `local` and the cleaned path, or `remote` with the
-remote's ID, backend type, non-secret options sorted by key, its union
-upstreams the same way, and the joined path. Secrets and obscured values
-never enter it. So:
+per side in order, `local` and the cleaned path (also for a remote of the
+local backend, with its root resolved), or `remote` with the remote's ID,
+backend type, non-secret options sorted by key, its union upstreams the
+same way, and the joined path. Secrets and obscured values never enter it,
+nor do options named like a secret. So:
 
 - the same pair gets the same key on every worker version;
-- a rotated credential keeps the key;
+- a rotated secret keeps the key;
 - any other change of a location (endpoint, bucket, host, root, path), or
   swapping the sides, gives a new key: the worker treats it as a new pair,
   and never compares old listings against a different place.
+
+The key takes every non-secret option, because the descriptors do not
+say which options name the place and which only tune the access. Some
+identify the credential rather than the place: S3's `access_key_id` is an
+option, so rotating an R2 or S3 token, which changes it, makes the next
+run of the remote's pairs a resync, and so does changing a tuning option.
+That costs a resync (a union) and never compares listings against a
+different place; a descriptor flag for "identity, not location" options
+would avoid it.
 
 The worker computes nothing from the key. It checks the format
 (`^[0-9a-f]{64}$`) before the key becomes a directory name.
@@ -83,12 +109,17 @@ worker, not a label (`jobkind.SingleWorker`, asked through
 pair on another worker is allowed: there it is a new pair, and its first
 run resyncs.
 
-### Resync: automatic only for a fresh pair
+### Resync: automatic only for a pair without a baseline
 
-A pair is fresh on a worker when its work directory holds no listings from
-a real run: its first run there, a new state key, or state removed for
-age. The worker then runs with `--resync` on its own and reports the
-reason `FIRST_RUN`. A resync is a union: what one side lacks is copied
+A pair has no baseline on a worker when its work directory holds no
+listing from a completed run with entries: its first run there, a new
+state key, state removed for age, a first resync that was cancelled or
+killed part-way (it leaves only `-new` listings, and rclone says to run it
+again), or a resync of two empty sides (rclone refuses to sync against
+empty listings). Dry-run listings never count; listings renamed after a
+critical error (`-err`) always do, and so does a listing of a kind the
+worker does not know. Without a baseline the worker runs with `--resync`
+on its own and reports the reason `FIRST_RUN`. A resync is a union: what one side lacks is copied
 from the other and nothing is deleted. A file that differs keeps the newer
 version by default (`resync_mode`; rclone's own default is Path1).
 
@@ -127,6 +158,12 @@ Neither needs a resync: the state is kept. A side that does not exist at
 all is `NOT_FOUND`. With one code, the UI could only tell from the
 message whether "Run once anyway" would help.
 
+A resync checks access too, and when it fails rclone adds "Must run
+--resync to recover", which a resync cannot fix. The worker therefore
+classifies a failed access test as `SIDE_UNAVAILABLE` before it looks for
+"must run --resync"; a pair without a baseline stays without one, so its
+next run resyncs again once the files are there.
+
 ### Safety
 
 | Risk | What stops it |
@@ -148,7 +185,10 @@ ADR 0013's pattern. The desktop's and the laptop's pairs share the key of
 their R2 location, so their runs never overlap and run oldest first; a
 scheduled run and a manual resync of one pair wait for each other too.
 A local key ignores the worker, which the kind does not know: the same
-path on two machines waits in line, which is harmless.
+path on two machines waits in line, which is harmless. The kind does not
+know a remote's type either, so a remote of the local backend and a direct
+worker path to the same folder get different keys (their state key is the
+same); like nested locations, they are not serialized.
 
 ### Syncr owns the work directory
 
@@ -160,7 +200,9 @@ the worker deletes `work/*.lck` left by a killed run instead of waiting
 for rclone's `--max-lock` to expire. It always runs rclone with
 `--recover --resilient --color=NEVER`, JSON logs and stats, and the
 locations after `--`, through the same location checks as transfers
-(`local_roots`, aliases).
+(`local_roots`, aliases). It also always passes `--conflict-resolve`,
+`--conflict-loser` and `--max-delete` (none, num and 50 when unset), so no
+safety default is rclone's, and refuses equal or nested sides itself.
 
 ### A limit on path length
 
@@ -174,17 +216,18 @@ reach rclone's misleading error.
 
 ### Outcome
 
-The worker classifies a run by rclone's final abort message, then by its
-exit code: "Must run --resync" is `RESYNC_REQUIRED`; the delete limit and
-"all files were changed" are `SAFETY_ABORT`, with rclone's counts in the
-message; an empty side and a failed access check are `SIDE_UNAVAILABLE`; a
-missing side while listing is `NOT_FOUND`; anything else is mapped as for
-transfers. The
-messages come from the pinned rclone and are tested against its recorded
-output, so a tool upgrade that changes them fails the tests instead of
-mislabelling jobs. A successful run reports `RcloneBisyncOutput`: whether
-it was a resync and why, and the conflicts (a count and the first 20
-paths), also as a warning.
+The worker classifies a failed run by rclone's messages, then by its exit
+code: a failed access check is `SIDE_UNAVAILABLE`; "must run --resync"
+anywhere, missing prior listings and empty prior listings are
+`RESYNC_REQUIRED`; an empty side is `SIDE_UNAVAILABLE`; a missing side
+while listing is `NOT_FOUND`; the delete limit and "all files were
+changed" are `SAFETY_ABORT`, with rclone's counts in the message; anything
+else is mapped as for transfers. The messages come from the pinned rclone
+and are tested against its recorded output, so a tool upgrade that changes
+them fails the tests instead of mislabelling jobs. A successful run
+reports `RcloneBisyncOutput`: whether it was a resync and why, and the
+conflicts (a count and the first 20 paths), also as a warning. A conflict
+counts only when rclone renamed a version or picked a winner.
 
 ### Retention
 
@@ -203,7 +246,10 @@ constant, not a setting. A pruned pair resyncs on its next run.
 - A resync can overwrite the older version of a file that differs. It runs
   on its own only for a fresh pair, where there is nothing to compare
   against anyway.
-- Changing a two-way sync's filters stops it until someone resyncs.
+- Changing a two-way sync's filters stops it until someone resyncs, and so
+  does one file that cannot be read: a critical error stops the whole pair.
+- Rotating an S3 or R2 token (a new access key ID), or changing any other
+  non-secret option of a remote, makes the next run of its pairs a resync.
 - Small folders can hit "every file changed": a folder of one file edited
   on both sides between runs stops with `SAFETY_ABORT` and needs a
   `force` run.
@@ -215,14 +261,20 @@ constant, not a setting. A pruned pair resyncs on its next run.
   transfers into a two-way location are not serialized. The docs say not
   to do either.
 - Change detection and `newer` rely on modification times and clocks.
-  Backends without modification times need `compare` with checksum or
-  size; case-insensitive file systems against case-sensitive buckets can
-  collide. Both are documented, not solved.
+  On backends without modification times bisync falls back to sizes, so
+  an edit that keeps the size goes unnoticed (checksums help only where
+  both sides share a hash); case-insensitive file systems against
+  case-sensitive buckets can collide. Both are documented, not solved.
 - bisync is an "advanced" command upstream. The pinned version and the
   recorded-output tests are what make a tool upgrade safe.
+- A cancel, a time limit or a worker stop gives rclone the supervisor's
+  10 seconds; a transfer that needs longer is killed, and the next run
+  finishes it with `--recover` (one more run may be needed to remove a
+  `.partial` file). On Windows every cancel is a kill. Rarely, a cancel
+  just as a transfer ends leaves a pair that needs a resync (an rclone
+  race).
 - Interrupt delivery and long work-directory paths on Windows can only be
-  verified in CI; a kill followed by `--recover` covers an ungraceful
-  stop there.
+  verified in CI.
 
 ## Alternatives considered
 
