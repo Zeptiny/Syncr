@@ -46,15 +46,21 @@ export class Enrollments {
     return t;
   }
 
+  /**
+   * advance enrolls and connects the workers whose time has come, as of
+   * now. Worker lookups call it too: once a token is used the page asks
+   * for the worker, no longer for the token.
+   */
+  advance(now = Date.now()) {
+    for (const t of this.tokens.values()) this.step(t, now);
+  }
+
   /** get returns the token as of now, enrolling and connecting its worker on time. */
   get(id: string, now = Date.now()): EnrollmentToken {
     const t = this.tokens.get(id);
     if (!t) throw new ConnectError("enrollment token not found", Code.NotFound);
+    this.step(t, now);
     const usedAt = t.createdAt + ENROLL_AFTER_MS;
-    if (!t.workerId && now >= usedAt && usedAt < t.expiresAt) this.enroll(t, usedAt);
-    const w = this.workers.find((x) => x.id === t.workerId);
-    if (w && !w.info && now >= usedAt + CONNECT_AFTER_MS)
-      this.connect(w, usedAt + CONNECT_AFTER_MS);
     const state = t.workerId
       ? EnrollmentTokenState.USED
       : now < t.expiresAt
@@ -68,6 +74,14 @@ export class Enrollments {
       usedAt: t.workerId ? timestampFromMs(usedAt) : undefined,
       workerId: t.workerId ?? "",
     });
+  }
+
+  private step(t: MockToken, now: number) {
+    const usedAt = t.createdAt + ENROLL_AFTER_MS;
+    if (!t.workerId && now >= usedAt && usedAt < t.expiresAt) this.enroll(t, usedAt);
+    const w = this.workers.find((x) => x.id === t.workerId);
+    if (w && !w.info && now >= usedAt + CONNECT_AFTER_MS)
+      this.connect(w, usedAt + CONNECT_AFTER_MS);
   }
 
   private enroll(t: MockToken, at: number) {

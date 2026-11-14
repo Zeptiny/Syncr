@@ -24,7 +24,11 @@ describe("mock enrollments", () => {
     expect(w.info).toBeUndefined();
     expect(workers).toHaveLength(before + 1);
 
-    e.get(id, t0 + ENROLL_AFTER_MS + CONNECT_AFTER_MS);
+    // The page stops asking for a used token and asks for the worker:
+    // that is enough to connect it.
+    e.advance(t0 + ENROLL_AFTER_MS + CONNECT_AFTER_MS - 1);
+    expect(w.info).toBeUndefined();
+    e.advance(t0 + ENROLL_AFTER_MS + CONNECT_AFTER_MS);
     expect(w.status).toBe(WorkerStatus.ONLINE);
     expect(w.info).toMatchObject({
       hostname: "studio-pc",

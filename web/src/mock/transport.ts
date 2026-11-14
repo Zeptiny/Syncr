@@ -492,6 +492,7 @@ export function createMockTransport(): Transport {
     service(WorkerAdminService, {
       listWorkers: (req) => {
         me();
+        enrollments.advance();
         return { workers: workers.filter((w) => !req.label || w.labels.includes(req.label)) };
       },
       setWorkerLabels: async (req) => {
@@ -514,6 +515,7 @@ export function createMockTransport(): Transport {
       },
       getWorker: (req) => {
         me();
+        enrollments.advance();
         const w = workers.find((x) => x.id === req.workerId);
         if (!w) throw new ConnectError("worker not found", Code.NotFound);
         return { worker: w };
