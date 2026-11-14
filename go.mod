@@ -2,6 +2,11 @@ module github.com/Zeptiny/Syncr
 
 go 1.27
 
+// CI and the release build install this toolchain (setup-go reads it), and
+// older go commands switch to it. Keep it equal to GO_VERSION in
+// deploy/Dockerfile.*.
+toolchain go1.27.4
+
 // web/node_modules holds npm packages, some of which ship Go sources.
 ignore ./web/node_modules
 

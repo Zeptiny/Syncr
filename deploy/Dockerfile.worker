@@ -10,6 +10,7 @@
 # deploy/docker-compose.yml has an optional worker service that enrolls on
 # first start.
 
+# Keep equal to the toolchain line in go.mod.
 ARG GO_VERSION=1.27.4
 ARG RCLONE_VERSION=1.75.2
 ARG RESTIC_VERSION=0.19.1
