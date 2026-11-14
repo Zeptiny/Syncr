@@ -51,7 +51,8 @@ type ChildMeasurement struct {
 const measureCheckEvery = 256
 
 // Measure walks path, which Resolve must accept, and sums what is below it
-// per direct child folder. path itself is opened as List opens it (a link
+// per direct child folder. A reserved folder below path (Reserve) counts as
+// an empty folder: the walk never opens it. path itself is opened as List opens it (a link
 // to a folder inside the roots is measured), but nothing below it is
 // followed: symbolic links, and on Windows junctions, mount points and
 // every other name-surrogate reparse point, are counted as entries and
@@ -94,6 +95,13 @@ func (p *Policy) Measure(ctx context.Context, path string, maxChildren int) (Mea
 		return Measurement{}, &PathError{Path: path, Err: fmt.Errorf("%w: not a folder", ErrInvalidPath)}
 	}
 	w := &walker{ctx: ctx, open: openDir, pseudo: pseudoFS}
+	if len(p.reserved) > 0 {
+		start, err := resolve(clean)
+		if err != nil {
+			return Measurement{}, err
+		}
+		w.skip = func(dir string) bool { return p.isReserved(clean, start, dir) }
+	}
 	m, err := w.measure(clean, maxChildren)
 	m.Path = clean
 	return m, err
@@ -121,6 +129,11 @@ type walker struct {
 	// pseudo reports an opened folder on a pseudo filesystem, which the
 	// walk does not enter (nil: none is).
 	pseudo func(dirReader) bool
+	// skip reports a folder below the walk's root that the walk must not
+	// open, not even to read its entries: a reserved folder (Policy.Reserve),
+	// which may hold a mount point whose stalled FUSE process would block
+	// whoever touches it. It counts as a folder. Nil skips none.
+	skip func(dir string) bool
 	// seen counts entries since the last context check.
 	seen       int
 	unreadable int64
@@ -223,6 +236,9 @@ func (w *walker) file(de fs.DirEntry, t *totals) {
 func (w *walker) readDir(dir string, top bool, fn func(fs.DirEntry) error) error {
 	if w.ctx.Err() != nil {
 		return errStop
+	}
+	if !top && w.skip != nil && w.skip(dir) {
+		return nil
 	}
 	f, err := w.open(dir)
 	if err != nil {

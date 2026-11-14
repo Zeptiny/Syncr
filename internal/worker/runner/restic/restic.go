@@ -66,6 +66,11 @@ type Config struct {
 	// never writes to the worker user's own cache.
 	CacheDir string
 
+	// RemoteSources runs backups of a folder of a remote
+	// (ResticBackup.remote_source, remote_source.go). The zero value makes
+	// every such backup fail with TOOL_UNAVAILABLE.
+	RemoteSources RemoteSources
+
 	// Logger receives diagnostics (never secrets). Nil discards them.
 	Logger *slog.Logger
 }
@@ -90,7 +95,12 @@ func New(cfg Config) ([]runner.Runner, error) {
 	}
 	runners := make([]runner.Runner, 0, len(kinds)+1)
 	for _, k := range kinds {
-		runners = append(runners, &kindRunner{e: e, kind: k.kind, plan: k.plan})
+		kr := &kindRunner{e: e, kind: k.kind, plan: k.plan}
+		if k.kind == kindBackup {
+			runners = append(runners, &backupRunner{kindRunner: kr})
+			continue
+		}
+		runners = append(runners, kr)
 	}
 	runners = append(runners, &deleteRunner{e: e})
 	return runners, nil
@@ -177,6 +187,9 @@ type execution struct {
 	// left in place (the caller owns it).
 	scratch string
 	dir     string
+	// workdir, if set, is restic's working directory instead of
+	// ScratchRoot: the folder a backup of a remote backs up as ".".
+	workdir string
 	// logID identifies the job or probe in diagnostics.
 	logID   string
 	remotes []*syncrv1.RemoteDefinition
@@ -251,10 +264,14 @@ func (e *engine) exec(ctx context.Context, x execution) (runner.Result, *session
 	if x.stdout != nil {
 		stdout = x.stdout
 	}
+	workdir := e.cfg.ScratchRoot
+	if x.workdir != "" {
+		workdir = x.workdir
+	}
 	pres, err := e.cfg.Supervisor.Run(ctx, proc.Spec{
 		Path:         e.cfg.ResticPath,
 		Args:         argv,
-		Dir:          e.cfg.ScratchRoot,
+		Dir:          workdir,
 		Env:          env,
 		Stdout:       stdout,
 		Stderr:       s.stderr,

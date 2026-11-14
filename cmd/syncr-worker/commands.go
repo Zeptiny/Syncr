@@ -193,7 +193,7 @@ func runWorker(ctx context.Context, e *env, configPath string, logOut io.Writer,
 // (upgrade.RemoveLeftover). Failures are logged; the worker starts anyway.
 func cleanStart(dataDir string, log *slog.Logger) {
 	scratch := paths.ScratchDir(dataDir)
-	if err := datadir.RemoveContents(filepath.Join(scratch, "rclone"), filepath.Join(scratch, "restic")); err != nil {
+	if err := datadir.RemoveContents(filepath.Join(scratch, "rclone"), filepath.Join(scratch, "restic"), filepath.Join(scratch, "mount")); err != nil {
 		log.Warn("could not remove all files earlier jobs left in the scratch directory; they stay until the next start",
 			"scratch_dir", scratch, "error", err.Error())
 	}

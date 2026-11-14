@@ -179,6 +179,10 @@ func TestRunActiveLink(t *testing.T) {
 	if !slices.Equal(hello.GetFeatures(), link.Features()) || !slices.Equal(hello.GetProbeOps(), link.ProbeOps()) {
 		t.Errorf("hello features = %v, probe ops = %v", hello.GetFeatures(), hello.GetProbeOps())
 	}
+	// With the restic.remote_source feature, it says how it reads remotes.
+	if rs := hello.GetRemoteSources(); !rs.GetMirror() || (!rs.GetMount() && rs.GetMountReason() == "") {
+		t.Errorf("hello remote sources = %v", rs)
+	}
 	want := link.ActiveAuthorization(cmdWorkerID, cmdSecret)
 	for _, a := range auth {
 		if a != want {

@@ -533,18 +533,58 @@ linters:
             - github.com/Zeptiny/Syncr/internal/worker/filelock
             - github.com/Zeptiny/Syncr/internal/worker/bisyncstate
 
+        # The folders of backups of remotes on the worker: mirrors (lock,
+        # last-run, pruning) and the locks of mount points. A leaf like
+        # worker-bisyncstate; it knows the source key format from link.
+        worker-sourcestate:
+          list-mode: strict
+          files: ["**/internal/worker/sourcestate/**"]
+          allow:
+            - $gostd
+            - github.com/Zeptiny/Syncr/internal/link$
+            - github.com/Zeptiny/Syncr/internal/worker/filelock
+            - github.com/Zeptiny/Syncr/internal/worker/sourcestate
+
+        # rclone mount for backups of remotes: processes through the
+        # supervisor, rclone's log through the shared reader, the mount
+        # table and the FUSE helper; no wire types, no runners.
+        worker-mount:
+          list-mode: strict
+          files: ["**/internal/worker/mount/**"]
+          allow:
+            - $gostd
+            - golang.org/x/sys
+            - github.com/Zeptiny/Syncr/internal/worker/proc
+            - github.com/Zeptiny/Syncr/internal/worker/runner$
+            - github.com/Zeptiny/Syncr/internal/worker/runner/rclonetool
+            - github.com/Zeptiny/Syncr/internal/worker/runner/scrub
+            - github.com/Zeptiny/Syncr/internal/worker/mount
+
+        # What the runners that start rclone share (flags, filters, exit
+        # codes, the JSON log reader): below both runners, above nothing.
+        runner-rclonetool:
+          list-mode: strict
+          files: ["**/internal/worker/runner/rclonetool/**"]
+          allow:
+            - $gostd
+            - github.com/Zeptiny/Syncr/gen
+            - github.com/Zeptiny/Syncr/internal/worker/proc
+            - github.com/Zeptiny/Syncr/internal/worker/runner$
+            - github.com/Zeptiny/Syncr/internal/worker/runner/scrub
+            - github.com/Zeptiny/Syncr/internal/worker/runner/rclonetool
+
         # Sibling implementations of one extension point stay independent.
         # The rclone runner may use the two-way sync state
         # (internal/worker/bisyncstate).
         runner-rclone:
           files: ["**/internal/worker/runner/rclone/**"]
           deny:
-            - pkg: github.com/Zeptiny/Syncr/internal/worker/runner/restic
+            - pkg: github.com/Zeptiny/Syncr/internal/worker/runner/restic$
               desc: runners must not import each other; share code via a separate package
         runner-restic:
           files: ["**/internal/worker/runner/restic/**"]
           deny:
-            - pkg: github.com/Zeptiny/Syncr/internal/worker/runner/rclone
+            - pkg: github.com/Zeptiny/Syncr/internal/worker/runner/rclone$
               desc: runners must not import each other; share code via a separate package
         transport-active:
           files: ["**/internal/worker/transport/active/**", "**/internal/controller/dispatch/active/**"]

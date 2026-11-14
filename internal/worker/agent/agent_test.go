@@ -47,6 +47,9 @@ func TestHelloIsFirstEvent(t *testing.T) {
 			LocalRoots: []string{"/srv"},
 			Features:   []string{"probe", "restic.v2"},
 			ProbeOps:   []string{"list_local", "restic_ls"},
+			RemoteSources: &syncrv1.RemoteSourceSupport{
+				Mirror: true, MountReason: "/dev/fuse is missing",
+			},
 		},
 		MaxConcurrentJobs: 3,
 		Outbox:            outbox.Options{Epoch: "epoch-1"},
@@ -66,6 +69,9 @@ func TestHelloIsFirstEvent(t *testing.T) {
 		h.GetTools()[1].GetName() != "restic" || h.GetTools()[1].GetVersion() != "0.19.1" ||
 		!slices.Equal(h.GetFeatures(), []string{"probe", "restic.v2"}) || !slices.Equal(h.GetProbeOps(), []string{"list_local", "restic_ls"}) {
 		t.Errorf("hello = %v", h)
+	}
+	if rs := h.GetRemoteSources(); !rs.GetMirror() || rs.GetMount() || rs.GetMountReason() != "/dev/fuse is missing" || rs.GetMirrorReason() != "" {
+		t.Errorf("hello remote sources = %v", rs)
 	}
 	if a.Epoch() != "epoch-1" {
 		t.Errorf("Epoch() = %q", a.Epoch())
@@ -554,6 +560,39 @@ func TestProgressThrottleTrailingEdge(t *testing.T) {
 		// Nothing was pending, so no extra sample before the result.
 		if got := describe(events(a)); got != "start(a) progress(a,1) progress(a,2) result(a,SUCCEEDED)" {
 			t.Errorf("events = %s", got)
+		}
+	})
+}
+
+// TestProgressThrottlePhaseChange: a sample of a new phase is published at
+// once, after the kept sample of the old phase, and Progress.phase carries
+// the phase.
+func TestProgressThrottlePhaseChange(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		fr := newFakeRunner(func(_ context.Context, _ runner.Job, emit runner.EmitFunc) (runner.Result, error) {
+			emit(runner.Progress{Phase: "mirror", Bytes: 1})
+			time.Sleep(100 * time.Millisecond)
+			emit(runner.Progress{Phase: "mirror", Bytes: 9}) // kept by the throttle
+			time.Sleep(100 * time.Millisecond)
+			emit(runner.Progress{Phase: "backup", Bytes: 2}) // counters restart
+			time.Sleep(5 * time.Second)
+			return runner.Result{Stats: runner.Progress{Phase: "backup", Bytes: 2}}, nil
+		})
+		a := newAgent(t, fr, Config{ProgressInterval: time.Second})
+		defer shutdown(t, a)
+		t0 := time.Now()
+		handle(t, a, startCmd("c1", "a"))
+		time.Sleep(10 * time.Second)
+		var got []string
+		for _, e := range events(a) {
+			if p := e.GetProgress(); p != nil {
+				got = append(got, e.GetTime().AsTime().Sub(t0).String()+"="+p.GetPhase()+"/"+time.Duration(p.GetStats().GetBytes()).String())
+			}
+		}
+		want := []string{"0s=mirror/1ns", "200ms=mirror/9ns", "200ms=backup/2ns"}
+		if !slices.Equal(got, want) {
+			t.Errorf("progress (time=phase/bytes) = %v, want %v", got, want)
 		}
 	})
 }
