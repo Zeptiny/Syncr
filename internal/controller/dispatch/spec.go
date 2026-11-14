@@ -35,6 +35,12 @@ var ErrTimeLimitUnsupported = fmt.Errorf("it cannot enforce a time limit: %w", E
 // (and so domain.ErrFailedPrecondition).
 var ErrHooksUnsupported = fmt.Errorf("it cannot run hooks: %w", ErrWorkerOutdated)
 
+// ErrRemoteSourceUnsupported reports a backup of a remote for a worker
+// that does not report link.FeatureResticRemoteSource, which would back up
+// nothing: the job fails with "worker_outdated". It matches
+// ErrWorkerOutdated (and so domain.ErrFailedPrecondition).
+var ErrRemoteSourceUnsupported = fmt.Errorf("it cannot back up a folder of a remote: %w", ErrWorkerOutdated)
+
 // MissingHooksError reports a worker that does not define hooks the job's
 // definition names (they were removed from its configuration, or the job
 // was sent to another worker than the one it was made for): the job fails
@@ -94,6 +100,32 @@ func (e *WrongOSError) Error() string {
 
 // Unwrap makes the error match domain.ErrInvalidArgument.
 func (e *WrongOSError) Unwrap() error { return domain.ErrInvalidArgument }
+
+// SourceMethodError reports a worker that cannot read the folder of a
+// backup of a remote with the definition's method (it reported, in its
+// Hello, that it cannot keep a mirror or cannot mount, with a reason): the
+// job fails with "tool_unavailable", the code the worker itself would fail
+// it with, and the worker's reason. It matches domain.ErrFailedPrecondition.
+type SourceMethodError struct {
+	// Why says what the worker cannot do and its reason
+	// (jobkind.RemoteSourceUnavailable), e.g. "cannot mount a remote:
+	// /dev/fuse is missing".
+	Why string
+}
+
+func (e *SourceMethodError) Error() string { return "the worker " + e.Why }
+
+// Message is the job's failure cause; worker names the worker ("" if
+// unknown).
+func (e *SourceMethodError) Message(worker string) string {
+	if worker == "" {
+		return "the worker " + e.Why
+	}
+	return fmt.Sprintf("worker %q %s", worker, e.Why)
+}
+
+// Unwrap makes the error match domain.ErrFailedPrecondition.
+func (e *SourceMethodError) Unwrap() error { return domain.ErrFailedPrecondition }
 
 // errRepositoryUnavailable reports a job whose restic repository was
 // deleted or is not its owner's any more: the job fails with
@@ -192,8 +224,9 @@ func (s *Specs) TimeLimitOf(j jobs.Job) time.Duration {
 // matches it) when the job has a time limit and w does not report
 // link.FeatureJobTimeLimit, and ErrHooksUnsupported (which matches it too)
 // when the job names hooks and w does not report link.FeatureJobHooks; a
-// *MissingHooksError when w does not define a hook the job names;
-// errRepositoryUnavailable when its repository is gone; domain.ErrNotFound
+// *MissingHooksError when w does not define a hook the job names; a
+// *SourceMethodError when the job is a backup of a remote and w reported
+// that it cannot use its method; errRepositoryUnavailable when its repository is gone; domain.ErrNotFound
 // (from Resolve or the kind) when a remote is missing, deleted or not the
 // owner's; whatever else the Resolves return (domain.ErrFailedPrecondition
 // for credentials or a password that cannot be decrypted, store errors to
@@ -222,8 +255,22 @@ func (s *Specs) Build(ctx context.Context, j jobs.Job, w workers.Info) (*syncrv1
 	// Some options need a newer worker than their kind (e.g. selected items
 	// of a restore's subfolder), which an older one refuses or misreads.
 	for _, f := range s.kinds.DefinitionFeatures(def) {
-		if !w.HasFeatures(f) {
-			return nil, fmt.Errorf("job %s: %w: it lacks the feature %q that this %s job needs", j.ID, ErrWorkerOutdated, f, kind)
+		if w.HasFeatures(f) {
+			continue
+		}
+		cause := ErrWorkerOutdated
+		if f == link.FeatureResticRemoteSource {
+			cause = ErrRemoteSourceUnsupported
+		}
+		return nil, fmt.Errorf("job %s: %w: it lacks the feature %q that this %s job needs", j.ID, cause, f, kind)
+	}
+	// A backup of a remote needs a worker that can use its method, which
+	// depends on the worker's machine, not its version (Hello.remote_sources).
+	if m, ok := jobkind.RemoteSourceMethod(def); ok {
+		rs := w.RemoteSources
+		support := &syncrv1.RemoteSourceSupport{Mirror: rs.Mirror, Mount: rs.Mount, MirrorReason: rs.MirrorReason, MountReason: rs.MountReason}
+		if why := jobkind.RemoteSourceUnavailable(m, support); why != "" {
+			return nil, fmt.Errorf("job %s: %w", j.ID, &SourceMethodError{Why: why})
 		}
 	}
 	// A worker that ignores max_runtime would run the job without a limit.

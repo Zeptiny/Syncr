@@ -70,7 +70,9 @@ func (s *Seed) seedJob(ctx context.Context, svc *jobs.Service, clk *stepClock, n
 		clk.set(created.Add(2 * time.Minute))
 		_, err = svc.Cancel(ctx, actor, id)
 		return id, err
-	case dj.err.Code == jobs.CodeDispatchTimeout:
+	case dj.err.Code == jobs.CodeDispatchTimeout, dj.err.Code == jobs.CodeToolUnavailable && dj.run == 0:
+		// Failed by the controller before it was sent: the dispatch
+		// timeout, or a worker that cannot use what the job needs.
 		clk.set(start)
 		_, _, err = svc.FailQueued(ctx, id, time.Time{}, dj.err)
 		return id, err

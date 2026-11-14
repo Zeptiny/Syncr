@@ -84,6 +84,13 @@ func repositoryNames(deps Deps) RepositoryNames {
 	return deps.Restic
 }
 
+func remoteSourceChecker(deps Deps) RemoteSourceChecker {
+	if deps.Restic == nil {
+		return nil
+	}
+	return deps.Restic
+}
+
 func remoteNames(deps Deps) RemoteNames {
 	if deps.Remotes == nil {
 		return nil

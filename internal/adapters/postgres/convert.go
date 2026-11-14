@@ -113,7 +113,19 @@ type infoDoc struct {
 	Features          []string  `json:"features,omitempty"`
 	ProbeOps          []string  `json:"probe_ops,omitempty"`
 	Hooks             []hookDoc `json:"hooks,omitempty"`
-	ReportedAt        time.Time `json:"reported_at,omitzero"`
+	// RemoteSources is set only for a worker that reported it (link
+	// feature restic.remote_source); rows stored before it decode as the
+	// zero value.
+	RemoteSources *remoteSourcesDoc `json:"remote_sources,omitempty"`
+	ReportedAt    time.Time         `json:"reported_at,omitzero"`
+}
+
+// remoteSourcesDoc is the stored form of workers.RemoteSources.
+type remoteSourcesDoc struct {
+	Mirror       bool   `json:"mirror,omitempty"`
+	Mount        bool   `json:"mount,omitempty"`
+	MirrorReason string `json:"mirror_reason,omitempty"`
+	MountReason  string `json:"mount_reason,omitempty"`
 }
 
 type toolDoc struct {
@@ -149,6 +161,11 @@ func encodeInfo(in workers.Info) ([]byte, error) {
 	for _, h := range in.Hooks {
 		doc.Hooks = append(doc.Hooks, hookDoc{Name: cleanText(h.Name), Description: cleanText(h.Description), TimeoutNs: int64(h.Timeout)})
 	}
+	if rs := in.RemoteSources; rs != (workers.RemoteSources{}) {
+		doc.RemoteSources = &remoteSourcesDoc{
+			Mirror: rs.Mirror, Mount: rs.Mount, MirrorReason: cleanText(rs.MirrorReason), MountReason: cleanText(rs.MountReason),
+		}
+	}
 	b, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("encode worker info: %w", err)
@@ -181,6 +198,11 @@ func decodeInfo(b []byte) (workers.Info, error) {
 	}
 	for _, h := range doc.Hooks {
 		out.Hooks = append(out.Hooks, workers.Hook{Name: h.Name, Description: h.Description, Timeout: time.Duration(h.TimeoutNs)})
+	}
+	if rs := doc.RemoteSources; rs != nil {
+		out.RemoteSources = workers.RemoteSources{
+			Mirror: rs.Mirror, Mount: rs.Mount, MirrorReason: rs.MirrorReason, MountReason: rs.MountReason,
+		}
 	}
 	return out, nil
 }

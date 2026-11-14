@@ -112,6 +112,11 @@ type Sample struct {
 	// Time is when the worker took the sample (worker clock).
 	Time  time.Time
 	Stats Stats
+	// Phase is the job's phase when the worker took the sample
+	// (Progress.phase, e.g. "mirror" or "backup" for a backup of a
+	// remote; "" for jobs without phases). It is live only: stores do not
+	// keep it, so stored samples have none.
+	Phase string
 }
 
 // JobError says why a job failed, was interrupted or cancelled. Code is the
@@ -149,6 +154,12 @@ const (
 	// requires (jobkind Registry.RequiredFeatures), or the job has a time
 	// limit and the worker cannot enforce one.
 	CodeWorkerOutdated = "worker_outdated"
+	// CodeToolUnavailable: the job's worker cannot use what the job needs,
+	// e.g. it cannot keep a mirror of a remote or mount one for a backup
+	// of a remote (the dispatcher fails such a job before sending it, with
+	// the worker's reason); workers report it too, for a tool they cannot
+	// run.
+	CodeToolUnavailable = "tool_unavailable"
 )
 
 // CodeTimeLimit is the error code of a job its worker stopped because its

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/proto"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
@@ -39,14 +40,14 @@ func TestRunSeededRestic(t *testing.T) {
 	for _, r := range list.Msg.GetRepositories() {
 		repos[r.GetName()] = r
 	}
-	for name, snapshots := range map[string]int32{"Photos vault": 30, "NAS documents": 14, "Office laptop": 10, "Old laptop": 6} {
+	for name, snapshots := range map[string]int32{"Photos vault": 30, "NAS documents": 14, "Office laptop": 10, "Old laptop": 6, "Nextcloud photos": 12} {
 		r := repos[name]
 		if r == nil || r.GetStats().GetSnapshotCount() != snapshots || r.GetRemote().GetName() == "" || r.GetStats().GetLastBackup() == nil {
 			t.Errorf("repository %q = %v", name, r)
 		}
 	}
-	if len(repos) != 4 {
-		t.Errorf("the admin's repositories = %v, want 4 (alice's and the deleted one are not listed)", len(repos))
+	if len(repos) != 5 {
+		t.Errorf("the admin's repositories = %v, want 5 (alice's and the deleted one are not listed)", len(repos))
 	}
 	photos, old := repos["Photos vault"], repos["Old laptop"]
 	if photos == nil || old == nil {
@@ -91,6 +92,16 @@ func TestRunSeededRestic(t *testing.T) {
 		// attic-nas runs probes too; it only lacks the time limits.
 		if up := w.GetName() != "laptop"; up != slices.Contains(w.GetInfo().GetFeatures(), "probe") {
 			t.Errorf("worker %s features = %v", w.GetName(), w.GetInfo().GetFeatures())
+		}
+		// What each can do with the folders of remotes reaches the API;
+		// attic-nas, an older build, and the pending laptop report nothing.
+		want, reported := map[string]*syncrv1.RemoteSourceSupport{
+			"nas-01":      {Mirror: true, Mount: true},
+			"backup-host": {Mirror: true, MountReason: "/dev/fuse is missing"},
+			"office-pc":   {MirrorReason: "remote_sources.mirror is off in worker.yaml", MountReason: "WinFsp is not installed"},
+		}[w.GetName()]
+		if got := w.GetInfo().GetRemoteSources(); reported != (got != nil) || reported && !proto.Equal(got, want) {
+			t.Errorf("worker %s remote_sources = %v, want %v", w.GetName(), got, want)
 		}
 	}
 	roots, err := pc.ListWorkerFiles(ctx, connect.NewRequest(&syncrv1.ListWorkerFilesRequest{WorkerId: ids["nas-01"]}))

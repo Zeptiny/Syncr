@@ -48,8 +48,11 @@ type Jobs interface {
 // not define a hook the definition names, too, with a message saying so),
 // ErrWorkerOutdated (the worker lacks a feature the kind requires, or
 // ErrTimeLimitUnsupported: the job has a time limit the worker cannot
-// enforce, or ErrHooksUnsupported: it names hooks the worker cannot run)
-// with "worker_outdated", domain.ErrFailedPrecondition (a
+// enforce, ErrHooksUnsupported: it names hooks the worker cannot run, or
+// ErrRemoteSourceUnsupported: it backs up a remote the worker cannot read)
+// with "worker_outdated", a *SourceMethodError (a backup of a remote for
+// a worker that cannot use its method) with "tool_unavailable",
+// domain.ErrFailedPrecondition (a
 // remote's stored credentials cannot be used, e.g. they no longer decrypt)
 // with "internal". Any other error is returned to the worker's call and
 // retried on its next poll.

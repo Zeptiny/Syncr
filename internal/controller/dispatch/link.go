@@ -282,7 +282,7 @@ func (s *Service) apply(ctx context.Context, workerID domain.WorkerID, epoch str
 		jobID = p.Progress.GetJobId()
 		var id domain.JobID
 		if id, err = domain.ParseJobID(jobID); err == nil {
-			_, err = s.jobs.RecordProgress(ctx, workerID, id, epoch, jobs.Sample{Time: at, Stats: statsFromProto(p.Progress.GetStats())})
+			_, err = s.jobs.RecordProgress(ctx, workerID, id, epoch, jobs.Sample{Time: at, Stats: statsFromProto(p.Progress.GetStats()), Phase: progressPhase(p.Progress.GetPhase())})
 		}
 	case *syncrv1.Event_JobResult:
 		jobID = p.JobResult.GetJobId()
@@ -485,9 +485,12 @@ func (s *Service) startSpec(ctx context.Context, j jobs.Job, info workers.Info) 
 	spec, err := s.specs.Build(ctx, j, info)
 	var wrongOS *WrongOSError
 	var missingHooks *MissingHooksError
+	var sourceMethod *SourceMethodError
 	switch {
 	case err == nil:
 		return spec, nil
+	case errors.As(err, &sourceMethod):
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeToolUnavailable, sourceMethod.Message(s.workerName(ctx, j)), err)
 	case errors.As(err, &wrongOS):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, s.wrongOSMessage(ctx, j, wrongOS), err)
 	case errors.As(err, &missingHooks):
@@ -517,6 +520,8 @@ func (s *Service) outdatedMessage(ctx context.Context, j jobs.Job, cause error) 
 		what = "jobs with a time limit"
 	case errors.Is(cause, ErrHooksUnsupported):
 		what = "jobs with hooks"
+	case errors.Is(cause, ErrRemoteSourceUnsupported):
+		what = "backups of a folder of a remote"
 	}
 	if name := s.workerName(ctx, j); name != "" {
 		return fmt.Sprintf("worker %q must be upgraded to run %s", name, what)

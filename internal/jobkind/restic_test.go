@@ -225,9 +225,6 @@ func TestResticCheckRejects(t *testing.T) {
 		{"control character in the host", backup(func(d *syncrv1.ResticBackupDefinition) { d.Host = "a\nb" }), "definition.restic_backup.host"},
 		{"zero size limit", backup(func(d *syncrv1.ResticBackupDefinition) { d.ExcludeLargerThanBytes = i64(0) }), "definition.restic_backup.exclude_larger_than_bytes"},
 		{"negative size limit", backup(func(d *syncrv1.ResticBackupDefinition) { d.ExcludeLargerThanBytes = i64(-1) }), "definition.restic_backup.exclude_larger_than_bytes"},
-		{"remote source (not built yet)", backup(func(d *syncrv1.ResticBackupDefinition) {
-			d.RemoteSource = &syncrv1.ResticRemoteSourceDefinition{Method: syncrv1.ResticRemoteSourceMethod_RESTIC_REMOTE_SOURCE_METHOD_MIRROR}
-		}), "definition.restic_backup.remote_source"},
 
 		// Forget.
 		{"no policy", forget(func(d *syncrv1.ResticForgetDefinition) { d.Policy = nil }), "definition.restic_forget.policy"},

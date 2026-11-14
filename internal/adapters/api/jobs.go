@@ -60,6 +60,9 @@ type jobHandler struct {
 	// repos names the jobs' restic repositories (Job.repository and the
 	// title); nil leaves the reference without a name.
 	repos RepositoryNames
+	// sources checks the folder of a backup of a remote against its
+	// repository; nil leaves it to the dispatcher (the job's spec).
+	sources RemoteSourceChecker
 	// workers tells RunJob the worker's operating system (the VSS check)
 	// and the hooks it defines; nil skips the checks.
 	workers WorkerNames
@@ -356,11 +359,17 @@ func (h *jobHandler) RunJob(ctx context.Context, req *connect.Request[syncrv1.Ru
 	if fields := unrunnableHooks(ctx, h.workers, workerID, def); len(fields) > 0 {
 		return nil, h.fail(ctx, procedure, &domain.ValidationError{Fields: fields})
 	}
+	actor, _ := ActorFrom(ctx)
+	if err := checkRemoteSource(ctx, h.sources, actor.UserID, def, refs); err != nil {
+		return nil, remoteSourceError(err, func(err error) error { return h.fail(ctx, procedure, err) })
+	}
+	if fe, wrong := unusableSourceMethod(ctx, h.workers, workerID, def, "worker_id"); wrong {
+		return nil, h.fail(ctx, procedure, &domain.ValidationError{Fields: []domain.FieldError{fe}})
+	}
 	encoded, err := jobkind.Marshal(def)
 	if err != nil {
 		return nil, h.fail(ctx, procedure, err)
 	}
-	actor, _ := ActorFrom(ctx)
 	j, err := h.jobs.Create(ctx, actor, jobs.CreateParams{
 		WorkerID: workerID, Kind: kind, Definition: encoded, RemoteIDs: refs.RemoteIDs, SearchTerms: refs.SearchTerms,
 		RepositoryID: refs.RepositoryID, ConcurrencyKeys: refs.ConcurrencyKeys,

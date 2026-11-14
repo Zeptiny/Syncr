@@ -40,6 +40,9 @@ type Probes struct {
 	// start is the seed's start; workers the demo workers' local roots.
 	start   time.Time
 	workers map[domain.WorkerID][]string
+	// remotes are the demo remotes' IDs by name: the tags of the
+	// snapshots of backups of a remote (demoRepo.sourceTagged).
+	remotes map[string]domain.RemoteID
 	// created are the repositories initialized through restic_init, by
 	// location, with their passwords.
 	created map[string]string
@@ -51,11 +54,12 @@ func NewProbes(clock Clock) *Probes {
 	return &Probes{clock: clock, workers: map[domain.WorkerID][]string{}, created: map[string]string{}}
 }
 
-// bind tells the probes the seed's start and its workers' local roots.
-func (p *Probes) bind(start time.Time, roots map[domain.WorkerID][]string) {
+// bind tells the probes the seed's start, its workers' local roots and its
+// remotes' IDs.
+func (p *Probes) bind(start time.Time, roots map[domain.WorkerID][]string, remotes map[string]domain.RemoteID) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.start, p.workers = start, roots
+	p.start, p.workers, p.remotes = start, roots, remotes
 }
 
 // seedStart is the time the answers count back from.
@@ -529,6 +533,9 @@ func (p *Probes) open(remotes []*syncrv1.RemoteDefinition, repo *syncrv1.ResticR
 		if repo.GetPassword() != demoRepoPassword {
 			return probeRepo{}, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_WRONG_PASSWORD, "wrong password or no key found")
 		}
+		p.mu.Lock()
+		d = d.sourceTagged(p.remotes)
+		p.mu.Unlock()
 		return probeRepo{resticID: resticIDOf(key), demo: &d}, nil
 	}
 	p.mu.Lock()
