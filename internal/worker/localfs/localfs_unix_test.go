@@ -77,3 +77,29 @@ func TestResolveUnreadableDirectory(t *testing.T) {
 		t.Errorf("err = %v, want ErrUnresolvable", err)
 	}
 }
+
+// TestResolveRefusesReservedBeforeResolving: a path inside a reserved
+// folder as written is refused without touching the file system (a live
+// mount point blocks whoever stats it): here a dangling link inside the
+// folder, which resolving would report as unresolvable, gives ErrReserved.
+func TestResolveRefusesReservedBeforeResolving(t *testing.T) {
+	t.Parallel()
+	root := realTempDir(t)
+	sources := filepath.Join(root, "data", "sources")
+	mkdirs(t, filepath.Join(sources, "mount"))
+	if err := os.Symlink(filepath.Join(root, "nowhere"), filepath.Join(sources, "mount", "k")); err != nil {
+		t.Fatal(err)
+	}
+	p, err := mustPolicy(t, root).Reserve(sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Resolve(filepath.Join(sources, "mount", "k", "x")); !errors.Is(err, ErrReserved) || errors.Is(err, ErrUnresolvable) {
+		t.Errorf("Resolve inside the reserved folder = %v, want ErrReserved without resolving", err)
+	}
+	// Without the reservation the same path is unresolvable: resolving
+	// would have touched it.
+	if _, err := mustPolicy(t, root).Resolve(filepath.Join(sources, "mount", "k", "x")); !errors.Is(err, ErrUnresolvable) {
+		t.Errorf("unreserved = %v", err)
+	}
+}

@@ -226,6 +226,46 @@ worker, back up with restic and restore into
 a current worker: one that shows as **Outdated** in the web UI is upgraded
 with `syncr-worker upgrade` ([above](#upgrading)).
 
+## Backing up remotes with the mount method
+
+A backup can read a folder of one of your remotes
+([restic](restic.md#back-up-a-folder-of-a-remote)). The default method,
+the **mirror**, needs nothing on the worker but disk in its data
+directory. The **mount** method (`rclone mount`, no disk) needs FUSE 3:
+
+```sh
+sudo apt install fuse3     # Debian, Ubuntu
+sudo dnf install fuse3     # Fedora, RHEL and derivatives
+```
+
+then a restart of the worker (`sudo syncr-worker service restart`), which
+checks at startup whether it can mount. The Workers page shows the result
+under **Remote backups**, with the reason when it cannot.
+
+- **System service** (root): `fuse3` is all it needs.
+- **User service** (`--user`): the worker is not root, so it mounts through
+  `fusermount3`, which the package installs setuid root. The unit's
+  `NoNewPrivileges=yes` stops exactly that (the Workers page says "the
+  worker runs with NoNewPrivileges, which keeps fusermount3 from
+  mounting…"). To allow it, add a drop-in:
+
+  ```sh
+  systemctl --user edit syncr-worker
+  ```
+
+  ```ini
+  [Service]
+  NoNewPrivileges=no
+  ```
+
+  then `systemctl --user restart syncr-worker`. This lets the worker and
+  its tools run setuid programs again; leave it out if you use the mirror.
+- **LXC containers** (Proxmox and the like) usually have no `/dev/fuse`.
+  The host must pass it through, for example `pct set <id> --features
+  fuse=1` on Proxmox. Where that is not possible, use the mirror.
+- `remote_sources.mount: off` in the [configuration](worker-config.md#remote-sources)
+  turns the mount off for this worker.
+
 ## Hooks: commands around jobs
 
 To let jobs dump a database, or stop and start containers, around a backup,
@@ -248,7 +288,7 @@ Then remove the worker in the controller UI (**Workers**, the worker,
 | | System | `--user` |
 | --- | --- | --- |
 | Config | `/etc/syncr/worker.yaml` (0600) | `~/.config/syncr/worker.yaml` |
-| Data, tools, certificate | `/var/lib/syncr` | `~/.local/share/syncr` |
+| Data, tools, certificate, mirrors | `/var/lib/syncr` | `~/.local/share/syncr` |
 | Logs | `journalctl -u syncr-worker -f` | `journalctl --user -u syncr-worker -f` |
 
 The tools directory (`<data dir>/tools`, or `tools.dir`) belongs to this

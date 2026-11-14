@@ -23,6 +23,7 @@ describe("mock transport, milestone 4", () => {
       "Archive 2019 yearly check",
       "Laptop projects",
       "Monthly deep check: photos",
+      "Nightly Nextcloud photos backup",
       "Nightly photos → B2",
       "Nightly photos backup",
       "Office docs hourly",

@@ -27,6 +27,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -44,6 +45,11 @@ var (
 	// a dangling symlink, a non-directory in the middle of the path, or an
 	// I/O or permission error.
 	ErrUnresolvable = errors.New("cannot resolve path")
+
+	// ErrReserved reports a path that is, or is inside, a folder the worker
+	// keeps for itself (Policy.Reserve), even inside a root. It is always
+	// joined with ErrNotAllowed.
+	ErrReserved = errors.New("the folder is reserved for the worker's own use")
 )
 
 // PathError describes a rejected path. Its message names the path, which is
@@ -71,6 +77,9 @@ type root struct {
 // safe for concurrent use.
 type Policy struct {
 	roots []root
+	// reserved are folders no path may be or lie inside, roots or not
+	// (Reserve).
+	reserved []root
 }
 
 // NewPolicy returns a policy for roots. Every root must be an absolute path;
@@ -99,6 +108,46 @@ func NewPolicy(roots []string) (*Policy, error) {
 	return p, nil
 }
 
+// Reserve returns a copy of p that also refuses every path that is one of
+// dirs or lies inside one, as written or resolved (symbolic links,
+// junctions), even when a root covers it: Resolve fails with ErrReserved
+// (joined with ErrNotAllowed), so List and Measure refuse it too, and
+// Measure never enters such a folder below the folder it measures. The
+// worker reserves <data_dir>/sources, which holds one user's copies of a
+// remote and the mount points of remotes, while every user may run jobs on
+// and browse a worker's roots. Every dir must be an absolute path; it need
+// not exist.
+func (p *Policy) Reserve(dirs ...string) (*Policy, error) {
+	out := &Policy{roots: p.roots, reserved: slices.Clone(p.reserved)}
+	var errs []error
+	for _, d := range dirs {
+		clean, err := cleanAbs(d)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("reserved folder: %w", err))
+			continue
+		}
+		resolved, err := resolve(clean)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("reserved folder: %w", err))
+			continue
+		}
+		out.reserved = append(out.reserved, root{clean: clean, resolved: resolved})
+	}
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Reserved returns the reserved folders (Reserve), cleaned.
+func (p *Policy) Reserved() []string {
+	out := make([]string, len(p.reserved))
+	for i, r := range p.reserved {
+		out[i] = r.clean
+	}
+	return out
+}
+
 // Roots returns the configured roots, cleaned, in configuration order.
 func (p *Policy) Roots() []string {
 	out := make([]string, len(p.roots))
@@ -111,8 +160,8 @@ func (p *Policy) Roots() []string {
 // Resolve checks path and returns it cleaned (absolute, with "." and ".."
 // removed lexically), ready to hand to a tool. The path is accepted only if
 // its resolved form (symlinks, junctions) is inside a root. Errors are
-// *PathError values wrapping ErrInvalidPath, ErrNotAllowed or
-// ErrUnresolvable.
+// *PathError values wrapping ErrInvalidPath, ErrNotAllowed (also with
+// ErrReserved, see Reserve) or ErrUnresolvable.
 //
 // The cleaned path, not the resolved one, is returned so that tools record
 // the paths users chose (e.g. in restic snapshots). Because ".." is removed
@@ -126,9 +175,20 @@ func (p *Policy) Resolve(path string) (string, error) {
 	if len(p.roots) == 0 {
 		return "", &PathError{Path: path, Err: fmt.Errorf("%w (no local_roots configured)", ErrNotAllowed)}
 	}
+	// A reserved folder as written is refused before anything touches the
+	// file system: resolving a path inside a live mount point stats the
+	// mount, which blocks while its rclone hangs.
+	for _, r := range p.reserved {
+		if within(r.clean, clean) {
+			return "", &PathError{Path: path, Err: fmt.Errorf("%w: %w (%s)", ErrNotAllowed, ErrReserved, r.clean)}
+		}
+	}
 	resolved, err := resolve(clean)
 	if err != nil {
 		return "", err
+	}
+	if r, ok := p.reservedHolding(clean, resolved); ok {
+		return "", &PathError{Path: path, Err: fmt.Errorf("%w: %w (%s)", ErrNotAllowed, ErrReserved, r.clean)}
 	}
 	for _, r := range p.roots {
 		if within(r.resolved, resolved) {
@@ -137,6 +197,37 @@ func (p *Policy) Resolve(path string) (string, error) {
 	}
 	return "", &PathError{Path: path, Err: ErrNotAllowed}
 }
+
+// reservedHolding returns the reserved folder that the path (clean, and
+// resolved as resolve resolves it) is or lies inside, if any.
+func (p *Policy) reservedHolding(clean, resolved string) (root, bool) {
+	for _, r := range p.reserved {
+		if within(r.clean, clean) || within(r.resolved, resolved) {
+			return r, true
+		}
+	}
+	return root{}, false
+}
+
+// isReserved reports whether path, a folder met during a walk that started
+// at start (clean, resolved as startResolved), is one of the reserved
+// folders, as written or through start's resolved form. A walk never
+// follows links, so this is enough to keep it out of them.
+func (p *Policy) isReserved(start, startResolved, path string) bool {
+	for _, r := range p.reserved {
+		if sameLocation(r.clean, path) {
+			return true
+		}
+		if rel, err := filepath.Rel(start, path); err == nil && sameLocation(r.resolved, filepath.Join(startResolved, rel)) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameLocation reports whether the clean absolute paths a and b name the
+// same location, compared as within compares.
+func sameLocation(a, b string) bool { return within(a, b) && within(b, a) }
 
 // Overlap reports whether the absolute paths a and b are the same location
 // or one is inside the other, compared component-wise as Resolve compares
@@ -164,6 +255,79 @@ func Overlap(a, b string) (bool, error) {
 		return false, err
 	}
 	return within(ra, rb) || within(rb, ra), nil
+}
+
+// HoldsReserved returns the reserved folder (Reserve) that the absolute
+// path holds, as written or resolved (Overlap), and whether there is one.
+// Resolve already refuses a path that is or lies inside a reserved folder;
+// this finds the folders above one, such as "/" or the data directory, for
+// the callers that must keep a tool working there out of it. A path that
+// cannot be resolved counts as holding nothing.
+func (p *Policy) HoldsReserved(path string) (string, bool) {
+	for _, r := range p.reserved {
+		if ok, err := Overlap(path, r.clean); err == nil && ok {
+			return r.clean, true
+		}
+	}
+	return "", false
+}
+
+// RelPath is a path relative to a folder (Inside), one entry per
+// component. Each entry lists the names that open that component: its
+// name first and, on Windows, its 8.3 short name when that differs.
+type RelPath [][]string
+
+// Inside returns how a tool that walks the folder outer meets the folder
+// inner when outer holds it (strictly): inner's path relative to outer, as
+// written (both cleaned) and as resolved (symbolic links, junctions, the
+// names as the file system spells them), without duplicates. It returns
+// nil when outer does not hold inner, or is inner. Both must be absolute;
+// errors are *PathError values, as from Resolve. Names compare as Resolve
+// compares them (case-insensitively on Windows), so a caller that matches
+// names must do so too.
+func Inside(outer, inner string) ([]RelPath, error) {
+	co, err := cleanAbs(outer)
+	if err != nil {
+		return nil, err
+	}
+	ci, err := cleanAbs(inner)
+	if err != nil {
+		return nil, err
+	}
+	var out []RelPath
+	add := func(o, i string) {
+		if !within(o, i) || within(i, o) {
+			return
+		}
+		depth := len(components(o[len(filepath.VolumeName(o)):]))
+		names := components(i[len(filepath.VolumeName(i)):])
+		short := shortComponents(i, len(names))
+		rel := make(RelPath, 0, len(names)-depth)
+		for k := depth; k < len(names); k++ {
+			alts := []string{names[k]}
+			if short != nil && !nameEqual(short[k], names[k]) {
+				alts = append(alts, short[k])
+			}
+			rel = append(rel, alts)
+		}
+		for _, have := range out {
+			if slices.EqualFunc(have, rel, slices.Equal[[]string]) {
+				return
+			}
+		}
+		out = append(out, rel)
+	}
+	add(co, ci)
+	ro, err := resolve(co)
+	if err != nil {
+		return nil, err
+	}
+	ri, err := resolve(ci)
+	if err != nil {
+		return nil, err
+	}
+	add(ro, ri)
+	return out, nil
 }
 
 // cleanAbs validates path and returns it cleaned.

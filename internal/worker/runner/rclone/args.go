@@ -4,46 +4,25 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
-	"time"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/worker/runner/rclonetool"
 )
 
-// Limits for RcloneTransferOptions. They keep a job from exhausting the
-// worker (thousands of parallel transfers) while staying far above useful
-// values.
+// Limits for RcloneTransferOptions (shared with every rclone run, see
+// rclonetool).
 const (
-	maxTransfers       = 64
-	maxCheckers        = 256
-	maxRetries         = 100
-	maxLowLevelRetries = 1000
-	maxFilters         = 1000
-	maxPatternBytes    = 4096
-	maxDuration        = 366 * 24 * time.Hour
+	maxTransfers       = rclonetool.MaxTransfers
+	maxCheckers        = rclonetool.MaxCheckers
+	maxRetries         = rclonetool.MaxRetries
+	maxLowLevelRetries = rclonetool.MaxLowLevelRetries
+	maxFilters         = rclonetool.MaxFilters
+	maxPatternBytes    = rclonetool.MaxPatternBytes
+	maxDuration        = rclonetool.MaxDuration
 )
 
-// statsInterval is how often rclone reports progress.
-const statsInterval = "1s"
-
-// baseFlags make rclone log JSON lines on stderr and print its stats as one
-// such line every statsInterval:
-//
-//   - --use-json-log: every log line is a JSON object; stats lines carry a
-//     "stats" object with the counters.
-//   - --log-level=NOTICE: rclone's default, made explicit; per-file INFO
-//     lines ("Copied (new)") are not needed and can be huge.
-//   - --stats=1s: periodic stats (rclone also prints them once at exit).
-//   - --stats-log-level=NOTICE: stats are logged at INFO by default, which
-//     NOTICE would hide.
-func baseFlags() []string {
-	return []string{
-		"--use-json-log",
-		"--log-level=NOTICE",
-		"--stats=" + statsInterval,
-		"--stats-log-level=NOTICE",
-	}
-}
+// baseFlags make rclone log JSON lines with its stats (rclonetool.BaseFlags).
+func baseFlags() []string { return rclonetool.BaseFlags() }
 
 // command returns the rclone command for mode.
 func command(mode syncrv1.RcloneTransferMode) (string, error) {
@@ -182,32 +161,7 @@ func filterFlags(rules []*syncrv1.FilterRule) ([]string, error) {
 
 // filterLines checks filter rules and returns them as rclone filter lines
 // ("+ pattern" or "- pattern"), in order: the values of --filter, and the
-// lines of a two-way sync's filters file.
+// lines of a two-way sync's filters file (rclonetool.FilterLines).
 func filterLines(rules []*syncrv1.FilterRule) ([]string, error) {
-	if len(rules) > maxFilters {
-		return nil, fmt.Errorf("at most %d filter rules are allowed", maxFilters)
-	}
-	lines := make([]string, 0, len(rules))
-	for i, r := range rules {
-		var sign string
-		switch r.GetAction() {
-		case syncrv1.FilterAction_FILTER_ACTION_INCLUDE:
-			sign = "+"
-		case syncrv1.FilterAction_FILTER_ACTION_EXCLUDE:
-			sign = "-"
-		default:
-			return nil, fmt.Errorf("filter rule %d: action must be include or exclude", i)
-		}
-		p := r.GetPattern()
-		switch {
-		case strings.TrimSpace(p) == "":
-			return nil, fmt.Errorf("filter rule %d: empty pattern", i)
-		case len(p) > maxPatternBytes:
-			return nil, fmt.Errorf("filter rule %d: pattern longer than %d bytes", i, maxPatternBytes)
-		case strings.ContainsAny(p, "\x00\r\n"):
-			return nil, fmt.Errorf("filter rule %d: pattern contains a line break or NUL byte", i)
-		}
-		lines = append(lines, sign+" "+p)
-	}
-	return lines, nil
+	return rclonetool.FilterLines(rules)
 }

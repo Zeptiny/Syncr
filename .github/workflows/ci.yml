@@ -25,6 +25,12 @@ env:
   GORELEASER_VERSION: v2.20.1
   GOVULNCHECK_VERSION: v1.9.0
   ACTIONLINT_VERSION: v1.7.12
+  # WinFsp for the Windows mount tests: the official MSI of this release,
+  # verified by its SHA-256 (the release's asset digest). Not Dependabot's:
+  # update the three together.
+  WINFSP_RELEASE: v2.1
+  WINFSP_MSI: winfsp-2.1.25156.msi
+  WINFSP_SHA256: 073a70e00f77423e34bed98b86e600def93393ba5822204fac57a29324db9f7a
 
 jobs:
   lint:
@@ -206,15 +212,34 @@ jobs:
           test -x "$rclone" && test -x "$restic"
           echo "rclone=$rclone" >> "$GITHUB_OUTPUT"
           echo "restic=$restic" >> "$GITHUB_OUTPUT"
+      - name: FUSE 3 for the mount tests
+        # Backups of a folder of a remote through `rclone mount` need
+        # /dev/fuse and, since the runner user is not root, the setuid-root
+        # fusermount3 of the fuse3 package in a process that may gain
+        # privileges (NoNewPrivs 0). Checked here so that a runner change
+        # fails with its cause, before the tests.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fuse3
+          helper=$(command -v fusermount3)
+          ls -l /dev/fuse "$helper"
+          test -c /dev/fuse && test -r /dev/fuse && test -w /dev/fuse || { echo "::error::/dev/fuse is missing or not read-write for $(id -un)"; exit 1; }
+          test -u "$helper" && [ "$(stat -c %u "$helper")" = 0 ] || { echo "::error::$helper is not setuid root"; exit 1; }
+          grep -E '^NoNewPrivs:' /proc/self/status
+          grep -qE '^NoNewPrivs:[[:space:]]+0$' /proc/self/status || { echo "::error::the job runs with NoNewPrivileges, so fusermount3 cannot mount"; exit 1; }
       - name: go test -tags integration
         # Docker is available on the runner, so the Postgres, MinIO and SFTP
         # (testcontainers) tests run too, and so do the end-to-end tests of
         # the real binaries (internal/e2e/system): they build both binaries,
         # run the controller on Postgres, enroll workers with `setup` and
-        # kill and restart the processes mid-job.
+        # kill and restart the processes mid-job. SYNCR_REQUIRE_MOUNT makes
+        # the real-mount tests (internal/worker/mount, the restic runner's
+        # and the system test's mount cases) fail instead of skip when this
+        # runner cannot mount.
         env:
           SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
           SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+          SYNCR_REQUIRE_MOUNT: "1"
         run: go test -tags integration -count=1 -timeout 20m ./...
       - name: go test -race (link wiring and e2e, integration tag)
         # The unit -race run covers every package without the integration
@@ -310,15 +335,33 @@ jobs:
             if (-not (Test-Path -LiteralPath $path)) { throw "$tool binary not found at '$path'" }
             Add-Content -Path $env:GITHUB_OUTPUT -Value "$tool=$path" -Encoding utf8
           }
+      - name: WinFsp for the mount tests
+        # rclone mount on Windows needs WinFsp. The worker finds it as rclone
+        # does: InstallDir under HKLM\SOFTWARE\WinFsp (32-bit view) and the
+        # DLL in its bin folder; both are checked after the install.
+        shell: pwsh
+        run: |
+          $msi = Join-Path $env:RUNNER_TEMP $env:WINFSP_MSI
+          Invoke-WebRequest -Uri "https://github.com/winfsp/winfsp/releases/download/$env:WINFSP_RELEASE/$env:WINFSP_MSI" -OutFile $msi
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $msi).Hash
+          if ($hash -ne $env:WINFSP_SHA256) { throw "$env:WINFSP_MSI has SHA-256 $hash, want $env:WINFSP_SHA256" }
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec failed with exit code $($p.ExitCode)" }
+          $dir = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\WOW6432Node\WinFsp' -Name InstallDir).InstallDir
+          $dll = Join-Path $dir 'bin\winfsp-x64.dll'
+          if (-not (Test-Path -LiteralPath $dll)) { throw "WinFsp's DLL is missing: $dll" }
+          Write-Host "WinFsp is installed in $dir"
       - name: go test -tags integration
         # The Windows runner only runs Windows containers, so the tests that
         # need Linux containers (MinIO, SFTP) skip themselves with a message.
         # Everything else runs for real: rclone local transfers, union,
-        # cancel, restic local lifecycle, local_roots, tool provisioning and
-        # the worker wiring. -v shows each skip and its reason.
+        # cancel, restic local lifecycle, local_roots, tool provisioning,
+        # the worker wiring and real WinFsp mounts (SYNCR_REQUIRE_MOUNT makes
+        # those fail instead of skip). -v shows each skip and its reason.
         env:
           SYNCR_TEST_RCLONE: ${{ steps.tools.outputs.rclone }}
           SYNCR_TEST_RESTIC: ${{ steps.tools.outputs.restic }}
+          SYNCR_REQUIRE_MOUNT: "1"
         run: go test -v -tags integration -count=1 -timeout 30m ./...
       - name: Build the worker for the service test
         shell: pwsh
@@ -623,3 +666,7 @@ jobs:
             'id; ls -ld /usr/share/doc/rclone /usr/share/doc/rclone/COPYING /usr/share/doc/restic /usr/share/doc/restic/LICENSE'
           docker run --rm --entrypoint /bin/sh syncr-worker:ci -c \
             'grep -q "Permission is hereby granted" /usr/share/doc/rclone/COPYING && grep -q "BSD 2-Clause License" /usr/share/doc/restic/LICENSE'
+          # The mount method: fuse3's helper, setuid root for the non-root
+          # worker.
+          docker run --rm --entrypoint /bin/sh syncr-worker:ci -c \
+            'ls -l /usr/bin/fusermount3 && test -u /usr/bin/fusermount3 && test "$(stat -c %u /usr/bin/fusermount3)" = 0'

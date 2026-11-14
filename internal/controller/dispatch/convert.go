@@ -33,6 +33,18 @@ func statsFromProto(p *syncrv1.JobStats) jobs.Stats {
 	}
 }
 
+// progressPhase returns the phase of a worker's progress sample
+// (Progress.phase) when it is one the controller knows (link
+// ProgressPhaseMirror, ProgressPhaseBackup); "" otherwise, so a
+// misbehaving worker cannot put arbitrary text in front of users.
+func progressPhase(p string) string {
+	switch p {
+	case link.ProgressPhaseMirror, link.ProgressPhaseBackup:
+		return p
+	}
+	return ""
+}
+
 func infoFromHello(h *syncrv1.Hello, at time.Time) workers.Info {
 	info := workers.Info{
 		Version: h.GetWorkerVersion(), OS: h.GetOs(), Arch: h.GetArch(), Hostname: h.GetHostname(),
@@ -50,6 +62,12 @@ func infoFromHello(h *syncrv1.Hello, at time.Time) workers.Info {
 			hook.Timeout = d.AsDuration()
 		}
 		info.Hooks = append(info.Hooks, hook)
+	}
+	// The workers service bounds the reasons (one line, 256 bytes).
+	if rs := h.GetRemoteSources(); rs != nil {
+		info.RemoteSources = workers.RemoteSources{
+			Mirror: rs.GetMirror(), Mount: rs.GetMount(), MirrorReason: rs.GetMirrorReason(), MountReason: rs.GetMountReason(),
+		}
 	}
 	return info
 }

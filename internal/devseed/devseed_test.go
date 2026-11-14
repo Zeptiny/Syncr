@@ -265,7 +265,8 @@ func TestSeed(t *testing.T) {
 		if j.ID != s.Jobs[len(s.Jobs)-1-i] {
 			t.Errorf("job %d is %s, want %s (IDs follow creation times)", i, j.ID, s.Jobs[len(s.Jobs)-1-i])
 		}
-		if j.Status.Terminal() && j.Status != domain.JobCancelled && j.Error.Code != "dispatch_timeout" && j.Error.Code != "path_not_allowed" && j.StartedAt.IsZero() {
+		if j.Status.Terminal() && j.Status != domain.JobCancelled && j.Error.Code != "dispatch_timeout" && j.Error.Code != "path_not_allowed" &&
+			j.Error.Code != "tool_unavailable" && j.StartedAt.IsZero() {
 			t.Errorf("finished job %s never started", j.ID)
 		}
 		if j.CreatedAt.After(t0) || j.FinishedAt.After(t0) {
@@ -498,8 +499,9 @@ func TestSeedSchedulesAndNotifications(t *testing.T) {
 		"Alice's documents":   {label: "linux"},
 	}
 	// The schedules on repositories are checked in TestSeedRestic, the
-	// two-way sync's in TestSeedTwoWaySync.
-	if len(s.Schedules) != len(want)+5+1 {
+	// two-way sync's in TestSeedTwoWaySync, the backup of a remote's in
+	// TestSeedRemoteBackups.
+	if len(s.Schedules) != len(want)+5+1+1 {
 		t.Fatalf("schedules = %v", s.Schedules)
 	}
 	missed := map[schedules.MissedAction]bool{}
@@ -610,10 +612,12 @@ func checkDeliveries(t *testing.T, e *env, s *devseed.Seed, now time.Time) {
 		case d.Status == notifications.StatusPending && d.Attempts == 0 && d.NextAttemptAt.After(now):
 			pending++
 			// The nightly run's webhook of about two days back (fires at
-			// most 25 hours apart).
+			// most 25 hours apart). The run is its fire's last before 36
+			// hours back, and the runs of one tick launch a few seconds
+			// apart, so it may be created up to a minute later.
 			j, err := e.store.GetJob(ctx, d.JobID)
 			if err != nil || d.ContactID != s.Contacts["Home Assistant"] || j.ScheduleID != s.Schedules["Nightly photos → B2"] ||
-				j.CreatedAt.Before(now.Add(-61*time.Hour)) || !j.CreatedAt.Before(now.Add(-36*time.Hour)) {
+				j.CreatedAt.Before(now.Add(-61*time.Hour)) || !j.CreatedAt.Before(now.Add(-36*time.Hour+time.Minute)) {
 				t.Errorf("pending delivery %+v is not the nightly run's webhook: job %+v (%v)", d, j, err)
 			}
 		case d.Status == notifications.StatusSending && d.LeaseUntil.After(now.Add(30*time.Minute)):
@@ -667,7 +671,7 @@ func TestSeedRestic(t *testing.T) {
 	for _, r := range repos {
 		byName[r.Name] = r
 	}
-	for name, snapshots := range map[string]int{"Photos vault": 30, "NAS documents": 14, "Office laptop": 10, "Old laptop": 6} {
+	for name, snapshots := range map[string]int{"Photos vault": 30, "NAS documents": 14, "Office laptop": 10, "Old laptop": 6, "Nextcloud photos": 12} {
 		r, ok := byName[name]
 		if !ok {
 			t.Fatalf("no repository %q among %v", name, slices.Collect(maps.Keys(byName)))
@@ -683,7 +687,7 @@ func TestSeedRestic(t *testing.T) {
 			t.Errorf("%s stores its password in the clear", name)
 		}
 	}
-	if _, ok := byName["Retired NAS"]; ok || len(repos) != 4 {
+	if _, ok := byName["Retired NAS"]; ok || len(repos) != 5 {
 		t.Errorf("the admin's live repositories = %v", slices.Collect(maps.Keys(byName)))
 	}
 	if alice, err := e.store.ListRepos(ctx, restic.ListFilter{OwnerID: s.Alice.UserID}); err != nil || len(alice) != 1 || alice[0].Name != "Alice's backups" {
@@ -848,11 +852,18 @@ func TestProbes(t *testing.T) {
 	if got := names(minio.GetListing()); !slices.Contains(got, "restic") || !slices.Contains(got, "archive") {
 		t.Errorf("MinIO archive = %v", got)
 	}
+	// Nextcloud: the folders the seeded backups of a remote read.
+	cloud := run(nas, &syncrv1.ProbeSpec{Remotes: remote("webdav"), Op: &syncrv1.ProbeSpec_ListRemote{ListRemote: &syncrv1.ProbeListRemote{
+		Location: &syncrv1.Location{Remote: "r1"}, DirsOnly: true,
+	}}})
+	if got := names(cloud.GetListing()); !slices.Equal(got, []string{"Calendar", "Documents", "Inbox", "Photos", "Projects", "Shared"}) {
+		t.Errorf("Nextcloud = %v (%v)", got, cloud)
+	}
 	for backend, want := range map[string]func(*syncrv1.ProbeResult) bool{
 		"b2":     func(r *syncrv1.ProbeResult) bool { return r.GetUsage().GetUsed() > 0 && !r.GetUsage().GetUnsupported() },
 		"s3":     func(r *syncrv1.ProbeResult) bool { return r.GetUsage().GetUnsupported() },
 		"sftp":   func(r *syncrv1.ProbeResult) bool { return r.GetUsage().GetFree() > 0 },
-		"webdav": func(r *syncrv1.ProbeResult) bool { return r.GetStatus() == syncrv1.ProbeStatus_PROBE_STATUS_FAILED },
+		"webdav": func(r *syncrv1.ProbeResult) bool { return r.GetUsage().GetTotal() > r.GetUsage().GetUsed() },
 	} {
 		res := run(nas, &syncrv1.ProbeSpec{Remotes: remote(backend), Op: &syncrv1.ProbeSpec_About{About: &syncrv1.ProbeAbout{Location: &syncrv1.Location{Remote: "r1"}}}})
 		if !want(res) {

@@ -166,6 +166,29 @@ worker, back up with restic and restore into
 tests and restic jobs need a current worker: one that shows as **Outdated**
 in the web UI is upgraded with `syncr-worker upgrade` ([above](#upgrading)).
 
+## Backing up remotes with the mount method
+
+A backup can read a folder of one of your remotes
+([restic](restic.md#back-up-a-folder-of-a-remote)). The default method,
+the **mirror**, needs nothing on the worker but disk in its data folder.
+The **mount** method (`rclone mount`, no disk) needs
+[WinFsp](https://winfsp.dev/) 2.x, for the service and for the `--user`
+task alike. Install it in an elevated PowerShell, then restart the worker,
+which checks at startup whether it can mount:
+
+```powershell
+winget install WinFsp.WinFsp     # or the MSI from https://github.com/winfsp/winfsp/releases
+syncr-worker.exe service restart  # or: service restart --user
+```
+
+The Workers page shows the result under **Remote backups**; without
+WinFsp it says "WinFsp is not installed". The worker mounts each folder at
+a path in its data folder (`<data dir>\sources\mount\<key>`), which
+exists only while the job runs. A mirror on Windows keeps rclone's
+encoding of names Windows cannot hold (fullwidth look-alikes of `*`, `?`,
+`:` and the like), and so do its snapshots. `remote_sources.mount: off` in
+the [configuration](worker-config.md#remote-sources) turns the mount off.
+
 ## Hooks: commands around jobs
 
 To let jobs stop a service or export a database around a backup, define
@@ -189,7 +212,7 @@ Then remove the worker in the controller UI (**Workers**, the worker,
 | | Service (administrator) | `--user` task |
 | --- | --- | --- |
 | Config | `%ProgramData%\Syncr\worker.yaml` | `%LocalAppData%\Syncr\worker.yaml` |
-| Data, tools, certificate | `%ProgramData%\Syncr` | `%LocalAppData%\Syncr` |
+| Data, tools, certificate, mirrors | `%ProgramData%\Syncr` | `%LocalAppData%\Syncr` |
 | Logs | Event Viewer, Windows Logs, Application, source `syncr-worker`; or `Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='syncr-worker'} -MaxEvents 30` | `%LocalAppData%\Syncr\logs\worker.log` (rotated at 10 MB to `worker.log.1`) |
 
 The tools directory (`<data dir>\tools`, or `tools.dir`) belongs to this

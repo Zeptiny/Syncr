@@ -74,8 +74,24 @@ type Info struct {
 	// sorted by name: what a job on the worker may name. Nil for a worker
 	// without hooks, and for one too old to run any.
 	Hooks []Hook
+	// RemoteSources is how the worker can read a folder of a remote for a
+	// backup (Hello.remote_sources); the zero value for a worker without
+	// the link feature restic.remote_source, which reports nothing.
+	RemoteSources RemoteSources
 	// ReportedAt is when the worker sent the Hello (worker clock).
 	ReportedAt time.Time
+}
+
+// RemoteSources is which methods a worker can use to read a folder of a
+// remote for a backup (Hello.remote_sources), and why not, for people,
+// when it cannot: the mirror (a copy kept in its data directory) and the
+// mount (rclone mount). A reason is one line of at most 256 bytes, empty
+// when the method is available.
+type RemoteSources struct {
+	Mirror       bool
+	Mount        bool
+	MirrorReason string
+	MountReason  string
 }
 
 // HookNames returns the names of the hooks the worker defines.

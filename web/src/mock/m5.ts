@@ -52,6 +52,7 @@ import type { User } from "@/gen/syncr/v1/users_pb";
 import * as fx from "@/test/fixtures";
 
 import * as bisync from "./bisync";
+import * as remoteBackup from "./remote-backup";
 import { next } from "./cron";
 
 type Violation = { field: string; message: string };
@@ -260,7 +261,12 @@ export function workerTrees(): Record<string, Record<string, Tree>> {
 export function remoteTrees(): Record<string, Tree> {
   return {
     [fx.ids.minio]: {
-      restic: { "nas-docs": repoDir, "archive-2019": repoDir, legacy: repoDir },
+      restic: {
+        "nas-docs": repoDir,
+        "archive-2019": repoDir,
+        legacy: repoDir,
+        "nextcloud-photos": repoDir,
+      },
       archive: { "2025": { "q1.tar": 3.1 * GiB, "q2.tar": 2.9 * GiB } },
     },
     [fx.ids.b2]: {
@@ -271,8 +277,9 @@ export function remoteTrees(): Record<string, Tree> {
       backups: { office: repoDir, "old-laptop": repoDir },
       "db-dumps": { "dump-2026-11-09.sql.gz": 86 * MiB },
       archive: {},
+      Scans: { "2026-10-invoice.pdf": 640 * 1024, "2026-11-contract.pdf": 2.3 * MiB },
     },
-    [fx.ids.nextcloud]: { Documents: {}, Projects: {} },
+    [fx.ids.nextcloud]: { Documents: {}, Inbox: {}, Photos: photos(), Projects: {} },
     [fx.ids.photos]: photos(),
     [fx.ids.media]: media,
     [bisync.ids.r2]: { shared: bisync.sharedTree() },
@@ -311,7 +318,7 @@ function entries(
     });
 }
 
-interface SnapshotSeed {
+export interface SnapshotSeed {
   count: number;
   /** every is the time between snapshots; first is how long ago the newest was. */
   every: number;
@@ -327,7 +334,7 @@ interface SnapshotSeed {
   seed: number;
 }
 
-function snapshots(now: number, s: SnapshotSeed): ResticSnapshot[] {
+export function snapshots(now: number, s: SnapshotSeed): ResticSnapshot[] {
   const r = rand(s.seed);
   const out: ResticSnapshot[] = [];
   for (let i = 0; i < s.count; i++) {
@@ -1296,7 +1303,17 @@ export function createM5(d: M5Deps): M5 {
     const op = j.definition?.operation;
     if (!r || !op) return;
     r.stale = true;
-    if (op.case === "resticBackup" && !op.value.dryRun) {
+    if (op.case === "resticBackup" && op.value.remoteSource) {
+      const host = d.workers.find((w) => w.id === j.workerId)?.info?.hostname ?? "worker";
+      remoteBackup.finish(j, r, host);
+      r.repo.stats!.lastBackup = {
+        $typeName: "syncr.v1.RepositoryJobRef",
+        jobId: j.id,
+        status: j.status,
+        createdAt: j.createdAt,
+        finishedAt: j.finishedAt,
+      };
+    } else if (op.case === "resticBackup" && !op.value.dryRun) {
       const [snap] = snapshots(Date.now() + 1, {
         count: 1,
         every: DAY,
@@ -1414,7 +1431,9 @@ export function createM5(d: M5Deps): M5 {
     let title = `${cases[op.case]} ${name}`;
     switch (op.case) {
       case "resticBackup":
-        title = `Back up ${op.value.paths.join(", ")} → ${name}`;
+        title = op.value.remoteSource
+          ? remoteBackup.title(def, d.remotes(), name)
+          : `Back up ${op.value.paths.join(", ")} → ${name}`;
         break;
       case "resticForget":
         title = `Apply retention to ${name}`;
@@ -1436,15 +1455,27 @@ export function createM5(d: M5Deps): M5 {
       kind: cases[op.case],
       title,
       repository: { id: repoId, name, deleted: false },
-      remotes: r?.repo.remote
-        ? [
-            {
-              id: r.repo.remote.id,
-              name: r.repo.remote.name,
-              backendType: r.repo.remote.backendType,
-            },
-          ]
-        : [],
+      remotes: [
+        ...(r?.repo.remote
+          ? [
+              {
+                id: r.repo.remote.id,
+                name: r.repo.remote.name,
+                backendType: r.repo.remote.backendType,
+              },
+            ]
+          : []),
+        // A backup of a remote also names the remote it reads.
+        ...d
+          .remotes()
+          .filter(
+            (x) =>
+              op.case === "resticBackup" &&
+              x.id === op.value.remoteSource?.remoteId &&
+              x.id !== r?.repo.remote?.id,
+          )
+          .map((x) => ({ id: x.id, name: x.name, backendType: x.backendType })),
+      ],
     };
   };
 
@@ -1462,7 +1493,16 @@ export function createM5(d: M5Deps): M5 {
     if (!r) v.push({ field: `${field}.repository_id`, message: "choose one of your repositories" });
     else if (r.repo.deleting)
       throw new ConnectError("the repository's data is being deleted", Code.FailedPrecondition);
-    if (op.case === "resticBackup") {
+    if (op.case === "resticBackup" && op.value.remoteSource) {
+      v.push(
+        ...remoteBackup.check(def, {
+          remotes: d.remotes(),
+          repositories: repos,
+          workers: d.workers,
+          workerId: forSchedule ? undefined : workerId,
+        }),
+      );
+    } else if (op.case === "resticBackup") {
       if (op.value.paths.length === 0)
         v.push({ field: `${field}.paths`, message: "add at least one path" });
       const w = d.workers.find((x) => x.id === workerId);

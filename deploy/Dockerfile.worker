@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 #
-# Worker image: Debian slim with pinned rclone and restic copied from their
-# official images, running as non-root. Build from the repository root:
+# Worker image: Debian slim with fuse3 and pinned rclone and restic copied
+# from their official images, running as non-root. Build from the
+# repository root:
 #   docker build -f deploy/Dockerfile.worker -t syncr-worker .
 #
 # Mount the data the worker may access and list it in the worker's
@@ -34,9 +35,16 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
       -o /out/syncr-worker ./cmd/syncr-worker
 
 FROM debian:trixie-slim
+# fuse3 lets the worker back up a folder of a remote through `rclone mount`
+# (docs/restic.md). The worker runs as a non-root user, so FUSE mounts go
+# through the setuid-root helper fusermount3 that the package installs; the
+# test fails the build if that bit is ever missing. The container also needs
+# /dev/fuse, CAP_SYS_ADMIN and no AppArmor profile (docker-compose.yml); the
+# mirror method needs none of it.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata fuse3 \
     && rm -rf /var/lib/apt/lists/* \
+    && test -u "$(command -v fusermount3)" \
     && groupadd --system --gid 10001 syncr \
     && useradd --system --uid 10001 --gid syncr --home-dir /var/lib/syncr --create-home --shell /usr/sbin/nologin syncr \
     && install -d -m 0755 /usr/share/doc/rclone /usr/share/doc/restic

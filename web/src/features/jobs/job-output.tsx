@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Archive, CircleCheck, TriangleAlert } from "lucide-react";
+import { Archive, CircleCheck, CircleSlash, TriangleAlert } from "lucide-react";
 
 import { KeyValueList } from "@/components/app/key-value-list";
 import { Panel } from "@/components/app/panel";
@@ -7,6 +7,7 @@ import { ShortId } from "@/components/app/short-id";
 import type { Job } from "@/gen/syncr/v1/api_pb";
 import {
   BisyncResyncReason,
+  ResticRemoteSourceMethod,
   type RcloneBisyncOutput,
   type ResticBackupOutput,
   type ResticCheckOutput,
@@ -14,11 +15,13 @@ import {
   type ResticForgetOutput,
   type ResticRestoreOutput,
 } from "@/gen/syncr/v1/link_pb";
-import { formatBytes, formatCount, toNumber } from "@/lib/format";
+import { durationSeconds, formatBytes, formatCount, formatDuration, toNumber } from "@/lib/format";
+import { methodLabel, phaseLabel, PHASE_MIRROR } from "@/lib/remote-sources";
 import { cn } from "@/lib/utils";
 
 import { bisyncOf, conflictsSummary, resyncModeLabel } from "./bisync-definition";
 import { resticSummary } from "./model";
+import { remoteSourceOf } from "./remote-source";
 
 function Figure({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
   return (
@@ -70,9 +73,56 @@ function ShareBar({
   );
 }
 
-/** BackupSummaryCard shows what a backup saved and links to its snapshot. */
+/**
+ * MirrorFigure shows what a backup of a remote mirrored before restic ran:
+ * the bytes and files downloaded, the files deleted and how long it took.
+ */
+function MirrorFigure({ out }: { out: ResticBackupOutput }) {
+  const m = out.remoteSource;
+  if (!m) return null;
+  const secs = durationSeconds(m.mirrorElapsed);
+  return (
+    <Figure
+      label="Mirrored"
+      value={formatBytes(m.mirroredBytes)}
+      sub={`${formatCount(m.mirroredFiles)} files, ${formatCount(m.deletedFiles)} deleted${secs > 0 ? ` in ${formatDuration(secs)}` : ""}`}
+    />
+  );
+}
+
+/**
+ * BackupSummaryCard shows what a backup saved and links to its snapshot.
+ * A backup of a remote also shows how the folder was read and, for a
+ * mirror, what was downloaded; an empty folder that was allowed ends
+ * without a snapshot (restic makes no empty ones), which it says.
+ */
 export function BackupSummaryCard({ out, job }: { out: ResticBackupOutput; job: Job }) {
   const repo = job.repository;
+  const src = remoteSourceOf(job.definition);
+  const dryRun =
+    job.definition?.operation.case === "resticBackup" && job.definition.operation.value.dryRun;
+  const mirrored = !!src && src.method !== ResticRemoteSourceMethod.MOUNT;
+  if (src && !out.snapshotId && !dryRun)
+    return (
+      <Panel title="Backup summary">
+        <div className="flex flex-col gap-4">
+          <div className="flex items-start gap-2.5 text-[13px] leading-5">
+            <CircleSlash className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <div>
+              <div className="font-semibold">No snapshot: the remote folder was empty</div>
+              <p className="text-muted-foreground">
+                The backup allows an empty folder, so the run succeeded without a snapshot (restic
+                makes no empty ones). The repository's snapshots are as they were.
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <Figure label="Read through" value={methodLabel(src.method)} />
+            {mirrored && <MirrorFigure out={out} />}
+          </div>
+        </div>
+      </Panel>
+    );
   return (
     <Panel
       title="Backup summary"
@@ -95,6 +145,14 @@ export function BackupSummaryCard({ out, job }: { out: ResticBackupOutput; job: 
             label="Snapshot"
             value={out.snapshotId ? <ShortId id={out.snapshotId} copy /> : "None (dry run)"}
           />
+          {src && (
+            <Figure
+              label="Read through"
+              value={methodLabel(src.method)}
+              sub={out.remoteSource?.mirrorDiscarded ? "mirror deleted after the run" : undefined}
+            />
+          )}
+          {mirrored && <MirrorFigure out={out} />}
           <Figure
             label="Processed"
             value={formatBytes(out.totalBytesProcessed)}
@@ -376,9 +434,40 @@ export function JobOutputCards({ job }: { job: Job }) {
   );
 }
 
-/** ResticBand says what a restic job does, where a transfer shows its two ends. */
-export function ResticBand({ job, worker }: { job: Job; worker?: string }) {
-  const summary = resticSummary(job.definition, job.repository);
+/**
+ * PhaseChip shows the live phase of a backup of a remote: "Mirroring…"
+ * (step 1 of 2) or "Backing up…" (step 2 of 2, or the one step of a mount).
+ */
+export function PhaseChip({ phase, steps }: { phase: string; steps: number }) {
+  const label = phaseLabel(phase);
+  if (!label) return null;
+  const step = phase === PHASE_MIRROR ? 1 : steps;
+  return (
+    <span
+      role="status"
+      className="inline-flex items-center gap-2 rounded-full bg-live-soft px-2.5 py-1 text-[13px] font-medium text-live"
+    >
+      <span
+        className="size-1.5 animate-pulse rounded-full bg-current motion-reduce:animate-none"
+        aria-hidden
+      />
+      {label}
+      {steps > 1 && (
+        <span className="text-xs font-normal">
+          step {step} of {steps}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * ResticBand says what a restic job does, where a transfer shows its two
+ * ends. phase is the live phase of a backup of a remote, shown while it runs.
+ */
+export function ResticBand({ job, worker, phase }: { job: Job; worker?: string; phase?: string }) {
+  const summary = resticSummary(job.definition, job.repository, job.remotes);
+  const src = remoteSourceOf(job.definition);
   const repo = job.repository;
   if (!summary) return null;
   return (
@@ -392,6 +481,9 @@ export function ResticBand({ job, worker }: { job: Job; worker?: string }) {
           <div className="mt-0.5 text-[13px] text-muted-foreground">{summary.detail}</div>
         )}
       </div>
+      {phase && src && (
+        <PhaseChip phase={phase} steps={src.method === ResticRemoteSourceMethod.MOUNT ? 1 : 2} />
+      )}
       {repo &&
         (repo.deleted ? (
           <span className="text-[13px] text-muted-foreground">

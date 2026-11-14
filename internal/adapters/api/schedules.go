@@ -34,6 +34,9 @@ type scheduleHandler struct {
 	// repos names the schedules' restic repositories; nil leaves the
 	// references without names.
 	repos RepositoryNames
+	// sources checks the folder of a backup of a remote against its
+	// repository; nil leaves it to the dispatcher (the job's spec).
+	sources RemoteSourceChecker
 	// workers tells the input check a target worker's operating system
 	// (the VSS check); nil skips it.
 	workers WorkerNames
@@ -322,10 +325,11 @@ func (h *scheduleHandler) input(ctx context.Context, procedure string, m *syncrv
 			} else if err != nil {
 				return schedules.Input{}, h.fail(ctx, procedure, err)
 			}
-			// Kinds whose state stays on the worker that ran them (two-way
-			// sync) target one worker, never a label.
+			// Definitions whose state stays on the worker that ran them
+			// (two-way sync, a backup of a remote) target one worker,
+			// never a label.
 			if _, onLabel := m.GetTarget().GetTarget().(*syncrv1.ScheduleTarget_WorkerLabel); onLabel {
-				if ok, why := h.kinds.LabelTargetAllowed(kind); !ok {
+				if ok, why := h.kinds.LabelTargetAllowed(def); !ok {
 					v.Add("target.worker_label", why)
 				}
 			}
@@ -334,6 +338,17 @@ func (h *scheduleHandler) input(ctx context.Context, procedure string, m *syncrv
 				v.Add(req.Field, req.FieldMessage()+"; this worker runs "+goos)
 			}
 			v.AddAll("", unrunnableHooks(ctx, h.workers, in.Target.WorkerID, def))
+			// A backup of a remote: its folder against its repository. A
+			// worker that cannot use the method is not refused here (it may
+			// be offline or set up later): its runs fail with
+			// tool_unavailable and the worker's reason.
+			actor, _ := ActorFrom(ctx)
+			var srcErr *domain.ValidationError
+			if err := checkRemoteSource(ctx, h.sources, actor.UserID, def, refs); errors.As(err, &srcErr) {
+				v.AddAll("", srcErr.Fields)
+			} else if err != nil {
+				return schedules.Input{}, remoteSourceError(err, func(err error) error { return h.fail(ctx, procedure, err) })
+			}
 		}
 	}
 	for i, c := range m.GetContacts() {

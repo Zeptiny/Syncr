@@ -77,7 +77,7 @@ tag, such as `2.0.0-rc.1`). To build them from source:
 
 ```sh
 docker build -f deploy/Dockerfile.controller -t syncr-controller .   # web UI embedded, distroless, non-root, HEALTHCHECK via -healthcheck
-docker build -f deploy/Dockerfile.worker -t syncr-worker .           # Debian slim, rclone v1.75.2, restic 0.19.1 (with their licences), non-root
+docker build -f deploy/Dockerfile.worker -t syncr-worker .           # Debian slim, rclone v1.75.2, restic 0.19.1 (with their licences), fuse3, non-root
 ```
 
 [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) runs the
@@ -89,6 +89,37 @@ configuration in a volume. The worker image's default command is
 `run --config /var/lib/syncr/worker.yaml`; enroll it once with
 `setup --no-service --config /var/lib/syncr/worker.yaml ...`. A worker in a
 container is upgraded by pulling its new image.
+
+### Mounting remotes in a container
+
+A worker can back up a folder of a remote through a mirror (the default:
+a copy in its data volume, which needs nothing more) or through
+`rclone mount` ([restic](restic.md#back-up-a-folder-of-a-remote)). The
+worker image ships `fuse3` with its setuid `fusermount3`, but a container
+cannot mount by default. To allow it, uncomment the three lines in the
+compose file's worker service, or pass the same to `docker run`:
+
+```yaml
+    devices:
+      - /dev/fuse              # the host's FUSE device
+    cap_add:
+      - SYS_ADMIN              # the mount system call needs it
+    security_opt:
+      - apparmor:unconfined    # Docker's default AppArmor profile denies mounts
+```
+
+```sh
+docker run --device /dev/fuse --cap-add SYS_ADMIN --security-opt apparmor:unconfined ...
+```
+
+These widen what the container may do, which is why they are off. Do not
+add `no-new-privileges`: the non-root worker mounts through the setuid
+helper. The mounts stay inside the container (`rclone mount` runs there,
+in the data volume's `sources/mount`); nothing is mounted on the host.
+After a restart the worker's page shows **Mount ✓** under **Remote
+backups**, or the reason it still cannot (its startup check includes a
+trial mount). A worker in an LXC container needs `/dev/fuse` from the
+host as well ([Linux setup](setup-linux.md#backing-up-remotes-with-the-mount-method)).
 
 Release files and how releases are versioned:
 [ADR 0016](adr/0016-releases-versioning.md).

@@ -10,11 +10,14 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
+	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/worker/bisyncstate"
 	workerconfig "github.com/Zeptiny/Syncr/internal/worker/config"
 	"github.com/Zeptiny/Syncr/internal/worker/hooks"
 	"github.com/Zeptiny/Syncr/internal/worker/localfs"
+	"github.com/Zeptiny/Syncr/internal/worker/mount"
 	"github.com/Zeptiny/Syncr/internal/worker/paths"
 	"github.com/Zeptiny/Syncr/internal/worker/probe"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
@@ -22,6 +25,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
 	"github.com/Zeptiny/Syncr/internal/worker/runner/rclone"
 	"github.com/Zeptiny/Syncr/internal/worker/runner/restic"
+	"github.com/Zeptiny/Syncr/internal/worker/sourcestate"
 	"github.com/Zeptiny/Syncr/internal/worker/tools"
 )
 
@@ -46,6 +50,9 @@ type workerDeps struct {
 	bundledDir string
 	// tools overrides the manifest, the network and the version runner.
 	tools toolsOverrides
+	// detectMount finds out whether the worker can mount remotes; nil
+	// means (*mount.Mounter).Detect.
+	detectMount func(ctx context.Context, m *mount.Mounter, opts mount.DetectOptions) (ok bool, reason string)
 }
 
 // worker is the assembled job-execution side of the worker: everything the
@@ -69,6 +76,15 @@ type worker struct {
 	// bisync is the state of two-way syncs (<data_dir>/bisync), shared by
 	// their runner and the pruner (startBackground).
 	bisync *bisyncstate.Store
+	// sources keeps the mirrors and mount points of backups of remotes
+	// (<data_dir>/sources), shared by the restic runner and the pruner.
+	sources *sourcestate.Store
+	// mounter mounts remotes for backups and sweeps stale mounts.
+	mounter *mount.Mounter
+	// remoteSources says how the worker can read a folder of a remote
+	// (Hello.remote_sources), and remoteCfg is its configuration.
+	remoteSources *syncrv1.RemoteSourceSupport
+	remoteCfg     workerconfig.RemoteSourcesConfig
 	// dataDir, scratchDir and cacheDir are the directories in use.
 	dataDir, scratchDir, cacheDir string
 }
@@ -107,6 +123,11 @@ func buildWorker(ctx context.Context, cfg workerconfig.Config, deps workerDeps, 
 	if err != nil {
 		return nil, fmt.Errorf("local_roots: %w", err)
 	}
+	// The copies and mount points of backups of remotes are no job's,
+	// probe's or folder listing's business, even inside local_roots.
+	if w.policy, err = w.policy.Reserve(paths.SourcesDir(dataDir)); err != nil {
+		return nil, fmt.Errorf("local_roots: %w", err)
+	}
 	if roots := w.policy.Roots(); len(roots) == 0 {
 		log.Warn("no local_roots configured: jobs cannot read or write local paths; " +
 			"set local_roots (SYNCR_LOCAL_ROOTS) to the directories jobs may use")
@@ -121,6 +142,10 @@ func buildWorker(ctx context.Context, cfg workerconfig.Config, deps workerDeps, 
 		return nil, err
 	}
 
+	if err := setupRemoteSources(ctx, w, cfg.RemoteSources, deps, log); err != nil {
+		return nil, err
+	}
+
 	w.registry = runner.NewRegistry()
 	if err := registerRunners(w, resticCache, log); err != nil {
 		return nil, err
@@ -129,6 +154,75 @@ func buildWorker(ctx context.Context, cfg workerconfig.Config, deps workerDeps, 
 		return nil, err
 	}
 	return w, nil
+}
+
+// mirrorOffReason is the reason when the configuration turns mirrors off.
+const mirrorOffReason = "remote_sources.mirror is off in worker.yaml"
+
+// setupRemoteSources prepares backups of a folder of a remote: the store
+// of mirrors and mount points (<data_dir>/sources) and the mounter. It
+// first sweeps the mounts a killed worker left (before anything else could
+// stat them), then finds out whether this machine can mount (static checks
+// and, with remote_sources.mount auto, a trial mount) and records what the
+// Hello reports.
+func setupRemoteSources(ctx context.Context, w *worker, cfg workerconfig.RemoteSourcesConfig, deps workerDeps, log *slog.Logger) error {
+	var err error
+	w.remoteCfg = cfg
+	if w.sources, err = sourcestate.New(sourcestate.Config{Root: paths.SourcesDir(w.dataDir)}); err != nil {
+		return fmt.Errorf("set up the folder of backups of remotes: %w", err)
+	}
+	mlog := log.With("component", "mount")
+	if w.mounter, err = mount.New(mount.Config{Rclone: w.tools[toolRclone].Path, Supervisor: w.supervisor, Logger: mlog}); err != nil {
+		return fmt.Errorf("set up mounting: %w", err)
+	}
+	swept, err := w.mounter.SweepAll(ctx, w.sources.MountsDir())
+	// The folder exists from now on (the trial mounts in it), with the
+	// marker file that keeps backups and copies of a folder holding it out
+	// of it.
+	if perr := w.sources.Prepare(w.sources.MountsDir()); perr != nil {
+		return fmt.Errorf("prepare the folder of backups of remotes: %w (set data_dir or SYNCR_DATA_DIR to a directory this user can write)", perr)
+	}
+	if len(swept) > 0 {
+		mlog.Warn("unmounted remotes that an earlier worker process left mounted", "mount_points", swept)
+	}
+	if err != nil {
+		mlog.Warn("could not unmount every remote an earlier worker process left mounted; the next mount there tries again", "error", err.Error())
+	}
+
+	detect := deps.detectMount
+	if detect == nil {
+		detect = func(ctx context.Context, m *mount.Mounter, opts mount.DetectOptions) (bool, string) {
+			return m.Detect(ctx, opts)
+		}
+	}
+	ok, reason := detect(ctx, w.mounter, mount.DetectOptions{
+		Off:        cfg.Mount == workerconfig.MountOff,
+		Trial:      cfg.Mount == workerconfig.MountAuto,
+		MountsDir:  w.sources.MountsDir(),
+		ScratchDir: filepath.Join(w.scratchDir, "mount"),
+	})
+	w.remoteSources = &syncrv1.RemoteSourceSupport{Mirror: cfg.Mirror, Mount: ok, MountReason: mount.Reason(reason)}
+	if !cfg.Mirror {
+		w.remoteSources.MirrorReason = mirrorOffReason
+	}
+	if ok {
+		w.remoteSources.MountReason = ""
+	}
+	log.Info("backups of remotes", "mirror", cfg.Mirror, "mount", ok, "mount_reason", w.remoteSources.GetMountReason(),
+		"sources_dir", w.sources.Root())
+	return nil
+}
+
+// resticMounter adapts *mount.Mounter to the restic runner's port.
+type resticMounter struct{ m *mount.Mounter }
+
+// Mount implements restic.Mounter.
+func (a resticMounter) Mount(ctx context.Context, req mount.Request) (restic.Mounted, error) {
+	mt, err := a.m.Mount(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return mt, nil
 }
 
 // buildHooks returns the hooks of the configuration over the supervisor
@@ -274,6 +368,7 @@ func registerRunners(w *worker, resticCache string, log *slog.Logger) error {
 		Env:        remotes,
 		Paths:      w.policy,
 		ScratchDir: filepath.Join(w.scratchDir, "rclone"),
+		SourcesDir: w.sources.Root(),
 		Logger:     log,
 	}
 	rcloneRunner, err := rclone.New(rcloneCfg)
@@ -296,7 +391,13 @@ func registerRunners(w *worker, resticCache string, log *slog.Logger) error {
 		Paths:       w.policy,
 		ScratchRoot: filepath.Join(w.scratchDir, "restic"),
 		CacheDir:    resticCache,
-		Logger:      log,
+		RemoteSources: restic.RemoteSources{
+			Store:        w.sources,
+			Mounter:      resticMounter{m: w.mounter},
+			Support:      w.remoteSources,
+			MountTimeout: w.remoteCfg.MountTimeout,
+		},
+		Logger: log,
 	}
 	resticRunners, err := restic.New(resticCfg)
 	if err != nil {
@@ -326,22 +427,23 @@ func registerRunners(w *worker, resticCache string, log *slog.Logger) error {
 
 // startBackground starts the worker's housekeeping beside the link: it
 // removes the state of two-way syncs that have not run for
-// bisyncstate.Retention, once now (before the link starts, so before any
-// job) and then every bisyncstate.PruneInterval in the background. The
-// returned stop function ends the background work and waits until it has;
-// `run` calls it before it releases the data directory. It also stops when
-// ctx ends.
+// bisyncstate.Retention and the mirrors of backups of remotes that have
+// not run for remote_sources.mirror_retention, once now (before the link
+// starts, so before any job) and then every bisyncstate.PruneInterval and
+// sourcestate.PruneInterval in the background. The returned stop function
+// ends the background work and waits until it has; `run` calls it before
+// it releases the data directory. It also stops when ctx ends.
 func (w *worker) startBackground(ctx context.Context, log *slog.Logger) (stop func()) {
-	log = log.With("component", "bisync")
-	w.bisync.PruneStale(ctx, log)
+	blog, mlog := log.With("component", "bisync"), log.With("component", "sources")
+	retention := w.remoteCfg.MirrorRetention
+	w.bisync.PruneStale(ctx, blog)
+	w.sources.PruneStale(ctx, retention, mlog)
 	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		w.bisync.RunPruner(ctx, bisyncstate.PruneInterval, log)
-	}()
+	var wg sync.WaitGroup
+	wg.Go(func() { w.bisync.RunPruner(ctx, bisyncstate.PruneInterval, blog) })
+	wg.Go(func() { w.sources.RunPruner(ctx, sourcestate.PruneInterval, retention, mlog) })
 	return func() {
 		cancel()
-		<-done
+		wg.Wait()
 	}
 }

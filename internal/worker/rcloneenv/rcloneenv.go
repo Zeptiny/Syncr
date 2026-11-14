@@ -89,6 +89,18 @@ type LocalResolver interface {
 	Resolve(path string) (string, error)
 }
 
+// ReservedHolder is what a LocalResolver also implements when the worker
+// keeps folders for its own use that no job may read or write
+// (*localfs.Policy, which refuses those folders and what lies inside
+// them). HoldsReserved returns the reserved folder that a local path holds,
+// such as "/" holding <data_dir>/sources, if any. A local union upstream
+// that holds one is refused: rclone would read and write that folder
+// through the union, and a union's paths cannot be kept out of it with
+// filters.
+type ReservedHolder interface {
+	HoldsReserved(path string) (string, bool)
+}
+
 // Builder validates remote definitions and builds child environments. It
 // holds no per-job state and is safe for concurrent use.
 type Builder struct {
@@ -546,6 +558,11 @@ func (b *Builder) upstreamPath(env *Env, self, alias, path string) (string, erro
 		resolved, err := b.local.Resolve(path)
 		if err != nil {
 			return "", fmt.Errorf("%w: %w", ErrLocalPath, err)
+		}
+		if h, ok := b.local.(ReservedHolder); ok {
+			if dir, holds := h.HoldsReserved(resolved); holds {
+				return "", fmt.Errorf("%w: local path %q holds %s, a folder the worker keeps for its own use", ErrLocalPath, resolved, dir)
+			}
 		}
 		return resolved, nil
 	}

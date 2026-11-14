@@ -63,6 +63,9 @@ func TestErrorCodeNames(t *testing.T) {
 		{syncrv1.JobErrorCode_JOB_ERROR_CODE_RESYNC_REQUIRED, "resync_required"},
 		{syncrv1.JobErrorCode_JOB_ERROR_CODE_SAFETY_ABORT, "safety_abort"},
 		{syncrv1.JobErrorCode_JOB_ERROR_CODE_SIDE_UNAVAILABLE, "side_unavailable"},
+		// Backups of a remote (restic_backup with a remote_source): set by
+		// workers.
+		{syncrv1.JobErrorCode_JOB_ERROR_CODE_SOURCE_EMPTY, "source_empty"},
 		{syncrv1.JobErrorCode(999), "unspecified"},
 	}
 	for _, tt := range tests {

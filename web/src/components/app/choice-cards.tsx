@@ -1,3 +1,5 @@
+import { useId } from "react";
+
 import { cn } from "@/lib/utils";
 
 /** ChoiceCard is one option of ChoiceCards. */
@@ -7,9 +9,21 @@ export interface ChoiceCard<T> {
   help?: React.ReactNode;
   /** children render inside the card while it is chosen (e.g. a select). */
   children?: React.ReactNode;
+  /**
+   * disabled keeps the option from being chosen; say why in note. It stays
+   * focusable (aria-disabled), so keyboard users reach it and hear why.
+   */
+  disabled?: boolean;
+  /** note renders under the help whether or not it is chosen, e.g. why it is disabled. */
+  note?: React.ReactNode;
 }
 
-/** ChoiceCards is a radio group of explained options, laid out as cards. */
+/**
+ * ChoiceCards is a radio group of explained options, laid out as cards.
+ * Each card is named by its label and described by its help and note. A
+ * disabled card is aria-disabled rather than disabled, so it stays in the
+ * tab order with its reason, and choosing it does nothing.
+ */
 export function ChoiceCards<T extends string | number>({
   label,
   labelId,
@@ -26,6 +40,7 @@ export function ChoiceCards<T extends string | number>({
   options: ChoiceCard<T>[];
   className?: string;
 }) {
+  const id = useId();
   return (
     <div className="flex flex-col gap-1.5">
       {label && (
@@ -34,24 +49,43 @@ export function ChoiceCards<T extends string | number>({
         </span>
       )}
       <div role="radiogroup" aria-labelledby={labelId} className={cn("grid gap-2", className)}>
-        {options.map((o) => {
+        {options.map((o, i) => {
           const on = o.value === value;
+          const ids = {
+            label: `${id}-${i}-label`,
+            help: `${id}-${i}-help`,
+            note: `${id}-${i}-note`,
+          };
+          const described = [o.help && ids.help, o.note && ids.note].filter(Boolean).join(" ");
           return (
             <div
               key={String(o.value)}
               className={cn(
                 "rounded-lg border bg-card transition-colors",
-                on ? "border-primary ring-[3px] ring-primary/20" : "hover:border-foreground/25",
+                on
+                  ? "border-primary ring-[3px] ring-primary/20"
+                  : !o.disabled && "hover:border-foreground/25",
               )}
             >
               <button
                 type="button"
                 role="radio"
                 aria-checked={on}
-                onClick={() => onChange(o.value)}
-                className="w-full rounded-lg px-3.5 py-3 text-left"
+                aria-disabled={o.disabled || undefined}
+                aria-labelledby={ids.label}
+                aria-describedby={described || undefined}
+                onClick={() => {
+                  if (!o.disabled) onChange(o.value);
+                }}
+                className="w-full rounded-lg px-3.5 py-3 text-left aria-disabled:cursor-not-allowed"
               >
-                <span className="flex items-center gap-2 text-[13px] font-semibold">
+                <span
+                  id={ids.label}
+                  className={cn(
+                    "flex items-center gap-2 text-[13px] font-semibold",
+                    o.disabled && "opacity-60",
+                  )}
+                >
                   <span
                     className={cn(
                       "grid size-3.5 shrink-0 place-items-center rounded-full border",
@@ -64,8 +98,19 @@ export function ChoiceCards<T extends string | number>({
                   {o.label}
                 </span>
                 {o.help && (
-                  <span className="mt-1 block pl-5.5 text-xs leading-5 text-muted-foreground">
+                  <span
+                    id={ids.help}
+                    className={cn(
+                      "mt-1 block pl-5.5 text-xs leading-5 text-muted-foreground",
+                      o.disabled && "opacity-60",
+                    )}
+                  >
                     {o.help}
+                  </span>
+                )}
+                {o.note && (
+                  <span id={ids.note} className="mt-1.5 block pl-5.5 text-xs leading-5">
+                    {o.note}
                   </span>
                 )}
               </button>

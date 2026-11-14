@@ -753,3 +753,68 @@ func TestBisyncSupervisorErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestBisyncRefusesSidesHoldingSources: a local side that holds the
+// worker's folder of backups of remotes is refused. In the usual layout
+// every such side holds the state folder too (both are in the data
+// directory) and is refused for that; when the folder was moved elsewhere
+// through a link, the side that holds it there is refused for it. A side
+// inside it is refused by the path policy.
+func TestBisyncRefusesSidesHoldingSources(t *testing.T) {
+	t.Parallel()
+	for _, moved := range []bool{false, true} {
+		f := newBisyncFixture(t, &fakeSupervisor{})
+		base := filepath.Dir(f.data) // the data directory: bisync/ is in it
+		sources := filepath.Join(base, "sources")
+		holder := base
+		if moved {
+			holder = filepath.Join(f.data, "disk")
+			if err := os.MkdirAll(filepath.Join(holder, "sources"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(holder, "sources"), sources); err != nil {
+				t.Skipf("symlinks: %v", err)
+			}
+		} else if err := os.MkdirAll(sources, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		policy, err := localfs.NewPolicy([]string{base})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if policy, err = policy.Reserve(sources); err != nil {
+			t.Fatal(err)
+		}
+		cfg := f.runner.r.cfg
+		cfg.Paths, cfg.Env, cfg.SourcesDir = policy, rcloneenv.NewBuilder(policy), sources
+		r, err := NewBisync(cfg, f.states)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tt := range []struct {
+			name, side, want string
+		}{
+			{"a folder that holds it", holder, map[bool]string{
+				false: "the folder where the worker keeps the state of two-way syncs",
+				true:  "holds the folder where the worker keeps the copies and mount points of backups of remotes",
+			}[moved]},
+			{"a folder inside it", filepath.Join(sources, "mirror"), "reserved for the worker's own use"},
+		} {
+			job := f.job(func(op *syncrv1.RcloneBisync) {
+				op.Path1, op.Path2 = &syncrv1.Location{Path: tt.side}, &syncrv1.Location{Remote: "box", Path: "x"}
+			})
+			job.Spec.Remotes = []*syncrv1.RemoteDefinition{sftpRemote("box", "secret-pass")}
+			_, err := r.Run(t.Context(), job, nil)
+			if runner.CodeOf(err) != syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("moved %v, %s: Run() = %v (code %v)", moved, tt.name, err, runner.CodeOf(err))
+			}
+			if f.sup.called {
+				t.Fatalf("moved %v, %s: rclone was started", moved, tt.name)
+			}
+		}
+		// Folders beside it are fine.
+		if _, err := r.Run(t.Context(), f.job(), nil); err != nil || !f.sup.called {
+			t.Errorf("moved %v: Run() beside the folder = %v", moved, err)
+		}
+	}
+}

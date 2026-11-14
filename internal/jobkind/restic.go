@@ -89,25 +89,34 @@ func checkRepositoryID(v *domain.Validation, field, raw string) domain.ResticRep
 // the remote definitions and the ResticRepository of the spec, and the
 // resolved repository.
 func repositorySpec(kind, raw string, in Resolved) ([]*syncrv1.RemoteDefinition, *syncrv1.ResticRepository, Repository, error) {
-	id, err := domain.ParseResticRepoID(raw)
-	if err != nil || id.IsZero() {
-		return nil, nil, Repository{}, fmt.Errorf("build %s: %w: the repository ID is not valid", kind, domain.ErrInvalidArgument)
-	}
-	repo, ok := in.Repositories[id]
-	if !ok {
-		return nil, nil, Repository{}, fmt.Errorf("build %s: repository %s: %w: it was not resolved", kind, id, domain.ErrNotFound)
-	}
-	if repo.ID != id {
-		return nil, nil, Repository{}, fmt.Errorf("build %s: repository %s: %w: resolved as repository %s", kind, id, domain.ErrInvalidArgument, repo.ID)
-	}
-	if repo.Password == "" {
-		return nil, nil, Repository{}, fmt.Errorf("build %s: repository %s: %w: it has no password", kind, id, domain.ErrInvalidArgument)
+	repo, err := resolveRepository(kind, raw, in)
+	if err != nil {
+		return nil, nil, Repository{}, err
 	}
 	defs, rr, err := LocateRepository(repo, in.Remotes)
 	if err != nil {
 		return nil, nil, Repository{}, fmt.Errorf("build %s: %w", kind, err)
 	}
 	return defs, rr, repo, nil
+}
+
+// resolveRepository looks up the repository raw names in in.
+func resolveRepository(kind, raw string, in Resolved) (Repository, error) {
+	id, err := domain.ParseResticRepoID(raw)
+	if err != nil || id.IsZero() {
+		return Repository{}, fmt.Errorf("build %s: %w: the repository ID is not valid", kind, domain.ErrInvalidArgument)
+	}
+	repo, ok := in.Repositories[id]
+	if !ok {
+		return Repository{}, fmt.Errorf("build %s: repository %s: %w: it was not resolved", kind, id, domain.ErrNotFound)
+	}
+	if repo.ID != id {
+		return Repository{}, fmt.Errorf("build %s: repository %s: %w: resolved as repository %s", kind, id, domain.ErrInvalidArgument, repo.ID)
+	}
+	if repo.Password == "" {
+		return Repository{}, fmt.Errorf("build %s: repository %s: %w: it has no password", kind, id, domain.ErrInvalidArgument)
+	}
+	return repo, nil
 }
 
 // repositoryName returns the display name of the repository raw names.
@@ -233,16 +242,25 @@ func treePathProblem(p string) string {
 const backupField = "definition.restic_backup"
 
 // ResticBackup is the "restic_backup" kind: back up local paths of the
-// worker into one of the owner's repositories.
+// worker, or a folder of one of the owner's remotes (remote_source,
+// restic_remote.go), into one of the owner's repositories.
+//
+// A backup of a remote reads its folder through a mirror or a mount the
+// worker keeps, so its schedules target one worker
+// (DefinitionSingleWorker), its jobs also hold the folder's concurrency key
+// (RemoteSourceKeyPrefix), and its workers need
+// link.FeatureResticRemoteSource (DefinitionRequirer).
 type ResticBackup struct{ resticBase }
 
 var (
-	_ Kind       = ResticBackup{}
-	_ Keyed      = ResticBackup{}
-	_ Requirer   = ResticBackup{}
-	_ OSBound    = ResticBackup{}
-	_ Labeled    = ResticBackup{}
-	_ Summarizer = ResticBackup{}
+	_ Kind                   = ResticBackup{}
+	_ Keyed                  = ResticBackup{}
+	_ Requirer               = ResticBackup{}
+	_ DefinitionRequirer     = ResticBackup{}
+	_ DefinitionSingleWorker = ResticBackup{}
+	_ OSBound                = ResticBackup{}
+	_ Labeled                = ResticBackup{}
+	_ Summarizer             = ResticBackup{}
 )
 
 // Name implements Kind.
@@ -260,15 +278,52 @@ func (ResticBackup) RequiredOS(def *syncrv1.JobDefinition) OSRequirement {
 // Label implements Labeled.
 func (ResticBackup) Label() string { return "Backup" }
 
-// ConcurrencyKeys implements Keyed: the repository's key.
+// ConcurrencyKeys implements Keyed: the repository's key and, for a
+// backup of a remote, the key of its folder (RemoteSourceKeyPrefix),
+// computed from the definition alone.
 func (ResticBackup) ConcurrencyKeys(def *syncrv1.JobDefinition) []string {
-	return repositoryKeys(def.GetResticBackup().GetRepositoryId())
+	op := def.GetResticBackup()
+	keys := repositoryKeys(op.GetRepositoryId())
+	if src := op.GetRemoteSource(); src != nil && src.GetRemoteId() != "" {
+		var v domain.Validation
+		if l := checkLocation(&v, remoteSourceField, sourceLocation(src)); l.ok {
+			keys = append(keys, remoteSourceLocationKey(l))
+		}
+	}
+	return keys
+}
+
+// DefinitionFeatures implements DefinitionRequirer: a backup of a remote
+// needs a worker that runs them (an older one would back up nothing, as
+// it does not know the field).
+func (ResticBackup) DefinitionFeatures(def *syncrv1.JobDefinition) []string {
+	if def.GetResticBackup().GetRemoteSource() != nil {
+		return []string{link.FeatureResticRemoteSource}
+	}
+	return nil
+}
+
+// SingleWorkerFor implements DefinitionSingleWorker: a backup of a remote
+// keeps its mirror or mount folder, and so restic's parent snapshots and
+// retention groups, on one worker.
+func (ResticBackup) SingleWorkerFor(def *syncrv1.JobDefinition) string {
+	if def.GetResticBackup().GetRemoteSource() != nil {
+		return RemoteSourceSingleWorkerReason
+	}
+	return ""
 }
 
 // Check implements Kind: the repository ID, 1 to 100 absolute local paths
 // without ".." segments or duplicates, the exclude patterns, the tags, the
 // host and exclude_larger_than_bytes. The search terms are the paths, the
 // tags and the host.
+//
+// A backup of a remote (remote_source) has no paths; its folder, method,
+// options and tags are checked by checkBackupRemoteSource. Its Refs name
+// the source remote, and its search terms start with the folder's path.
+// Whether the remote is the owner's, is not a Local directory remote and
+// does not overlap the repository is checked where they are known (the
+// app layer; Build).
 func (ResticBackup) Check(def *syncrv1.JobDefinition) (Refs, error) {
 	op := def.GetResticBackup()
 	var v domain.Validation
@@ -277,6 +332,25 @@ func (ResticBackup) Check(def *syncrv1.JobDefinition) (Refs, error) {
 		return Refs{}, v.Err()
 	}
 	refs := Refs{RepositoryID: checkRepositoryID(&v, backupField, op.GetRepositoryId())}
+	if op.GetRemoteSource() != nil {
+		src := checkBackupRemoteSource(&v, op)
+		checkHost(&v, backupField+".host", op.GetHost())
+		if op.ExcludeLargerThanBytes != nil && op.GetExcludeLargerThanBytes() <= 0 {
+			v.Add(backupField+".exclude_larger_than_bytes", "must be greater than 0")
+		}
+		if err := v.Err(); err != nil {
+			return Refs{}, err
+		}
+		refs.RemoteIDs = []domain.RemoteID{src.remote}
+		if src.path != "" {
+			refs.SearchTerms = append(refs.SearchTerms, src.path)
+		}
+		refs.SearchTerms = append(refs.SearchTerms, op.GetTags()...)
+		if h := op.GetHost(); h != "" {
+			refs.SearchTerms = append(refs.SearchTerms, h)
+		}
+		return refs, nil
+	}
 	switch n := len(op.GetPaths()); {
 	case n == 0:
 		v.Add(backupField+".paths", "needs at least one path")
@@ -315,11 +389,17 @@ func (ResticBackup) Check(def *syncrv1.JobDefinition) (Refs, error) {
 
 // Build implements Kind: the backup of the definition's paths (normalized
 // with backend.JoinLocal) into the located repository.
+//
+// A backup of a remote is built by buildRemoteSource.
 func (k ResticBackup) Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.JobSpec, error) {
-	if _, err := k.Check(def); err != nil {
+	refs, err := k.Check(def)
+	if err != nil {
 		return nil, err
 	}
 	d := def.GetResticBackup()
+	if d.GetRemoteSource() != nil {
+		return k.buildRemoteSource(d, refs, in)
+	}
 	defs, repo, _, err := repositorySpec(k.Name(), d.GetRepositoryId(), in)
 	if err != nil {
 		return nil, err
@@ -348,17 +428,21 @@ func (k ResticBackup) Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.J
 }
 
 // Describe implements Kind: "Back up /srv/photos → Photos vault"; two
-// paths are both named, more become "/srv/a + 2 more".
+// paths are both named, more become "/srv/a + 2 more". A backup of a
+// remote names the remote, the folder and the method: "Back up B2
+// photos/Pictures (mirror) → Photos vault".
 func (ResticBackup) Describe(def *syncrv1.JobDefinition, names Names) string {
 	op := def.GetResticBackup()
 	paths := op.GetPaths()
 	var what string
-	switch len(paths) {
-	case 0:
+	switch {
+	case op.GetRemoteSource() != nil:
+		what = describeRemoteSource(op.GetRemoteSource(), names)
+	case len(paths) == 0:
 		what = "nothing"
-	case 1:
+	case len(paths) == 1:
 		what = paths[0]
-	case 2:
+	case len(paths) == 2:
 		what = paths[0] + ", " + paths[1]
 	default:
 		what = fmt.Sprintf("%s + %d more", paths[0], len(paths)-1)
@@ -371,8 +455,12 @@ func (ResticBackup) Describe(def *syncrv1.JobDefinition, names Names) string {
 }
 
 // Summarize implements Summarizer: the snapshot, the file and folder
-// counts, the data added and the size processed.
-func (ResticBackup) Summarize(_ *syncrv1.JobDefinition, out *syncrv1.JobOutput) []Detail {
+// counts, the data added and the size processed. A backup of a remote
+// first says how its folder was read and what the mirror's refresh did
+// (summarizeRemoteSource); one that made no snapshot because the folder
+// was empty (allow_empty: restic makes no empty snapshot) says so instead
+// of restic's counters.
+func (ResticBackup) Summarize(def *syncrv1.JobDefinition, out *syncrv1.JobOutput) []Detail {
 	o := out.GetResticBackup()
 	if o == nil {
 		return nil
@@ -380,6 +468,13 @@ func (ResticBackup) Summarize(_ *syncrv1.JobDefinition, out *syncrv1.JobOutput) 
 	var ds []Detail
 	if id := o.GetSnapshotId(); id != "" {
 		ds = append(ds, Detail{"Snapshot", shortID(id)})
+	}
+	if src := o.GetRemoteSource(); src != nil {
+		if o.GetSnapshotId() == "" && !def.GetResticBackup().GetDryRun() {
+			ds = append(ds, Detail{"Snapshot", NoSnapshotEmptySource})
+			return append(ds, summarizeRemoteSource(src)...)
+		}
+		ds = append(ds, summarizeRemoteSource(src)...)
 	}
 	ds = append(ds,
 		Detail{"Files", fmt.Sprintf("%s new, %s changed, %s unmodified", formatCount(o.GetFilesNew()), formatCount(o.GetFilesChanged()), formatCount(o.GetFilesUnmodified()))},

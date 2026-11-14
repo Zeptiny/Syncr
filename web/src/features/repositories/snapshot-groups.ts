@@ -4,9 +4,14 @@
 import type { ResticSnapshot } from "@/gen/syncr/v1/link_pb";
 import { tsDate } from "@/lib/format";
 
+import { remoteOrigin, type RemoteNames } from "./snapshot-origin";
+
 /** SnapshotFilter narrows a snapshot list; empty fields match everything. */
 export interface SnapshotFilter {
-  /** text matches part of the ID, the host, a tag or a path, ignoring case. */
+  /**
+   * text matches part of the ID, the host, a tag or a path, or the remote
+   * a snapshot is of ("From Nextcloud"), ignoring case.
+   */
   text: string;
   host: string;
   tag: string;
@@ -27,10 +32,14 @@ export function newestFirst(list: readonly ResticSnapshot[]): ResticSnapshot[] {
   return [...list].sort((a, b) => time(b) - time(a) || a.id.localeCompare(b.id));
 }
 
-/** filterSnapshots keeps the snapshots that match every field of f, in order. */
+/**
+ * filterSnapshots keeps the snapshots that match every field of f, in
+ * order. names (the user's remotes) lets the text match a remote's name.
+ */
 export function filterSnapshots(
   list: readonly ResticSnapshot[],
   f: SnapshotFilter,
+  names: RemoteNames = new Map(),
 ): ResticSnapshot[] {
   const needle = f.text.trim().toLowerCase();
   return list.filter(
@@ -41,7 +50,8 @@ export function filterSnapshots(
         s.id.toLowerCase().includes(needle) ||
         s.host.toLowerCase().includes(needle) ||
         s.tags.some((t) => t.toLowerCase().includes(needle)) ||
-        s.paths.some((p) => p.toLowerCase().includes(needle))),
+        s.paths.some((p) => p.toLowerCase().includes(needle)) ||
+        !!remoteOrigin(s, names)?.toLowerCase().includes(needle)),
   );
 }
 
@@ -65,6 +75,8 @@ export interface SnapshotGroup {
   key: string;
   host: string;
   paths: string[];
+  /** first is the group's newest snapshot, e.g. to name the remote of a group of a remote. */
+  first: ResticSnapshot;
   snapshots: ResticSnapshot[];
 }
 
@@ -75,7 +87,7 @@ export function groupSnapshots(list: readonly ResticSnapshot[]): SnapshotGroup[]
     const key = groupKey(s);
     let g = groups.get(key);
     if (!g) {
-      g = { key, host: s.host, paths: [...s.paths].sort(), snapshots: [] };
+      g = { key, host: s.host, paths: [...s.paths].sort(), first: s, snapshots: [] };
       groups.set(key, g);
     }
     g.snapshots.push(s);

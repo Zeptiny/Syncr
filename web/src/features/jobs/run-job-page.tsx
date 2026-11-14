@@ -28,6 +28,7 @@ import { draftRunJob, type ParsedDraft } from "../files/job-drafts";
 import {
   definitionError,
   definitionState,
+  definitionWorkerProblem,
   emptyDefinition,
   forWorkerOS,
   isDryRun,
@@ -184,6 +185,7 @@ export function RunJobPage({ from, draft, kind, repository }: RunJobPageProps) {
                 value={s.workerId}
                 onChange={(v) => setS((p) => ({ ...p, workerId: v }))}
                 invalid={!!errors.worker}
+                unavailable={definitionWorkerProblem(s.definition)}
                 className="bg-card"
               />
             </FieldShell>

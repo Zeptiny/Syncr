@@ -48,7 +48,7 @@ func (s *Seed) seedRepositories(ctx context.Context, now time.Time) error {
 			continue
 		}
 		// The change mark is set once the history exists (markSnapshotCaches).
-		if err := s.d.Store.ReplaceSnapshots(ctx, id, d.snapshots(now), false, now.Add(-d.refreshedAgo), restic.ChangeMark{}); err != nil {
+		if err := s.d.Store.ReplaceSnapshots(ctx, id, d.sourceTagged(s.Remotes).snapshots(now), false, now.Add(-d.refreshedAgo), restic.ChangeMark{}); err != nil {
 			return fmt.Errorf("repository %q: snapshots: %w", d.name, err)
 		}
 	}
@@ -109,7 +109,7 @@ func (s *Seed) bindProbes(now time.Time) {
 			roots[id] = w.info.LocalRoots
 		}
 	}
-	s.d.Probes.bind(now, roots)
+	s.d.Probes.bind(now, roots, s.Remotes)
 }
 
 // storeRepos checks the repository of the history's jobs and schedules

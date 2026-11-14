@@ -103,7 +103,9 @@ export function JobDefinitionEditor({
   const whereNote =
     s.kind === "rclone_bisync"
       ? "A two-way sync keeps its state on the worker that runs it. Its first run on a worker is a resync: it merges both folders and deletes nothing."
-      : undefined;
+      : s.kind === "restic_backup" && s.backup.source === "remote"
+        ? "A backup of a remote keeps its mirror or mount folder on the worker that runs it, so it runs on one worker. A run on another worker reads the whole folder again."
+        : undefined;
   return (
     <>
       <Panel title="What kind of job">
@@ -161,6 +163,9 @@ export function JobDefinitionEditor({
               {...restic}
               value={s.backup}
               onChange={(backup) => onChange({ ...s, backup })}
+              remotes={remotes}
+              backends={backends}
+              jobWorker={worker}
               {...local}
             />
           )}

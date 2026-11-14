@@ -133,3 +133,34 @@ func TestConfigFile(t *testing.T) {
 		})
 	}
 }
+
+// TestSourcesDirs: the folders of backups of a remote, all inside
+// SourcesDir (whose refusal covers them), one per method and source key.
+func TestSourcesDirs(t *testing.T) {
+	t.Parallel()
+	data := filepath.Join("a", "b")
+	const key = "0123456789abcdef0123456789abcdef"
+	for _, tt := range []struct {
+		name, got, want string
+	}{
+		{"SourcesDir", SourcesDir(data), filepath.Join(data, "sources")},
+		{"MirrorsDir", MirrorsDir(data), filepath.Join(data, "sources", "mirror")},
+		{"MirrorDir", MirrorDir(data, key), filepath.Join(data, "sources", "mirror", key)},
+		{"MountsDir", MountsDir(data), filepath.Join(data, "sources", "mount")},
+		{"MountDir", MountDir(data, key), filepath.Join(data, "sources", "mount", key)},
+	} {
+		if tt.got != tt.want {
+			t.Errorf("%s = %q, want %q", tt.name, tt.got, tt.want)
+		}
+	}
+	// A mirror and a mount of the same key never share a folder, and
+	// neither is the bisync state root or the scratch space.
+	if MirrorDir(data, key) == MountDir(data, key) {
+		t.Error("MirrorDir and MountDir of one key are the same folder")
+	}
+	for _, other := range []string{BisyncDir(data), ScratchDir(data), CacheDir(data), ToolsDir(data)} {
+		if other == SourcesDir(data) {
+			t.Errorf("SourcesDir = %q is another directory's", other)
+		}
+	}
+}

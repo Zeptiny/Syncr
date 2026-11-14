@@ -40,6 +40,9 @@ type Probes struct {
 	// start is the seed's start; workers the demo workers' local roots.
 	start   time.Time
 	workers map[domain.WorkerID][]string
+	// remotes are the demo remotes' IDs by name: the tags of the
+	// snapshots of backups of a remote (demoRepo.sourceTagged).
+	remotes map[string]domain.RemoteID
 	// created are the repositories initialized through restic_init, by
 	// location, with their passwords.
 	created map[string]string
@@ -51,11 +54,12 @@ func NewProbes(clock Clock) *Probes {
 	return &Probes{clock: clock, workers: map[domain.WorkerID][]string{}, created: map[string]string{}}
 }
 
-// bind tells the probes the seed's start and its workers' local roots.
-func (p *Probes) bind(start time.Time, roots map[domain.WorkerID][]string) {
+// bind tells the probes the seed's start, its workers' local roots and its
+// remotes' IDs.
+func (p *Probes) bind(start time.Time, roots map[domain.WorkerID][]string, remotes map[string]domain.RemoteID) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.start, p.workers = start, roots
+	p.start, p.workers, p.remotes = start, roots, remotes
 }
 
 // seedStart is the time the answers count back from.
@@ -437,14 +441,28 @@ func remoteTree(backend string, start time.Time) (tree, error) {
 			{"media/films/holiday-2025.mkv", 4*gib + 300*mib},
 			{"calendar/ada.ics", 96 * kib},
 			{"laptop/projects/syncr.tar.zst", 220 * mib},
+			{"Scans/2026-10-invoice.pdf", 640 * kib},
+			{"Scans/2026-11-contract.pdf", 2*mib + 300*kib},
 		})), nil
 	case "r2":
 		return newTree(start, sharedFiles(sharedRemotePath)), nil
 	case "webdav":
-		return nil, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED,
-			"couldn't list the folder: Propfind \"https://cloud.example.com/remote.php/dav/files/ada/\": dial tcp 203.0.113.20:443: connect: connection refused")
+		return nextcloudTree(start), nil
 	}
 	return nil, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "the demo has no content for this kind of remote")
+}
+
+// nextcloudTree is the demo Nextcloud: the phone's photos that the
+// nightly remote backup reads (with thumbnails and an upload in progress,
+// which its filters leave out), the documents and shared folders the copy
+// jobs read, and an empty Inbox (the allowed empty run).
+func nextcloudTree(start time.Time) tree {
+	return newTree(start, slices.Concat(photoFiles("Photos"), documentFiles("Documents"), []demoFile{
+		{"Photos/.thumbnails/IMG_1100.jpg", 24 * kib},
+		{"Photos/2026/11/IMG_1163.jpg.tmp", 1*mib + 512*kib},
+		{"Shared/readme.md", 2 * kib},
+		{"Calendar/ada.ics", 96 * kib},
+	}), "Inbox", "Projects")
 }
 
 func (p *Probes) listRemote(remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeListRemote) (*syncrv1.ProbeListing, error) {
@@ -468,7 +486,8 @@ func about(remotes []*syncrv1.RemoteDefinition) (*syncrv1.ProbeUsage, error) {
 	case "sftp":
 		return &syncrv1.ProbeUsage{Total: ptr(1024 * gib), Used: ptr(318 * gib), Free: ptr(706 * gib)}, nil
 	case "webdav":
-		return nil, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "connect: connection refused")
+		// Nextcloud's quota.
+		return &syncrv1.ProbeUsage{Total: ptr(512 * gib), Used: ptr(74*gib + 600*mib), Free: ptr(437*gib + 424*mib)}, nil
 	}
 	return &syncrv1.ProbeUsage{Unsupported: true}, nil
 }
@@ -529,6 +548,9 @@ func (p *Probes) open(remotes []*syncrv1.RemoteDefinition, repo *syncrv1.ResticR
 		if repo.GetPassword() != demoRepoPassword {
 			return probeRepo{}, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_WRONG_PASSWORD, "wrong password or no key found")
 		}
+		p.mu.Lock()
+		d = d.sourceTagged(p.remotes)
+		p.mu.Unlock()
 		return probeRepo{resticID: resticIDOf(key), demo: &d}, nil
 	}
 	p.mu.Lock()

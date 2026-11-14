@@ -38,9 +38,9 @@ import {
   emptyRestore,
   cannotRestoreInPlace,
   hostWorker,
+  inPlaceParent,
   outdatedHost,
   loadRestoreTarget,
-  originalParent,
   pickRestoreWorker,
   restoreSummary,
   shortId,
@@ -51,14 +51,18 @@ import {
   type RestoreErrors,
   type RestoreWhat,
 } from "./model";
+import { isRemoteSnapshot, REMOTE_RESTORE_HINT } from "./snapshot-origin";
 
 /** RestoreSheetProps configures RestoreSheet. */
 export interface RestoreSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   repository: Repository;
-  /** snapshot is the one restored from; only its ID is required. */
-  snapshot: Pick<ResticSnapshot, "id"> & Partial<Pick<ResticSnapshot, "host" | "time">>;
+  /**
+   * snapshot is the one restored from; only its ID is required. Its tags
+   * tell a snapshot of a remote, which has no original location.
+   */
+  snapshot: Pick<ResticSnapshot, "id"> & Partial<Pick<ResticSnapshot, "host" | "time" | "tags">>;
   /**
    * what is restored: chosen items, one folder's contents, everything, or
    * chosen items back to their original location.
@@ -117,7 +121,10 @@ function Body({
     what.mode === "original" ? undefined : loadRestoreTarget(repo.id),
   );
   const toOriginal = what.mode === "original";
-  const parent = toOriginal ? originalParent(what.paths) : undefined;
+  // A snapshot of a remote has no original location on any worker.
+  const fromRemote = isRemoteSnapshot(snapshot);
+  const tags = snapshot.tags ?? [];
+  const parent = toOriginal ? inPlaceParent(what.paths, snapshot) : undefined;
 
   const usable = (id: string | undefined) => {
     const w = workers.find((x) => x.id === id);
@@ -126,7 +133,7 @@ function Body({
   const proposal =
     proposedWorker ??
     (toOriginal
-      ? hostWorker(workers, snapshot.host ?? "")?.id
+      ? hostWorker(workers, snapshot.host ?? "", tags)?.id
       : (usable(remembered?.workerId)?.id ?? pickRestoreWorker(workers, snapshot.host ?? "")?.id));
   if (proposedWorker === undefined && proposal !== undefined) setProposedWorker(proposal);
   const workerId = chosenWorker ?? proposal ?? "";
@@ -135,7 +142,8 @@ function Body({
   const roots = worker?.info?.localRoots ?? [];
   // Back in place needs a worker of 2.1 (restic.restore_subfolder_paths).
   const tooOld = toOriginal && !!worker && cannotRestoreInPlace(worker) !== undefined;
-  const oldHost = toOriginal && !proposal ? outdatedHost(workers, snapshot.host ?? "") : undefined;
+  const oldHost =
+    toOriginal && !proposal ? outdatedHost(workers, snapshot.host ?? "", tags) : undefined;
   const defaultTarget =
     proposedTarget?.workerId === workerId
       ? proposedTarget.target
@@ -152,16 +160,17 @@ function Body({
   // The hooks are the chosen worker's: another worker offers others.
   const hooksTarget = { workers: worker?.info ? [worker] : [] };
   const showHooks = hasHooks(rest.hooks) || hooksEmptyText(rest.hooks, hooksTarget) === undefined;
-  const original = what.mode === "folder" ? treeToLocal(what.folder, os) : undefined;
+  const original = what.mode === "folder" && !fromRemote ? treeToLocal(what.folder, os) : undefined;
   const outside = target.trim() !== "" && roots.length > 0 && !isWithinRoots(target, roots, os);
   // Back to the original location only where the worker may write, and
   // only by a worker that can.
-  const blocked = toOriginal && (outside || tooOld);
+  const blocked = toOriginal && (fromRemote || outside || tooOld);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const local = validateRestore(what, state);
-    if (tooOld && !local.worker) local.worker = TOO_OLD;
+    if (toOriginal && fromRemote) local.form = `${REMOTE_RESTORE_HINT}.`;
+    else if (tooOld && !local.worker) local.worker = TOO_OLD;
     else if (blocked && !local.target)
       local.target = "The original location is outside the worker's allowed folders.";
     setErrors(local);
@@ -223,8 +232,12 @@ function Body({
               {what.mode === "folder"
                 ? "The folder's contents go directly into the target."
                 : what.mode === "original"
-                  ? `Back where they were: the items go into the target as they were in ${parent ?? "/"}.`
-                  : "Files keep their original path under the target, such as target/srv/photos/…"}
+                  ? fromRemote
+                    ? `${REMOTE_RESTORE_HINT}.`
+                    : `Back where they were: the items go into the target as they were in ${parent ?? "/"}.`
+                  : fromRemote
+                    ? "Files keep their path in the remote folder under the target: its contents start right in the target."
+                    : "Files keep their original path under the target, such as target/srv/photos/…"}
             </p>
           </div>
           {errors.what && <p className="text-xs text-danger">{errors.what}</p>}
@@ -235,15 +248,17 @@ function Body({
           label="Worker"
           error={errors.worker}
           help={
-            tooOld
-              ? TOO_OLD
-              : worker && !isOnline(worker)
-                ? `${worker.name} is offline: the restore waits until it is back.`
-                : oldHost && !worker
-                  ? `${oldHost.name} took this snapshot, but it is too old to restore items back in place: upgrade it, or choose where the files go back.`
-                  : toOriginal && !proposal
-                    ? `No online worker is ${snapshot.host || "the machine this snapshot was taken on"}: choose where the files go back.`
-                    : "The machine that receives the files."
+            toOriginal && fromRemote
+              ? `${REMOTE_RESTORE_HINT}.`
+              : tooOld
+                ? TOO_OLD
+                : worker && !isOnline(worker)
+                  ? `${worker.name} is offline: the restore waits until it is back.`
+                  : oldHost && !worker
+                    ? `${oldHost.name} took this snapshot, but it is too old to restore items back in place: upgrade it, or choose where the files go back.`
+                    : toOriginal && !proposal
+                      ? `No online worker is ${snapshot.host || "the machine this snapshot was taken on"}: choose where the files go back.`
+                      : "The machine that receives the files."
           }
         >
           <WorkerPicker
@@ -276,6 +291,9 @@ function Body({
               Not inside {worker?.name ?? "the worker"}'s allowed folders ({roots.join(", ")}). The
               worker will refuse it.
             </FieldWarning>
+          )}
+          {what.mode === "folder" && fromRemote && (
+            <p className="text-xs leading-5 text-muted-foreground">{REMOTE_RESTORE_HINT}.</p>
           )}
           {original !== undefined && (
             <div>

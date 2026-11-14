@@ -20,6 +20,7 @@ export const FEATURE_RESTIC = "restic.v2";
 export const FEATURE_RESTIC_DELETE = "restic.delete";
 export const FEATURE_HOOKS = "job.hooks";
 export const FEATURE_RESTORE_SUBFOLDER_PATHS = "restic.restore_subfolder_paths";
+export const FEATURE_REMOTE_SOURCE = "restic.remote_source";
 
 /** hasFeature reports whether a worker reported a link feature. */
 export function hasFeature(w: Worker | undefined, feature: string): boolean {

@@ -194,6 +194,10 @@ type Identity struct {
 	// ProbeOps are the probe operations this worker can run
 	// (probe.Executor.Ops).
 	ProbeOps []string
+	// RemoteSources says how the worker can read a folder of a remote for
+	// a backup (Hello.remote_sources), as it found out when it started.
+	// Nil for a worker without the restic.remote_source feature.
+	RemoteSources *syncrv1.RemoteSourceSupport
 }
 
 // Config configures an Agent.
@@ -390,6 +394,11 @@ func (a *Agent) hello(id Identity) *syncrv1.Hello {
 	}
 	if a.hooks != nil {
 		h.Hooks = a.hooks.Infos()
+	}
+	if rs := id.RemoteSources; rs != nil {
+		h.RemoteSources = &syncrv1.RemoteSourceSupport{
+			Mirror: rs.GetMirror(), Mount: rs.GetMount(), MirrorReason: rs.GetMirrorReason(), MountReason: rs.GetMountReason(),
+		}
 	}
 	return h
 }
@@ -589,7 +598,7 @@ func (a *Agent) awaitCapacityLocked() {
 // in the steps the package documentation lists under "Hooks".
 func (a *Agent) run(j *job) {
 	th := newThrottle(a.progressInterval, func(p runner.Progress) {
-		a.append(&syncrv1.Event{Payload: &syncrv1.Event_Progress{Progress: &syncrv1.Progress{JobId: j.id, Stats: p.Proto()}}})
+		a.append(&syncrv1.Event{Payload: &syncrv1.Event_Progress{Progress: &syncrv1.Progress{JobId: j.id, Stats: p.Proto(), Phase: p.Phase}}})
 	})
 	res := runner.Result{ExitCode: -1}
 	operated := false // the runner succeeded: its output and warnings count

@@ -16,6 +16,7 @@ import {
 } from "@/gen/syncr/v1/api_pb";
 import { ResticService } from "@/gen/syncr/v1/restic_pb";
 import { useNow } from "@/hooks/use-now";
+import { formatRate } from "@/lib/format";
 import * as m5 from "@/mock/m5";
 import * as m6 from "@/mock/m6";
 import { signedIn } from "@/test/app-api";
@@ -23,15 +24,7 @@ import * as fx from "@/test/fixtures";
 import { m5Api } from "@/test/m5-api";
 import { mockTransport, renderApp, renderWithProviders } from "@/test/render";
 
-// uPlot needs a canvas, which jsdom lacks; the note under the chart is
-// what these tests read.
-vi.mock("uplot", () => ({
-  default: class {
-    setData() {}
-    setSize() {}
-    destroy() {}
-  },
-}));
+import { jobElapsed } from "./model";
 
 const now = Date.now();
 
@@ -86,6 +79,18 @@ describe("job page: time limits and progress history", { timeout: 30_000 }, () =
       await screen.findByText("No progress history (it is kept for a limited time)"),
     ).toBeVisible();
     expect(screen.getByText("None")).toBeVisible(); // no time limit
+  });
+
+  it("keeps a finished transfer's average over the whole job, and its checks", async () => {
+    const job = fx
+      .jobs(now)
+      .find((j) => j.status === JobStatus.SUCCEEDED && j.kind === "rclone_transfer")!;
+    const { transport } = jobApi(job, []);
+    renderApp(`/jobs/${job.id}`, transport);
+    const card = (await screen.findByText("Average speed")).parentElement!;
+    expect(card).toHaveTextContent(formatRate(Number(job.stats!.bytes) / jobElapsed(job)!));
+    expect(screen.queryByText("Backup average")).toBeNull();
+    expect(screen.getByText("Checks and deletes")).toBeVisible();
   });
 
   it("refreshes the repository queries when a restic job runs again", async () => {

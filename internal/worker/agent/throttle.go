@@ -16,7 +16,10 @@ import (
 //     when interval has passed since the last publication (trailing edge),
 //     unless a newer sample replaces it first;
 //   - close publishes a kept sample immediately, so the job's final sample is
-//     delivered before its result.
+//     delivered before its result;
+//   - a sample of another phase (runner.Progress.Phase) than the newest one
+//     seen is published at once, after a kept sample of the old phase, so
+//     the controller sees each phase's counters start from zero.
 //
 // emit is called by the runner's goroutine; the trailing timer runs on its
 // own goroutine, so a mutex guards the state. publish runs under that mutex,
@@ -47,9 +50,13 @@ func (t *throttle) emit(p runner.Progress) {
 	if t.closed {
 		return // the runner broke its contract and emitted after returning
 	}
+	phaseChanged := t.seen && p.Phase != t.latest.Phase
 	t.latest, t.seen = p, true
 	now := time.Now()
-	if !t.published || now.Sub(t.last) >= t.interval {
+	if phaseChanged && t.pending != nil {
+		t.publishLocked(*t.pending, now)
+	}
+	if phaseChanged || !t.published || now.Sub(t.last) >= t.interval {
 		t.publishLocked(p, now)
 		return
 	}

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Zeptiny/Syncr/internal/adapters/idgen"
 	"github.com/Zeptiny/Syncr/internal/adapters/memstore"
@@ -601,6 +602,44 @@ func TestSetInfoClampsAndIgnoresReplacedEpochs(t *testing.T) {
 	}
 	if got, _ := e.svc.Get(ctx, w.ID); got.Info.Version == "old" {
 		t.Error("a replaced epoch overwrote the info")
+	}
+}
+
+// TestSetInfoKeepsRemoteSources: what a worker can do to back up a remote's
+// folder is kept as reported, with each reason one line of at most 256
+// bytes.
+func TestSetInfoKeepsRemoteSources(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	w := e.enroll(t, "w").Worker
+	w, err := e.svc.AdvanceEpoch(ctx, w, "e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := workers.Info{Version: "v", RemoteSources: workers.RemoteSources{
+		Mirror:       true,
+		MirrorReason: "",
+		MountReason:  "/dev/fuse\nis missing\n" + strings.Repeat("é", 300),
+	}}
+	if err := e.svc.SetInfo(ctx, w.ID, "e1", in); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := e.svc.Get(ctx, w.ID)
+	rs := got.Info.RemoteSources
+	if !rs.Mirror || rs.Mount || rs.MirrorReason != "" {
+		t.Errorf("RemoteSources = %+v, want the mirror only", rs)
+	}
+	if !strings.HasPrefix(rs.MountReason, "/dev/fuse is missing é") || len(rs.MountReason) > 256 || !utf8.ValidString(rs.MountReason) {
+		t.Errorf("MountReason = %q (%d bytes), want one valid line of at most 256 bytes", rs.MountReason, len(rs.MountReason))
+	}
+
+	// A worker that reports nothing (an older build) has the zero value.
+	if err := e.svc.SetInfo(ctx, w.ID, "e1", workers.Info{Version: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := e.svc.Get(ctx, w.ID); got.Info.RemoteSources != (workers.RemoteSources{}) {
+		t.Errorf("RemoteSources of a worker that reports none = %+v", got.Info.RemoteSources)
 	}
 }
 

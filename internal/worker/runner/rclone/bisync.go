@@ -16,6 +16,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
+	"github.com/Zeptiny/Syncr/internal/worker/runner/rclonetool"
 	"github.com/Zeptiny/Syncr/internal/worker/runner/scrub"
 )
 
@@ -229,7 +230,7 @@ func (b *BisyncRunner) outcome(err error, pres proc.Result, t *tracker, log *bis
 			dryRun: dryRun,
 		}
 		if code, msg, ok := log.failure(run); ok {
-			return runner.Fail(code, &exitError{msg: msg, err: err})
+			return runner.Fail(code, &rclonetool.ExitError{Msg: msg, Err: err})
 		}
 	}
 	cmd := "bisync"
@@ -266,9 +267,14 @@ func (b *BisyncRunner) next(pair *bisyncstate.Pair) pairNext {
 // outsideState refuses (PATH_NOT_ALLOWED) a local side that is the folder
 // of the two-way sync state store, is inside it, or holds it, also through
 // a symbolic link: a run there would sync rclone's own listings, and let
-// the job read or change the state of other pairs. local_roots may cover
-// the worker's data directory; this keeps the pairs' state out of reach
-// anyway. path is a side's rclone path; remotes are not checked.
+// the job read or change the state of other pairs. It refuses a side that
+// holds the folder of backups of remotes (Config.SourcesDir) too, which
+// the path policy does not (it refuses only that folder and what lies
+// inside it): every such side also holds the state store, both being in
+// the data directory, unless one of them was moved elsewhere through a
+// symbolic link. local_roots may cover the worker's data directory; this
+// keeps the pairs' state and other users' mirrors out of reach anyway.
+// path is a side's rclone path; remotes are not checked.
 func (b *BisyncRunner) outsideState(role, path string) error {
 	if !filepath.IsAbs(path) {
 		return nil
@@ -280,6 +286,16 @@ func (b *BisyncRunner) outsideState(role, path string) error {
 	if overlap {
 		return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
 			"%s: %s is, holds or is inside the folder where the worker keeps the state of two-way syncs (%s)", role, path, b.states.Root())
+	}
+	if sources := b.r.cfg.SourcesDir; sources != "" {
+		overlap, err := localfs.Overlap(path, sources)
+		if err != nil {
+			return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED, "%s: %w", role, err)
+		}
+		if overlap {
+			return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
+				"%s: %s holds the folder where the worker keeps the copies and mount points of backups of remotes (%s)", role, path, sources)
+		}
 	}
 	return nil
 }

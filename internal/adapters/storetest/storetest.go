@@ -401,7 +401,9 @@ func testWorkerInfoAndTouch(t *testing.T, s Store) {
 		{Name: "dump-db", Description: "Dump the database: “app”", Timeout: 15*time.Minute + time.Nanosecond},
 		{Name: "start-app"},
 	}
-	info := workers.Info{Epoch: "e", Version: "v2", OS: "linux", JobKinds: []string{"a", "b"}, MaxConcurrentJobs: 2, Hooks: hooks, ReportedAt: t0()}
+	sources := workers.RemoteSources{Mirror: true, MountReason: "/dev/fuse is missing"}
+	info := workers.Info{Epoch: "e", Version: "v2", OS: "linux", JobKinds: []string{"a", "b"}, MaxConcurrentJobs: 2, Hooks: hooks,
+		RemoteSources: sources, ReportedAt: t0()}
 	if err := s.SetWorkerInfo(ctx, w.ID, "e", info); err != nil {
 		t.Fatal(err)
 	}
@@ -415,13 +417,25 @@ func testWorkerInfoAndTouch(t *testing.T, s Store) {
 	if !slices.Equal(got.Info.Hooks, hooks) || !slices.Equal(got.Info.HookNames(), []string{"dump-db", "start-app"}) {
 		t.Errorf("Info.Hooks = %+v, want %+v", got.Info.Hooks, hooks)
 	}
+	// What it can do with the folders of remotes, as reported.
+	if got.Info.RemoteSources != sources {
+		t.Errorf("Info.RemoteSources = %+v, want %+v", got.Info.RemoteSources, sources)
+	}
 	// A later Hello without hooks removes them: Info is replaced as a whole.
 	info.Hooks = nil
+	info.RemoteSources = workers.RemoteSources{MirrorReason: "remote_sources.mirror is off in worker.yaml", MountReason: "WinFsp is not installed"}
 	if err := s.SetWorkerInfo(ctx, w.ID, "e", info); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.GetWorker(ctx, w.ID); len(got.Info.Hooks) != 0 || got.Info.HookNames() != nil {
-		t.Errorf("Info.Hooks after a Hello without hooks = %+v", got.Info.Hooks)
+	if got, _ := s.GetWorker(ctx, w.ID); len(got.Info.Hooks) != 0 || got.Info.HookNames() != nil || got.Info.RemoteSources != info.RemoteSources {
+		t.Errorf("Info after a Hello without hooks = %+v", got.Info)
+	}
+	info.RemoteSources = workers.RemoteSources{}
+	if err := s.SetWorkerInfo(ctx, w.ID, "e", info); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetWorker(ctx, w.ID); got.Info.RemoteSources != (workers.RemoteSources{}) {
+		t.Errorf("Info.RemoteSources after a Hello without them = %+v", got.Info.RemoteSources)
 	}
 	// A new epoch keeps the info, which is then the previous process's.
 	if _, err := s.AdvanceWorkerEpoch(ctx, w.ID, "e", workers.NewEpoch{Epoch: "e2", PastEpochs: []string{"e"}}); err != nil {

@@ -282,7 +282,7 @@ func (s *Service) apply(ctx context.Context, workerID domain.WorkerID, epoch str
 		jobID = p.Progress.GetJobId()
 		var id domain.JobID
 		if id, err = domain.ParseJobID(jobID); err == nil {
-			_, err = s.jobs.RecordProgress(ctx, workerID, id, epoch, jobs.Sample{Time: at, Stats: statsFromProto(p.Progress.GetStats())})
+			_, err = s.jobs.RecordProgress(ctx, workerID, id, epoch, jobs.Sample{Time: at, Stats: statsFromProto(p.Progress.GetStats()), Phase: progressPhase(p.Progress.GetPhase())})
 		}
 	case *syncrv1.Event_JobResult:
 		jobID = p.JobResult.GetJobId()
@@ -485,9 +485,12 @@ func (s *Service) startSpec(ctx context.Context, j jobs.Job, info workers.Info) 
 	spec, err := s.specs.Build(ctx, j, info)
 	var wrongOS *WrongOSError
 	var missingHooks *MissingHooksError
+	var sourceMethod *SourceMethodError
 	switch {
 	case err == nil:
 		return spec, nil
+	case errors.As(err, &sourceMethod):
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeToolUnavailable, sourceMethod.Message(s.workerName(ctx, j)), err)
 	case errors.As(err, &wrongOS):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, s.wrongOSMessage(ctx, j, wrongOS), err)
 	case errors.As(err, &missingHooks):
@@ -499,12 +502,47 @@ func (s *Service) startSpec(ctx context.Context, j jobs.Job, info workers.Info) 
 	case errors.Is(err, domain.ErrNotFound):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeRemoteUnavailable, "a remote of the job was deleted or is not available to its owner", err)
 	case errors.Is(err, domain.ErrInvalidArgument):
-		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, "the job's definition cannot be turned into a spec", err)
+		return nil, s.failUnbuildable(ctx, j, jobs.CodeInvalidSpec, invalidSpecMessage(err), err)
 	case errors.Is(err, domain.ErrFailedPrecondition):
 		return nil, s.failUnbuildable(ctx, j, jobs.CodeInternal, "the credentials of a remote of the job cannot be used", err)
 	default:
 		return nil, fmt.Errorf("build the spec of job %s: %w", j.ID, err)
 	}
+}
+
+// maxSpecFieldMessages bounds the field messages invalidSpecMessage
+// passes on.
+const maxSpecFieldMessages = 5
+
+// invalidSpecMessage is the invalid_spec failure cause of a job whose
+// definition the spec builder refused. When it refused fields (a
+// *domain.ValidationError, from the kind's Check or Build, such as a
+// remote's root edited after the schedule was saved so that the folder now
+// holds the repository), their field names and messages follow, so the
+// user sees why. Those messages are fixed texts about the definition (its
+// paths, patterns and options, as the API reports them when the definition
+// is saved); none quotes a remote's options or credentials or a
+// repository's password.
+func invalidSpecMessage(err error) string {
+	const msg = "the job's definition cannot be turned into a spec"
+	verr, ok := errors.AsType[*domain.ValidationError](err)
+	if !ok || len(verr.Fields) == 0 {
+		return msg
+	}
+	var parts []string
+	for _, f := range verr.Fields {
+		part := f.Message
+		if f.Field != "" {
+			part = f.Field + ": " + part
+		}
+		if !slices.Contains(parts, part) {
+			parts = append(parts, part)
+		}
+	}
+	if n := len(parts); n > maxSpecFieldMessages {
+		parts = append(parts[:maxSpecFieldMessages], fmt.Sprintf("and %d more", n-maxSpecFieldMessages))
+	}
+	return msg + ": " + strings.Join(parts, "; ")
 }
 
 // outdatedMessage names the job's worker in the worker_outdated failure
@@ -517,6 +555,8 @@ func (s *Service) outdatedMessage(ctx context.Context, j jobs.Job, cause error) 
 		what = "jobs with a time limit"
 	case errors.Is(cause, ErrHooksUnsupported):
 		what = "jobs with hooks"
+	case errors.Is(cause, ErrRemoteSourceUnsupported):
+		what = "backups of a folder of a remote"
 	}
 	if name := s.workerName(ctx, j); name != "" {
 		return fmt.Sprintf("worker %q must be upgraded to run %s", name, what)

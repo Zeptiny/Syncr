@@ -26,7 +26,8 @@
 //
 // Allowed dependencies: the standard library, the generated protobuf code,
 // internal/worker/proc, internal/worker/runner, internal/worker/runner/scrub,
-// internal/worker/runner/tally, internal/worker/rcloneenv and
+// internal/worker/runner/tally, internal/worker/runner/rclonetool,
+// internal/worker/rcloneenv, internal/worker/localfs and
 // internal/worker/bisyncstate.
 package rclone
 
@@ -37,12 +38,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
+	"github.com/Zeptiny/Syncr/internal/worker/runner/rclonetool"
 	"github.com/Zeptiny/Syncr/internal/worker/runner/scrub"
 )
 
@@ -81,6 +84,12 @@ type Config struct {
 	// private directory (rclone config, cache), removed when the job ends.
 	// It is created if missing.
 	ScratchDir string
+	// SourcesDir is the worker's folder of backups of remotes
+	// (paths.SourcesDir), which the path policy refuses; a transfer whose
+	// local source or destination holds it gets filter rules that keep
+	// rclone out of it on both sides (sourcesRules), and a two-way sync
+	// side that holds it is refused. Empty: none.
+	SourcesDir string
 	// Logger receives operational warnings (never job secrets). Nil
 	// discards them.
 	Logger *slog.Logger
@@ -90,6 +99,9 @@ type Config struct {
 // concurrent use.
 type Runner struct {
 	cfg Config
+	// goos is the worker's operating system (runtime.GOOS); tests set it
+	// to check another system's rules.
+	goos string
 }
 
 var _ runner.Runner = (*Runner)(nil)
@@ -118,7 +130,7 @@ func New(cfg Config) (*Runner, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
-	return &Runner{cfg: cfg}, nil
+	return &Runner{cfg: cfg, goos: runtime.GOOS}, nil
 }
 
 // Kind implements runner.Runner.
@@ -161,6 +173,11 @@ func (r *Runner) Run(ctx context.Context, job runner.Job, emit runner.EmitFunc) 
 	if err != nil {
 		return res, runner.Fail(syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, err)
 	}
+	rules, err := r.sourcesRules(src, dst)
+	if err != nil {
+		return res, err
+	}
+	args = withRules(args, rules)
 
 	sc := scrub.New(env.Secrets())
 	t := newTracker(emit, sc)
@@ -199,31 +216,11 @@ func (r *Runner) outcome(err error, pres proc.Result, t *tracker, cmd string) er
 		return runner.Fail(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, err)
 	}
 
-	ec := classifyExit(pres.ExitCode)
-	if ec.success {
+	if rclonetool.ClassifyExit(pres.ExitCode).Success {
 		return nil
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "rclone %s failed: %s", cmd, ec.summary)
-	if pres.ExitCode >= 0 {
-		fmt.Fprintf(&b, " (exit code %d)", pres.ExitCode)
-	}
-	if d := t.diagnostics(); len(d) > 0 {
-		b.WriteString(": ")
-		b.WriteString(strings.Join(d, "; ")) // scrubbed by the tracker
-	}
-	return runner.Fail(ec.code, &exitError{msg: b.String(), err: err})
+	return rclonetool.Failure(cmd, pres.ExitCode, t.diagnostics(), err)
 }
-
-// exitError is a failure message built from rclone's output; it unwraps to
-// the supervisor's *proc.ExitError.
-type exitError struct {
-	msg string
-	err error
-}
-
-func (e *exitError) Error() string { return e.msg }
-func (e *exitError) Unwrap() error { return e.err }
 
 // location validates loc and returns its rclone path.
 func (r *Runner) location(role string, loc *syncrv1.Location, env *rcloneenv.Env) (string, error) {

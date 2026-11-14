@@ -55,6 +55,7 @@ import { CronError, nextRuns, parseCron } from "./cron";
 import { check as checkBisync } from "./bisync";
 import { check as checkHooks } from "./hooks";
 import type { M5 } from "./m5";
+import { api as remoteBackupApi, sourceOf as remoteBackupSource } from "./remote-backup";
 
 type Violation = { field: string; message: string };
 
@@ -192,6 +193,9 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
     v.push(
       ...checkHooks(input.definition, d.workers, t?.case === "workerId" ? t.value : undefined),
     );
+    // A backup of a remote runs on one worker (its other checks are m5's).
+    if (t?.case === "workerLabel" && remoteBackupSource(input.definition))
+      v.push({ field: "target.worker_label", message: remoteBackupApi.singleWorker });
     v.push(
       ...checkBisync(input.definition, {
         forSchedule: true,

@@ -11,6 +11,7 @@ import { fieldViolations } from "@/lib/errors";
 import * as fx from "@/test/fixtures";
 
 import * as m5 from "./m5";
+import * as remoteBackup from "./remote-backup";
 import { createMockTransport } from "./transport";
 
 async function signIn(user: "admin" | "alice" = "admin") {
@@ -48,6 +49,7 @@ describe("mock transport, milestone 5", { timeout: 20_000 }, () => {
     expect(repositories.map((r) => r.name)).toEqual([
       "Archive 2019",
       "NAS documents",
+      "Nextcloud photos",
       "Office laptop",
       "Old laptop",
       "Photos vault",
@@ -327,7 +329,8 @@ describe("mock transport, milestone 5", { timeout: 20_000 }, () => {
     const jobs = createClient(JobService, t);
     const workers = await createClient(WorkerAdminService, t).listWorkers({});
     const nas = workers.workers.find((w) => w.id === fx.ids.nas)!;
-    // The hooks, two-way sync and browser mocks add their features to the up-to-date workers.
+    // The hooks, two-way sync, browser and remote-backup mocks add their
+    // features to the up-to-date workers.
     expect(nas.info?.features).toEqual([
       "probe",
       "restic.v2",
@@ -335,6 +338,7 @@ describe("mock transport, milestone 5", { timeout: 20_000 }, () => {
       "job.hooks",
       "rclone.bisync",
       "restic.restore_subfolder_paths",
+      "restic.remote_source",
     ]);
     // Milestone 6 adds sftp_host_keys to the seven probe operations of m5,
     // and milestone 7 its five scans (sizes, search, compare).
@@ -389,7 +393,11 @@ describe("mock transport, milestone 5", { timeout: 20_000 }, () => {
       expect(page.jobs.every((j) => j.kind === kind && j.title !== "")).toBe(true);
     }
     const warned = await jobs.listJobs({ kinds: ["restic_backup"], pageSize: 100 });
-    expect(warned.jobs.flatMap((j) => j.warnings)).toEqual(["3 items could not be read"]);
+    // The second is the remote-backup mock's empty Inbox, which made no snapshot.
+    expect(warned.jobs.flatMap((j) => j.warnings).sort()).toEqual([
+      "3 items could not be read",
+      remoteBackup.messages.emptyWarning,
+    ]);
     const failed = (await jobs.getJob({ jobId: m5.ids.failedCheck })).job!;
     expect(failed.error?.message).toContain("the check found 2 error(s)");
   });

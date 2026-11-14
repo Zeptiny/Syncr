@@ -24,12 +24,32 @@ import {
   type RetentionPolicyState,
 } from "@/lib/retention";
 
+import { MAX_REMOTE_SOURCE_TAGS, REMOTE_TAG_PREFIX } from "@/lib/remote-sources";
+
+import {
+  emptyRemoteSource,
+  remoteSourceState,
+  toRemoteSource,
+  validateRemoteSource,
+  type RemoteSourceErrorKey,
+  type RemoteSourceState,
+} from "./remote-source";
 import { decimalToScaled, isDecimal } from "./units";
 
 // This module must not import definition.ts (which imports it); the shared
 // error type is repeated structurally instead.
 type Errors = Partial<
-  Record<"options" | "repository" | "paths" | "excludes" | "policy" | "readData", string>
+  Record<
+    | "options"
+    | "repository"
+    | "paths"
+    | "excludes"
+    | "policy"
+    | "readData"
+    | "tags"
+    | RemoteSourceErrorKey,
+    string
+  >
 >;
 
 const MiB = 1024n * 1024n;
@@ -39,9 +59,21 @@ const isAbsolute = (p: string) =>
 
 const clean = (list: string[]) => [...new Set(list.map((x) => x.trim()).filter(Boolean))];
 
-/** BackupState is the editable form of a backup. */
+/**
+ * BackupSource is what a backup reads: folders on the worker (paths) or a
+ * folder of one of the user's remotes (remote).
+ */
+export type BackupSource = "paths" | "remote";
+
+/**
+ * BackupState is the editable form of a backup. It keeps both sources, so
+ * switching between them loses nothing typed; only the chosen one is sent.
+ */
 export interface BackupState {
   repositoryId: string;
+  source: BackupSource;
+  /** remote is the folder of a remote, used when source is "remote". */
+  remote: RemoteSourceState;
   paths: string[];
   excludes: string[];
   tags: string[];
@@ -60,6 +92,8 @@ export interface BackupState {
 export function emptyBackup(): BackupState {
   return {
     repositoryId: "",
+    source: "paths",
+    remote: emptyRemoteSource(),
     paths: [""],
     excludes: [],
     tags: [],
@@ -90,6 +124,8 @@ function mibText(bytes: bigint | undefined): string {
 export function backupState(d: ResticBackupDefinition): BackupState {
   return {
     repositoryId: d.repositoryId,
+    source: d.remoteSource ? "remote" : "paths",
+    remote: remoteSourceState(d.remoteSource),
     paths: d.paths.length ? [...d.paths] : [""],
     excludes: [...d.excludes],
     tags: [...d.tags],
@@ -106,13 +142,32 @@ export function backupState(d: ResticBackupDefinition): BackupState {
 export function validateBackup(s: BackupState): Errors {
   const e: Errors = {};
   if (!s.repositoryId) e.repository = "Choose the repository to back up into.";
-  const paths = clean(s.paths);
-  if (paths.length === 0) e.paths = "Add at least one folder or file to back up.";
-  else if (paths.some((p) => !isAbsolute(p)))
-    e.paths = "Enter absolute paths on the worker, such as /srv/data.";
+  if (s.source === "remote") {
+    Object.assign(e, validateRemoteSource(s.remote));
+    const tags = remoteTagsProblem(clean(s.tags));
+    if (tags) e.tags = tags;
+  } else {
+    const paths = clean(s.paths);
+    if (paths.length === 0) e.paths = "Add at least one folder or file to back up.";
+    else if (paths.some((p) => !isAbsolute(p)))
+      e.paths = "Enter absolute paths on the worker, such as /srv/data.";
+  }
   if (s.excludeLargerThan !== "" && (!isDecimal(s.excludeLargerThan) || !larger(s)))
     e.options = "The size limit must be a number above zero.";
   return e;
+}
+
+/**
+ * remoteTagsProblem checks the tags of a backup of a remote: Syncr adds
+ * its own syncr-remote: tag, so there is room for one tag less and that
+ * prefix is taken.
+ */
+export function remoteTagsProblem(tags: string[]): string | undefined {
+  if (tags.length > MAX_REMOTE_SOURCE_TAGS)
+    return `Use at most ${MAX_REMOTE_SOURCE_TAGS} tags: Syncr adds one to name the remote.`;
+  const taken = tags.find((t) => t.startsWith(REMOTE_TAG_PREFIX));
+  if (taken) return `Tags cannot start with “${REMOTE_TAG_PREFIX}”: Syncr adds that tag itself.`;
+  return undefined;
 }
 
 function larger(s: BackupState): bigint | undefined {
@@ -121,8 +176,22 @@ function larger(s: BackupState): bigint | undefined {
   return bytes > 0n ? bytes : undefined;
 }
 
-/** toBackup builds the backup definition the API takes. */
+/**
+ * toBackup builds the backup definition the API takes: the chosen source
+ * only. A backup of a remote never sends paths, restic excludes, one file
+ * system or VSS, which the controller refuses with it.
+ */
 export function toBackup(s: BackupState): MessageInitShape<typeof ResticBackupDefinitionSchema> {
+  if (s.source === "remote")
+    return {
+      repositoryId: s.repositoryId,
+      remoteSource: toRemoteSource(s.remote),
+      tags: clean(s.tags),
+      host: s.host.trim(),
+      excludeCaches: s.excludeCaches,
+      excludeLargerThanBytes: larger(s),
+      dryRun: s.dryRun,
+    };
   return {
     repositoryId: s.repositoryId,
     paths: clean(s.paths),

@@ -1,7 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 
 import { cleanup, configure } from "@testing-library/react";
-import { afterEach } from "vitest";
+import { afterEach, vi } from "vitest";
+
+// uPlot draws on a canvas, which jsdom lacks: every test gets the stub,
+// which records the options charts are built with (src/test/uplot.ts).
+vi.mock("uplot", () => import("@/test/uplot"));
 
 // Whole pages load their route chunks lazily, which can take more than the
 // default second when the test files run in parallel.

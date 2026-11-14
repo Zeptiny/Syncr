@@ -38,6 +38,19 @@ type ResticService interface {
 	// or the folder path (restic diff).
 	Compare(ctx context.Context, actor domain.Actor, id domain.ResticRepoID, fromID, toID, path string, workerID domain.WorkerID) (restic.Comparison, error)
 	RepositoryNames
+	RemoteSourceChecker
+}
+
+// RemoteSourceChecker checks the folder a backup of a remote reads where
+// both the repository and the remote are known: RunJob and the schedule
+// input ask it (implemented by *restic.Service).
+type RemoteSourceChecker interface {
+	// CheckRemoteSource checks the folder path on remoteID against owner's
+	// repository repoID: domain.ErrNotFound (restic.ErrUnknownRepository,
+	// restic.ErrUnknownSourceRemote) for objects that are not owner's, a
+	// *domain.ValidationError on "remote_id" (a Local directory remote) or
+	// "path" (the source is, holds or is inside the repository's folder).
+	CheckRemoteSource(ctx context.Context, owner domain.UserID, repoID domain.ResticRepoID, remoteID domain.RemoteID, path string) error
 }
 
 var _ ResticService = (*restic.Service)(nil)

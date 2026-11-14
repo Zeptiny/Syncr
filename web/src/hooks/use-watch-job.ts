@@ -20,6 +20,12 @@ export interface JobSample {
   bytes: number;
   files: number;
   errors: number;
+  /**
+   * phase is the job's phase when the sample was taken ("mirror" or
+   * "backup" for a backup of a remote): live samples only, and the
+   * counters start again at a change.
+   */
+  phase?: string;
 }
 
 /**
@@ -49,6 +55,11 @@ export const HISTORY_POINTS = 1000;
 export interface WatchResult {
   /** job is the latest job message from the stream, if any yet. */
   job: Job | undefined;
+  /**
+   * progress is the latest live progress message, with its phase and
+   * totals, until the job ends.
+   */
+  progress: JobProgress | undefined;
   /** samples is the chart history followed by live samples, oldest first. */
   samples: JobSample[];
   /**
@@ -94,7 +105,21 @@ export function toSample(p: JobProgress): JobSample | undefined {
     bytes: toNumber(p.stats?.bytes),
     files: toNumber(p.stats?.files),
     errors: toNumber(p.stats?.errors),
+    ...(p.phase ? { phase: p.phase } : {}),
   };
+}
+
+/**
+ * phaseTail returns the samples of the current phase: the last ones that
+ * share the newest sample's phase. Counters restart at a phase change, so
+ * rates are only meaningful within one. Without phases it is every sample.
+ */
+export function phaseTail(samples: JobSample[]): JobSample[] {
+  const phase = samples.at(-1)?.phase;
+  if (!phase) return samples;
+  let i = samples.length - 1;
+  while (i > 0 && samples[i - 1].phase === phase) i--;
+  return samples.slice(i);
 }
 
 /**
@@ -251,7 +276,9 @@ export function useWatchJob(jobId: string, opts: WatchOptions = {}): WatchResult
               update({ job });
               queryClient.setQueryData(jobKey, create(GetJobResponseSchema, { job }));
             } else if (msg.update.case === "progress") {
-              const s = toSample(msg.update.value);
+              const progress = msg.update.value;
+              update({ progress });
+              const s = toSample(progress);
               if (s) addSamples([s]);
             }
           }
@@ -297,6 +324,7 @@ function freshResult(jobId: string): Omit<WatchResult, "retry"> & { jobId: strin
   return {
     jobId,
     job: undefined,
+    progress: undefined,
     samples: [],
     history: "loading",
     total: 0,

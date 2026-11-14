@@ -62,7 +62,7 @@ function JobSummary({ schedule }: { schedule: Schedule }) {
   const t = transferOf(job);
   const bisync = bisyncOf(schedule.definition);
   const route = jobRoute(job);
-  const restic = resticSummary(schedule.definition, schedule.repository);
+  const restic = resticSummary(schedule.definition, schedule.repository, schedule.remotes);
   if (restic)
     return (
       <div className="flex min-w-0 flex-col gap-1">

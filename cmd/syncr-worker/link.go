@@ -205,6 +205,7 @@ func identity(w *worker, info linkInfo) agent.Identity {
 	}
 	if w.probes != nil {
 		id.Features, id.ProbeOps = link.Features(), w.probes.Ops()
+		id.RemoteSources = w.remoteSources
 	}
 	for _, tool := range []string{toolRclone, toolRestic} {
 		if r, ok := w.tools[tool]; ok {

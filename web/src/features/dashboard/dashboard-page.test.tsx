@@ -15,17 +15,6 @@ import * as fx from "@/test/fixtures";
 import { formatInZone } from "@/lib/timezones";
 import { mockTransport, renderApp } from "@/test/render";
 
-// uPlot needs a canvas, which jsdom lacks; the charts' data shaping is
-// tested on its own.
-vi.mock("uplot", () => ({
-  default: class {
-    static paths = { bars: () => () => null };
-    setData() {}
-    setSize() {}
-    destroy() {}
-  },
-}));
-
 const now = Date.now();
 const HOUR = 3_600_000;
 
