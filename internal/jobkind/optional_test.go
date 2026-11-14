@@ -262,29 +262,32 @@ func TestRegistryScheduleRules(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	labels := []struct {
-		kind string
-		ok   bool
-		why  string
-	}{
-		{kind: "rclone_transfer", ok: true},
-		{kind: "rclone_bisync", why: "a two-way sync keeps its state on one worker; choose a worker"},
-		{kind: "restic_prune", why: "prunes stay on one worker"},
-		{kind: "restic_forget", ok: true},
-		{kind: "restic_backup", why: `job kind "restic_backup" is not supported`},
-		{kind: "", why: `job kind "" is not supported`},
-	}
-	for _, tt := range labels {
-		if ok, why := r.LabelTargetAllowed(tt.kind); ok != tt.ok || why != tt.why {
-			t.Errorf("LabelTargetAllowed(%q) = (%v, %q), want (%v, %q)", tt.kind, ok, why, tt.ok, tt.why)
-		}
-	}
-
 	forget := func(dryRun bool) *syncrv1.JobDefinition {
 		return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticForget{ResticForget: &syncrv1.ResticForgetDefinition{DryRun: dryRun}}}
 	}
 	backup := &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticBackup{ResticBackup: &syncrv1.ResticBackupDefinition{}}}
 	prune := &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticPrune{ResticPrune: &syncrv1.ResticPruneDefinition{}}}
+
+	labels := []struct {
+		name string
+		def  *syncrv1.JobDefinition
+		ok   bool
+		why  string
+	}{
+		{name: "transfer", def: transfer("", "/src"), ok: true},
+		{name: "two-way", def: bisyncDef(false, false), why: "a two-way sync keeps its state on one worker; choose a worker"},
+		{name: "two-way, one-shot", def: bisyncDef(true, true), why: "a two-way sync keeps its state on one worker; choose a worker"},
+		{name: "single worker only", def: prune, why: "prunes stay on one worker"},
+		{name: "one-shot only", def: forget(true), ok: true},
+		{name: "unregistered kind", def: backup, why: `job kind "restic_backup" is not supported`},
+		{name: "no operation", def: &syncrv1.JobDefinition{}, why: `job kind "" is not supported`},
+		{name: "nil", why: `job kind "" is not supported`},
+	}
+	for _, tt := range labels {
+		if ok, why := r.LabelTargetAllowed(tt.def); ok != tt.ok || why != tt.why {
+			t.Errorf("%s: LabelTargetAllowed = (%v, %q), want (%v, %q)", tt.name, ok, why, tt.ok, tt.why)
+		}
+	}
 	defs := []struct {
 		name string
 		def  *syncrv1.JobDefinition
@@ -346,14 +349,103 @@ func TestRegistryScheduleRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	restore := &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticRestore{ResticRestore: &syncrv1.ResticRestoreDefinition{}}}
-	for _, def := range []*syncrv1.JobDefinition{transfer("", "/src"), checkDef(), forget(true), restore} {
+	for _, def := range []*syncrv1.JobDefinition{transfer("", "/src"), checkDef(), forget(true), restore, pathsBackup()} {
 		kind := jobkind.KindOf(def)
 		if err := builtin.CheckSchedulable(def); err != nil {
 			t.Errorf("built-in CheckSchedulable(%s) = %v", kind, err)
 		}
-		if ok, why := builtin.LabelTargetAllowed(kind); !ok {
+		if ok, why := builtin.LabelTargetAllowed(def); !ok {
 			t.Errorf("built-in LabelTargetAllowed(%s) = (false, %q)", kind, why)
 		}
+	}
+}
+
+// remoteBackupKind is a restic_backup stand-in that is DefinitionSingleWorker:
+// a backup of a remote stays on one worker, a backup of paths does not.
+type remoteBackupKind struct{ echoKind }
+
+// Check accepts any definition and refers to no remote.
+func (remoteBackupKind) Check(*syncrv1.JobDefinition) (jobkind.Refs, error) {
+	return jobkind.Refs{}, nil
+}
+
+func (remoteBackupKind) SingleWorkerFor(def *syncrv1.JobDefinition) string {
+	if def.GetResticBackup().GetRemoteSource() == nil {
+		return ""
+	}
+	return "a backup of a remote keeps its mirror or mount folder on one worker; choose a worker"
+}
+
+// pinnedEitherWayKind is a restic_prune stand-in that is both SingleWorker
+// and DefinitionSingleWorker (with another reason).
+type pinnedEitherWayKind struct{ echoKind }
+
+func (pinnedEitherWayKind) SingleWorker() string { return "prunes stay on one worker" }
+func (pinnedEitherWayKind) SingleWorkerFor(*syncrv1.JobDefinition) string {
+	return "this definition stays on one worker"
+}
+
+var (
+	_ jobkind.DefinitionSingleWorker = remoteBackupKind{}
+	_ jobkind.SingleWorker           = pinnedEitherWayKind{}
+	_ jobkind.DefinitionSingleWorker = pinnedEitherWayKind{}
+)
+
+// pathsBackup is a backup of worker paths.
+func pathsBackup() *syncrv1.JobDefinition {
+	return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticBackup{ResticBackup: &syncrv1.ResticBackupDefinition{
+		RepositoryId: "0f8e2c4a-1b3d-4e5f-8a7b-9c0d1e2f3a4b", Paths: []string{"/srv/photos"},
+	}}}
+}
+
+// remoteBackup is a backup of a folder of a remote.
+func remoteBackup(method syncrv1.ResticRemoteSourceMethod) *syncrv1.JobDefinition {
+	return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticBackup{ResticBackup: &syncrv1.ResticBackupDefinition{
+		RepositoryId: "0f8e2c4a-1b3d-4e5f-8a7b-9c0d1e2f3a4b",
+		RemoteSource: &syncrv1.ResticRemoteSourceDefinition{RemoteId: "1a2b3c4d-1b3d-4e5f-8a7b-9c0d1e2f3a4b", Path: "photos", Method: method},
+	}}}
+}
+
+// TestRegistryDefinitionSingleWorker: LabelTargetAllowed asks a
+// DefinitionSingleWorker kind about each definition, after SingleWorker,
+// and nothing else consults it (RunJob's Check, CheckSchedulable).
+func TestRegistryDefinitionSingleWorker(t *testing.T) {
+	t.Parallel()
+	r, err := jobkind.NewRegistry(remoteBackupKind{echoKind{"restic_backup"}}, pinnedEitherWayKind{echoKind{"restic_prune"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const why = "a backup of a remote keeps its mirror or mount folder on one worker; choose a worker"
+	prune := &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticPrune{ResticPrune: &syncrv1.ResticPruneDefinition{}}}
+	for _, tt := range []struct {
+		name string
+		def  *syncrv1.JobDefinition
+		ok   bool
+		why  string
+	}{
+		{name: "backup of paths", def: pathsBackup(), ok: true},
+		{name: "backup of a remote, mirror", def: remoteBackup(syncrv1.ResticRemoteSourceMethod_RESTIC_REMOTE_SOURCE_METHOD_MIRROR), why: why},
+		{name: "backup of a remote, mount", def: remoteBackup(syncrv1.ResticRemoteSourceMethod_RESTIC_REMOTE_SOURCE_METHOD_MOUNT), why: why},
+		{name: "the kind's reason comes first", def: prune, why: "prunes stay on one worker"},
+		{name: "unregistered kind", def: transfer("", "/src"), why: `job kind "rclone_transfer" is not supported`},
+		{name: "nil", why: `job kind "" is not supported`},
+	} {
+		if ok, got := r.LabelTargetAllowed(tt.def); ok != tt.ok || got != tt.why {
+			t.Errorf("%s: LabelTargetAllowed = (%v, %q), want (%v, %q)", tt.name, ok, got, tt.ok, tt.why)
+		}
+	}
+
+	// Only schedules on a label are refused: the definition is schedulable
+	// on a worker, and RunJob accepts it.
+	def := remoteBackup(syncrv1.ResticRemoteSourceMethod_RESTIC_REMOTE_SOURCE_METHOD_MIRROR)
+	if ok, why := r.Schedulable("restic_backup"); !ok {
+		t.Errorf("Schedulable(restic_backup) = (false, %q)", why)
+	}
+	if err := r.CheckSchedulable(def); err != nil {
+		t.Errorf("CheckSchedulable = %v", err)
+	}
+	if _, _, err := r.Check(def); err != nil {
+		t.Errorf("Check = %v", err)
 	}
 }
 

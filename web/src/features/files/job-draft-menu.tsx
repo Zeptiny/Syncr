@@ -1,3 +1,4 @@
+import { useQuery } from "@connectrpc/connect-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftRight,
@@ -19,12 +20,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { WorkerAdminService } from "@/gen/syncr/v1/api_pb";
 import { pathCrumbs } from "@/lib/paths";
 
 import {
   backupDraft,
   bisyncDraft,
   draftFolder,
+  remoteBackupDraft,
   transferDraft,
   type DraftTarget,
   type JobDraft,
@@ -33,13 +36,14 @@ import { itemsText } from "./transfer";
 
 /**
  * JobDraftMenu starts a job from the file browser in the existing editors,
- * filled in: a backup of the selection (a worker's folders), a copy or
- * sync, a two-way sync of a folder, or a schedule of one of these; and, in
- * a remote, a new restic repository in the folder. It acts on the selection,
- * or on the open folder when nothing is selected.
+ * filled in: a backup of the selection (a worker's folders) or of a folder
+ * of a remote, a copy or sync, a two-way sync of a folder, or a schedule of
+ * one of these; and, in a remote, a new restic repository in the folder.
+ * It acts on the selection, or on the open folder when nothing is selected.
  */
 export function JobDraftMenu({ target }: { target: DraftTarget }) {
   const navigate = useNavigate();
+  const workers = useQuery(WorkerAdminService.method.listWorkers, {});
   const folder = draftFolder(target);
   const kind = target.place.kind;
   const name = (p: string) => (p === "" ? "the root" : (pathCrumbs(p, kind).at(-1)?.label ?? p));
@@ -49,7 +53,10 @@ export function JobDraftMenu({ target }: { target: DraftTarget }) {
       : folder !== undefined
         ? `For ${name(folder)}`
         : "Open a folder or select items first";
-  const backup = kind === "worker" ? backupDraft(target) : undefined;
+  const backup =
+    kind === "worker" ? backupDraft(target) : remoteBackupDraft(target, workers.data?.workers);
+  // A Local directory remote is a folder on a worker: it is backed up from there.
+  const localRemote = target.place.kind === "remote" && !!target.place.local;
   const transfer = transferDraft(target);
   const bisync = bisyncDraft(target);
   const go = (to: "/jobs/new" | "/schedules/new", jobDraft: JobDraft) =>
@@ -57,10 +64,10 @@ export function JobDraftMenu({ target }: { target: DraftTarget }) {
   const jobs: { label: string; icon: typeof Copy; draft: JobDraft | undefined; hide?: boolean }[] =
     [
       {
-        label: "Back up with restic",
+        label: kind === "worker" ? "Back up with restic" : "Back up this folder",
         icon: DatabaseBackup,
         draft: backup,
-        hide: kind !== "worker",
+        hide: localRemote,
       },
       { label: "Copy or sync", icon: Copy, draft: transfer },
       { label: "Two-way sync", icon: ArrowLeftRight, draft: bisync },

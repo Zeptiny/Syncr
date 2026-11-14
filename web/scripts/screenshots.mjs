@@ -8,8 +8,8 @@
 //                           01-setup (default: skipped unless SYNCR_UI_MOCK=1)
 //   SYNCR_UI_USER           sign-in user (default admin)
 //   SYNCR_UI_PASSWORD       sign-in password (default syncr-demo-admin)
-//   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3, hooks, bisync, browser
-//                           or readme: which shot list
+//   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3, hooks, bisync, browser,
+//                           remote-backup or readme: which shot list
 //   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/<set>)
 //   SYNCR_SCREENSHOT_ONLY   comma-separated shot names to take (default all)
 //   SYNCR_SCREENSHOT_MOBILE 1 to also take 390px-wide shots
@@ -33,7 +33,7 @@ const mock = process.env.SYNCR_UI_MOCK === "1";
 const setupUrl = (process.env.SYNCR_SETUP_URL ?? (mock ? base : "")).replace(/\/$/, "");
 const user = process.env.SYNCR_UI_USER ?? "admin";
 const password = process.env.SYNCR_UI_PASSWORD ?? "syncr-demo-admin";
-const set = ["m3", "m4", "m5", "hooks", "bisync", "browser", "readme"].includes(
+const set = ["m3", "m4", "m5", "hooks", "bisync", "browser", "remote-backup", "readme"].includes(
   process.env.SYNCR_SCREENSHOT_SET,
 )
   ? process.env.SYNCR_SCREENSHOT_SET
@@ -1072,6 +1072,309 @@ async function browserSet(browser) {
   }
 }
 
+// pick chooses an option of a labelled select.
+async function pick(page, label, option) {
+  await page.getByRole("combobox", { name: label }).click();
+  await page.getByRole("option", { name: option }).first().click();
+  await settle(page, 200);
+}
+
+// remoteEditor opens Run a job on a backup of a folder of a remote, with
+// the worker, repository, remote and folder given (each optional).
+async function remoteEditor(page, { worker, repo, remote, folder } = {}) {
+  await open(page, "/jobs/new?kind=restic_backup");
+  if (worker) await pick(page, /^Worker/, new RegExp(`^${worker}`));
+  await page.getByRole("radio", { name: /^A folder on a remote/ }).click();
+  if (repo) await pick(page, /^Repository/, new RegExp(`^${repo}`));
+  if (remote) await pick(page, /^Remote/, new RegExp(`^${remote}`));
+  if (folder) await page.getByLabel(/^Folder/).fill(folder);
+  await settle(page, 300);
+}
+
+// remoteJob opens the newest backup of a remote whose title matches title
+// and, with want, whose error code (a name such as "SOURCE_EMPTY") or
+// status ("JOB_STATUS_SUCCEEDED") matches. It asks the controller's API.
+async function remoteJob(page, title, want) {
+  if (!page.url().startsWith(base)) await page.goto(`${base}/`);
+  const { jobs = [] } = await api(page, "JobService/ListJobs", {
+    kinds: ["restic_backup"],
+    pageSize: 200,
+  });
+  const job = jobs.find(
+    (j) =>
+      title.test(j.title ?? "") &&
+      (!want || j.status === want || j.error?.code === `JOB_ERROR_CODE_${want}`),
+  );
+  if (!job) throw new Error(`no backup of a remote matching ${title} ${want ?? ""}`);
+  await open(page, `/jobs/${job.id}`, 900);
+}
+
+// cloudSchedule returns the dev seed's nightly backup of Nextcloud.
+async function cloudSchedule(page) {
+  if (!page.url().startsWith(base)) await page.goto(`${base}/`);
+  const { schedules = [] } = await api(page, "ScheduleService/ListSchedules", { pageSize: 200 });
+  const sc = schedules.find((x) => x.name === "Nightly Nextcloud photos backup");
+  if (!sc) throw new Error("no schedule Nightly Nextcloud photos backup");
+  return sc.id;
+}
+
+// cloudSnapshot opens the newest snapshot of the repository Nextcloud
+// photos at path.
+async function cloudSnapshot(page, path = "") {
+  const { repos } = await seedIds(page);
+  const repo = repos["Nextcloud photos"];
+  const snap = await newestSnapshot(page, repo);
+  await open(page, `/repositories/${repo}/snapshots/${snap}?path=${encodeURIComponent(path)}`);
+}
+
+// The backups of a remote (v2.2). They expect the dev seed
+// (internal/devseed/remote_backup_data.go and probes.go): nas-01 can mirror
+// and mount, backup-host only mirror (/dev/fuse is missing), office-pc
+// neither; the repository Nextcloud photos on MinIO archive with tagged
+// snapshots of Nextcloud/Photos; the schedule Nightly Nextcloud photos
+// backup (one night failed source_empty); by hand a mount of Storage
+// box/Scans, an allowed empty Nextcloud/Inbox and a mount refused on
+// backup-host.
+const remoteBackupShots = [
+  [
+    "01-editor-remote-source",
+    async (p) => {
+      await remoteEditor(p, {
+        worker: "nas-01",
+        repo: "Nextcloud photos",
+        remote: "Nextcloud",
+        folder: "Photos",
+      });
+      await scrollTo(p, p.getByRole("radio", { name: /^A folder on a remote/ }), 140);
+    },
+  ],
+  [
+    "02-editor-mount-refused",
+    async (p) => {
+      await remoteEditor(p, {
+        worker: "backup-host",
+        repo: "Nextcloud photos",
+        remote: "Nextcloud",
+      });
+      await scrollTo(p, p.getByText("How the worker reads it"), 24);
+    },
+  ],
+  [
+    "03-editor-worker-picker",
+    async (p) => {
+      await remoteEditor(p, { worker: "nas-01", remote: "Nextcloud" });
+      await p.getByRole("radio", { name: /^Mount/ }).click();
+      await p.evaluate(() => window.scrollTo({ top: 0 }));
+      await p.getByRole("combobox", { name: /^Worker/ }).click();
+      await p.getByRole("listbox").waitFor();
+      await settle(p, 300);
+    },
+  ],
+  [
+    "04-editor-remote-picker",
+    async (p) => {
+      await remoteEditor(p, { worker: "nas-01" });
+      await scrollTo(p, p.getByRole("radio", { name: /^A folder on a remote/ }), 140);
+      await p.getByRole("combobox", { name: /^Remote/ }).click();
+      await p.getByRole("listbox").waitFor();
+      await settle(p, 300);
+    },
+  ],
+  [
+    "05-editor-folder-browser",
+    async (p) => {
+      await remoteEditor(p, { worker: "nas-01", remote: "Nextcloud" });
+      await p.getByRole("button", { name: "Browse" }).first().click();
+      await p.getByRole("dialog").waitFor();
+      await settle(p, 900);
+    },
+  ],
+  [
+    "06-editor-overlap",
+    async (p) => {
+      await remoteEditor(p, {
+        worker: "nas-01",
+        repo: "Nextcloud photos",
+        remote: "MinIO archive",
+        folder: "restic",
+      });
+      await p.getByRole("button", { name: "Run job" }).click();
+      await p
+        .getByText(/a backup cannot read its own repository/)
+        .first()
+        .waitFor();
+      await scrollTo(p, p.getByLabel(/^Folder/), 160);
+    },
+  ],
+  [
+    "07-editor-options",
+    async (p) => {
+      await remoteEditor(p, {
+        worker: "nas-01",
+        repo: "Nextcloud photos",
+        remote: "Nextcloud",
+        folder: "Photos",
+      });
+      for (const [i, pattern] of [".thumbnails/**", "*.tmp"].entries()) {
+        await p.getByRole("button", { name: "Add filter" }).click();
+        await p.getByLabel(`Filter ${i + 1} pattern`).fill(pattern);
+      }
+      await p.getByLabel(/^Tags/).fill("phone,");
+      await p.getByRole("button", { name: "Advanced" }).click();
+      await settle(p, 300);
+      await scrollTo(p, p.getByText("How the worker reads it"), 24);
+    },
+  ],
+  [
+    "08-schedule-edit",
+    async (p) => {
+      const id = await cloudSchedule(p);
+      await open(p, `/schedules/${id}/edit`, 900);
+      await scrollTo(p, p.getByText("Where it runs").first(), 24);
+    },
+  ],
+  [
+    "09-schedule-detail",
+    async (p) => {
+      const id = await cloudSchedule(p);
+      await open(p, `/schedules/${id}`, 900);
+    },
+  ],
+  [
+    "10-job-mirror-run",
+    async (p) => {
+      await remoteJob(p, /^Back up Nextcloud\/Photos \(mirror\)/, "JOB_STATUS_SUCCEEDED");
+      await scrollTo(p, p.getByText("Read through").first(), 120);
+    },
+  ],
+  [
+    "11-job-throughput-phases",
+    async (p) => {
+      await remoteJob(p, /^Back up Nextcloud\/Photos \(mirror\)/, "JOB_STATUS_SUCCEEDED");
+      await scrollTo(p, p.getByRole("img", { name: /Throughput and bytes/ }), 160);
+    },
+  ],
+  [
+    "12-job-no-snapshot",
+    async (p) => remoteJob(p, /^Back up Nextcloud\/Inbox \(mirror\)/, "JOB_STATUS_SUCCEEDED"),
+  ],
+  [
+    "13-job-source-empty",
+    async (p) => remoteJob(p, /^Back up Nextcloud\/Photos \(mirror\)/, "SOURCE_EMPTY"),
+  ],
+  [
+    "14-job-mount-refused",
+    async (p) => remoteJob(p, /^Back up Storage box\/Scans \(mount\)/, "TOOL_UNAVAILABLE"),
+  ],
+  [
+    "15-snapshots",
+    async (p) => {
+      const { repos } = await seedIds(p);
+      const repo = repos["Nextcloud photos"];
+      await newestSnapshot(p, repo);
+      await open(p, `/repositories/${repo}`, 900);
+      await scrollTo(p, p.getByRole("tab", { name: "Snapshots" }), 24);
+    },
+  ],
+  [
+    "16-snapshot-browser",
+    async (p) => {
+      await cloudSnapshot(p);
+      await rowMenu(p, "README.txt");
+    },
+  ],
+  [
+    "17-restore-sheet",
+    async (p) => {
+      await cloudSnapshot(p);
+      await rowMenu(p, "2026");
+      await p
+        .getByRole("menuitem", { name: /^Restore/ })
+        .first()
+        .click();
+      await p.getByRole("dialog").waitFor();
+      await settle(p, 400);
+    },
+  ],
+  ["18-workers", async (p) => open(p, "/workers", 900)],
+  [
+    "19-worker-detail",
+    async (p) => {
+      const { workers } = await seedIds(p);
+      await open(p, `/workers/${workers["office-pc"]}`, 900);
+    },
+  ],
+  [
+    "20-remote-browser-menu",
+    async (p) => {
+      const { remotes } = await seedIds(p);
+      await open(p, `/remotes/${remotes["Nextcloud"]}/files?path=Photos`, 900);
+      await p.getByRole("button", { name: /New job/ }).click();
+      await p.getByRole("menu").waitFor();
+      await settle(p, 300);
+    },
+  ],
+  [
+    "21-remote-browser-draft",
+    async (p) => {
+      const { remotes } = await seedIds(p);
+      await open(p, `/remotes/${remotes["Nextcloud"]}/files?path=Photos`, 900);
+      await p.getByRole("button", { name: /New job/ }).click();
+      await p.getByRole("menuitem", { name: "Back up this folder…", exact: true }).click();
+      await p.waitForURL((u) => u.pathname === "/jobs/new");
+      await settle(p, 600);
+      await scrollTo(p, p.getByRole("radio", { name: /^A folder on a remote/ }), 140);
+    },
+  ],
+];
+
+// remoteBackupSet takes the backups of a remote shots: light at 1440×900,
+// then the editor and a snapshot dark at phone width, a mirror run's job
+// page dark, and a worker's page at phone width (and every shot at 390 px
+// with MOBILE=1).
+async function remoteBackupSet(browser) {
+  const variants = [{ suffix: "", width: 1440, height: 900 }];
+  if (mobile) variants.push({ suffix: "-mobile", width: 390, height: 844 });
+  for (const v of variants) {
+    const p = await newPage(browser, v);
+    await signIn(p);
+    for (const [name, go] of remoteBackupShots) {
+      if (!wanted(name)) continue;
+      await go(p);
+      await shot(p, name + v.suffix);
+      // Close a menu, picker or dialog a shot left open before the next page.
+      await p.keyboard.press("Escape");
+      await p.keyboard.press("Escape");
+    }
+    await p.context().close();
+  }
+  const shots = Object.fromEntries(remoteBackupShots);
+  const phoneDark = { width: 390, height: 844, dark: true };
+  const extra = [
+    ["22-editor-dark-mobile", phoneDark, shots["07-editor-options"]],
+    // The tables put the new columns off screen at 390 px: the snapshot
+    // browser and a worker's page show them.
+    ["23-snapshot-browser-dark-mobile", phoneDark, async (p) => cloudSnapshot(p)],
+    ["24-job-mirror-run-dark", { dark: true }, shots["11-job-throughput-phases"]],
+    [
+      "25-worker-detail-mobile",
+      { width: 390, height: 844 },
+      async (p) => {
+        const { workers } = await seedIds(p);
+        await open(p, `/workers/${workers["backup-host"]}`, 900);
+        await scrollTo(p, p.getByText("Remote backups").first(), 120);
+      },
+    ],
+  ].filter(([name]) => wanted(name) && !(mobile && name.endsWith("-mobile")));
+  for (const [name, opts, go] of extra) {
+    const p = await newPage(browser, opts);
+    await signIn(p);
+    await go(p);
+    await shot(p, name);
+    await p.context().close();
+  }
+}
+
 // The README shots: one page per feature from the same seeded controller,
 // each in light and dark so the README can follow the reader's theme.
 const readmeShots = [
@@ -1136,6 +1439,10 @@ async function main() {
     }
     if (set === "browser") {
       await browserSet(browser);
+      return;
+    }
+    if (set === "remote-backup") {
+      await remoteBackupSet(browser);
       return;
     }
     if (set === "m5") {

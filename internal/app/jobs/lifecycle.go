@@ -123,7 +123,9 @@ func (s *Service) RecordProgress(ctx context.Context, workerID domain.WorkerID, 
 	if !s.due(id, workerID, epoch, smp.Time) {
 		return true, nil
 	}
-	if err := s.samples.AppendJobSample(ctx, smp); err != nil {
+	stored := smp
+	stored.Phase = "" // live only: stores keep the counters
+	if err := s.samples.AppendJobSample(ctx, stored); err != nil {
 		return true, fmt.Errorf("record progress of job %s: %w", id, err)
 	}
 	s.stored(id, workerID, epoch, smp.Time)

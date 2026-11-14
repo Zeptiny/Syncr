@@ -231,8 +231,14 @@ message WorkerInfo {
   // The hooks the worker's operator defined (Hello.hooks), by name: what a
   // job on this worker may name in JobDefinition.hooks.
   repeated HookInfo hooks = 12;
+  // Whether the worker can mirror and mount the folder of a remote for a
+  // backup (ResticRemoteSourceDefinition.method), and why not when it
+  // cannot (Hello.remote_sources). Unset for a worker without the link
+  // feature restic.remote_source, which must be upgraded to back up a
+  // remote.
+  RemoteSourceSupport remote_sources = 13;
 
-  reserved 13 to 19;
+  reserved 14 to 19;
 }
 
 // CreateEnrollmentTokenRequest configures the token.
@@ -703,6 +709,8 @@ message JobDefinition {
     RcloneBisyncDefinition rclone_bisync = 11;
 
     // Restic operations (Milestone 5) on one of the owner's repositories.
+    // A schedule of a backup of a remote (remote_source) must target a
+    // worker, not a label.
     ResticBackupDefinition restic_backup = 21;
     ResticForgetDefinition restic_forget = 22;
     ResticPruneDefinition restic_prune = 23;
@@ -774,42 +782,119 @@ message RcloneBisyncDefinition {
   reserved 6 to 9;
 }
 
-// ResticBackupDefinition backs up local paths of the worker into a
-// repository (see ResticBackup).
+// ResticBackupDefinition backs up local paths of the worker, or a folder of
+// one of the owner's remotes (remote_source), into a repository (see
+// ResticBackup).
 message ResticBackupDefinition {
   // One of the owner's repositories (ResticService).
   string repository_id = 1;
 
   // Absolute local paths to back up, inside the worker's local_roots: 1 to
-  // 100, without ".." segments or duplicates.
+  // 100, without ".." segments or duplicates. Empty when remote_source is
+  // set.
   repeated string paths = 2;
 
-  // --exclude patterns, at most 1000.
+  // --exclude patterns, at most 1000. Not with remote_source.
   repeated string excludes = 3;
 
-  // --tag values, at most 32, each 1 to 128 bytes without commas.
+  // --tag values, at most 32 (31 with remote_source), each 1 to 128 bytes
+  // without commas.
   repeated string tags = 4;
 
   // --host override; empty uses the worker's host name.
   string host = 5;
 
   // --use-fs-snapshot (Windows VSS; the worker must run as a system
-  // service). Fails on other operating systems.
+  // service). Fails on other operating systems. Not with remote_source.
   bool use_fs_snapshot = 6;
 
   // --exclude-caches.
   bool exclude_caches = 7;
 
-  // --one-file-system.
+  // --one-file-system. Not with remote_source.
   bool one_file_system = 8;
 
   // --exclude-larger-than in bytes; greater than 0 when set.
   optional int64 exclude_larger_than_bytes = 9;
 
-  // --dry-run.
+  // --dry-run. With remote_source and the mirror method, the worker still
+  // brings its mirror up to date (the repository is not touched).
   bool dry_run = 10;
 
-  reserved 11 to 29;
+  // Back up a folder of one of the owner's remotes instead of paths:
+  // exactly one of paths and remote_source is set. With it, excludes,
+  // use_fs_snapshot and one_file_system must be unset (its filters leave
+  // things out instead), and at most 31 tags may be set: the controller
+  // adds "syncr-remote:<remote_id>" to the snapshot's tags, by which the
+  // web UI names the remote ("From <remote>") and never offers to restore
+  // the snapshot "to its original location".
+  //
+  // The worker keeps the source's mirror or mount folder, and restic
+  // groups the snapshots by host and folder, so all runs belong on one
+  // worker: a schedule of it must target a worker, not a label. RunJob may
+  // name any worker (a run on another worker starts a new group: one full
+  // read). The worker must report the link feature restic.remote_source
+  // (an older one fails the job with WORKER_OUTDATED) and be able to use
+  // the method (WorkerInfo.remote_sources): RunJob refuses a worker that
+  // cannot, and a job for one fails with TOOL_UNAVAILABLE and the worker's
+  // reason.
+  ResticRemoteSourceDefinition remote_source = 11;
+
+  reserved 12 to 29;
+}
+
+// ResticRemoteSourceDefinition is the folder of one of the owner's remotes
+// that a backup reads, and how the worker reads it (see
+// ResticBackupRemoteSource for what the worker does with it, and
+// ResticRemoteSourceMethod for the methods). Jobs that read the same folder
+// (remote_id and path) run one at a time.
+message ResticRemoteSourceDefinition {
+  // One of the owner's remotes. Not a remote of the Local directory type
+  // (back up that folder of the worker through paths instead), and not the
+  // repository's remote when one of the source's path and the repository's
+  // path holds the other (or they are equal): a backup never reads its own
+  // repository. Overlaps the controller cannot see, through unions or two
+  // remotes of the same storage, are not detected.
+  string remote_id = 1;
+
+  // The folder's path on the remote, relative to its root, without ".."
+  // segments; "" is the remote's root.
+  string path = 2;
+
+  // How the worker reads the folder: MIRROR (what the web UI offers first)
+  // or MOUNT; UNSPECIFIED is refused.
+  ResticRemoteSourceMethod method = 3;
+
+  // rclone filter rules, in order, as RcloneTransferOptions.filters (at
+  // most 1000; each include or exclude with a pattern of at most 4096
+  // bytes, without NUL bytes or line breaks): what the backup leaves out,
+  // or, with include rules, keeps. A mirror never downloads what they
+  // leave out.
+  repeated FilterRule filters = 4;
+
+  // MIRROR only (refused with MOUNT): delete the worker's copy after each
+  // run, whatever its outcome. Less disk between runs; every run downloads the whole folder
+  // again.
+  bool discard_mirror = 5;
+
+  // Back up the folder even when it is empty. Off (the default), an empty
+  // folder fails the job with SOURCE_EMPTY, so an emptied or mistyped
+  // folder does not push real snapshots out of retention.
+  bool allow_empty = 6;
+
+  // MIRROR only (refused with MOUNT): parallel downloads (rclone
+  // --transfers), 1 to 64; unset uses rclone's default.
+  optional int32 transfers = 7;
+
+  // Bandwidth limit of the download or the mount in bytes per second; 0 or
+  // unset means unlimited. Must not be negative.
+  optional int64 bandwidth_limit_bytes_per_second = 8;
+
+  // MIRROR only (refused with MOUNT): list the folder in one recursive
+  // call where the remote supports it (rclone --fast-list).
+  bool fast_list = 9;
+
+  reserved 10 to 19;
 }
 
 // ResticForgetDefinition applies a retention policy (see ResticForget).
@@ -1071,4 +1156,13 @@ message JobProgress {
 
   // Cumulative counters.
   JobStats stats = 2;
+
+  // The job's phase when the worker took the sample (Progress.phase):
+  // "mirror" or "backup" for a backup of a remote
+  // (ResticBackupDefinition.remote_source), empty for jobs without phases.
+  // The counters start again from zero when the phase changes, so rates
+  // must not be derived across a change. Only live samples
+  // (WatchJobResponse.progress) carry it; stored samples (ListJobSamples)
+  // do not.
+  string phase = 3;
 }

@@ -129,6 +129,35 @@ func CacheDir(dataDir string) string { return filepath.Join(dataDir, "cache") }
 // the scratch directory it survives restarts.
 func BisyncDir(dataDir string) string { return filepath.Join(dataDir, "bisync") }
 
+// SourcesDir returns the directory under dataDir that holds the folders of
+// backups of a remote between and during their runs: mirrors (MirrorsDir)
+// and mount points (MountsDir). It survives restarts. No job, probe or
+// folder listing may use a path inside it (PATH_NOT_ALLOWED), even when
+// local_roots covers the data directory: mirrors hold one user's remote
+// data, and every user may browse a worker's folders. Walks of the data
+// directory skip it, since a stale FUSE mount blocks whoever touches it.
+func SourcesDir(dataDir string) string { return filepath.Join(dataDir, "sources") }
+
+// MirrorsDir returns the directory under SourcesDir that holds one folder
+// per mirrored source (MirrorDir).
+func MirrorsDir(dataDir string) string { return filepath.Join(SourcesDir(dataDir), "mirror") }
+
+// MirrorDir returns the folder of the mirrored source key
+// (ResticBackupRemoteSource.source_key) under MirrorsDir: its lock, its
+// last-run mark and its copy of the remote's folder. key must be a valid
+// source key (link.ValidSourceKey); MirrorDir does not check it.
+func MirrorDir(dataDir, key string) string { return filepath.Join(MirrorsDir(dataDir), key) }
+
+// MountsDir returns the directory under SourcesDir that holds one mount
+// point per mounted source (MountDir). The worker sweeps every folder in it
+// at startup, before it walks anything else in the data directory.
+func MountsDir(dataDir string) string { return filepath.Join(SourcesDir(dataDir), "mount") }
+
+// MountDir returns the mount point of the mounted source key
+// (ResticBackupRemoteSource.source_key) under MountsDir. key must be a
+// valid source key (link.ValidSourceKey); MountDir does not check it.
+func MountDir(dataDir, key string) string { return filepath.Join(MountsDir(dataDir), key) }
+
 // ConfigFileName is the name of the worker's configuration file.
 const ConfigFileName = "worker.yaml"
 

@@ -61,6 +61,11 @@ func tools() []workers.Tool {
 // link.FeatureRcloneBisync nor the rclone_bisync kind), so the UI shows it
 // outdated with the command that upgrades it. nas-01's operator defined
 // hooks (demoHooks), which the backups of its documents run.
+//
+// For backups of a remote's folder, nas-01 can mirror and mount,
+// backup-host can only mirror (no /dev/fuse), and office-pc can do
+// neither (its operator turned mirrors off, and WinFsp is missing);
+// attic-nas is too old to report anything.
 func demoWorkers() []demoWorker {
 	features, ops := link.Features(), link.ProbeOps()
 	return []demoWorker{
@@ -70,6 +75,7 @@ func demoWorkers() []demoWorker {
 				Version: "2.0.0-dev", OS: "linux", Arch: "amd64", Hostname: "nas-01", Tools: tools(), JobKinds: link.Kinds(),
 				MaxConcurrentJobs: 2, LocalRoots: []string{"/srv", "/mnt"},
 				Features: features, ProbeOps: ops, Hooks: demoHooks(),
+				RemoteSources: workers.RemoteSources{Mirror: true, Mount: true},
 			},
 			labels: []string{"nas", "linux"},
 		},
@@ -79,6 +85,10 @@ func demoWorkers() []demoWorker {
 				Version: "2.0.0-dev", OS: "windows", Arch: "amd64", Hostname: "OFFICE-PC", Tools: tools(), JobKinds: link.Kinds(),
 				MaxConcurrentJobs: 1, LocalRoots: []string{`C:\Users\ada\Documents`, `D:\Backups`},
 				Features: features, ProbeOps: ops,
+				RemoteSources: workers.RemoteSources{
+					MirrorReason: "remote_sources.mirror is off in worker.yaml",
+					MountReason:  "WinFsp is not installed",
+				},
 			},
 			labels: []string{"desktop", "windows"},
 		},
@@ -89,6 +99,7 @@ func demoWorkers() []demoWorker {
 				Version: "2.0.0-dev", OS: "linux", Arch: "arm64", Hostname: "backup-host", Tools: tools(), JobKinds: link.Kinds(),
 				MaxConcurrentJobs: 4, LocalRoots: []string{"/backup"},
 				Features: features, ProbeOps: ops,
+				RemoteSources: workers.RemoteSources{Mirror: true, MountReason: "/dev/fuse is missing"},
 			},
 			labels: []string{"offsite"},
 		},
@@ -110,12 +121,13 @@ func demoWorkers() []demoWorker {
 				Version: "2.0.0-dev", OS: "linux", Arch: "amd64", Hostname: "attic-nas", Tools: tools(),
 				MaxConcurrentJobs: 1, LocalRoots: []string{"/volume1"},
 				// Built before Milestone 6: no time limits, no hooks, no
-				// host-key probe, no two-way sync, and none of Milestone
-				// 7's scans or restores of items of a subfolder.
+				// host-key probe, no two-way sync, none of Milestone 7's
+				// scans or restores of items of a subfolder, and no
+				// backups of a remote.
 				JobKinds: slices.DeleteFunc(link.Kinds(), func(k string) bool { return k == "rclone_bisync" }),
 				Features: slices.DeleteFunc(slices.Clone(features), func(f string) bool {
 					return f == link.FeatureJobTimeLimit || f == link.FeatureJobHooks || f == link.FeatureRcloneBisync ||
-						f == link.FeatureResticRestoreSubfolderPaths
+						f == link.FeatureResticRestoreSubfolderPaths || f == link.FeatureResticRemoteSource
 				}),
 				ProbeOps: slices.DeleteFunc(slices.Clone(ops), func(op string) bool { return op == "sftp_host_keys" || link.IsHeavyProbeOp(op) }),
 			},

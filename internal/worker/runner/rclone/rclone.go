@@ -26,8 +26,10 @@
 //
 // Allowed dependencies: the standard library, the generated protobuf code,
 // internal/worker/proc, internal/worker/runner, internal/worker/runner/scrub,
-// internal/worker/runner/tally, internal/worker/rcloneenv and
-// internal/worker/bisyncstate.
+// internal/worker/runner/tally, internal/worker/runner/rclonetool,
+// internal/worker/rcloneenv, internal/worker/localfs,
+// internal/worker/bisyncstate and internal/worker/sourcestate (the name of
+// its marker file).
 package rclone
 
 import (
@@ -37,13 +39,17 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/worker/localfs"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
+	"github.com/Zeptiny/Syncr/internal/worker/runner/rclonetool"
 	"github.com/Zeptiny/Syncr/internal/worker/runner/scrub"
+	"github.com/Zeptiny/Syncr/internal/worker/sourcestate"
 )
 
 // Kind is the job kind this runner executes (the JobSpec.operation field).
@@ -81,6 +87,11 @@ type Config struct {
 	// private directory (rclone config, cache), removed when the job ends.
 	// It is created if missing.
 	ScratchDir string
+	// SourcesDir is the worker's folder of backups of remotes
+	// (paths.SourcesDir), which the path policy refuses; a transfer whose
+	// local source or destination holds it leaves its contents out (see
+	// Runner.Run). Empty: none.
+	SourcesDir string
 	// Logger receives operational warnings (never job secrets). Nil
 	// discards them.
 	Logger *slog.Logger
@@ -161,6 +172,7 @@ func (r *Runner) Run(ctx context.Context, job runner.Job, emit runner.EmitFunc) 
 	if err != nil {
 		return res, runner.Fail(syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, err)
 	}
+	args = r.excludeSources(args, src, dst)
 
 	sc := scrub.New(env.Secrets())
 	t := newTracker(emit, sc)
@@ -199,31 +211,38 @@ func (r *Runner) outcome(err error, pres proc.Result, t *tracker, cmd string) er
 		return runner.Fail(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, err)
 	}
 
-	ec := classifyExit(pres.ExitCode)
-	if ec.success {
+	if rclonetool.ClassifyExit(pres.ExitCode).Success {
 		return nil
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "rclone %s failed: %s", cmd, ec.summary)
-	if pres.ExitCode >= 0 {
-		fmt.Fprintf(&b, " (exit code %d)", pres.ExitCode)
-	}
-	if d := t.diagnostics(); len(d) > 0 {
-		b.WriteString(": ")
-		b.WriteString(strings.Join(d, "; ")) // scrubbed by the tracker
-	}
-	return runner.Fail(ec.code, &exitError{msg: b.String(), err: err})
+	return rclonetool.Failure(cmd, pres.ExitCode, t.diagnostics(), err)
 }
 
-// exitError is a failure message built from rclone's output; it unwraps to
-// the supervisor's *proc.ExitError.
-type exitError struct {
-	msg string
-	err error
+// excludeSources adds --exclude-if-present with the marker file of the
+// worker's folder of backups of remotes (sourcestate.MarkerName) before
+// the "--" of args when a local side (an absolute path, already accepted
+// by the path policy, which refuses that folder and everything in it)
+// holds the folder: rclone then neither copies its contents, which hold
+// other users' remote data and mount points, nor deletes them in a
+// destination. Nothing changes for a transfer whose sides do not hold it.
+func (r *Runner) excludeSources(args []string, sides ...string) []string {
+	if r.cfg.SourcesDir == "" {
+		return args
+	}
+	holds := false
+	for _, side := range sides {
+		if !filepath.IsAbs(side) {
+			continue
+		}
+		if overlap, err := localfs.Overlap(side, r.cfg.SourcesDir); err == nil && overlap {
+			holds = true
+		}
+	}
+	i := slices.Index(args, "--")
+	if !holds || i < 0 {
+		return args
+	}
+	return slices.Insert(args, i, "--exclude-if-present="+sourcestate.MarkerName)
 }
-
-func (e *exitError) Error() string { return e.msg }
-func (e *exitError) Unwrap() error { return e.err }
 
 // location validates loc and returns its rclone path.
 func (r *Runner) location(role string, loc *syncrv1.Location, env *rcloneenv.Env) (string, error) {

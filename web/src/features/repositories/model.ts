@@ -18,6 +18,8 @@ import {
 import { emptyHooks, toHooks, type HooksState } from "../jobs/hooks";
 import { overwriteLabel } from "../jobs/model";
 
+import { isRemoteSnapshot } from "./snapshot-origin";
+
 /** shortId is the first eight characters of a snapshot or repository ID. */
 export function shortId(id: string): string {
   return id.slice(0, 8);
@@ -81,11 +83,16 @@ export function cannotRestoreInPlace(w: Worker): string | undefined {
  * hostWorker is the online worker with restic whose host name is the
  * snapshot's (ignoring case), and that can restore items in place: the
  * machine a restore to the original location goes back to. Without one,
- * the user picks.
+ * the user picks. A snapshot of a remote (tags) has none: its host only
+ * read the remote, and its paths are that worker's internal folder.
  */
-export function hostWorker(workers: Worker[], hostname: string): Worker | undefined {
+export function hostWorker(
+  workers: Worker[],
+  hostname: string,
+  tags: readonly string[] = [],
+): Worker | undefined {
   const host = hostname.trim().toLowerCase();
-  if (!host) return undefined;
+  if (!host || isRemoteSnapshot({ tags })) return undefined;
   return sortWorkers(workers).find(
     (w) =>
       isOnline(w) &&
@@ -99,9 +106,13 @@ export function hostWorker(workers: Worker[], hostname: string): Worker | undefi
  * outdatedHost is the online worker with restic whose host name is the
  * snapshot's but that cannot restore items in place, to say so.
  */
-export function outdatedHost(workers: Worker[], hostname: string): Worker | undefined {
+export function outdatedHost(
+  workers: Worker[],
+  hostname: string,
+  tags: readonly string[] = [],
+): Worker | undefined {
   const host = hostname.trim().toLowerCase();
-  if (!host) return undefined;
+  if (!host || isRemoteSnapshot({ tags })) return undefined;
   return sortWorkers(workers).find(
     (w) =>
       isOnline(w) &&
@@ -238,6 +249,18 @@ export function validateRestore(what: RestoreWhat, s: RestoreState): RestoreErro
  */
 export function originalParent(paths: string[]): string {
   return commonParent(paths, "snapshot") ?? "/";
+}
+
+/**
+ * inPlaceParent is originalParent for a snapshot, or undefined when the
+ * snapshot has no original location: a snapshot of a remote, whose tree
+ * is the remote folder's contents, not paths of any worker.
+ */
+export function inPlaceParent(
+  paths: string[],
+  snapshot: { tags?: readonly string[] } | undefined,
+): string | undefined {
+  return isRemoteSnapshot(snapshot) ? undefined : originalParent(paths);
 }
 
 /** toRestoreRequest builds the RunJob request of a restore. */

@@ -338,7 +338,9 @@ message Hello {
   // RunProbe and Probe), "restic.v2" (it honours the Milestone 5 restic spec
   // fields), "restic.delete" (it runs restic_delete_data),
   // "job.time_limit" (it enforces JobSpec.max_runtime), "job.hooks" (it
-  // runs JobSpec.hooks) and "rclone.bisync" (it runs rclone_bisync). The
+  // runs JobSpec.hooks), "rclone.bisync" (it runs rclone_bisync) and
+  // "restic.remote_source" (it backs up folders of remotes,
+  // ResticBackup.remote_source, and reports remote_sources). The
   // controller sends a worker only what its features allow; a worker that
   // reports none is treated as a Milestone 4 worker.
   repeated string features = 9;
@@ -353,7 +355,13 @@ message Hello {
   // feature.
   repeated HookInfo hooks = 11;
 
-  reserved 12 to 19;
+  // How the worker can read a folder of a remote for a backup
+  // (ResticBackup.remote_source), as it found out when it started. Set by
+  // every worker with the "restic.remote_source" feature, even one that
+  // can use neither method; unset by older workers.
+  RemoteSourceSupport remote_sources = 12;
+
+  reserved 13 to 19;
 }
 
 // ToolVersion identifies a supervised external tool.
@@ -362,6 +370,47 @@ message ToolVersion {
   string name = 1;
   // Version as reported by the tool, e.g. "v1.75.2" or "0.19.1".
   string version = 2;
+}
+
+// RemoteSourceSupport says which methods (ResticRemoteSourceMethod) a
+// worker can use to read a folder of a remote for a backup, and why not
+// when it cannot. The worker decides once, when it starts:
+//
+//   - Mirror depends only on its configuration: available unless its
+//     operator set remote_sources.mirror to false in worker.yaml.
+//   - Mount also depends on the machine. On Linux the worker checks that
+//     /dev/fuse opens, that fusermount3 (or fusermount) is on its PATH and,
+//     when it does not run as root, that the helper is setuid root and the
+//     process may gain privileges (no NoNewPrivileges). On Windows it checks
+//     that WinFsp is installed. When those checks pass and
+//     remote_sources.mount is "auto" (the default), it mounts an empty
+//     folder read-only as a trial, which catches containers without the
+//     rights to mount. remote_sources.mount "off" turns the mount off.
+//
+// The controller sends a backup of a remote only to a worker whose latest
+// report says it can use the backup's method: RunJob refuses another
+// worker, and a job for one (e.g. a scheduled run) fails before dispatch
+// with TOOL_UNAVAILABLE and the worker's reason. A worker that finds out
+// otherwise when it runs the job fails it the same way.
+message RemoteSourceSupport {
+  // The worker can keep mirrors (RESTIC_REMOTE_SOURCE_METHOD_MIRROR).
+  bool mirror = 1;
+
+  // The worker can mount remotes (RESTIC_REMOTE_SOURCE_METHOD_MOUNT).
+  bool mount = 2;
+
+  // Why mirror is false, for people, in one line, e.g.
+  // "remote_sources.mirror is off in worker.yaml"; empty when it is true.
+  // The controller keeps at most 256 bytes of it.
+  string mirror_reason = 3;
+
+  // Why mount is false, for people, in one line, e.g. "/dev/fuse is
+  // missing", "WinFsp is not installed" or "the systemd user service sets
+  // NoNewPrivileges; see docs/setup-linux.md"; empty when it is true. The
+  // controller keeps at most 256 bytes of it.
+  string mount_reason = 4;
+
+  reserved 5 to 9;
 }
 
 // JobStarted reports that the worker started a job (the job left the
@@ -387,12 +436,23 @@ message Progress {
   // Cumulative counters at the time of the sample.
   JobStats stats = 2;
 
-  reserved 3 to 9;
+  // What the job is doing, for a job that runs in phases; empty for every
+  // other job. A backup of a remote (ResticBackup.remote_source) reports
+  // "mirror" while it brings its mirror up to date (rclone's counters) and
+  // "backup" while restic runs (restic's counters); with the mount method
+  // it reports only "backup". The counters of stats belong to the phase:
+  // they start again from zero when it changes, so rates must not be
+  // derived across a change. Workers without the "restic.remote_source"
+  // feature never set it.
+  string phase = 3;
+
+  reserved 4 to 9;
 }
 
-// JobStats are cumulative job counters. All counters only grow during a job,
-// except totals, which may grow while the tool discovers more work. Zero
-// totals mean "unknown".
+// JobStats are cumulative job counters. All counters only grow during a job
+// (during a phase, for a job whose Progress has phases), except totals,
+// which may grow while the tool discovers more work. Zero totals mean
+// "unknown".
 message JobStats {
   // Bytes transferred (rclone) or processed (restic) so far.
   int64 bytes = 1;
@@ -432,7 +492,8 @@ message JobResult {
   // because the worker is shutting down) and message gives the cause.
   JobError error = 3;
 
-  // Final cumulative counters.
+  // Final cumulative counters. For a job with phases (Progress.phase),
+  // those of the last phase it reached.
   JobStats stats = 4;
 
   // Exit code of the tool process; -1 if no process ran or it was killed by a
@@ -518,7 +579,11 @@ enum JobErrorCode {
   JOB_ERROR_CODE_UNSUPPORTED_KIND = 2;
   // A local path is outside the worker's local_roots.
   JOB_ERROR_CODE_PATH_NOT_ALLOWED = 3;
-  // The required tool (rclone, restic) is missing or unusable.
+  // The required tool (rclone, restic) is missing or unusable. Also: the
+  // worker cannot use the method of a backup of a remote
+  // (RemoteSourceSupport): FUSE or WinFsp is missing or refuses the mount,
+  // or its operator turned the method off. The controller sets it too,
+  // before dispatch, when the worker's latest Hello says so.
   JOB_ERROR_CODE_TOOL_UNAVAILABLE = 4;
   // The tool ran and reported failure (non-zero exit).
   JOB_ERROR_CODE_EXECUTION_FAILED = 5;
@@ -631,6 +696,15 @@ enum JobErrorCode {
   // location (mount the drive, create the check files). A side that does
   // not exist at all is NOT_FOUND.
   JOB_ERROR_CODE_SIDE_UNAVAILABLE = 31;
+
+  // Set by workers (restic_backup with a remote_source): the remote's
+  // folder holds no entry at all, so the worker made no snapshot. An
+  // emptied or mistyped folder would otherwise add empty snapshots that
+  // push real ones out of retention. The worker checks this first, before
+  // it touches the mirror or mounts anything, so a mirror stays as it was.
+  // Status FAILED. ResticBackupRemoteSource.allow_empty backs up an empty
+  // folder instead. A folder that does not exist is NOT_FOUND.
+  JOB_ERROR_CODE_SOURCE_EMPTY = 32;
 }
 
 // WorkerState is a snapshot (not an event) of the jobs a worker holds,
@@ -1078,6 +1152,34 @@ enum FilterAction {
   FILTER_ACTION_EXCLUDE = 2;
 }
 
+// ResticRemoteSourceMethod is how a worker reads the folder of a remote
+// that a backup reads from (ResticBackupRemoteSource, and the API's
+// ResticRemoteSourceDefinition). Which methods a worker can use is in its
+// Hello (RemoteSourceSupport).
+enum ResticRemoteSourceMethod {
+  // Not set: the controller refuses it in a definition, and a worker
+  // refuses a spec with it (INVALID_SPEC).
+  RESTIC_REMOTE_SOURCE_METHOD_UNSPECIFIED = 0;
+  // The worker keeps a copy of the folder in its data directory
+  // (<data_dir>/sources/mirror/<source_key>/data), brings it up to date
+  // with rclone sync before each backup and backs the copy up. It needs
+  // disk space for the folder (after filters), works on every worker whose
+  // operator did not turn it off, and keeps its own modification times, so
+  // unchanged files are not read again even from remotes without stable
+  // ones. The copy is kept between runs (unless discard_mirror) and
+  // deleted once unused for remote_sources.mirror_retention (worker.yaml,
+  // 30 days by default).
+  RESTIC_REMOTE_SOURCE_METHOD_MIRROR = 1;
+  // The worker mounts the folder read-only with rclone mount at
+  // <data_dir>/sources/mount/<source_key> for the run, backs the mount up
+  // and unmounts it, whatever the outcome (also after a cancel or the time
+  // limit); a mount a killed worker left behind is removed on its next run
+  // and when the worker starts. It needs no disk space, but FUSE 3 (Linux)
+  // or WinFsp (Windows) and the right to mount; on a remote without stable
+  // modification times every file is read again on every run.
+  RESTIC_REMOTE_SOURCE_METHOD_MOUNT = 2;
+}
+
 // RcloneBisync keeps two locations in step in both directions with rclone
 // bisync: new and changed files and deletions on either side spread to the
 // other, and a file changed on both sides is a conflict that keeps both
@@ -1343,14 +1445,17 @@ message ResticInit {
   reserved 2 to 9;
 }
 
-// ResticBackup backs up local paths.
+// ResticBackup backs up local paths, or a folder of a remote
+// (remote_source): exactly one of paths and remote_source is set.
 message ResticBackup {
   ResticRepository repository = 1;
 
   // Absolute local paths to back up; each must be inside local_roots.
+  // Empty when remote_source is set.
   repeated string paths = 2;
 
-  // --exclude patterns.
+  // --exclude patterns. Must be empty with remote_source (its filters
+  // leave things out instead).
   repeated string excludes = 3;
 
   // --tag values attached to the snapshot.
@@ -1361,22 +1466,132 @@ message ResticBackup {
 
   // --use-fs-snapshot (Windows VSS). Setting it on a worker that is not
   // running on Windows is an error (INVALID_SPEC), not silently ignored: the
-  // caller asked for a consistent snapshot that cannot be provided.
+  // caller asked for a consistent snapshot that cannot be provided. Must be
+  // false with remote_source.
   bool use_fs_snapshot = 6;
 
   // --exclude-caches: skip directories containing a CACHEDIR.TAG.
   bool exclude_caches = 7;
 
-  // --one-file-system: do not cross filesystem boundaries.
+  // --one-file-system: do not cross filesystem boundaries. Must be false
+  // with remote_source.
   bool one_file_system = 8;
 
   // --exclude-larger-than in bytes.
   optional int64 exclude_larger_than_bytes = 9;
 
-  // --dry-run.
+  // --dry-run. With remote_source and the mirror method, the mirror is
+  // still brought up to date for real (it is the worker's copy; the
+  // repository is not touched).
   bool dry_run = 10;
 
-  reserved 11 to 29;
+  // Back up a folder of a remote instead of paths (see
+  // ResticBackupRemoteSource). Sent only to workers whose Hello lists the
+  // "restic.remote_source" feature: an older worker would drop the field
+  // and see a backup without paths. With it, paths, excludes,
+  // use_fs_snapshot and one_file_system must be unset (INVALID_SPEC
+  // otherwise). The controller adds the tag "syncr-remote:<remote ID>" (the
+  // source remote's ID in the controller) to tags, which names the remote
+  // in the UI and marks the snapshot as one of a remote; the worker passes
+  // tags on as they are.
+  ResticBackupRemoteSource remote_source = 11;
+
+  reserved 12 to 29;
+}
+
+// ResticBackupRemoteSource is the folder of a remote that a backup reads
+// (ResticBackup.remote_source), and how the worker reads it.
+//
+// A run goes:
+//
+//  1. Check: the worker lists the folder, one level deep and without the
+//     filters. A folder that does not exist fails the job with NOT_FOUND
+//     (on remotes whose folders exist only through the files in them, such
+//     as S3 or B2, an empty folder may look like a missing one); an empty
+//     folder fails it with SOURCE_EMPTY unless allow_empty is set; a remote
+//     that cannot be listed fails it with the code rclone's failure maps to
+//     for transfers (e.g. TEMPORARY or EXECUTION_FAILED). Nothing has
+//     changed on the worker by then.
+//  2. Read: with MIRROR, rclone sync brings the copy at
+//     <data_dir>/sources/mirror/<source_key>/data up to date with the
+//     folder as the filters show it, deleting what the folder no longer
+//     holds or the filters now leave out (progress phase "mirror"). If it
+//     fails, the job fails without a snapshot and the copy is kept as it
+//     is for the next run. With MOUNT, rclone mounts the folder read-only
+//     at <data_dir>/sources/mount/<source_key>, with the filters; a mount
+//     that is not ready within remote_sources.mount_timeout (worker.yaml,
+//     30s by default) fails the job (TOOL_UNAVAILABLE when FUSE or WinFsp
+//     refused it, EXECUTION_FAILED otherwise).
+//  3. Back up: restic runs in the copy or the mount and backs up ".", so
+//     the snapshot's tree is the folder's contents (a folder that holds
+//     "Pictures" gives "/Pictures/..."), while the snapshot's paths record
+//     the worker's folder. The worker always passes --ignore-inode (mounts
+//     have no stable inode numbers, and a discarded mirror is downloaded
+//     again): unchanged files are found by size and modification time
+//     (progress phase "backup").
+//  4. Clean up: the mount is unmounted, or, with discard_mirror, the copy
+//     is deleted, whatever the outcome.
+//
+// Restic's parent snapshot and retention group by host and paths, so they
+// work across runs only while the source runs on one worker: a schedule of
+// it targets a worker, never a label. Runs of one source on one worker
+// take turns (a lock per source_key); the controller also lets only one
+// job of a remote folder run at a time.
+//
+// The output (ResticBackupOutput.remote_source) says how the folder was
+// read.
+message ResticBackupRemoteSource {
+  // Alias of the RemoteDefinition in JobSpec.remotes that holds the folder.
+  // Required (INVALID_SPEC otherwise): a folder of the worker is backed up
+  // through ResticBackup.paths, and the controller refuses its Local
+  // directory remotes as sources.
+  string remote = 1;
+
+  // The folder's path within the remote, as Location.path (e.g.
+  // "bucket/photos"); "" is the remote's root.
+  string path = 2;
+
+  // How the worker reads the folder. UNSPECIFIED is INVALID_SPEC; a method
+  // the worker cannot use (RemoteSourceSupport) is TOOL_UNAVAILABLE.
+  ResticRemoteSourceMethod method = 3;
+
+  // Names the worker's folder for this source: sources/mirror/<source_key>
+  // or sources/mount/<source_key> in its data directory. Exactly 32
+  // lower-case hex digits (link.ValidSourceKey); anything else is
+  // INVALID_SPEC. The controller derives it from the source remote's
+  // non-secret settings and the path, so a changed credential keeps a
+  // mirror and a changed bucket or endpoint starts a new one; the worker
+  // only checks its format.
+  string source_key = 4;
+
+  // rclone filter rules, in order, with the limits of
+  // RcloneTransferOptions.filters: what the backup leaves out (or, with
+  // include rules, keeps). Both methods apply them through rclone (sync's
+  // and mount's --filter-from), so a mirror never downloads what they
+  // leave out.
+  repeated FilterRule filters = 5;
+
+  // MIRROR only (INVALID_SPEC with MOUNT): delete the copy after the run,
+  // whatever its outcome. Less disk between runs; every run downloads the
+  // whole folder again, and restic still reads only what changed.
+  bool discard_mirror = 6;
+
+  // Back up the folder even when it is empty, instead of failing with
+  // SOURCE_EMPTY. A folder that does not exist still fails (NOT_FOUND).
+  bool allow_empty = 7;
+
+  // MIRROR only (INVALID_SPEC with MOUNT): rclone sync --transfers, 1 to
+  // 64. Unset uses rclone's default.
+  optional int32 transfers = 8;
+
+  // --bwlimit of the sync or the mount in bytes per second; 0 or unset
+  // means unlimited. Must not be negative.
+  optional int64 bandwidth_limit_bytes_per_second = 9;
+
+  // MIRROR only (INVALID_SPEC with MOUNT): rclone sync --fast-list.
+  bool fast_list = 10;
+
+  reserved 11 to 19;
 }
 
 // ResticBackupOutput is the output of a successful backup.
@@ -1406,7 +1621,38 @@ message ResticBackupOutput {
   int64 total_files_processed = 10;
   int64 total_bytes_processed = 11;
 
-  reserved 12 to 19;
+  // How the worker read the folder of a backup of a remote
+  // (ResticBackup.remote_source); unset for a backup of paths.
+  RemoteSourceStats remote_source = 12;
+
+  reserved 13 to 19;
+}
+
+// RemoteSourceStats says how a worker read the folder of a remote for a
+// backup (ResticBackupOutput.remote_source). The mirror fields are zero
+// with the mount method.
+message RemoteSourceStats {
+  // The method the worker used.
+  ResticRemoteSourceMethod method = 1;
+
+  // Bytes and files rclone downloaded into the mirror in this run: only
+  // what changed since the last run, everything after a discarded or new
+  // mirror.
+  int64 mirrored_bytes = 2;
+  int64 mirrored_files = 3;
+
+  // Files rclone deleted from the mirror in this run: gone from the folder,
+  // or left out by changed filters.
+  int64 deleted_files = 4;
+
+  // How long bringing the mirror up to date took; unset with the mount
+  // method.
+  google.protobuf.Duration mirror_elapsed = 5;
+
+  // The mirror's copy was deleted after the run (discard_mirror).
+  bool mirror_discarded = 6;
+
+  reserved 7 to 9;
 }
 
 // ResticRetentionPolicy maps to restic forget --keep-* flags. Zero means the

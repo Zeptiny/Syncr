@@ -29,12 +29,16 @@ import { labelledWorkers } from "@/lib/labels";
 import { sortWorkers } from "@/lib/workers";
 
 import { filtersNeedResync } from "../jobs/bisync-definition";
-import { scheduleKinds, type JobDefinitionState } from "../jobs/definition";
+import {
+  definitionWorkerProblem,
+  scheduleKinds,
+  type JobDefinitionState,
+} from "../jobs/definition";
 import { JobDefinitionEditor } from "../jobs/job-definition-editor";
 import {
   labelTargetAllowed,
   scheduleServerErrors,
-  SINGLE_WORKER_REASON,
+  singleWorkerReason,
   toScheduleInput,
   validateSchedule,
   type ScheduleErrors,
@@ -73,13 +77,13 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
   const [formError, setFormError] = useState<string | undefined>();
   const set = <K extends keyof ScheduleFormState>(k: K, v: ScheduleFormState[K]) =>
     setS((p) => ({ ...p, [k]: v }));
-  // A kind that keeps its state on one worker cannot run on a label.
+  // A job that keeps its state (or its mirror) on one worker cannot run on a label.
   const setDefinition = (definition: JobDefinitionState) =>
     setS((p) => ({
       ...p,
       definition,
       target:
-        p.target.kind === "label" && !labelTargetAllowed(definition.kind)
+        p.target.kind === "label" && !labelTargetAllowed(definition)
           ? { ...p.target, kind: "worker" }
           : p.target,
     }));
@@ -116,6 +120,7 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
         }
       : { workers: worker?.info ? [worker] : [] };
   const pending = create.isPending || update.isPending;
+  const single = singleWorkerReason(s.definition);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -241,10 +246,11 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
               workers={workerList}
               error={errors.target}
               labelDisabled={
-                labelTargetAllowed(s.definition.kind)
-                  ? undefined
-                  : `${SINGLE_WORKER_REASON}, so its schedule runs on a specific worker, not on any worker with a label.`
+                single
+                  ? `${single}, so its schedule runs on a specific worker, not on any worker with a label.`
+                  : undefined
               }
+              unavailable={definitionWorkerProblem(s.definition)}
             />
           }
         />

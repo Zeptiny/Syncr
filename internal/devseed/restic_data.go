@@ -61,6 +61,10 @@ type demoRepo struct {
 	// gone: the repository's data was deleted during the history (its
 	// row is soft-deleted and nothing is at its location any more).
 	gone bool
+	// source names the demo remote whose folder the backups read (a
+	// backup of a remote): its snapshots carry the remote's tag
+	// (sourceTagged). "" for backups of worker paths.
+	source string
 }
 
 // key identifies the repository's location for the canned probes.
@@ -98,6 +102,7 @@ func demoRepos() []demoRepo {
 				return []demoFile{{"/srv/home/alice/thesis.pdf", 12 * mib}, {"/srv/home/alice/notes.md", 9 * kib}}
 			},
 			refreshedAgo: 5 * h},
+		cloudRepo(),
 	}
 }
 

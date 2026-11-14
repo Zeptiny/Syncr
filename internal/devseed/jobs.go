@@ -70,7 +70,9 @@ func (s *Seed) seedJob(ctx context.Context, svc *jobs.Service, clk *stepClock, n
 		clk.set(created.Add(2 * time.Minute))
 		_, err = svc.Cancel(ctx, actor, id)
 		return id, err
-	case dj.err.Code == jobs.CodeDispatchTimeout:
+	case dj.err.Code == jobs.CodeDispatchTimeout, dj.err.Code == jobs.CodeToolUnavailable && dj.run == 0:
+		// Failed by the controller before it was sent: the dispatch
+		// timeout, or a worker that cannot use what the job needs.
 		clk.set(start)
 		_, _, err = svc.FailQueued(ctx, id, time.Time{}, dj.err)
 		return id, err
@@ -106,7 +108,7 @@ func (s *Seed) seedJob(ctx context.Context, svc *jobs.Service, clk *stepClock, n
 	}
 	every := max(5*time.Second, dj.run/time.Duration(cmp.Or(dj.samples, 60)))
 	for at := start.Add(every); at.Before(end); at = at.Add(every) {
-		if err := s.sample(ctx, svc, clk, workerID, id, epoch, at, partialStats(dj.stats, at.Sub(start), dj.run)); err != nil {
+		if err := s.sample(ctx, svc, clk, workerID, id, epoch, at, phasedStats(dj, at.Sub(start))); err != nil {
 			return id, err
 		}
 	}
@@ -215,6 +217,22 @@ func partialStats(f jobs.Stats, elapsed, run time.Duration) jobs.Stats {
 		Bytes: scale(f.Bytes), TotalBytes: total, Files: scale(f.Files), TotalFiles: f.TotalFiles,
 		Checks: scale(f.Checks), Deletes: scale(f.Deletes), Elapsed: elapsed,
 	}
+}
+
+// phasedStats are a finished job's counters after elapsed. A backup of a
+// remote through a mirror reports two phases, as a worker does: rclone's
+// counters while it mirrors (for the mirror's time), then restic's,
+// starting again from zero.
+func phasedStats(dj demoJob, elapsed time.Duration) jobs.Stats {
+	src := dj.output.GetResticBackup().GetRemoteSource()
+	mirror := src.GetMirrorElapsed().AsDuration()
+	if src.GetMirroredBytes() == 0 || mirror <= 0 || mirror >= dj.run {
+		return partialStats(dj.stats, elapsed, dj.run)
+	}
+	if elapsed < mirror {
+		return partialStats(jobs.Stats{Bytes: src.GetMirroredBytes(), Files: src.GetMirroredFiles()}, elapsed, mirror)
+	}
+	return partialStats(dj.stats, elapsed-mirror, dj.run-mirror)
 }
 
 // runningRate is the average speed of the running job Animate moves, and

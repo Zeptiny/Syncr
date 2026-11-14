@@ -11,7 +11,9 @@ import (
 	"unicode"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/worker/localfs"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
+	"github.com/Zeptiny/Syncr/internal/worker/sourcestate"
 )
 
 // Job kinds: the names of the JobSpec.operation fields.
@@ -117,15 +119,41 @@ func planBackup(e *engine, spec *syncrv1.JobSpec) (command, error) {
 		}
 		args = append(args, "--use-fs-snapshot")
 	}
-	args = append(args, "--")
+	paths := make([]string, 0, len(op.GetPaths()))
 	for _, p := range op.GetPaths() {
 		resolved, err := e.resolve("backup path", p)
 		if err != nil {
 			return command{}, err
 		}
-		args = append(args, resolved)
+		paths = append(paths, resolved)
 	}
+	if e.holdsSources(paths) {
+		args = append(args, "--exclude-if-present="+sourcestate.MarkerName)
+	}
+	args = append(args, "--")
+	args = append(args, paths...)
 	return command{repo: op.GetRepository(), verb: "backup", args: args}, nil
+}
+
+// holdsSources reports whether one of the resolved paths holds the
+// worker's folder of backups of remotes (RemoteSources.Store's root), as
+// written or resolved. The path policy refuses that folder and everything
+// in it; a backup of a folder that holds it (such as "/") leaves its
+// contents out with --exclude-if-present and the marker file the store
+// keeps there, so restic neither reads the mirrors, which hold other
+// users' remote data, nor walks into a mount point. Nothing changes for a
+// backup whose paths do not hold it.
+func (e *engine) holdsSources(paths []string) bool {
+	store := e.cfg.RemoteSources.Store
+	if store == nil {
+		return false
+	}
+	for _, p := range paths {
+		if overlap, err := localfs.Overlap(p, store.Root()); err == nil && overlap {
+			return true
+		}
+	}
+	return false
 }
 
 func planForget(_ *engine, spec *syncrv1.JobSpec) (command, error) {

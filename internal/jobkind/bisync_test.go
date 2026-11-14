@@ -583,7 +583,7 @@ func TestBisyncRegistry(t *testing.T) {
 	if ok, why := r.UserStartable("rclone_bisync"); !ok || why != "" {
 		t.Errorf("UserStartable = (%v, %q)", ok, why)
 	}
-	if ok, why := r.LabelTargetAllowed("rclone_bisync"); ok || why != "a two-way sync keeps its state on one worker; choose a worker" {
+	if ok, why := r.LabelTargetAllowed(twoWay(local("/a"), local("/b"))); ok || why != "a two-way sync keeps its state on one worker; choose a worker" {
 		t.Errorf("LabelTargetAllowed = (%v, %q)", ok, why)
 	}
 	if got := r.RequiredOS(twoWay(local("/a"), local("/b"))); got != (jobkind.OSRequirement{}) {

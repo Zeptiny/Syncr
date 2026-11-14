@@ -123,6 +123,12 @@ func sanitizeInfo(in Info) Info {
 		out.ProbeOps = append(out.ProbeOps, clampString(op, maxInfoString))
 	}
 	out.Hooks = sanitizeHooks(in.Hooks)
+	out.RemoteSources = RemoteSources{
+		Mirror:       in.RemoteSources.Mirror,
+		Mount:        in.RemoteSources.Mount,
+		MirrorReason: clampString(oneLine(in.RemoteSources.MirrorReason, maxInfoString), maxInfoString),
+		MountReason:  clampString(oneLine(in.RemoteSources.MountReason, maxInfoString), maxInfoString),
+	}
 	return out
 }
 

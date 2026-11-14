@@ -16,6 +16,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
+	"github.com/Zeptiny/Syncr/internal/worker/runner/rclonetool"
 	"github.com/Zeptiny/Syncr/internal/worker/runner/scrub"
 )
 
@@ -229,7 +230,7 @@ func (b *BisyncRunner) outcome(err error, pres proc.Result, t *tracker, log *bis
 			dryRun: dryRun,
 		}
 		if code, msg, ok := log.failure(run); ok {
-			return runner.Fail(code, &exitError{msg: msg, err: err})
+			return runner.Fail(code, &rclonetool.ExitError{Msg: msg, Err: err})
 		}
 	}
 	cmd := "bisync"

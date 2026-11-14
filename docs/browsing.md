@@ -179,6 +179,7 @@ Nothing runs or is saved until you press the editor's button.
 | From | Choice | What is filled in |
 |---|---|---|
 | A worker's folders | **Back up with restic…** | the selected paths and the worker (choose the repository) |
+| A remote | **Back up this folder…** | a [backup of the remote's folder](restic.md#back-up-a-folder-of-a-remote) (the open or selected folder), and the worker that listed it (choose the repository and the method); not for a Local directory remote |
 | A worker or a remote | **Copy or sync…** | the open or selected folder as the source; with a selection, its filters |
 | A worker or a remote | **Two-way sync…** | the selected folder (one folder) as Folder A |
 | A worker or a remote | **Schedule: …** | the same, in a new schedule |

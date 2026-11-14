@@ -15,6 +15,7 @@ import {
   ValidationErrorSchema,
   WorkerAdminService,
   type Job,
+  type Worker,
 } from "@/gen/syncr/v1/api_pb";
 import { BackendService, RemoteService } from "@/gen/syncr/v1/remotes_pb";
 import { ContactService } from "@/gen/syncr/v1/notify_pb";
@@ -24,6 +25,7 @@ import * as hooksMock from "@/mock/hooks";
 import * as m5 from "@/mock/m5";
 import * as m6 from "@/mock/m6";
 import { applyTransfer, applyWorkers as applyM7Workers, registerM7 } from "@/mock/m7";
+import * as remoteBackupMock from "@/mock/remote-backup";
 import { isTerminal } from "@/lib/status";
 
 import { signedIn } from "./app-api";
@@ -53,6 +55,19 @@ export interface M5Api {
   finish: (jobId: string, status?: JobStatus) => void;
   /** busy are workers whose heavy slot is taken: their scans are refused as busy. */
   busy: Set<string>;
+  /** workers are the demo workers, to adjust before rendering. */
+  workers: Worker[];
+}
+
+/** M5Options adds demo data to m5Api. */
+export interface M5Options {
+  /**
+   * remoteBackup adds the backups of a remote (mock/remote-backup.ts): what
+   * the workers can do, the repository "Nextcloud photos" with its
+   * snapshots of Nextcloud, its schedule and jobs, and the controller's
+   * checks of a backup of a remote.
+   */
+  remoteBackup?: boolean;
 }
 
 /**
@@ -63,7 +78,7 @@ export interface M5Api {
  * hooks mock's hooks (nas-01 defines four), and its jobs include the hooks
  * mock's two backups.
  */
-export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
+export function m5Api(now: number, user: "admin" | "alice" = "admin", opts: M5Options = {}): M5Api {
   const data = m5.data(now);
   const workers = m5.workers(now);
   m6.applyWorkers(workers);
@@ -71,6 +86,14 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
   applyM7Workers(workers);
   const jobs = [...data.jobs, ...hooksMock.jobs(now)];
   const schedules = [...data.schedules];
+  if (opts.remoteBackup) {
+    remoteBackupMock.applyWorkers(workers);
+    const repo = remoteBackupMock.repository(now);
+    data.repositories.push(repo);
+    const h = remoteBackupMock.history(now, repo);
+    jobs.push(...h.jobs);
+    schedules.push(h.schedule);
+  }
   const remotes = fx.remotes(now);
   const me = fx.users(now).find((u) => u.username === user)!;
   const calls: Call[] = [];
@@ -141,6 +164,14 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
             ...api.check(req.input?.definition, true, workerId),
             ...hooksMock.check(req.input?.definition, workers, workerId),
           ];
+          if (
+            req.input?.target?.target.case === "workerLabel" &&
+            remoteBackupMock.sourceOf(req.input.definition)
+          )
+            problems.push({
+              field: "target.worker_label",
+              message: remoteBackupMock.api.singleWorker,
+            });
           if (problems.length) throw invalid(problems);
           return { schedule: create(ScheduleSchema, { id: "s-new", name: req.input?.name }) };
         },
@@ -175,6 +206,7 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
             kind: d?.kind ?? "rclone_transfer",
             title: d?.title ?? "",
             repository: d?.repository,
+            remotes: d?.remotes ?? [],
             status: JobStatus.QUEUED,
             ownerId: me.id,
             createdAt: timestampFromMs(now),
@@ -237,5 +269,6 @@ export function m5Api(now: number, user: "admin" | "alice" = "admin"): M5Api {
     repo: (id) => data.repositories.find((r) => r.repo.id === id)!,
     finish,
     busy,
+    workers,
   };
 }

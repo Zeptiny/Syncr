@@ -2,7 +2,8 @@
 // worker: job kinds and probe ops derived from the wire contract, error code
 // names, the link features workers report in their Hello (Milestone 5), the
 // time limits of probes and which probe ops are heavy (Milestone 7), the
-// names and limits of job hooks, and the
+// names and limits of job hooks, the names backups of a remote agree on
+// (snapshot tag, progress phases, source keys), and the
 // authorization headers (see
 // docs/adr/0002-worker-link.md and proto/syncr/v1/link.proto).
 //

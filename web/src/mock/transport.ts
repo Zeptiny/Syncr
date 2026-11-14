@@ -41,6 +41,7 @@ import { registerM4 } from "./m4";
 import * as m5mock from "./m5";
 import * as m6 from "./m6";
 import { applyTransfer, applyWorkers as applyM7Workers, registerM7 } from "./m7";
+import * as remoteBackupMock from "./remote-backup";
 
 const passwords: Record<string, string> = { admin: "syncr-demo-admin", alice: "syncr-demo-alice" };
 const SESSION_KEY = "syncr.mock.session";
@@ -83,6 +84,7 @@ export function createMockTransport(): Transport {
   hooksMock.applyWorkers(workers);
   bisyncMock.applyWorkers(workers);
   applyM7Workers(workers);
+  remoteBackupMock.applyWorkers(workers);
   workers.push(m6.atticWorker(now));
   const enrollments = new Enrollments(workers);
   let remotes = [...fx.remotes(now), m6.verifiedRemote(now), bisyncMock.r2Remote(now)].sort(
@@ -91,6 +93,11 @@ export function createMockTransport(): Transport {
   const hist = fx.history(now);
   const m5data = m5mock.data(now);
   hist.schedules.push(...m5data.schedules);
+  const remoteRepo = remoteBackupMock.repository(now);
+  m5data.repositories.push(remoteRepo);
+  const fromRemote = remoteBackupMock.history(now, remoteRepo);
+  hist.schedules.push(fromRemote.schedule);
+  hist.runs.push(...fromRemote.runs);
   const twoWay = bisyncMock.history(now);
   hist.schedules.push(twoWay.schedule);
   hist.runs.push(...twoWay.runs);
@@ -105,6 +112,8 @@ export function createMockTransport(): Transport {
     limited.job,
     ...hooksMock.jobs(now),
     ...twoWay.jobs,
+    ...fromRemote.jobs,
+    remoteBackupMock.runningJob(now),
   ].sort(
     (a, b) =>
       timestampMs(b.createdAt ?? timestampFromMs(0)) -
@@ -114,6 +123,9 @@ export function createMockTransport(): Transport {
   let setupRequired = store(SETUP_KEY) === "1";
   let sessionUser = store(SESSION_KEY) ?? undefined;
   const lastTick = new Map<string, number>(); // jobId → time of the last progress
+  // The phase of a running backup of a remote: its counters restart at a change.
+  const phases = new Map<string, string>([[remoteBackupMock.ids.runningJob, "mirror"]]);
+  lastTick.set(remoteBackupMock.ids.runningJob, now);
 
   const running = jobs.find((j) => j.id === fx.ids.runningJob);
   const history = new Map<string, ReturnType<typeof fx.samples>>();
@@ -183,8 +195,22 @@ export function createMockTransport(): Transport {
       Math.round((Number(j.stats.bytes) / Math.max(1, total)) * Number(j.stats.totalFiles)),
     );
     j.stats.elapsed = durationFromMs(Date.now() - timestampMs(j.startedAt ?? timestampFromMs(now)));
+    if (bytes >= total && phases.get(j.id) === "mirror") {
+      // The mirror is up to date: restic starts, with counters from zero.
+      const b = remoteBackupMock.RUNNING_TOTALS.backup;
+      phases.set(j.id, "backup");
+      j.stats.bytes = 0n;
+      j.stats.files = 0n;
+      j.stats.totalBytes = BigInt(Math.round(b.bytes));
+      j.stats.totalFiles = BigInt(b.files);
+      return;
+    }
     if (bytes >= total) {
       j.status = JobStatus.SUCCEEDED;
+      if (phases.delete(j.id)) {
+        const repo = m5data.repositories.find((r) => r.repo.id === j.repository?.id);
+        if (repo) remoteBackupMock.finish(j, repo, "nas-01");
+      }
       j.finishedAt = timestampFromMs(Date.now());
       bisyncMock.finish(j);
       applyTransfer(m5.files, j.workerId, j.definition);
@@ -677,7 +703,8 @@ export function createMockTransport(): Transport {
           if (j.stats && j.status === JobStatus.RUNNING) {
             const sample = create(JobProgressSchema, {
               time: timestampFromMs(Date.now()),
-              stats: j.stats,
+              stats: { ...j.stats },
+              phase: phases.get(j.id) ?? "",
             });
             const h = history.get(j.id) ?? [];
             if (Date.now() - timestampMs(h[h.length - 1]?.time ?? timestampFromMs(0)) >= 5000)

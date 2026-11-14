@@ -230,6 +230,7 @@ func mountProtected(mux *http.ServeMux, deps Deps, logger *slog.Logger, opts []c
 			remotes:   deps.Remotes,
 			schedules: deps.Schedules,
 			repos:     repositoryNames(deps),
+			sources:   remoteSourceChecker(deps),
 			workers:   workerNames(deps),
 			errs:      errs,
 			log:       logger,
@@ -278,7 +279,7 @@ func mountMilestone4(mux *http.ServeMux, deps Deps, errs errorMapper, disabled f
 	if deps.Schedules != nil {
 		mux.Handle(syncrv1connect.NewScheduleServiceHandler(&scheduleHandler{
 			schedules: deps.Schedules, kinds: deps.Kinds, remotes: deps.Remotes, contacts: deps.Contacts,
-			repos: repositoryNames(deps), workers: workerNames(deps), errs: errs,
+			repos: repositoryNames(deps), sources: remoteSourceChecker(deps), workers: workerNames(deps), errs: errs,
 		}, opts...))
 	} else {
 		disabled(syncrv1connect.ScheduleServiceName)

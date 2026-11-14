@@ -205,8 +205,8 @@ export function validateSchedule(s: ScheduleFormState): ScheduleErrors {
   if (s.target.kind === "worker" && !s.target.workerId)
     e.target = "Choose the worker that runs the jobs.";
   if (s.target.kind === "label" && !s.target.label.trim()) e.target = "Enter a worker label.";
-  if (s.target.kind === "label" && !labelTargetAllowed(s.definition.kind))
-    e.target = `${SINGLE_WORKER_REASON}: choose a worker.`;
+  const single = singleWorkerReason(s.definition);
+  if (s.target.kind === "label" && single) e.target = `${single}: choose a worker.`;
   if (s.missed.action === "run_late" && (s.missed.within < 0 || s.missed.within > MAX_WITHIN))
     e.missed = "A late run can wait at most 7 days.";
   const contactErrors: Record<number, string> = {};
@@ -268,9 +268,30 @@ export function scheduleServerErrors(err: unknown): { errors: ScheduleErrors; re
  */
 export const SINGLE_WORKER_REASON = "A two-way sync keeps its state on one worker";
 
-/** labelTargetAllowed reports whether a schedule of the kind may run on any worker with a label. */
-export function labelTargetAllowed(kind: EditableKind): boolean {
-  return kind !== "rclone_bisync";
+/**
+ * REMOTE_SOURCE_SINGLE_WORKER_REASON is why the schedule of a backup of a
+ * remote cannot target a label (the controller's SingleWorkerFor reason,
+ * RemoteSourceSingleWorkerReason).
+ */
+export const REMOTE_SOURCE_SINGLE_WORKER_REASON =
+  "A backup of a remote keeps its mirror or mount folder on one worker";
+
+/**
+ * singleWorkerReason says why a definition's schedule must target one
+ * worker, not a label, or returns undefined when a label is fine: a
+ * two-way sync keeps its state on the worker, and a backup of a remote
+ * its mirror or mount folder (restic's parent snapshot follows the folder).
+ */
+export function singleWorkerReason(def: JobDefinitionState): string | undefined {
+  if (def.kind === "rclone_bisync") return SINGLE_WORKER_REASON;
+  if (def.kind === "restic_backup" && def.backup.source === "remote")
+    return REMOTE_SOURCE_SINGLE_WORKER_REASON;
+  return undefined;
+}
+
+/** labelTargetAllowed reports whether a schedule of the definition may run on any worker with a label. */
+export function labelTargetAllowed(def: JobDefinitionState): boolean {
+  return singleWorkerReason(def) === undefined;
 }
 
 /** TargetLabel describes a schedule's target for lists. */

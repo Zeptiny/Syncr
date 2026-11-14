@@ -26,6 +26,8 @@ import { useSession } from "@/hooks/use-session";
 import { tsDate } from "@/lib/format";
 import { workerModeLabel } from "@/lib/status";
 
+import { RemoteAbilities } from "./remote-abilities";
+
 const col = createColumnHelper<Worker>();
 
 /** platformLabel renders "linux/amd64". */
@@ -112,6 +114,17 @@ export function WorkersPage({ label }: { label?: string }) {
           ) : (
             <span className="text-[13px] text-muted-foreground">Not connected yet</span>
           ),
+      }),
+      col.display({
+        id: "remoteBackups",
+        header: "Remote backups",
+        cell: ({ row: { original: w } }) => (
+          <RemoteAbilities
+            worker={w}
+            stacked
+            empty={<span className="text-[13px] text-muted-foreground">–</span>}
+          />
+        ),
       }),
       col.accessor((w) => tsDate(w.lastSeen), {
         id: "lastSeen",

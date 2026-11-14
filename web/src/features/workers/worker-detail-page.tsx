@@ -40,7 +40,9 @@ import {
   outdatedHelp,
 } from "@/lib/workers";
 import { JobsTable } from "@/features/jobs/jobs-table";
+import { workerAbilities } from "@/lib/remote-sources";
 
+import { RemoteAbilities } from "./remote-abilities";
 import { UpgradeWorkerCard } from "./upgrade-card";
 import { WorkerLabelsPanel } from "./worker-labels";
 import { platformLabel } from "./workers-page";
@@ -245,6 +247,9 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
               },
               { label: "Job kinds", value: info?.jobKinds.join(", ") || "–", mono: true },
               { label: "Parallel jobs", value: info?.maxConcurrentJobs || "–" },
+              ...(workerAbilities(w)
+                ? [{ label: "Remote backups", value: <RemoteAbilities worker={w} stacked /> }]
+                : []),
               ...(w.mode === WorkerMode.PASSIVE
                 ? [
                     { label: "URL", value: w.url, mono: true },

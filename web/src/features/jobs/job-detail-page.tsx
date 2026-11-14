@@ -26,12 +26,12 @@ import { StatusBadge } from "@/components/app/status-badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { JobService, JobStatus, WorkerAdminService, type Job } from "@/gen/syncr/v1/api_pb";
-import { JobErrorCode } from "@/gen/syncr/v1/link_pb";
+import { JobErrorCode, ResticRemoteSourceMethod } from "@/gen/syncr/v1/link_pb";
 import { ResticService } from "@/gen/syncr/v1/restic_pb";
 import { UserService } from "@/gen/syncr/v1/users_pb";
 import { useNow } from "@/hooks/use-now";
 import { useSession } from "@/hooks/use-session";
-import { useWatchJob, type JobSample, type WatchResult } from "@/hooks/use-watch-job";
+import { phaseTail, useWatchJob, type JobSample, type WatchResult } from "@/hooks/use-watch-job";
 import {
   durationSeconds,
   formatBytes,
@@ -48,14 +48,9 @@ import {
   tsDate,
 } from "@/lib/format";
 import { errorMessage } from "@/lib/errors";
+import { PHASE_MIRROR } from "@/lib/remote-sources";
 import { invalidateService } from "@/lib/invalidate";
-import {
-  errorCodeLabel,
-  isResticKind,
-  isTerminal,
-  kindLabel,
-  transferModeLabel,
-} from "@/lib/status";
+import { isResticKind, isTerminal, kindLabel, transferModeLabel } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 import {
@@ -71,6 +66,8 @@ import { hookSummary, hooksState } from "./hooks";
 import { JobOutputCards, ResticBand } from "./job-output";
 import { ScheduleChip, WaitingChip } from "./jobs-table";
 import {
+  errorHint,
+  errorTitle,
   jobElapsed,
   jobProgress,
   jobRoute,
@@ -78,6 +75,7 @@ import {
   transferOf,
   type EndpointLabel,
 } from "./model";
+import { remoteSourceOf } from "./remote-source";
 
 /** currentRate smooths the throughput over the last few samples. */
 export function currentRate(samples: JobSample[], window = 3): number {
@@ -288,15 +286,45 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
   // Progress messages carry fresher counters than the last job message.
   const latest = terminal ? undefined : watch.samples.at(-1);
   const stored = jobProgress(job);
-  const p = latest
-    ? {
-        ...stored,
-        bytes: Math.max(stored.bytes, latest.bytes),
-        files: Math.max(stored.files, latest.files),
-      }
-    : stored;
+  // A backup of a remote reports phases (mirror, then backup) whose
+  // counters each start from zero: while one runs, its own counters count.
+  const live = terminal ? undefined : watch.progress;
+  const phase = live?.phase ?? "";
+  const p =
+    phase && live
+      ? {
+          bytes: toNumber(live.stats?.bytes),
+          total: toNumber(live.stats?.totalBytes),
+          files: toNumber(live.stats?.files),
+          totalFiles: toNumber(live.stats?.totalFiles),
+        }
+      : latest
+        ? {
+            ...stored,
+            bytes: Math.max(stored.bytes, latest.bytes),
+            files: Math.max(stored.files, latest.files),
+          }
+        : stored;
   const elapsed = jobElapsed(job, now);
-  const rate = terminal ? (elapsed ? p.bytes / elapsed : 0) : currentRate(watch.samples);
+  const rate = terminal
+    ? elapsed
+      ? p.bytes / elapsed
+      : 0
+    : currentRate(phase ? phaseTail(watch.samples) : watch.samples);
+  const hint = errorHint(job);
+  const started = tsDate(job.startedAt);
+  const startedAt = started ? started.getTime() / 1000 : undefined;
+  // A mirror is brought up to date, then backed up (a mount has one
+  // phase); a finished job's result says when the mirror was done.
+  const mirrored = remoteSourceOf(job.definition)?.method === ResticRemoteSourceMethod.MIRROR;
+  const phases = mirrored ? ["Mirror", "Backup"] : undefined;
+  const mirrorTime = durationSeconds(
+    job.output?.output.case === "resticBackup"
+      ? job.output.output.value.remoteSource?.mirrorElapsed
+      : undefined,
+  );
+  const phaseChangedAt =
+    mirrored && startedAt !== undefined && mirrorTime > 0 ? [startedAt + mirrorTime] : undefined;
   const errors = toNumber(job.stats?.errors);
   const owner = foreign ? users.data?.users.find((u) => u.id === job.ownerId) : undefined;
 
@@ -391,11 +419,13 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
 
       <div className="flex flex-col gap-6">
         <RouteBand job={job} worker={worker?.name} p={p} />
-        <ResticBand job={job} worker={worker?.name} />
+        <ResticBand job={job} worker={worker?.name} phase={phase} />
 
         <StatGrid>
           <StatCard
-            label={transfer || bisync ? "Transferred" : "Processed"}
+            label={
+              transfer || bisync ? "Transferred" : phase === PHASE_MIRROR ? "Mirrored" : "Processed"
+            }
             value={formatBytes(p.bytes)}
             sub={
               p.total > 0
@@ -453,7 +483,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden />
             <div className="min-w-0">
               <div className="text-[13px] font-semibold text-danger">
-                {errorCodeLabel(job.error.code)}
+                {errorTitle(job)}
                 {job.exitCode !== undefined && !hookFailed && (
                   <span className="font-normal"> (exit code {job.exitCode})</span>
                 )}
@@ -466,6 +496,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
                   The hooks below show what happened.
                 </p>
               )}
+              {hint && <p className="mt-0.5 text-[13px] leading-5">{hint}</p>}
               {timedOut && (
                 <p className="mt-0.5 text-[13px] leading-5">
                   It ran longer than its time limit
@@ -503,6 +534,9 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
           <ProgressChart
             samples={watch.samples}
             live={!terminal}
+            startedAt={startedAt}
+            phases={phases}
+            phaseChangedAt={phaseChangedAt}
             empty={
               terminal && watch.history !== "loading"
                 ? "No progress history (it is kept for a limited time)"

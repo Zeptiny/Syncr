@@ -40,10 +40,17 @@ type Job struct {
 
 // Progress is a cumulative snapshot of a running job. Each emitted value
 // replaces the previous one; it is never a delta. Counters must not decrease
-// during a run, except Total* fields, which may grow while the tool discovers
-// more work. Zero totals mean "unknown". Rates are derived by the controller
-// from consecutive snapshots, so runners do not report them.
+// during a run (during a phase, for a job that reports phases), except
+// Total* fields, which may grow while the tool discovers more work. Zero
+// totals mean "unknown". Rates are derived by the controller from
+// consecutive snapshots, so runners do not report them.
 type Progress struct {
+	// Phase names what a job that runs in phases is doing
+	// (link.ProgressPhaseMirror, link.ProgressPhaseBackup); "" for every
+	// other job. The counters belong to the phase: they start again from
+	// zero when it changes. It is reported in the link's Progress.phase,
+	// not in JobStats.
+	Phase string
 	// Bytes transferred (rclone) or processed (restic) so far.
 	Bytes int64
 	// TotalBytes expected, 0 if unknown.

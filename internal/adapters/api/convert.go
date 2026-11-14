@@ -156,7 +156,22 @@ func workerInfoToProto(in workers.Info) *syncrv1.WorkerInfo {
 	for _, h := range in.Hooks {
 		out.Hooks = append(out.Hooks, &syncrv1.HookInfo{Name: h.Name, Description: h.Description, Timeout: durationpb.New(h.Timeout)})
 	}
+	out.RemoteSources = remoteSourcesToProto(in)
 	return out
+}
+
+// remoteSourcesToProto returns what a worker reported about reading the
+// folders of remotes (WorkerInfo.remote_sources): nil for a worker without
+// the link feature restic.remote_source that reported nothing, so the web
+// UI can tell an outdated worker from one that cannot use a method.
+func remoteSourcesToProto(in workers.Info) *syncrv1.RemoteSourceSupport {
+	rs := in.RemoteSources
+	if rs == (workers.RemoteSources{}) && !in.HasFeatures(link.FeatureResticRemoteSource) {
+		return nil
+	}
+	return &syncrv1.RemoteSourceSupport{
+		Mirror: rs.Mirror, Mount: rs.Mount, MirrorReason: rs.MirrorReason, MountReason: rs.MountReason,
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +237,7 @@ func statsToProto(s jobs.Stats) *syncrv1.JobStats {
 }
 
 func progressToProto(s jobs.Sample) *syncrv1.JobProgress {
-	return &syncrv1.JobProgress{Time: ts(s.Time), Stats: statsToProto(s.Stats)}
+	return &syncrv1.JobProgress{Time: ts(s.Time), Stats: statsToProto(s.Stats), Phase: s.Phase}
 }
 
 // jobToProto converts j (it holds no secrets).

@@ -9,7 +9,8 @@ storage through rclone, with the remotes you already store in Syncr.
 Design records: [repositories](adr/0011-restic-repositories.md),
 [worker probes](adr/0012-worker-probes.md),
 [concurrency keys](adr/0013-concurrency-keys.md),
-[browser operations](adr/0019-browser-operations.md).
+[browser operations](adr/0019-browser-operations.md),
+[backing up a remote](adr/0020-backing-up-a-remote.md).
 
 ## Repositories
 
@@ -51,7 +52,7 @@ Under **Jobs, Run a job** (or a repository's buttons), and under
 
 | Job | What it does |
 |---|---|
-| **Backup** | Saves folders of the worker (inside its `local_roots`) as a snapshot. Options: exclude patterns, tags, a host name, skip cache folders, stay on one file system, skip files above a size, dry run. |
+| **Backup** | Saves folders of the worker (inside its `local_roots`) as a snapshot. Options: exclude patterns, tags, a host name, skip cache folders, stay on one file system, skip files above a size, dry run. Or saves a folder of one of your remotes ([below](#back-up-a-folder-of-a-remote)). |
 | **Retention** | `restic forget` with a policy: keep the last N, or N hourly, daily, weekly, monthly, yearly snapshots, snapshots with certain tags, or everything within a period such as `1y6m`. With **prune**, the data no snapshot needs any more is removed too. |
 | **Prune** | Removes unneeded data without changing which snapshots exist. |
 | **Check** | Verifies the repository's structure, and reads back a share of the data (0 to 100 %). |
@@ -90,6 +91,178 @@ qualify), and when the job is sent to its worker.
 
 A Windows snapshot records `C:\Users\ada\Documents` as the tree path
 `/C/Users/ada/Documents`; the snapshot browser shows the tree form.
+
+## Back up a folder of a remote
+
+A backup can read a folder of one of your **remotes** instead of folders
+of the worker: your Nextcloud photos, a bucket, an SFTP share. Under
+**What to back up**, choose **A folder on a remote**, then the **Remote**
+and the **Folder** (empty: the remote's root). In the
+[file browser](browsing.md) of a remote, **New job, Back up this folder…**
+opens the same form with the folder filled in.
+
+restic reads only local folders, so the worker brings the remote's folder
+to it first, in one of two ways (**How the worker reads it**):
+
+| | Mirror (default) | Mount |
+|---|---|---|
+| Disk on the worker | As large as the folder (after the filters) | None |
+| Works on | Every worker | Linux with FUSE 3, Windows with WinFsp ([below](#what-a-worker-needs-for-the-mount)) |
+| Each run after the first | rclone downloads what changed; restic reads what changed | restic reads what changed, through the mount |
+| Remotes without stable modification times | Fine (the mirror keeps its own) | Every file looks changed: everything is read again on every run |
+| An interrupted run | The partial mirror is kept and reused | Nothing is left (stale mounts are swept) |
+
+- **Mirror** runs `rclone sync` of the folder into the worker's data
+  directory (`<data_dir>/sources/mirror/<key>/data`), then backs up that
+  copy. The copy is kept for the next run, so only what changed is
+  downloaded again. **Delete the mirror after each run** frees the disk
+  instead: every run then downloads the whole folder, but restic still
+  reads only the files that changed (it compares sizes and modification
+  times, not inode numbers). A mirror that no backup used for 30 days is
+  deleted (`remote_sources.mirror_retention` in the
+  [worker's configuration](worker-config.md#remote-sources)). If the sync
+  fails, no snapshot is made and the mirror keeps what it had; rclone
+  deletes nothing after an error, so a mirror may hold too much but never
+  too little.
+- **Mount** runs `rclone mount --read-only` at
+  `<data_dir>/sources/mount/<key>` for the length of the job, backs up the
+  mounted folder and unmounts it, also when the job fails, is cancelled or
+  reaches its time limit. A mount left behind by a killed worker is
+  unmounted at the next start or before the next run. A mount uses no
+  disk, but every file restic reads is downloaded while it reads it.
+- **Advanced:** parallel downloads and fast listing (mirror only) and a
+  bandwidth limit (both), as in a copy job.
+
+The worker must be able to use the method. The Workers page shows it per
+worker under **Remote backups** ("Mirror ✓ · Mount ✗ – /dev/fuse is
+missing"), and the form disables a method or a worker that cannot, with
+the reason. A worker older than 2.2 shows as outdated: it cannot run these
+backups (`worker_outdated`).
+
+### Skipping files
+
+A backup of a remote leaves files out with **rclone filter rules**, the
+same rows as a copy job's filters, for example exclude `.thumbnails/**`
+and `*.tmp` ([rclone's filter syntax](https://rclone.org/filtering/)). rclone applies them in both methods, so a
+mirror does not download what is skipped, and a mount does not show it.
+restic's exclude patterns, **Stay on one file system** and volume
+snapshots are not available here. Changing the filters deletes from the
+mirror what the new filters leave out.
+
+### Snapshots of a remote
+
+- **The folder's contents are at the snapshot's root.** A backup of the
+  folder `Photos` that holds `2026/` and `README.txt` gives a snapshot
+  whose top level is `2026` and `README.txt`.
+- **The tag `syncr-remote:<remote id>`** is added to every such snapshot.
+  The UI shows **From *remote name*** instead of the snapshot's paths and
+  a badge instead of the tag, and the snapshot list's filter finds the
+  remote's name. The tag counts toward restic's limit, so a backup of a
+  remote takes up to 31 tags of your own. The folder inside the remote is
+  not recorded in restic; the job and schedule pages show it.
+- **The host** is the worker's host name, as for any backup, unless you
+  set one.
+- **restic itself shows the internal folder** (for example
+  `/var/lib/syncr/sources/mirror/3f…/data`) as the snapshot's path, in the
+  restic command line and in **Group by host and paths**.
+
+### One worker per backup of a remote
+
+restic finds the previous snapshot to compare with by host and path, and
+the path of a backup of a remote is the worker's mirror or mount folder.
+So **a backup of a remote belongs on one worker**: a schedule of it must
+target a worker, not a label. A run on another worker (by hand), or with
+the other method, has another host or path:
+
+- it reads every file again (the mirror is downloaded in full there, or
+  the mount reads everything), and
+- retention counts its snapshots as a group of their own.
+
+To move a backup of a remote to another worker, change the schedule's
+worker and expect one full read; the old worker's mirror is deleted
+after 30 days unused.
+
+### Retention
+
+The tag lets a retention job pick these snapshots out: a **Retention**
+job with **Only snapshots tagged** `syncr-remote:<remote id>` applies its
+policy to the backups of that remote only. The remote's ID is the last
+part of its page's address (`/remotes/<remote id>`). Without a tag,
+retention groups by host and paths as usual, which keeps one group per
+remote folder, method and worker.
+
+### Empty folders
+
+**An empty folder fails the backup** with *The remote folder is empty*
+(`source_empty`), before anything is downloaded or deleted from the
+mirror. A folder that was emptied by mistake, or a wrong path, would
+otherwise make empty snapshots that push the real ones out of retention.
+
+- The check lists the folder's top level, without the filters.
+- On S3 and compatibles, a folder that does not exist in an existing
+  bucket lists as empty, so it is reported as empty rather than missing; a
+  missing bucket is *not found*.
+- **Back up an empty folder** (Advanced) lets the run go on. restic makes
+  no empty snapshot, so such a run **succeeds without a snapshot** and
+  says so (*No snapshot: the remote folder was empty*, and a warning); the
+  mirror is still emptied to match.
+- A folder that has files, all of which the filters leave out, fails: "the
+  filters leave out everything".
+
+### Dry run
+
+A dry run of a backup of a remote **brings the mirror up to date for
+real** (it is the worker's own copy; the repository is not touched), then
+runs restic with `--dry-run`. A mount is mounted and unmounted as usual.
+
+### Restoring
+
+**Restore to original location** is not offered for a snapshot of a
+remote: its paths are the worker's mirror or mount folder, not the remote.
+Restore it, or a part of it, **to a folder of a worker** (whole snapshot,
+a folder or selected items, as above): the folder's contents land in the
+target as they were in the remote's folder. To put them back on the
+remote, run a **Copy** job from that folder to the remote. Restoring
+straight to a remote is planned.
+
+### What a backup of a remote refuses
+
+- A **Local directory** remote: it is a folder of a worker, so back up that
+  folder instead.
+- A folder that **is, holds or is inside the repository** on the same
+  remote: a backup cannot read its own repository. (A repository reached
+  through another remote, a union or an alias of the same storage is not
+  detected.)
+- Folders of a worker together with a remote folder, or several remote
+  folders in one backup.
+
+### The worker's own folder
+
+`<data_dir>/sources` holds mirrors of other users' remotes and live mounts,
+so no job, folder listing or folder size may use it or anything inside it
+(`path_not_allowed`), even when `local_roots` covers the data directory.
+A backup or copy of a folder that holds it, such as `/` or the data
+directory's parent, leaves it out: the worker keeps a marker file
+(`.syncr-sources`) in it and passes `--exclude-if-present=.syncr-sources`,
+so the snapshot keeps the empty folder and nothing of its contents.
+
+### What a worker needs for the mount
+
+| Install | Needs |
+|---|---|
+| Linux, system service (root) | The `fuse3` package; FUSE in the kernel (usual). |
+| Linux, user service | `fuse3`, and a drop-in that sets `NoNewPrivileges=no` ([setup](setup-linux.md#backing-up-remotes-with-the-mount-method)). |
+| Docker | The image has `fuse3`; the container needs `/dev/fuse`, `SYS_ADMIN` and no AppArmor profile ([deployment](deployment.md#mounting-remotes-in-a-container)). |
+| LXC | The host must pass `/dev/fuse` through (often not possible: use the mirror). |
+| Windows (service or user task) | [WinFsp](setup-windows.md#backing-up-remotes-with-the-mount-method). |
+
+At startup the worker checks this (and mounts an empty folder once, as a
+trial) and reports the result. When it cannot mount, the reason is on the
+Workers page, for example "/dev/fuse is missing", "fusermount3 is not
+setuid root…", "WinFsp is not installed" or the trial's error; a mount
+sent to it anyway fails with `tool_unavailable`. Install what is missing
+and restart the worker. `remote_sources.mount: off` turns the mount off
+for a worker.
 
 ## Snapshots and restore
 
@@ -139,7 +312,8 @@ From the snapshot browser:
 - **Restore selected** writes the selected files and folders, with their
   original paths below the target.
 - **Restore to original location** (a row's menu, or the tray) writes the
-  selected items back where they were.
+  selected items back where they were. It is not offered for a
+  [snapshot of a remote](#restoring).
 
 The target is a folder of the worker, inside its `local_roots`. The sheet
 proposes the worker and target you used last for this repository (kept in
@@ -329,3 +503,7 @@ Things to know about backends:
   than the one that sent it times out for the caller.
 - The dashboard's "bytes" total counts what backups read, not what they
   added, so nightly backups dominate it.
+- A backup of a remote cannot be restored straight back to the remote, and
+  schedules of one cannot target a label. On Windows a mirror keeps
+  rclone's encoding of names Windows cannot hold (fullwidth look-alikes of
+  `*`, `?`, `:` and the like), and so does the snapshot.

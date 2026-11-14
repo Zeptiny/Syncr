@@ -25,6 +25,12 @@ export interface RemotePickerProps {
   onChange: (value: string) => void;
   /** filter limits the offered remotes, e.g. to union members. */
   filter?: (remote: Remote, backend: Backend | undefined) => boolean;
+  /**
+   * unavailable returns why a remote cannot be chosen (e.g. a Local
+   * directory remote as the folder of a backup): it is listed, disabled,
+   * with the reason.
+   */
+  unavailable?: (remote: Remote, backend: Backend | undefined) => string | undefined;
   /** allowLocal offers the worker's filesystem first. */
   allowLocal?: boolean;
   placeholder?: string;
@@ -41,6 +47,7 @@ export function RemotePicker({
   value,
   onChange,
   filter,
+  unavailable,
   allowLocal,
   placeholder = "Choose a remote",
   invalid,
@@ -66,14 +73,19 @@ export function RemotePicker({
         {offered.length > 0 && (
           <SelectGroup>
             {allowLocal && <SelectLabel>Remotes</SelectLabel>}
-            {offered.map((r) => (
-              <SelectItem key={r.id} value={r.id}>
-                <span className="truncate">{r.name}</span>
-                <span className="ml-1 text-xs text-muted-foreground">
-                  {backends.get(r.backendType)?.label ?? r.backendType}
-                </span>
-              </SelectItem>
-            ))}
+            {offered.map((r) => {
+              const backend = backends.get(r.backendType);
+              const why = unavailable?.(r, backend);
+              return (
+                <SelectItem key={r.id} value={r.id} disabled={why !== undefined}>
+                  <span className="truncate">{r.name}</span>
+                  <span className="ml-1 text-xs text-muted-foreground">
+                    {backend?.label ?? r.backendType}
+                    {why !== undefined && `: ${why}`}
+                  </span>
+                </SelectItem>
+              );
+            })}
           </SelectGroup>
         )}
         {!allowLocal && offered.length === 0 && (

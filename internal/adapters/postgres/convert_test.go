@@ -40,6 +40,32 @@ func TestInfoRoundTrip(t *testing.T) {
 	}
 }
 
+// TestInfoRemoteSources: what a worker reported about reading the
+// folders of remotes is kept in the jsonb document (no migration), only
+// when it reported something; rows stored before it decode as nothing.
+func TestInfoRemoteSources(t *testing.T) {
+	t.Parallel()
+	in := workers.Info{Version: "v2.2.0", RemoteSources: workers.RemoteSources{Mirror: true, MountReason: "/dev/fuse is missing"}}
+	doc, err := encodeInfo(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"version":"v2.2.0","remote_sources":{"mirror":true,"mount_reason":"/dev/fuse is missing"}}`; string(doc) != want {
+		t.Errorf("encoded %s, want %s", doc, want)
+	}
+	out, err := decodeInfo(doc)
+	if err != nil || out.RemoteSources != in.RemoteSources {
+		t.Errorf("round trip = (%+v, %v), want %+v", out.RemoteSources, err, in.RemoteSources)
+	}
+	if doc, _ := encodeInfo(workers.Info{Version: "v2.1.0"}); strings.Contains(string(doc), "remote_sources") {
+		t.Errorf("a worker that reported nothing stores %s", doc)
+	}
+	old, err := decodeInfo([]byte(`{"version":"v2.1.0"}`))
+	if err != nil || old.RemoteSources != (workers.RemoteSources{}) {
+		t.Errorf("an older row decodes as (%+v, %v)", old.RemoteSources, err)
+	}
+}
+
 func TestInfoZeroAndEmpty(t *testing.T) {
 	t.Parallel()
 	doc, err := encodeInfo(workers.Info{})
