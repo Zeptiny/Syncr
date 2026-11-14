@@ -207,9 +207,17 @@ export function BackupEditor({
                   placeholder="photos, nightly…"
                   separators={/,$/}
                   help={
-                    remote
-                      ? `Tags mark the snapshot, so retention rules can pick it out. Syncr adds ${REMOTE_TAG_PREFIX}… itself to name the remote, so up to 31 of your own.`
-                      : "Tags mark the snapshot, so retention rules can pick it out."
+                    remote ? (
+                      <>
+                        Tags mark the snapshot, so retention rules can pick it out. Syncr adds{" "}
+                        <code className="rounded bg-muted px-1 whitespace-nowrap">
+                          {REMOTE_TAG_PREFIX}…
+                        </code>{" "}
+                        itself to name the remote, so up to 31 of your own.
+                      </>
+                    ) : (
+                      "Tags mark the snapshot, so retention rules can pick it out."
+                    )
                   }
                 />
               </FieldShell>

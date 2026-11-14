@@ -34,7 +34,9 @@ func remoteBackupJob(repo, remote, path string, method syncrv1.ResticRemoteSourc
 // into a repository on the same remote through the API with the real
 // binaries, with the mirror method: the snapshot holds the folder's
 // contents at its root and carries the remote's tag, the job's summary
-// shows the mirror's counters, and a second run reads nothing again. The
+// shows the mirror's counters, and a second run reads nothing again; the
+// snapshot restores into a worker folder with the folder's contents at its
+// root. The
 // API refuses a source that holds the repository, a Local directory
 // remote, a schedule of it on a label, and a worker that cannot use the
 // method (with the worker's reason); a schedule on the worker is saved.
@@ -117,7 +119,21 @@ func TestSystemRemoteBackupToMinIO(t *testing.T) {
 		t.Errorf("the second backup = %v, want every file unmodified and nothing mirrored", o)
 	}
 
-	// 4. Refusals through the API.
+	// 4. A snapshot of a remote is restored to a worker folder (then a Copy
+	// job would put it back on a remote): the folder's contents land at the
+	// target's root, as the snapshot holds them.
+	target := filepath.Join(w.root, "restored")
+	e.run(restoreJob(&syncrv1.ResticRestoreDefinition{RepositoryId: repo.GetId(), SnapshotId: snap.GetId(), Target: target}))
+	for name, content := range files {
+		if got := read(t, filepath.Join(target, filepath.FromSlash(name))); got != content {
+			t.Errorf("restored %s = %q, want %q", name, got, content)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(target, "upload.tmp")); !os.IsNotExist(err) {
+		t.Errorf("the file the filter left out was restored (%v)", err)
+	}
+
+	// 5. Refusals through the API.
 	refused := func(def *syncrv1.JobDefinition) error {
 		_, err := c.jobs.RunJob(ctx, connect.NewRequest(&syncrv1.RunJobRequest{WorkerId: w.id, Definition: def}))
 		return err
@@ -139,7 +155,7 @@ func TestSystemRemoteBackupToMinIO(t *testing.T) {
 		}
 	}
 
-	// 5. Schedules target the worker, never a label.
+	// 6. Schedules target the worker, never a label.
 	schedules := syncrv1connect.NewScheduleServiceClient(c.client(), c.base)
 	schedule := func(name string, target *syncrv1.ScheduleTarget) error {
 		_, err := schedules.CreateSchedule(ctx, connect.NewRequest(&syncrv1.CreateScheduleRequest{Input: &syncrv1.ScheduleInput{
@@ -160,7 +176,7 @@ func TestSystemRemoteBackupToMinIO(t *testing.T) {
 		t.Errorf("a schedule on the worker: %v", err)
 	}
 
-	// 6. With the mirror turned off in its configuration, the worker says
+	// 7. With the mirror turned off in its configuration, the worker says
 	// so, and RunJob refuses it with that reason.
 	if err := w.proc.stop(30 * time.Second); err != nil {
 		t.Fatal(err)
@@ -183,4 +199,93 @@ func TestSystemRemoteBackupToMinIO(t *testing.T) {
 	if strings.Contains(w.proc.out.String(), minioPassword) || strings.Contains(c.proc.out.String(), minioPassword) {
 		t.Error("the S3 secret appears in a log")
 	}
+}
+
+// TestSystemRemoteBackupMount backs up a folder of a remote (MinIO) through
+// `rclone mount` with the real binaries: the worker's startup trial found
+// that it can mount, the snapshot holds the folder's contents at its root,
+// a second run finds every file unmodified (the mount keeps the remote's
+// modification times; --ignore-inode covers the rest), and no mount is
+// left behind after either run. It needs FUSE (Linux: /dev/fuse and a
+// usable fusermount3): where the worker reports it cannot mount, the test
+// skips, unless SYNCR_REQUIRE_MOUNT=1 (CI), which makes it fail instead.
+func TestSystemRemoteBackupMount(t *testing.T) {
+	t.Parallel()
+	e := newResticEnv(t, false)
+	c, w := e.c, e.w
+	const mount = syncrv1.ResticRemoteSourceMethod_RESTIC_REMOTE_SOURCE_METHOD_MOUNT
+
+	if support := c.waitOnline(w.id).GetInfo().GetRemoteSources(); !support.GetMount() {
+		if os.Getenv("SYNCR_REQUIRE_MOUNT") == "1" {
+			t.Fatalf("SYNCR_REQUIRE_MOUNT=1 but the worker cannot mount: %s", support.GetMountReason())
+		}
+		t.Skipf("the worker cannot mount here: %s", support.GetMountReason())
+	}
+
+	endpoint := startMinIO(t)
+	minio := c.createRemote(&syncrv1.RemoteInput{
+		Name: "MinIO", BackendType: "s3",
+		Options: map[string]string{
+			"provider": "Minio", "endpoint": endpoint, "region": "us-east-1",
+			"access_key_id": minioUser, "bucket": "syncr-remote-mount", "force_path_style": "true",
+		},
+		Secrets: map[string]string{"secret_access_key": minioPassword},
+	})
+	repo, err := e.create("Vault", minio, "restic/vault", resticPassword, syncrv1.RepositoryCreateMode_REPOSITORY_CREATE_MODE_INIT)
+	if err != nil {
+		t.Fatalf("CreateRepository: %v", err)
+	}
+	src := filepath.Join(w.root, "scans")
+	files := map[string]string{"invoice.pdf": "first scan", "2026/contract.pdf": "second scan"}
+	for name, content := range files {
+		write(t, filepath.Join(src, name), content)
+	}
+	write(t, filepath.Join(src, "scan.tmp"), "left out by the filter")
+	e.run(copyDef(local(src), onRemote(minio, "Scans"), 0))
+
+	mounts := filepath.Join(w.dir, "state", "sources", "mount")
+	noMountLeft := func(when string) {
+		t.Helper()
+		table, err := os.ReadFile("/proc/self/mountinfo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(table), mounts) {
+			t.Errorf("%s: a mount under %s is still listed", when, mounts)
+		}
+	}
+
+	first := e.run(remoteBackupJob(repo.GetId(), minio, "Scans", mount))
+	out := first.GetOutput().GetResticBackup()
+	if out.GetFilesNew() != int64(len(files)) || out.GetRemoteSource().GetMethod() != mount || out.GetRemoteSource().GetMirroredFiles() != 0 {
+		t.Errorf("the first backup = %v, want %d new files read through the mount", out, len(files))
+	}
+	if first.GetTitle() != "Back up MinIO/Scans (mount) → Vault" || detail(first, "Read through") != "Mount" || detail(first, "Mirrored") != "" {
+		t.Errorf("job %q details %v", first.GetTitle(), first.GetDetails())
+	}
+	noMountLeft("after the first run")
+
+	list := e.snapshots(repo.GetId())
+	if len(list.GetSnapshots()) != 1 {
+		t.Fatalf("snapshots = %v", list)
+	}
+	snap := list.GetSnapshots()[0]
+	if !slices.Contains(snap.GetTags(), link.RemoteSourceTagPrefix+minio) {
+		t.Errorf("snapshot tags %v, want the remote's", snap.GetTags())
+	}
+	if got := e.browse(repo.GetId(), snap.GetId(), ""); !slices.Equal(got, []string{"2026", "invoice.pdf"}) {
+		t.Errorf("the snapshot's root = %q, want the folder's contents", got)
+	}
+
+	second := e.run(remoteBackupJob(repo.GetId(), minio, "Scans", mount))
+	if o := second.GetOutput().GetResticBackup(); o.GetFilesUnmodified() != int64(len(files)) || o.GetFilesNew() != 0 || o.GetFilesChanged() != 0 {
+		t.Errorf("the second backup = %v, want every file unmodified", o)
+	}
+	noMountLeft("after the second run")
+	// Nothing was mirrored: a mount uses no disk.
+	if entries, err := os.ReadDir(filepath.Join(w.dir, "state", "sources", "mirror")); err == nil && len(entries) > 0 {
+		t.Errorf("a mount left mirrors: %v", entries)
+	}
+
+	e.noPasswordAnywhere()
 }

@@ -134,7 +134,7 @@ func TestRunSeededRestic(t *testing.T) {
 		},
 		"MinIO archive": func(r *syncrv1.TestRemoteResponse) bool { return r.GetOk() && r.GetUsage().GetUnsupported() },
 		"Nextcloud": func(r *syncrv1.TestRemoteResponse) bool {
-			return !r.GetOk() && strings.Contains(r.GetError(), "connection refused") && r.GetWorker().GetName() != ""
+			return r.GetOk() && slices.Contains(r.GetSample(), "Photos") && r.GetUsage().GetFree() > 0 && r.GetWorker().GetName() != ""
 		},
 	} {
 		res, err := pc.TestRemote(ctx, connect.NewRequest(&syncrv1.TestRemoteRequest{RemoteId: remoteIDs[name]}))

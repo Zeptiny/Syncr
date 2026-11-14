@@ -852,11 +852,18 @@ func TestProbes(t *testing.T) {
 	if got := names(minio.GetListing()); !slices.Contains(got, "restic") || !slices.Contains(got, "archive") {
 		t.Errorf("MinIO archive = %v", got)
 	}
+	// Nextcloud: the folders the seeded backups of a remote read.
+	cloud := run(nas, &syncrv1.ProbeSpec{Remotes: remote("webdav"), Op: &syncrv1.ProbeSpec_ListRemote{ListRemote: &syncrv1.ProbeListRemote{
+		Location: &syncrv1.Location{Remote: "r1"}, DirsOnly: true,
+	}}})
+	if got := names(cloud.GetListing()); !slices.Equal(got, []string{"Calendar", "Documents", "Inbox", "Photos", "Projects", "Shared"}) {
+		t.Errorf("Nextcloud = %v (%v)", got, cloud)
+	}
 	for backend, want := range map[string]func(*syncrv1.ProbeResult) bool{
 		"b2":     func(r *syncrv1.ProbeResult) bool { return r.GetUsage().GetUsed() > 0 && !r.GetUsage().GetUnsupported() },
 		"s3":     func(r *syncrv1.ProbeResult) bool { return r.GetUsage().GetUnsupported() },
 		"sftp":   func(r *syncrv1.ProbeResult) bool { return r.GetUsage().GetFree() > 0 },
-		"webdav": func(r *syncrv1.ProbeResult) bool { return r.GetStatus() == syncrv1.ProbeStatus_PROBE_STATUS_FAILED },
+		"webdav": func(r *syncrv1.ProbeResult) bool { return r.GetUsage().GetTotal() > r.GetUsage().GetUsed() },
 	} {
 		res := run(nas, &syncrv1.ProbeSpec{Remotes: remote(backend), Op: &syncrv1.ProbeSpec_About{About: &syncrv1.ProbeAbout{Location: &syncrv1.Location{Remote: "r1"}}}})
 		if !want(res) {

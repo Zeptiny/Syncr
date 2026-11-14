@@ -441,14 +441,28 @@ func remoteTree(backend string, start time.Time) (tree, error) {
 			{"media/films/holiday-2025.mkv", 4*gib + 300*mib},
 			{"calendar/ada.ics", 96 * kib},
 			{"laptop/projects/syncr.tar.zst", 220 * mib},
+			{"Scans/2026-10-invoice.pdf", 640 * kib},
+			{"Scans/2026-11-contract.pdf", 2*mib + 300*kib},
 		})), nil
 	case "r2":
 		return newTree(start, sharedFiles(sharedRemotePath)), nil
 	case "webdav":
-		return nil, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED,
-			"couldn't list the folder: Propfind \"https://cloud.example.com/remote.php/dav/files/ada/\": dial tcp 203.0.113.20:443: connect: connection refused")
+		return nextcloudTree(start), nil
 	}
 	return nil, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "the demo has no content for this kind of remote")
+}
+
+// nextcloudTree is the demo Nextcloud: the phone's photos that the
+// nightly remote backup reads (with thumbnails and an upload in progress,
+// which its filters leave out), the documents and shared folders the copy
+// jobs read, and an empty Inbox (the allowed empty run).
+func nextcloudTree(start time.Time) tree {
+	return newTree(start, slices.Concat(photoFiles("Photos"), documentFiles("Documents"), []demoFile{
+		{"Photos/.thumbnails/IMG_1100.jpg", 24 * kib},
+		{"Photos/2026/11/IMG_1163.jpg.tmp", 1*mib + 512*kib},
+		{"Shared/readme.md", 2 * kib},
+		{"Calendar/ada.ics", 96 * kib},
+	}), "Inbox", "Projects")
 }
 
 func (p *Probes) listRemote(remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeListRemote) (*syncrv1.ProbeListing, error) {
@@ -472,7 +486,8 @@ func about(remotes []*syncrv1.RemoteDefinition) (*syncrv1.ProbeUsage, error) {
 	case "sftp":
 		return &syncrv1.ProbeUsage{Total: ptr(1024 * gib), Used: ptr(318 * gib), Free: ptr(706 * gib)}, nil
 	case "webdav":
-		return nil, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "connect: connection refused")
+		// Nextcloud's quota.
+		return &syncrv1.ProbeUsage{Total: ptr(512 * gib), Used: ptr(74*gib + 600*mib), Free: ptr(437*gib + 424*mib)}, nil
 	}
 	return &syncrv1.ProbeUsage{Unsupported: true}, nil
 }

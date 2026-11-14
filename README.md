@@ -25,6 +25,11 @@ snapshots, and get notified when something fails.
   restore all of one, a folder or selected files, also back to where they
   were. Search every snapshot for a file and its versions, and compare
   two snapshots.
+- **Back up a remote.** Back up a folder of one of your remotes, such as
+  Nextcloud photos or a bucket, through a mirror kept on the worker or an
+  `rclone mount`, with rclone filters; snapshots are named after their
+  remote, and an emptied folder fails instead of pushing real snapshots
+  out of retention.
 - **File browser.** Browse a worker's folders and your remotes, select
   files and folders across folders, copy or move them, see which folder
   takes the space, and start a backup, a transfer or a schedule from what

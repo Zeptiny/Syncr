@@ -14,8 +14,9 @@ log:
   level: info                # SYNCR_LOG_LEVEL: debug, info, warn, error
   format: text               # SYNCR_LOG_FORMAT: text or json
 
-# Where scratch space, the restic cache, managed tools and the state of
-# two-way syncs (<data_dir>/bisync) live.
+# Where scratch space, the restic cache, managed tools, the state of
+# two-way syncs (<data_dir>/bisync) and the mirrors and mounts of backups
+# of a remote (<data_dir>/sources) live.
 # Default: /var/lib/syncr (Linux, root), ~/.local/share/syncr (Linux, user),
 # %ProgramData%\Syncr (Windows service), %LocalAppData%\Syncr (Windows user).
 data_dir: /var/lib/syncr     # SYNCR_DATA_DIR
@@ -51,6 +52,13 @@ max_concurrent_jobs: 2       # SYNCR_MAX_CONCURRENT_JOBS
 # Minimum time between two progress reports of one job (100ms-1m). The last
 # sample of a job is always reported before its result.
 progress_interval: 1s        # SYNCR_PROGRESS_INTERVAL
+
+# Backups of a folder of a remote (see "Remote sources" below).
+remote_sources:
+  mirror: true               # SYNCR_REMOTE_SOURCES_MIRROR: keep mirrors in <data_dir>/sources/mirror
+  mirror_retention: 720h     # SYNCR_REMOTE_SOURCES_MIRROR_RETENTION: delete a mirror unused this long (at least 1h)
+  mount: auto                # SYNCR_REMOTE_SOURCES_MOUNT: auto (when this machine can) or off
+  mount_timeout: 30s         # SYNCR_REMOTE_SOURCES_MOUNT_TIMEOUT: wait for a mount to be ready (5s-5m)
 
 # Commands jobs may run on this machine before and after their operation,
 # by name (see "Hooks" below). No environment form.
@@ -255,6 +263,73 @@ At startup and then once a day, the worker deletes the state of pairs that
 have not run for 180 days (not a setting); a pair that runs again later
 starts with a resync. Only one run of a pair uses its state at a time,
 also across processes.
+
+## Remote sources
+
+A backup can read a folder of one of the owner's remotes instead of
+folders of this worker ([restic](restic.md#back-up-a-folder-of-a-remote)),
+through a **mirror** (a copy kept in the data directory) or a **mount**
+(`rclone mount`). The `remote_sources` block says which of the two this
+worker offers:
+
+| Key | Default | Environment | Meaning |
+|---|---|---|---|
+| `mirror` | `true` | `SYNCR_REMOTE_SOURCES_MIRROR` | Allow mirrors. `false`: the worker reports "remote_sources.mirror is off in worker.yaml" and refuses mirrored backups. |
+| `mirror_retention` | `720h` (30 days) | `SYNCR_REMOTE_SOURCES_MIRROR_RETENTION` | Delete a mirror that no backup used for this long (at least `1h`). |
+| `mount` | `auto` | `SYNCR_REMOTE_SOURCES_MOUNT` | `auto`: mount when this machine can (checked at startup); `off`: never. |
+| `mount_timeout` | `30s` | `SYNCR_REMOTE_SOURCES_MOUNT_TIMEOUT` | How long a job waits for its mount to be ready (`5s` to `5m`); longer fails the job. |
+
+**What the worker reports.** At startup the worker works out what it can
+do and reports it to the controller, which shows it on the Workers page
+(**Remote backups**) and sends the worker only backups it can run; a job
+sent anyway fails with `tool_unavailable` and the reason. With
+`mount: auto` the worker checks, on Linux, that `/dev/fuse` opens
+read-write, that `fusermount3` (or `fusermount`) is on the `PATH` and,
+when the worker is not root, that the helper is setuid root and the
+process may gain privileges (`NoNewPrivs: 0`); on Windows, that WinFsp is
+installed. Then it mounts an empty folder once, read-only, for up to 5
+seconds, which catches what the checks cannot see (a container without
+`SYS_ADMIN`, AppArmor). The reason when it cannot is one line, such as
+"/dev/fuse is missing". What each kind of install needs is in
+[restic](restic.md#what-a-worker-needs-for-the-mount). Restart the worker
+after changing the block or the machine.
+
+### `<data_dir>/sources`
+
+| Path | What it is |
+|---|---|
+| `sources/mirror/<key>/data` | A mirror: the remote folder's copy (after the backup's filters) |
+| `sources/mirror/<key>/lock`, `last-run` | Only one run uses a mirror at a time, also across processes; when it was last used |
+| `sources/mount/<key>` | A mount point, mounted only while a job runs |
+| `sources/mount/<key>.lock` | The mount point's lock |
+| `sources/.syncr-sources` | The marker that keeps the folder out of backups and copies of a folder that holds it |
+
+`<key>` is 32 hex digits the controller computes from the remote's
+non-secret settings and the folder: a changed password keeps the mirror, a
+changed bucket or endpoint starts a new one. The folders are created with
+mode `0700`.
+
+- **Mirrors are kept** between runs, so a run downloads only what changed.
+  At startup and then once a day the worker deletes mirrors whose last run
+  is older than `mirror_retention`, skipping those in use. A backup with
+  **Delete the mirror after each run** removes its own. A mirror is as
+  large as its folder: watch the data directory's disk.
+- **Mounts last one job.** The worker unmounts on every way a job ends
+  (success, failure, cancel, time limit): rclone is stopped, then killed
+  after 10 seconds, then `fusermount3 -u -z` runs if the mount is still
+  listed. At startup, before anything else in the data directory is
+  touched, the worker unmounts whatever a killed worker left under
+  `sources/mount` (it reads only `/proc/self/mountinfo`, because a hung
+  FUSE mount blocks anything that looks at the folder), and the start-up
+  clean-up of the scratch space never walks into `sources/`.
+- **Refused to every job, listing and folder size.** The folder holds
+  copies of users' remotes and live mounts, and every signed-in user may
+  browse a worker's folders, so a path that is `sources`, or inside it,
+  fails with `path_not_allowed`, even when `local_roots` covers the data
+  directory. A backup or copy of a folder that holds it (such as `/`, or
+  the data directory's parent) leaves its contents out
+  (`--exclude-if-present=.syncr-sources`); folder sizes count it as
+  empty.
 
 ## Child process limits
 

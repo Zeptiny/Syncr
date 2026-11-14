@@ -15,6 +15,7 @@ import type { SelectedItem } from "@/components/app/file-browser/selection";
 import { JobDefinitionSchema, type JobDefinition, type Worker } from "@/gen/syncr/v1/api_pb";
 import { FilterAction, ProbeEntryType, ResticRemoteSourceMethod } from "@/gen/syncr/v1/link_pb";
 import { parseFilterLine } from "@/lib/rclone-filters";
+import { methodProblem } from "@/lib/remote-sources";
 
 import { definitionState, type EditableKind } from "../jobs/definition";
 import { formKind } from "../jobs/search";
@@ -151,13 +152,19 @@ export function backupDraft(t: DraftTarget): JobDraft | undefined {
 
 /**
  * remoteBackupDraft backs up the target's folder of a remote (the open
- * folder, or the one folder selected) with restic, through a mirror. A
+ * folder, or the one folder selected) with restic, through a mirror, on
+ * the worker that listed it when workers (if given) says it can mirror. A
  * Local directory remote is a folder on a worker: back that up instead.
  */
-export function remoteBackupDraft(t: DraftTarget): JobDraft | undefined {
+export function remoteBackupDraft(t: DraftTarget, workers?: Worker[]): JobDraft | undefined {
   if (t.place.kind !== "remote" || t.place.local) return undefined;
   const folder = draftFolder(t);
   if (folder === undefined) return undefined;
+  // The listing worker, unless it cannot keep a mirror (outdated, or
+  // mirrors off): then the editor asks for one.
+  const lister = workers?.find((w) => w.id === t.workerId);
+  const workerId =
+    lister && methodProblem(lister, ResticRemoteSourceMethod.MIRROR) ? "" : t.workerId;
   return makeJobDraft(
     {
       operation: {
@@ -172,7 +179,7 @@ export function remoteBackupDraft(t: DraftTarget): JobDraft | undefined {
         },
       },
     },
-    t.workerId,
+    workerId,
   );
 }
 

@@ -248,7 +248,7 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
               { label: "Job kinds", value: info?.jobKinds.join(", ") || "–", mono: true },
               { label: "Parallel jobs", value: info?.maxConcurrentJobs || "–" },
               ...(workerAbilities(w)
-                ? [{ label: "Remote backups", value: <RemoteAbilities worker={w} /> }]
+                ? [{ label: "Remote backups", value: <RemoteAbilities worker={w} stacked /> }]
                 : []),
               ...(w.mode === WorkerMode.PASSIVE
                 ? [

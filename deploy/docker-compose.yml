@@ -124,6 +124,19 @@ services:
   #   volumes:
   #     - worker-data:/var/lib/syncr
   #     - /srv/syncr-data:/data
+  #   # Backing up a folder of a remote with the mount method (rclone mount,
+  #   # docs/restic.md) needs FUSE in the container: the host's /dev/fuse,
+  #   # CAP_SYS_ADMIN (the mount system call needs it, even through the
+  #   # image's setuid fusermount3) and no AppArmor profile (Docker's default
+  #   # one denies mounts). That widens what the container may do, so it is
+  #   # off here. The mirror method (the default) needs none of it. Without
+  #   # these lines the worker reports why it cannot mount on its page.
+  #   # devices:
+  #   #   - /dev/fuse
+  #   # cap_add:
+  #   #   - SYS_ADMIN
+  #   # security_opt:
+  #   #   - apparmor:unconfined
 
 volumes:
   postgres-data:

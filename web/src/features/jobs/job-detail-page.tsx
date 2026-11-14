@@ -26,7 +26,7 @@ import { StatusBadge } from "@/components/app/status-badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { JobService, JobStatus, WorkerAdminService, type Job } from "@/gen/syncr/v1/api_pb";
-import { JobErrorCode } from "@/gen/syncr/v1/link_pb";
+import { JobErrorCode, ResticRemoteSourceMethod } from "@/gen/syncr/v1/link_pb";
 import { ResticService } from "@/gen/syncr/v1/restic_pb";
 import { UserService } from "@/gen/syncr/v1/users_pb";
 import { useNow } from "@/hooks/use-now";
@@ -75,6 +75,7 @@ import {
   transferOf,
   type EndpointLabel,
 } from "./model";
+import { remoteSourceOf } from "./remote-source";
 
 /** currentRate smooths the throughput over the last few samples. */
 export function currentRate(samples: JobSample[], window = 3): number {
@@ -311,6 +312,19 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
       : 0
     : currentRate(phase ? phaseTail(watch.samples) : watch.samples);
   const hint = errorHint(job);
+  const started = tsDate(job.startedAt);
+  const startedAt = started ? started.getTime() / 1000 : undefined;
+  // A mirror is brought up to date, then backed up (a mount has one
+  // phase); a finished job's result says when the mirror was done.
+  const mirrored = remoteSourceOf(job.definition)?.method === ResticRemoteSourceMethod.MIRROR;
+  const phases = mirrored ? ["Mirror", "Backup"] : undefined;
+  const mirrorTime = durationSeconds(
+    job.output?.output.case === "resticBackup"
+      ? job.output.output.value.remoteSource?.mirrorElapsed
+      : undefined,
+  );
+  const phaseChangedAt =
+    mirrored && startedAt !== undefined && mirrorTime > 0 ? [startedAt + mirrorTime] : undefined;
   const errors = toNumber(job.stats?.errors);
   const owner = foreign ? users.data?.users.find((u) => u.id === job.ownerId) : undefined;
 
@@ -520,6 +534,9 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
           <ProgressChart
             samples={watch.samples}
             live={!terminal}
+            startedAt={startedAt}
+            phases={phases}
+            phaseChangedAt={phaseChangedAt}
             empty={
               terminal && watch.history !== "loading"
                 ? "No progress history (it is kept for a limited time)"

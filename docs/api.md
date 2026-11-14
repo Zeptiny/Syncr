@@ -55,6 +55,41 @@ curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/j
   why (`resyncReason`), and counts the conflicts (`conflicts`, with the
   first 20 in `conflictPaths`).
 
+A [backup of a folder of a remote](restic.md#back-up-a-folder-of-a-remote)
+is a `resticBackup` with `remoteSource` instead of `paths`
+(`ResticRemoteSourceDefinition` in
+[`api.proto`](../proto/syncr/v1/api.proto)):
+
+```sh
+curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"workerId":"<worker id>","definition":{"resticBackup":{"repositoryId":"<repository id>",
+       "remoteSource":{"remoteId":"<remote id>","path":"Photos","method":"RESTIC_REMOTE_SOURCE_METHOD_MIRROR",
+       "filters":[{"action":"FILTER_ACTION_EXCLUDE","pattern":".thumbnails/**"}]}}}}' \
+  http://127.0.0.1:8080/syncr.v1.JobService/RunJob
+```
+
+- `method` is `RESTIC_REMOTE_SOURCE_METHOD_MIRROR` or `…_MOUNT`.
+  `discardMirror`, `transfers` and `fastList` are for the mirror only;
+  `allowEmpty` lets an empty folder pass. `excludes`, `oneFileSystem` and
+  `useFsSnapshot` are refused with a remote source, and at most 31 tags of
+  your own (Syncr adds `syncr-remote:<remote id>`).
+- What a worker can do is in `ListWorkers` under `info.remoteSources`
+  (`mirror`, `mount`, `mirrorReason`, `mountReason`; unset for a worker
+  that never reported it). `RunJob` refuses a worker that cannot use the
+  method, on `worker_id`; a job that reaches such a worker anyway fails
+  with `JOB_ERROR_CODE_TOOL_UNAVAILABLE` and its reason. A worker without
+  the `restic.remote_source` feature (older than 2.2.0) fails it with
+  `JOB_ERROR_CODE_WORKER_OUTDATED`.
+- A schedule of it must target a worker: `target.workerLabel` is refused
+  with a field error on `target.worker_label`.
+- An empty folder fails with `JOB_ERROR_CODE_SOURCE_EMPTY` (32) unless
+  `allowEmpty` is set; then the job succeeds with an empty `snapshotId`
+  and a warning (restic makes no empty snapshot).
+- Live progress (`WatchJob`) carries `phase`: `mirror` (rclone's
+  counters) then `backup` (restic's, from zero again). Stored samples
+  (`ListJobSamples`) have no phase. A successful run's
+  `output.resticBackup.remoteSource` holds the mirror's counters.
+
 The [file browser](browsing.md)'s scans are calls of their own. All of
 them go through a worker and answer within the request:
 

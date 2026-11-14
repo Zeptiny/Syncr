@@ -2,7 +2,7 @@ import { create } from "@bufbuild/protobuf";
 import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   JobProgressSchema,
@@ -19,6 +19,16 @@ import { signedIn } from "@/test/app-api";
 import * as fx from "@/test/fixtures";
 import { m5Api } from "@/test/m5-api";
 import { mockTransport, renderApp } from "@/test/render";
+
+// uPlot needs a canvas, which jsdom lacks (the job page's throughput
+// chart would draw after a test ended); these tests read the page around it.
+vi.mock("uplot", () => ({
+  default: class {
+    setData() {}
+    setSize() {}
+    destroy() {}
+  },
+}));
 
 const now = Date.now();
 const MIRROR = ResticRemoteSourceMethod.MIRROR;

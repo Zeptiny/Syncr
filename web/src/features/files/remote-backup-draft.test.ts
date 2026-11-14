@@ -2,7 +2,9 @@ import { create } from "@bufbuild/protobuf";
 import { describe, expect, it } from "vitest";
 
 import type { SelectedItem } from "@/components/app/file-browser/selection";
+import { WorkerSchema } from "@/gen/syncr/v1/api_pb";
 import { ProbeEntrySchema, ProbeEntryType, ResticRemoteSourceMethod } from "@/gen/syncr/v1/link_pb";
+import { FEATURE_REMOTE_SOURCE } from "@/lib/workers";
 
 import {
   draftRunJob,
@@ -27,6 +29,28 @@ const target = (over: Partial<DraftTarget> = {}): DraftTarget => ({
 });
 
 describe("Back up this folder… from the remote browser", () => {
+  it("proposes the listing worker only if it can keep a mirror", () => {
+    const worker = (id: string, features: string[], mirror?: boolean) =>
+      create(WorkerSchema, {
+        id,
+        info: {
+          features,
+          remoteSources:
+            mirror === undefined ? undefined : { mirror, mirrorReason: mirror ? "" : "off" },
+        },
+      });
+    const workers = [
+      worker("nas", [FEATURE_REMOTE_SOURCE], true),
+      worker("old", ["probe"]),
+      worker("off", [FEATURE_REMOTE_SOURCE], false),
+    ];
+    expect(remoteBackupDraft(target(), workers)?.workerId).toBe("nas");
+    expect(remoteBackupDraft(target({ workerId: "old" }), workers)?.workerId).toBe("");
+    expect(remoteBackupDraft(target({ workerId: "off" }), workers)?.workerId).toBe("");
+    // Unknown workers (not loaded yet): the listing worker as before.
+    expect(remoteBackupDraft(target({ workerId: "old" }))?.workerId).toBe("old");
+  });
+
   it("backs up the open folder through a mirror, on the listing worker", () => {
     const draft = remoteBackupDraft(target());
     expect(draft?.kind).toBe("restic_backup");

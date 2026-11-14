@@ -39,14 +39,17 @@ export function RemoteAbilities({
       {rows.map((r, i) => (
         <span key={r.label} className="inline-flex items-start gap-1" aria-hidden>
           {!stacked && i > 0 && <span className="text-muted-foreground">·</span>}
-          <span>{r.label}</span>
+          <span className="shrink-0">{r.label}</span>
           {r.ok ? (
             <Check className="mt-[3px] size-3.5 shrink-0 text-success" />
           ) : (
             <X className="mt-[3px] size-3.5 shrink-0 text-danger" />
           )}
           {!r.ok && r.reason && (
-            <span className="pt-px text-xs leading-[18px] text-muted-foreground">– {r.reason}</span>
+            <span className="min-w-0 pt-px text-xs leading-[18px] text-muted-foreground">
+              {/* A no-break space keeps the dash with the reason's first word. */}–{"\u00a0"}
+              {r.reason}
+            </span>
           )}
         </span>
       ))}
