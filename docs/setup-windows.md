@@ -43,6 +43,12 @@ last line:
 & 'C:\Program Files\Syncr\syncr-worker.exe' setup --controller https://syncr.example.com --token syncr_et_...
 ```
 
+The page that showed the command follows the worker: it shows when the
+command has run and the worker enrolled, then, once it has connected, its
+hostname, versions and allowed folders (`local_roots`), with a link to its
+page. An empty list of allowed folders is flagged there: jobs could not
+touch the machine's own files.
+
 To check the archive against the release's `checksums.txt` before
 installing it by hand (elevated PowerShell):
 

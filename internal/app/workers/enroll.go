@@ -40,8 +40,8 @@ func SecretAD(id domain.WorkerID) []byte { return []byte("worker-secret:" + id.S
 func HashToken(token string) TokenHash { return sha256.Sum256([]byte(token)) }
 
 // CreateEnrollmentToken creates a single-use token valid for ttl (zero means
-// Config.TokenTTL; otherwise MinTokenTTL to Config.MaxTokenTTL). Expired
-// tokens are purged on the way.
+// Config.TokenTTL; otherwise MinTokenTTL to Config.MaxTokenTTL). Tokens that
+// expired more than KeepExpiredTokens ago are purged on the way.
 func (s *Service) CreateEnrollmentToken(ctx context.Context, ttl time.Duration) (EnrollmentGrant, error) {
 	if ttl == 0 {
 		ttl = s.cfg.TokenTTL
@@ -51,7 +51,7 @@ func (s *Service) CreateEnrollmentToken(ctx context.Context, ttl time.Duration) 
 			domain.ErrInvalidArgument, ttl, MinTokenTTL, s.cfg.MaxTokenTTL)
 	}
 	now := s.clock.Now()
-	if n, err := s.tokens.DeleteEnrollmentTokens(ctx, now); err != nil {
+	if n, err := s.tokens.DeleteEnrollmentTokens(ctx, now.Add(-KeepExpiredTokens)); err != nil {
 		s.log.WarnContext(ctx, "purging expired enrollment tokens failed", "error", err.Error())
 	} else if n > 0 {
 		s.log.DebugContext(ctx, "purged expired enrollment tokens", "count", n)
@@ -60,13 +60,31 @@ func (s *Service) CreateEnrollmentToken(ctx context.Context, ttl time.Duration) 
 	if err != nil {
 		return EnrollmentGrant{}, fmt.Errorf("create enrollment token: %w", err)
 	}
-	t := EnrollmentToken{Hash: HashToken(token), CreatedAt: now, ExpiresAt: now.Add(ttl)}
+	t := EnrollmentToken{ID: s.ids.NewEnrollmentTokenID(), Hash: HashToken(token), CreatedAt: now, ExpiresAt: now.Add(ttl)}
 	if err := s.tokens.CreateEnrollmentToken(ctx, t); err != nil {
 		return EnrollmentGrant{}, fmt.Errorf("create enrollment token: %w", err)
 	}
-	s.log.InfoContext(ctx, "enrollment token created", "expires_at", t.ExpiresAt)
-	return EnrollmentGrant{Token: token, ExpiresAt: t.ExpiresAt}, nil
+	s.log.InfoContext(ctx, "enrollment token created", "id", t.ID.String(), "expires_at", t.ExpiresAt)
+	return EnrollmentGrant{ID: t.ID, Token: token, ExpiresAt: t.ExpiresAt}, nil
 }
+
+// GetEnrollmentToken returns the token with this ID, so an admin can follow
+// the enrollment it starts: TokenState tells whether it is waiting, used
+// (UsedBy is the worker) or expired. ErrNotFound for an unknown ID or a
+// token purged KeepExpiredTokens after it expired.
+func (s *Service) GetEnrollmentToken(ctx context.Context, id domain.EnrollmentTokenID) (EnrollmentToken, error) {
+	if id.IsZero() {
+		return EnrollmentToken{}, fmt.Errorf("get enrollment token: %w", domain.ErrInvalidID)
+	}
+	t, err := s.tokens.GetEnrollmentToken(ctx, id)
+	if err != nil {
+		return EnrollmentToken{}, fmt.Errorf("get enrollment token %s: %w", id, err)
+	}
+	return t, nil
+}
+
+// TokenState returns t's state as of now.
+func (s *Service) TokenState(t EnrollmentToken) TokenState { return t.State(s.clock.Now()) }
 
 // Enroll redeems an enrollment token and creates the worker with a new
 // random secret. The request is validated before the token is redeemed, so a

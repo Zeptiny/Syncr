@@ -61,6 +61,35 @@ func workerStatusToProto(s domain.WorkerStatus) syncrv1.WorkerStatus {
 	}
 }
 
+func tokenStateToProto(s workers.TokenState) syncrv1.EnrollmentTokenState {
+	switch s {
+	case workers.TokenWaiting:
+		return syncrv1.EnrollmentTokenState_ENROLLMENT_TOKEN_STATE_WAITING
+	case workers.TokenUsed:
+		return syncrv1.EnrollmentTokenState_ENROLLMENT_TOKEN_STATE_USED
+	case workers.TokenExpired:
+		return syncrv1.EnrollmentTokenState_ENROLLMENT_TOKEN_STATE_EXPIRED
+	default:
+		return syncrv1.EnrollmentTokenState_ENROLLMENT_TOKEN_STATE_UNSPECIFIED
+	}
+}
+
+// enrollmentTokenToProto converts t with its derived state. The hash is not
+// exposed.
+func enrollmentTokenToProto(t workers.EnrollmentToken, state workers.TokenState) *syncrv1.EnrollmentToken {
+	out := &syncrv1.EnrollmentToken{
+		Id:        t.ID.String(),
+		State:     tokenStateToProto(state),
+		CreatedAt: ts(t.CreatedAt),
+		ExpiresAt: ts(t.ExpiresAt),
+		UsedAt:    ts(t.UsedAt),
+	}
+	if !t.UsedBy.IsZero() {
+		out.WorkerId = t.UsedBy.String()
+	}
+	return out
+}
+
 // workerToProto converts w with its derived connection status and whether
 // it is outdated against a controller of version controllerVersion (see
 // workerOutdated). Secrets (SecretEnc) and link internals (epochs, ack

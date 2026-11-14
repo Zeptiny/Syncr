@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
@@ -66,7 +67,7 @@ var milestone4Tables = []string{"contacts", "schedules", "schedule_remotes", "sc
 var milestone5Tables = []string{"restic_repositories", "restic_snapshots"}
 
 // allVersions are the versions of the embedded migrations.
-var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
 
 func columnExists(t *testing.T, s *Store, table, column string) bool {
 	t.Helper()
@@ -590,6 +591,58 @@ func TestMigrateJobHooks(t *testing.T) {
 	}
 	if got, err := s.GetJob(ctx, j.ID); err != nil || got.HookRuns != nil {
 		t.Errorf("GetJob of a job from before the migration: hook runs %+v, %v", got.HookRuns, err)
+	}
+}
+
+// TestMigrateEnrollmentTokenIDs checks migration 00011: it gives every
+// enrollment token an ID, the tokens already there too, so they can still be
+// looked up and redeemed; down removes the column.
+func TestMigrateEnrollmentTokenIDs(t *testing.T) {
+	s := openStore(t, createDB(t, true))
+	ctx := t.Context()
+	p, closeDB, err := s.migrationProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	if _, err := p.DownTo(ctx, 10); err != nil {
+		t.Fatalf("down to 10: %v", err)
+	}
+	if columnExists(t, s, "enrollment_tokens", "id") {
+		t.Fatal("enrollment_tokens.id survived the down migration")
+	}
+	hashes := []workers.TokenHash{{1}, {2}}
+	for _, h := range hashes {
+		if _, err := s.pool.Exec(ctx, `INSERT INTO enrollment_tokens (hash, created_at, expires_at) VALUES ($1, now(), now() + interval '1 hour')`, h[:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) {
+		t.Errorf("applied versions = %v, want %v", got, allVersions)
+	}
+
+	seen := map[domain.EnrollmentTokenID]bool{}
+	for _, h := range hashes {
+		var raw string
+		if err := s.pool.QueryRow(ctx, `SELECT id::text FROM enrollment_tokens WHERE hash = $1`, h[:]).Scan(&raw); err != nil {
+			t.Fatalf("token %x: %v", h[:1], err)
+		}
+		id, err := domain.ParseEnrollmentTokenID(raw)
+		if err != nil || seen[id] {
+			t.Fatalf("token %x got the ID %q (%v), want a new one", h[:1], raw, err)
+		}
+		seen[id] = true
+		if got, err := s.GetEnrollmentToken(ctx, id); err != nil || got.Hash != h || got.ID != id {
+			t.Errorf("GetEnrollmentToken(%s) = (%+v, %v)", id, got, err)
+		}
+	}
+	// A token from before the migration can still be redeemed.
+	w := newTestWorker()
+	if got, err := s.EnrollWorker(ctx, hashes[0], time.Now(), w); err != nil || got.UsedBy != w.ID || got.ID.IsZero() {
+		t.Errorf("EnrollWorker(old token) = (%+v, %v)", got, err)
 	}
 }
 

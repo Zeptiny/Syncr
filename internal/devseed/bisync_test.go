@@ -143,7 +143,9 @@ func TestSeedTwoWaySync(t *testing.T) {
 
 	// The jobs run by hand, newest first: the new pair's first run on
 	// backup-host, refused because its folder is empty, and the resync
-	// after the run that needed it, before the next.
+	// after the run that needed it, before the next. The new pair shares
+	// only its R2 side with the scheduled one, so one key; which of the two
+	// keys that is depends on their hashes, not on their order.
 	all, err := e.deps.Jobs.List(ctx, s.Admin, jobs.ListFilter{Kinds: []string{"rclone_bisync"}, Limit: jobs.MaxPageSize})
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +164,7 @@ func TestSeedTwoWaySync(t *testing.T) {
 	if err != nil || fresh.WorkerID != s.Workers["backup-host"] || fresh.Status != domain.JobFailed ||
 		fresh.Error.Code != "resync_required" || fresh.Error.Message != msgEmpty || fresh.ExitCode != -1 ||
 		fdef.GetRcloneBisync().GetPath1().GetPath() != "/backup/shared" || fdef.GetRcloneBisync().GetResync() ||
-		!slices.Contains(fresh.ConcurrencyKeys, keys[1]) || slices.Contains(fresh.ConcurrencyKeys, keys[0]) {
+		len(fresh.ConcurrencyKeys) != 2 || countShared(fresh.ConcurrencyKeys, keys) != 1 {
 		t.Errorf("the new pair's first run = %+v (%v)", fresh, err)
 	}
 	resync := manual[1]
@@ -222,4 +224,15 @@ func TestSeedTwoWaySync(t *testing.T) {
 	if strings.Contains(e.logs.String(), "syncr-demo-r2-secret") {
 		t.Error("the log contains the R2 secret")
 	}
+}
+
+// countShared counts the keys of a that are also in b.
+func countShared(a, b []string) int {
+	n := 0
+	for _, k := range a {
+		if slices.Contains(b, k) {
+			n++
+		}
+	}
+	return n
 }

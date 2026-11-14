@@ -114,3 +114,18 @@ func TestProbeID(t *testing.T) {
 		t.Errorf("ParseProbeID(nil UUID) = %v, want ErrInvalidID", err)
 	}
 }
+
+func TestEnrollmentTokenID(t *testing.T) {
+	t.Parallel()
+	a := NewEnrollmentTokenID()
+	if a.IsZero() || a == NewEnrollmentTokenID() {
+		t.Fatal("new enrollment token IDs must be non-zero and distinct")
+	}
+	got, err := ParseEnrollmentTokenID(a.String())
+	if err != nil || got != a {
+		t.Errorf("ParseEnrollmentTokenID(%s) = (%v, %v)", a, got, err)
+	}
+	if _, err := ParseEnrollmentTokenID("00000000-0000-0000-0000-000000000000"); !errors.Is(err, ErrInvalidID) {
+		t.Errorf("ParseEnrollmentTokenID(nil UUID) = %v, want ErrInvalidID", err)
+	}
+}

@@ -111,6 +111,7 @@ func newPolicy() map[string]access {
 		syncrv1connect.WorkerAdminServiceListWorkersProcedure:               user,
 		syncrv1connect.WorkerAdminServiceGetWorkerProcedure:                 user,
 		syncrv1connect.WorkerAdminServiceCreateEnrollmentTokenProcedure:     admin,
+		syncrv1connect.WorkerAdminServiceGetEnrollmentTokenProcedure:        admin,
 		syncrv1connect.WorkerAdminServiceGetPassiveInstallCommandsProcedure: admin,
 		syncrv1connect.WorkerAdminServiceRegisterPassiveWorkerProcedure:     admin,
 		syncrv1connect.WorkerAdminServiceRenameWorkerProcedure:              admin,

@@ -35,6 +35,7 @@ import { UserRole, UserSchema, UserService } from "@/gen/syncr/v1/users_pb";
 import * as fx from "@/test/fixtures";
 
 import * as bisyncMock from "./bisync";
+import { Enrollments } from "./enrollment";
 import * as hooksMock from "./hooks";
 import { registerM4 } from "./m4";
 import * as m5mock from "./m5";
@@ -83,6 +84,7 @@ export function createMockTransport(): Transport {
   bisyncMock.applyWorkers(workers);
   applyM7Workers(workers);
   workers.push(m6.atticWorker(now));
+  const enrollments = new Enrollments(workers);
   let remotes = [...fx.remotes(now), m6.verifiedRemote(now), bisyncMock.r2Remote(now)].sort(
     (a, b) => a.name.localeCompare(b.name),
   );
@@ -490,6 +492,7 @@ export function createMockTransport(): Transport {
     service(WorkerAdminService, {
       listWorkers: (req) => {
         me();
+        enrollments.advance();
         return { workers: workers.filter((w) => !req.label || w.labels.includes(req.label)) };
       },
       setWorkerLabels: async (req) => {
@@ -512,6 +515,7 @@ export function createMockTransport(): Transport {
       },
       getWorker: (req) => {
         me();
+        enrollments.advance();
         const w = workers.find((x) => x.id === req.workerId);
         if (!w) throw new ConnectError("worker not found", Code.NotFound);
         return { worker: w };
@@ -519,15 +523,21 @@ export function createMockTransport(): Transport {
       createEnrollmentToken: async (req) => {
         admin();
         await sleep(300);
-        const token = "enr_7Hq2xV9pLmT4sR8wK3nB6cY1dF5gJ0aZ";
+        const token = "syncr_et_7Hq2xV9pLmT4sR8wK3nB6cY1dF5gJ0aZ";
+        const t = enrollments.create(Number(req.ttl?.seconds ?? 3600n) * 1000);
         return {
           token,
-          expiresAt: timestampFromMs(Date.now() + Number(req.ttl?.seconds ?? 3600n) * 1000),
+          tokenId: t.id,
+          expiresAt: timestampFromMs(t.expiresAt),
           installCommands: fx.installCommands(
             token,
             req.controllerUrl || "https://syncr.example.net",
           ),
         };
+      },
+      getEnrollmentToken: (req) => {
+        admin();
+        return { token: enrollments.get(req.tokenId) };
       },
       getPassiveInstallCommands: () => {
         admin();

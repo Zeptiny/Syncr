@@ -61,6 +61,7 @@ type EnrollmentToken struct {
 	ExpiresAt pgtype.Timestamptz
 	UsedAt    pgtype.Timestamptz
 	UsedBy    pgtype.UUID
+	ID        pgtype.UUID
 }
 
 type Job struct {

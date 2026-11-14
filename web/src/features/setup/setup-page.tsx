@@ -73,6 +73,8 @@ export function SetupPage({ step }: { step: SetupStep }) {
     confirm: "",
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // The first worker connected: Continue to Syncr becomes the main button.
+  const [workerConnected, setWorkerConnected] = useState(false);
 
   const goTo = (s: SetupStep) => {
     setCurrent(s);
@@ -232,8 +234,12 @@ export function SetupPage({ step }: { step: SetupStep }) {
               later from Workers.
             </p>
           </div>
-          <ActiveEnrollment />
-          <Button size="lg" variant="outline" onClick={() => void navigate({ to: "/" })}>
+          <ActiveEnrollment onConnected={() => setWorkerConnected(true)} workerLink="secondary" />
+          <Button
+            size="lg"
+            variant={workerConnected ? "default" : "outline"}
+            onClick={() => void navigate({ to: "/" })}
+          >
             Continue to Syncr
           </Button>
         </div>

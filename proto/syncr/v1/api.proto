@@ -82,6 +82,15 @@ service WorkerAdminService {
   // token is returned once; the controller stores only its hash.
   rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateEnrollmentTokenResponse) {}
 
+  // GetEnrollmentToken returns where an enrollment token is: waiting to be
+  // used, used (with the worker it enrolled) or expired. The page that
+  // created the token follows the enrollment with it, then with GetWorker.
+  // Tokens are kept for a day after they expire; NOT_FOUND for an unknown
+  // ID or a token deleted since.
+  rpc GetEnrollmentToken(GetEnrollmentTokenRequest) returns (GetEnrollmentTokenResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
   // GetPassiveInstallCommands returns the commands that install a passive
   // worker (`syncr-worker setup --passive`), which then prints the URL,
   // fingerprint and pairing secret for RegisterPassiveWorker.
@@ -250,6 +259,54 @@ message CreateEnrollmentTokenResponse {
   // Commands that download, install and enroll a worker with this token,
   // per platform and scope. Empty if the controller URL is unknown.
   repeated InstallCommand install_commands = 3;
+
+  // The token's ID (UUID), for GetEnrollmentToken. Unlike the token it is
+  // not a credential.
+  string token_id = 4;
+}
+
+// GetEnrollmentTokenRequest names the token by its ID.
+message GetEnrollmentTokenRequest {
+  string token_id = 1;
+}
+
+// GetEnrollmentTokenResponse returns the token.
+message GetEnrollmentTokenResponse {
+  EnrollmentToken token = 1;
+}
+
+// EnrollmentToken is an enrollment token without the token itself, which
+// the controller does not keep.
+message EnrollmentToken {
+  // Token ID (UUID).
+  string id = 1;
+
+  // Where the token is, as of the controller's clock.
+  EnrollmentTokenState state = 2;
+
+  // When the token was created.
+  google.protobuf.Timestamp created_at = 3;
+
+  // When the token stops being accepted.
+  google.protobuf.Timestamp expires_at = 4;
+
+  // USED only: when the worker enrolled.
+  google.protobuf.Timestamp used_at = 5;
+
+  // USED only: the worker the token enrolled (GetWorker). It reports what
+  // it is (Worker.info) once it has connected.
+  string worker_id = 6;
+}
+
+// EnrollmentTokenState is where an enrollment token is.
+enum EnrollmentTokenState {
+  ENROLLMENT_TOKEN_STATE_UNSPECIFIED = 0;
+  // Not used yet and still accepted.
+  ENROLLMENT_TOKEN_STATE_WAITING = 1;
+  // A worker enrolled with it.
+  ENROLLMENT_TOKEN_STATE_USED = 2;
+  // Not used and no longer accepted.
+  ENROLLMENT_TOKEN_STATE_EXPIRED = 3;
 }
 
 // GetPassiveInstallCommandsRequest is empty.

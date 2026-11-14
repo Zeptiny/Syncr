@@ -13,6 +13,9 @@ import (
 // policy table restricts their management to admins.
 type WorkerService interface {
 	CreateEnrollmentToken(ctx context.Context, ttl time.Duration) (workers.EnrollmentGrant, error)
+	GetEnrollmentToken(ctx context.Context, id domain.EnrollmentTokenID) (workers.EnrollmentToken, error)
+	// TokenState derives an enrollment token's state as of now.
+	TokenState(t workers.EnrollmentToken) workers.TokenState
 	RegisterPassive(ctx context.Context, p workers.PassiveParams) (workers.Worker, error)
 	List(ctx context.Context, f workers.ListFilter) ([]workers.Worker, error)
 	Get(ctx context.Context, id domain.WorkerID) (workers.Worker, error)

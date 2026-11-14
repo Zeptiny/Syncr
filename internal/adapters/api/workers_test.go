@@ -233,6 +233,70 @@ func TestListGetRenameRemoveWorkers(t *testing.T) {
 	wantCode(t, err, connect.CodeNotFound)
 }
 
+func TestGetEnrollmentToken(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	c := e.workersClient()
+	create := func(ttl time.Duration) *syncrv1.CreateEnrollmentTokenResponse {
+		t.Helper()
+		resp, err := c.CreateEnrollmentToken(t.Context(), connect.NewRequest(&syncrv1.CreateEnrollmentTokenRequest{Ttl: durationpb.New(ttl)}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := domain.ParseEnrollmentTokenID(resp.Msg.GetTokenId()); err != nil {
+			t.Fatalf("token_id %q: %v", resp.Msg.GetTokenId(), err)
+		}
+		return resp.Msg
+	}
+	get := func(id string) *syncrv1.EnrollmentToken {
+		t.Helper()
+		resp, err := c.GetEnrollmentToken(t.Context(), connect.NewRequest(&syncrv1.GetEnrollmentTokenRequest{TokenId: id}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(resp.Msg.String(), "syncr_et_") {
+			t.Errorf("GetEnrollmentToken returned a token: %v", resp.Msg)
+		}
+		return resp.Msg.GetToken()
+	}
+
+	used, expiring := create(10*time.Minute), create(time.Minute)
+	if used.GetTokenId() == expiring.GetTokenId() {
+		t.Error("two tokens have the same ID")
+	}
+	got := get(used.GetTokenId())
+	if got.GetId() != used.GetTokenId() || got.GetState() != syncrv1.EnrollmentTokenState_ENROLLMENT_TOKEN_STATE_WAITING ||
+		!got.GetCreatedAt().AsTime().Equal(e.clock.Now()) || !got.GetExpiresAt().AsTime().Equal(used.GetExpiresAt().AsTime()) ||
+		got.GetUsedAt() != nil || got.GetWorkerId() != "" {
+		t.Errorf("unused token = %v", got)
+	}
+
+	enr, err := e.wsvc.Enroll(t.Context(), workers.EnrollParams{Token: used.GetToken(), Name: "followed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = get(used.GetTokenId())
+	if got.GetState() != syncrv1.EnrollmentTokenState_ENROLLMENT_TOKEN_STATE_USED || got.GetWorkerId() != enr.Worker.ID.String() ||
+		!got.GetUsedAt().AsTime().Equal(e.clock.Now()) {
+		t.Errorf("used token = %v", got)
+	}
+
+	e.clock.Advance(time.Minute)
+	if got := get(expiring.GetTokenId()); got.GetState() != syncrv1.EnrollmentTokenState_ENROLLMENT_TOKEN_STATE_EXPIRED || got.GetWorkerId() != "" {
+		t.Errorf("expired token = %v", got)
+	}
+	if got := get(used.GetTokenId()); got.GetState() != syncrv1.EnrollmentTokenState_ENROLLMENT_TOKEN_STATE_USED {
+		t.Errorf("used token, later = %v", got)
+	}
+
+	_, err = c.GetEnrollmentToken(t.Context(), connect.NewRequest(&syncrv1.GetEnrollmentTokenRequest{TokenId: domain.NewEnrollmentTokenID().String()}))
+	wantCode(t, err, connect.CodeNotFound)
+	for _, id := range []string{"", "not-a-uuid", "00000000-0000-0000-0000-000000000000"} {
+		_, err := c.GetEnrollmentToken(t.Context(), connect.NewRequest(&syncrv1.GetEnrollmentTokenRequest{TokenId: id}))
+		wantCode(t, err, connect.CodeInvalidArgument)
+	}
+}
+
 func TestWorkerIDValidation(t *testing.T) {
 	t.Parallel()
 	c := newEnv(t).workersClient()

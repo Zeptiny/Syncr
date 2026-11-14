@@ -29,6 +29,7 @@ type (
 	runKind        struct{}
 	deliveryKind   struct{}
 	probeKind      struct{}
+	enrollmentKind struct{}
 )
 
 // Entity IDs.
@@ -57,6 +58,9 @@ type (
 	// outside its job slots (Milestone 5). Probes are never stored; the ID
 	// matches a worker's result to its caller.
 	ProbeID = ID[probeKind]
+	// EnrollmentTokenID identifies an enrollment token, so an admin can
+	// follow the enrollment it starts without holding the token itself.
+	EnrollmentTokenID = ID[enrollmentKind]
 )
 
 // NewUserID returns a new random UserID.
@@ -92,6 +96,9 @@ func NewDeliveryID() DeliveryID { return newID[deliveryKind]() }
 // NewProbeID returns a new random ProbeID.
 func NewProbeID() ProbeID { return newID[probeKind]() }
 
+// NewEnrollmentTokenID returns a new random EnrollmentTokenID.
+func NewEnrollmentTokenID() EnrollmentTokenID { return newID[enrollmentKind]() }
+
 // ParseUserID parses a UserID from its canonical string form.
 func ParseUserID(s string) (UserID, error) { return parseID[userKind](s) }
 
@@ -124,6 +131,12 @@ func ParseDeliveryID(s string) (DeliveryID, error) { return parseID[deliveryKind
 
 // ParseProbeID parses a ProbeID from its canonical string form.
 func ParseProbeID(s string) (ProbeID, error) { return parseID[probeKind](s) }
+
+// ParseEnrollmentTokenID parses an EnrollmentTokenID from its canonical
+// string form.
+func ParseEnrollmentTokenID(s string) (EnrollmentTokenID, error) {
+	return parseID[enrollmentKind](s)
+}
 
 func newID[K any]() ID[K] { return ID[K]{uuid: uuid.NewV7()} }
 

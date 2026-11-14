@@ -72,6 +72,7 @@ func (h *workerAdminHandler) CreateEnrollmentToken(ctx context.Context, req *con
 	msg := &syncrv1.CreateEnrollmentTokenResponse{
 		Token:     grant.Token,
 		ExpiresAt: timestamppb.New(grant.ExpiresAt),
+		TokenId:   grant.ID.String(),
 	}
 	if haveURL {
 		cmds, err := enrollCommands(h.install, controllerURL, grant.Token)
@@ -83,6 +84,20 @@ func (h *workerAdminHandler) CreateEnrollmentToken(ctx context.Context, req *con
 	resp := connect.NewResponse(msg)
 	resp.Header().Set("Cache-Control", "no-store")
 	return resp, nil
+}
+
+// GetEnrollmentToken returns an enrollment token's state, so the page that
+// created it can follow the enrollment.
+func (h *workerAdminHandler) GetEnrollmentToken(ctx context.Context, req *connect.Request[syncrv1.GetEnrollmentTokenRequest]) (*connect.Response[syncrv1.GetEnrollmentTokenResponse], error) {
+	id, err := parseEnrollmentTokenID(req.Msg.GetTokenId())
+	if err != nil {
+		return nil, err
+	}
+	t, err := h.workers.GetEnrollmentToken(ctx, id)
+	if err != nil {
+		return nil, h.errs.toConnect(ctx, syncrv1connect.WorkerAdminServiceGetEnrollmentTokenProcedure, "enrollment token", err)
+	}
+	return connect.NewResponse(&syncrv1.GetEnrollmentTokenResponse{Token: enrollmentTokenToProto(t, h.workers.TokenState(t))}), nil
 }
 
 // GetPassiveInstallCommands returns the commands that install a passive
@@ -209,6 +224,17 @@ func (h *workerAdminHandler) GetWorkerUpgradeCommands(ctx context.Context, req *
 
 // parseWorkerID parses a request's worker ID into an InvalidArgument error
 // naming the field.
+func parseEnrollmentTokenID(s string) (domain.EnrollmentTokenID, error) {
+	if s == "" {
+		return domain.EnrollmentTokenID{}, invalid("token_id is required")
+	}
+	id, err := domain.ParseEnrollmentTokenID(s)
+	if err != nil {
+		return domain.EnrollmentTokenID{}, invalid("token_id is not a valid ID")
+	}
+	return id, nil
+}
+
 func parseWorkerID(s string) (domain.WorkerID, error) {
 	if s == "" {
 		return domain.WorkerID{}, invalid("worker_id is required")

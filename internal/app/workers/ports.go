@@ -90,8 +90,13 @@ type NewEpoch struct {
 
 // TokenRepository persists enrollment tokens. Same rules as Repository.
 type TokenRepository interface {
-	// CreateEnrollmentToken inserts t. ErrAlreadyExists if its hash exists.
+	// CreateEnrollmentToken inserts t. ErrAlreadyExists if its ID or hash
+	// exists.
 	CreateEnrollmentToken(ctx context.Context, t EnrollmentToken) error
+
+	// GetEnrollmentToken returns the token with this ID, used or not,
+	// until DeleteEnrollmentTokens deletes it. ErrNotFound otherwise.
+	GetEnrollmentToken(ctx context.Context, id domain.EnrollmentTokenID) (EnrollmentToken, error)
 
 	// EnrollWorker redeems a token and creates the worker it enrolls, as one
 	// atomic step. If a token with this hash exists, is unused and at <
@@ -125,9 +130,10 @@ type Clock interface {
 	Now() time.Time
 }
 
-// IDGenerator mints worker IDs.
+// IDGenerator mints worker and enrollment token IDs.
 type IDGenerator interface {
 	NewWorkerID() domain.WorkerID
+	NewEnrollmentTokenID() domain.EnrollmentTokenID
 }
 
 // JobReleaser ends the unfinished jobs of a removed worker (implemented by
