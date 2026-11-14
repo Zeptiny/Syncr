@@ -9,8 +9,8 @@ SQLC          ?= $(GO) run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 GOLANGCI_LINT ?= golangci-lint
 # GoReleaser runs via `go run` at the version CI and the release workflow pin
 # (GORELEASER_VERSION in .github/workflows/{ci,release}.yml); it needs Go
-# 1.27.3 or newer. Override GORELEASER to use an installed binary.
-GORELEASER_VERSION ?= v2.20.1
+# 1.27.4 or newer. Override GORELEASER to use an installed binary.
+GORELEASER_VERSION ?= v2.20.2
 GORELEASER         ?= $(GO) run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 # Installs web/ dependencies with the npm bundled with Node 26 (web/.nvmrc).
 NPM_CI        ?= npm ci --no-audit --no-fund

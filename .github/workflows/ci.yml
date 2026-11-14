@@ -22,7 +22,7 @@ env:
   # needed and the generated code cannot depend on a stray local version.
   SQLC_VERSION: v1.31.1
   # Keep in sync with the Makefile and .github/workflows/release.yml.
-  GORELEASER_VERSION: v2.20.1
+  GORELEASER_VERSION: v2.20.2
   GOVULNCHECK_VERSION: v1.9.0
   ACTIONLINT_VERSION: v1.7.12
   # WinFsp for the Windows mount tests: the official MSI of this release,

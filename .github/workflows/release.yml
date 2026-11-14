@@ -20,7 +20,7 @@ concurrency:
 # Actions are pinned to full commit SHAs (the comment names the release).
 env:
   # Keep in sync with the Makefile and .github/workflows/ci.yml.
-  GORELEASER_VERSION: v2.20.1
+  GORELEASER_VERSION: v2.20.2
   REGISTRY: ghcr.io/zeptiny
 
 jobs:
