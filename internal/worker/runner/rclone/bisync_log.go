@@ -16,7 +16,7 @@ const (
 	maxConflictPathBytes = 500
 )
 
-// Messages of rclone bisync (1.75.2) that the runner acts on. The tests
+// Messages of rclone bisync (1.76.0) that the runner acts on. The tests
 // check them against output recorded from that version
 // (testdata/bisync_*.jsonl), so a tool upgrade that changes them fails the
 // tests instead of mislabelling jobs.

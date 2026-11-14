@@ -13,7 +13,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
 )
 
-// fixtureLines reads a testdata file captured from rclone v1.75.2 (local
+// fixtureLines reads a testdata file captured from rclone v1.76.0 (local
 // paths rewritten to /data/...).
 func fixtureLines(t *testing.T, name string) []string {
 	t.Helper()
@@ -51,9 +51,11 @@ func TestTrackerCopyFixture(t *testing.T) {
 	t.Parallel()
 	tr, got := feed(fixtureLines(t, "copy_progress.jsonl")...)
 	want := []runner.Progress{
-		{Bytes: 1082342, TotalBytes: 2800006, Files: 2, TotalFiles: 3, Elapsed: secs(1.00134646)},
-		{Bytes: 2130918, TotalBytes: 2800006, Files: 2, TotalFiles: 3, Elapsed: secs(2.000669151)},
-		{Bytes: 2800006, TotalBytes: 2800006, Files: 3, TotalFiles: 3, Elapsed: secs(2.668178729)},
+		{Bytes: 1273862, TotalBytes: 2800006, Files: 1, TotalFiles: 3, Elapsed: secs(1.000207721)},
+		{Bytes: 2355206, TotalBytes: 2800006, Files: 1, TotalFiles: 3, Elapsed: secs(2.001201825)},
+		// rclone 1.76 counts the folder whose modification time it set as
+		// a check.
+		{Bytes: 2800006, TotalBytes: 2800006, Files: 3, TotalFiles: 3, Checks: 1, Elapsed: secs(2.668375743)},
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("emitted\n%+v\nwant\n%+v", got, want)
@@ -66,7 +68,7 @@ func TestTrackerCopyFixture(t *testing.T) {
 func TestTrackerSyncFixture(t *testing.T) {
 	t.Parallel()
 	_, got := feed(fixtureLines(t, "sync_renames_deletes.jsonl")...)
-	want := []runner.Progress{{Checks: 7, Deletes: 2, Renames: 1, Elapsed: secs(0.000871769)}}
+	want := []runner.Progress{{Checks: 7, Deletes: 2, Renames: 1, Elapsed: secs(0.000524697)}}
 	if !slices.Equal(got, want) {
 		t.Errorf("emitted %+v, want %+v", got, want)
 	}

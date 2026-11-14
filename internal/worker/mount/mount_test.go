@@ -194,7 +194,7 @@ func TestMountLifecycle(t *testing.T) {
 
 // TestMountRcloneExitsFirst: rclone ending before the folder is mounted
 // fails the mount at once with its messages, Unavailable when they name
-// FUSE or WinFsp (recorded from rclone v1.75.2 on a machine without
+// FUSE or WinFsp (recorded from rclone v1.76.0 on a machine without
 // /dev/fuse), and the mount point is cleaned up.
 func TestMountRcloneExitsFirst(t *testing.T) {
 	t.Parallel()
@@ -206,8 +206,8 @@ func TestMountRcloneExitsFirst(t *testing.T) {
 	}{
 		"no FUSE device": {
 			lines: []string{
-				`{"time":"2026-11-14T01:57:07.61422137Z","level":"notice","msg":"mount helper error: fusermount3: fuse device not found, try 'modprobe fuse' first","source":"fuse@v0.0.0-20230120002735-62a210ff1fd5/mount.go:23"}`,
-				`{"time":"2026-11-14T01:57:07.614326107Z","level":"critical","msg":"Fatal error: failed to mount FUSE fs: fusermount: exit status 1","source":"mountlib/mount.go:329"}`,
+				`{"time":"2026-11-14T22:01:52.530138412Z","level":"notice","msg":"mount helper error: fusermount3: fuse device not found, try 'modprobe fuse' first","source":"fuse@v0.0.0-20230120002735-62a210ff1fd5/mount.go:23"}`,
+				`{"time":"2026-11-14T22:01:52.53033464Z","level":"critical","msg":"Fatal error: failed to mount FUSE fs: fusermount: exit status 1","source":"mountlib/mount.go:339"}`,
 			},
 			unavailable: true,
 			want: "rclone mount failed (exit code 1): mount helper error: fusermount3: fuse device not found, try 'modprobe fuse' first; " +

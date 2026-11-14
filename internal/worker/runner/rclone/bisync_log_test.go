@@ -12,7 +12,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/worker/runner/scrub"
 )
 
-// The testdata/bisync_*.jsonl files are the output of rclone v1.75.2
+// The testdata/bisync_*.jsonl files are the output of rclone v1.76.0
 // bisync with the runner's fixed flags (--use-json-log --log-level=NOTICE
 // --stats=1s --stats-log-level=NOTICE --color=NEVER --workdir=<state>/work
 // --filters-file=<state>/filters.txt --recover --resilient), the pair's
@@ -299,7 +299,7 @@ func TestBisyncLogConflictLines(t *testing.T) {
 	}
 	renamed := logLine{Level: "notice", Msg: "- Path1             Renaming Path1 copy                         - /data/a/x.conflict1"}
 
-	// Recorded from rclone v1.75.2: a name that is not valid UTF-8, quoted.
+	// Recorded from rclone v1.76.0: a name that is not valid UTF-8, quoted.
 	l := &bisyncLog{}
 	l.line(warning(`"bad\xffname.txt"`))
 	l.line(renamed)

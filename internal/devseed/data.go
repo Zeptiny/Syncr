@@ -50,7 +50,7 @@ type demoWorker struct {
 const passivePairingSecret = "devseed-pairing-secret-0123456789abcdef"
 
 func tools() []workers.Tool {
-	return []workers.Tool{{Name: "rclone", Version: "v1.75.2"}, {Name: "restic", Version: "0.19.1"}}
+	return []workers.Tool{{Name: "rclone", Version: "v1.76.0"}, {Name: "restic", Version: "0.19.1"}}
 }
 
 // demoWorkers are the workers. All but old-nas and attic-nas run the

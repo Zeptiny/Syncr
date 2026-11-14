@@ -16,7 +16,7 @@ import (
 )
 
 // The testdata/lsjson_recursive*.out and .err files are the standard
-// output and error of rclone v1.75.2 running
+// output and error of rclone v1.76.0 running
 //
 //	rclone --config= lsjson -R --no-mimetype --no-modtime --use-json-log -- <target>
 //
@@ -222,14 +222,14 @@ func TestProberMeasureStopsWithItsContext(t *testing.T) {
 	// The soft deadline: what was counted, with complete=false.
 	sup := &probeSupervisor{stdout: readFixture(t, "lsjson_recursive.out")}
 	p, _ := newTestProber(t, sup)
-	// Stopped before the 11th line: "[", then a.txt, readme.md and seven
-	// folders.
+	// Stopped before the 11th line: "[", then a.txt, the two photos and
+	// six folders.
 	ctx := &endAfter{Context: t.Context(), err: context.DeadlineExceeded, n: 11}
 	m, err := p.Measure(ctx, probeID, remotes, measureOp("data"), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.GetComplete() || !sup.stopped || m.GetFiles() != 2 || m.GetDirs() != 7 || m.GetBytes() != 9 {
+	if m.GetComplete() || !sup.stopped || m.GetFiles() != 3 || m.GetDirs() != 6 || m.GetBytes() != 8004 {
 		t.Errorf("partial measurement = %v (stopped %v)", m, sup.stopped)
 	}
 	// A cancellation fails.

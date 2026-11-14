@@ -88,10 +88,10 @@ func replayLines(f proc.LineFunc, lines ...string) {
 }
 
 // defaultRun is a successful run of each command: lsf lists two entries,
-// sync prints rclone v1.75.2's stats of a first mirror, restic backs up
+// sync prints rclone v1.76.0's stats of a first mirror, restic backs up
 // (its status, then its summary).
 func defaultRun(t *testing.T) func(context.Context, proc.Spec) (proc.Result, error) {
-	sync := fixture(t, "rclone-1.75.2_sync_mirror.jsonl")
+	sync := fixture(t, "rclone-1.76.0_sync_mirror.jsonl")
 	summary := fixture(t, "backup_summary.out")
 	return func(_ context.Context, spec proc.Spec) (proc.Result, error) {
 		switch commandOf(spec) {
@@ -838,11 +838,12 @@ func TestRemoteSourceEmptySnapshot(t *testing.T) {
 }
 
 // TestRemoteSourceMirrorDeletes reads what a sync deleted from rclone
-// v1.75.2's stats (a second sync after a deletion and a new filter).
+// v1.76.0's stats (a second sync after a deletion and a new filter). Its
+// checks include the folder whose modification time rclone set.
 func TestRemoteSourceMirrorDeletes(t *testing.T) {
 	t.Parallel()
 	e := newRSEnv(t, bothMethods())
-	again := fixture(t, "rclone-1.75.2_sync_mirror_again.jsonl")
+	again := fixture(t, "rclone-1.76.0_sync_mirror_again.jsonl")
 	base := e.sup.script
 	e.sup.script = func(ctx context.Context, spec proc.Spec) (proc.Result, error) {
 		if commandOf(spec) == "rclone sync" {
@@ -859,7 +860,7 @@ func TestRemoteSourceMirrorDeletes(t *testing.T) {
 	if rs.GetDeletedFiles() != 2 || rs.GetMirroredFiles() != 0 || rs.GetMirroredBytes() != 0 {
 		t.Errorf("remote source stats = %v", rs)
 	}
-	if snaps[0].Phase != "mirror" || snaps[0].Deletes != 2 || snaps[0].Checks != 3 {
+	if snaps[0].Phase != "mirror" || snaps[0].Deletes != 2 || snaps[0].Checks != 4 {
 		t.Errorf("mirror sample = %+v", snaps[0])
 	}
 }

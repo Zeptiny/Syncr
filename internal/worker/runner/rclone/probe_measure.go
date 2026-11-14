@@ -27,7 +27,7 @@ const scanGrace = time.Second
 // first.
 //
 // It runs "lsjson -R --no-mimetype --no-modtime --use-json-log" and reads
-// the listing line by line. rclone 1.75 lists recursively with the
+// the listing line by line. rclone 1.76 lists recursively with the
 // backend's own recursive listing when it has one (a bucket: one request
 // per 1000 objects, the folders it synthesizes printed last), whether or
 // not --fast-list is given, and streams the items either way; elsewhere

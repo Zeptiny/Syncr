@@ -28,7 +28,7 @@ package tools
 // purpose: the worker never trusts a digest fetched at runtime.
 func DefaultManifest() Manifest {
 	const (
-		rcloneVersion = "1.75.2"
+		rcloneVersion = "1.76.0"
 		resticVersion = "0.19.1"
 		rcloneBase    = "https://downloads.rclone.org/v" + rcloneVersion + "/rclone-v" + rcloneVersion + "-"
 		resticBase    = "https://github.com/restic/restic/releases/download/v" + resticVersion + "/restic_" + resticVersion + "_"
@@ -42,19 +42,19 @@ func DefaultManifest() Manifest {
 			Artifacts: map[Platform]Artifact{
 				{OS: "linux", Arch: "amd64"}: {
 					URL:    rcloneBase + "linux-amd64.zip",
-					SHA256: "349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702",
+					SHA256: "b00f00b3266c3764413afe599d3ec316f6f43b3e0ea8a0bc1d186d2133e46df7",
 					Format: FormatZip,
 					Entry:  "rclone-v" + rcloneVersion + "-linux-amd64/rclone",
 				},
 				{OS: "linux", Arch: "arm64"}: {
 					URL:    rcloneBase + "linux-arm64.zip",
-					SHA256: "7e1e8d69654941b7b7df84ee74c5f7fb09cce7d5496947fb7bf16b55ff427d10",
+					SHA256: "ee169016675e23a69d77240565133ff7dbc9b33d16fa8f7053d4af39f1eaeb78",
 					Format: FormatZip,
 					Entry:  "rclone-v" + rcloneVersion + "-linux-arm64/rclone",
 				},
 				{OS: "windows", Arch: "amd64"}: {
 					URL:    rcloneBase + "windows-amd64.zip",
-					SHA256: "8a9db2bad1dc79a65b3348fd857069598e2aab7cf4d118b77b1df23055aff818",
+					SHA256: "8b4fd2737ade4e70c057ef4a49deb7cffe94b0fb9d7587c189d149823f21a1dc",
 					Format: FormatZip,
 					Entry:  "rclone-v" + rcloneVersion + "-windows-amd64/rclone.exe",
 				},

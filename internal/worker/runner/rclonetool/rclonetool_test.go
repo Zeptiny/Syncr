@@ -112,7 +112,7 @@ func TestClassifyExitAndFailure(t *testing.T) {
 	}
 }
 
-// TestTracker reads stats and errors from rclone v1.75.2 JSON log lines, and
+// TestTracker reads stats and errors from rclone v1.76.0 JSON log lines, and
 // scrubs a secret out of an error line.
 func TestTracker(t *testing.T) {
 	t.Parallel()
