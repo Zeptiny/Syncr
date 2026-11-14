@@ -8,7 +8,7 @@
 # SYNCR_DATABASE_URL and SYNCR_SECRETS_KEY, and SYNCR_PUBLIC_URL behind a
 # reverse proxy. deploy/docker-compose.yml runs it with Postgres.
 
-ARG GO_VERSION=1.27.3
+ARG GO_VERSION=1.27.4
 # Keep in sync with web/.nvmrc and node-version in .github/workflows/ci.yml.
 ARG NODE_VERSION=26
 
