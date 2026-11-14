@@ -1,9 +1,15 @@
 import type { MessageInitShape } from "@bufbuild/protobuf";
 
 import type { Location } from "@/components/app/location-editor";
-import type { FieldViolation, JobDefinition, JobDefinitionSchema } from "@/gen/syncr/v1/api_pb";
+import type {
+  FieldViolation,
+  JobDefinition,
+  JobDefinitionSchema,
+  Worker,
+} from "@/gen/syncr/v1/api_pb";
 import { FilterAction, RcloneTransferMode } from "@/gen/syncr/v1/link_pb";
 import { toNumber } from "@/lib/format";
+import { methodProblem } from "@/lib/remote-sources";
 
 import {
   bisyncError,
@@ -15,6 +21,7 @@ import {
   type BisyncState,
 } from "./bisync-definition";
 import { emptyHooks, hooksError, hooksState, toHooks, type HooksState } from "./hooks";
+import { remoteSourceError, type RemoteSourceErrorKey } from "./remote-source";
 import {
   backupState,
   checkState,
@@ -88,7 +95,8 @@ export interface TransferState {
 /**
  * DefinitionErrors are the definition's problems, by form section. The
  * first four belong to transfers; repository, paths, excludes, policy and
- * readData to the restic kinds; the BisyncErrorKey ones to two-way syncs;
+ * readData to the restic kinds, and tags and the RemoteSourceErrorKey ones
+ * to backups (of a remote); the BisyncErrorKey ones to two-way syncs;
  * options, timeLimit and hooks to every kind.
  */
 export type DefinitionErrors = Partial<
@@ -103,9 +111,11 @@ export type DefinitionErrors = Partial<
     | "excludes"
     | "policy"
     | "readData"
+    | "tags"
     | "timeLimit"
     | "hooks"
-    | BisyncErrorKey,
+    | BisyncErrorKey
+    | RemoteSourceErrorKey,
     string
   >
 >;
@@ -254,8 +264,9 @@ export function toTransferDefinition(
  * definitionError places one API violation on a definition section, or
  * returns false when the field is not part of the definition. Paths look
  * like definition.rclone_transfer.source.path,
- * definition.rclone_bisync.options.max_delete_percent or
- * definition.restic_backup.paths[0].
+ * definition.rclone_bisync.options.max_delete_percent,
+ * definition.restic_backup.paths[0] or
+ * definition.restic_backup.remote_source.remote_id.
  */
 export function definitionError(v: FieldViolation, errors: DefinitionErrors): boolean {
   const f = v.field;
@@ -274,8 +285,14 @@ export function definitionError(v: FieldViolation, errors: DefinitionErrors): bo
     errors[bisync] = v.message;
     return true;
   }
+  const remote = remoteSourceError(v);
+  if (remote !== undefined) {
+    errors[remote] = v.message;
+    return true;
+  }
   if (f.includes(".restic_")) {
     if (f.endsWith("repository_id")) errors.repository = v.message;
+    else if (/\.restic_backup\.tags(\[\d+\])?$/.test(f)) errors.tags = v.message;
     else if (f.includes(".paths")) errors.paths = v.message;
     else if (f.includes(".excludes")) errors.excludes = v.message;
     else if (f.includes(".policy")) errors.policy = v.message;
@@ -525,4 +542,18 @@ export function isDryRun(s: JobDefinitionState): boolean {
 export function forWorkerOS(s: JobDefinitionState, os: string | undefined): JobDefinitionState {
   if (s.kind !== "restic_backup" || !os || os.toLowerCase() === "windows") return s;
   return s.backup.useFsSnapshot ? { ...s, backup: { ...s.backup, useFsSnapshot: false } } : s;
+}
+
+/**
+ * definitionWorkerProblem returns, for a definition only some workers can
+ * run, why a worker cannot ("outdated", "can't mount: /dev/fuse is
+ * missing"), for the worker pickers; undefined for every other definition.
+ * Today that is a backup of a remote, by its method.
+ */
+export function definitionWorkerProblem(
+  s: JobDefinitionState,
+): ((w: Worker) => string | undefined) | undefined {
+  if (s.kind !== "restic_backup" || s.backup.source !== "remote") return undefined;
+  const method = s.backup.remote.method;
+  return (w) => methodProblem(w, method);
 }

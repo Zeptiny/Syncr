@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import type { Worker } from "@/gen/syncr/v1/api_pb";
+import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
 import type { ResticSnapshot } from "@/gen/syncr/v1/link_pb";
 import {
   ResticService,
@@ -42,6 +43,8 @@ import {
   tagsOf,
   type SnapshotFilter,
 } from "./snapshot-groups";
+import { RemoteBadge } from "./remote-badge";
+import { remoteNames, remoteOrigin, tagLabel, userTags } from "./snapshot-origin";
 
 const col = createColumnHelper<ResticSnapshot>();
 const PAGE = 100;
@@ -68,7 +71,9 @@ const ALL = "__all__";
  * browser. While the repository's data is being deleted the cache can
  * still be read, but not refreshed. The list can be filtered by text
  * (ID, host, tag, path), host and tag, and grouped by host and paths
- * like restic groups them.
+ * like restic groups them. Snapshots of a remote show the remote ("From
+ * Nextcloud") instead of their paths, which are the worker's internal
+ * mirror or mount folder.
  */
 export function SnapshotsTable({ repository, workers, rowActions }: SnapshotsTableProps) {
   const navigate = useNavigate();
@@ -85,6 +90,8 @@ export function SnapshotsTable({ repository, workers, rowActions }: SnapshotsTab
     workerId: "",
   });
   const refresh = useMutation(ResticService.method.listSnapshots);
+  const remotes = useQuery(RemoteService.method.listRemotes, {});
+  const names = useMemo(() => remoteNames(remotes.data?.remotes ?? []), [remotes.data]);
   // The answer of the last refresh replaces the cached list on screen.
   const [fresh, setFresh] = useState<ListSnapshotsResponse | undefined>();
   const data = fresh ?? cached.data;
@@ -131,7 +138,7 @@ export function SnapshotsTable({ repository, workers, rowActions }: SnapshotsTab
   }, [all]);
   const hosts = useMemo(() => hostsOf(all ?? []), [all]);
   const tags = useMemo(() => tagsOf(all ?? []), [all]);
-  const matching = useMemo(() => filterSnapshots(all ?? [], filter), [all, filter]);
+  const matching = useMemo(() => filterSnapshots(all ?? [], filter, names), [all, filter, names]);
   const groups = useMemo(() => (grouped ? groupSnapshots(matching) : []), [grouped, matching]);
   const filtered = isFiltered(filter);
 
@@ -153,27 +160,29 @@ export function SnapshotsTable({ repository, workers, rowActions }: SnapshotsTab
       }),
       col.accessor("host", {
         header: "Host",
-        cell: (c) => <span className="text-[13px]">{c.getValue() || "–"}</span>,
+        cell: (c) => <span className="text-[13px] whitespace-nowrap">{c.getValue() || "–"}</span>,
       }),
       col.display({
         id: "paths",
         header: "Paths",
         cell: ({ row: { original: s } }) => (
-          <span
-            className="block max-w-[16rem] truncate font-mono text-[12.5px]"
-            title={s.paths.join("\n")}
-          >
-            {s.paths.join(", ") || "–"}
-          </span>
+          <RemoteBadge snapshot={s} names={names}>
+            <span
+              className="block max-w-[16rem] truncate font-mono text-[12.5px]"
+              title={s.paths.join("\n")}
+            >
+              {s.paths.join(", ") || "–"}
+            </span>
+          </RemoteBadge>
         ),
       }),
       col.display({
         id: "tags",
         header: "Tags",
         cell: ({ row: { original: s } }) =>
-          s.tags.length ? (
+          userTags(s).length ? (
             <span className="inline-flex flex-wrap gap-1">
-              {s.tags.map((t) => (
+              {userTags(s).map((t) => (
                 <span
                   key={t}
                   className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[11.5px] text-secondary-foreground"
@@ -200,7 +209,7 @@ export function SnapshotsTable({ repository, workers, rowActions }: SnapshotsTab
         id: "size",
         header: "Size",
         cell: ({ row: { original: s } }) => (
-          <span className="tabular text-[13px]">
+          <span className="tabular text-[13px] whitespace-nowrap">
             {s.summary ? formatBytes(s.summary.totalBytesProcessed) : "–"}
           </span>
         ),
@@ -231,7 +240,7 @@ export function SnapshotsTable({ repository, workers, rowActions }: SnapshotsTab
           ]
         : []),
     ],
-    [rowActions, previous],
+    [rowActions, previous, names],
   );
 
   const rows = all ? matching.slice(0, shown) : undefined;
@@ -342,7 +351,7 @@ export function SnapshotsTable({ repository, workers, rowActions }: SnapshotsTab
                 <SelectItem value={ALL}>All tags</SelectItem>
                 {tags.map((t) => (
                   <SelectItem key={t} value={t}>
-                    {t}
+                    {tagLabel(t, names)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -366,16 +375,19 @@ export function SnapshotsTable({ repository, workers, rowActions }: SnapshotsTab
           <EmptyState title="No snapshot matches the filter" className="rounded-lg border py-10" />
         ) : (
           groups.map((g) => {
-            const label = `${g.host || "Unknown host"}: ${g.paths.join(", ") || "no paths"}`;
+            const from = remoteOrigin(g.first, names);
+            const label = `${g.host || "Unknown host"}: ${from ?? (g.paths.join(", ") || "no paths")}`;
             const open_ = expanded.has(g.key);
             const list = open_ ? g.snapshots : g.snapshots.slice(0, PAGE);
             return (
               <section key={g.key} aria-label={label} className="flex flex-col gap-2">
                 <h3 className="flex flex-wrap items-baseline gap-x-2 text-[13px] font-semibold">
                   {g.host || "Unknown host"}
-                  <span className="font-mono text-[12.5px] font-normal text-muted-foreground">
-                    {g.paths.join(", ") || "–"}
-                  </span>
+                  <RemoteBadge snapshot={g.first} names={names}>
+                    <span className="font-mono text-[12.5px] font-normal text-muted-foreground">
+                      {g.paths.join(", ") || "–"}
+                    </span>
+                  </RemoteBadge>
                   <span className="tabular text-xs font-normal text-muted-foreground">
                     {g.snapshots.length === 1
                       ? "1 snapshot"

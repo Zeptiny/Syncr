@@ -13,7 +13,7 @@ import {
 
 import type { SelectedItem } from "@/components/app/file-browser/selection";
 import { JobDefinitionSchema, type JobDefinition, type Worker } from "@/gen/syncr/v1/api_pb";
-import { FilterAction, ProbeEntryType } from "@/gen/syncr/v1/link_pb";
+import { FilterAction, ProbeEntryType, ResticRemoteSourceMethod } from "@/gen/syncr/v1/link_pb";
 import { parseFilterLine } from "@/lib/rclone-filters";
 
 import { definitionState, type EditableKind } from "../jobs/definition";
@@ -145,6 +145,33 @@ export function backupDraft(t: DraftTarget): JobDraft | undefined {
   if (!paths.length) return undefined;
   return makeJobDraft(
     { operation: { case: "resticBackup", value: { repositoryId: "", paths } } },
+    t.workerId,
+  );
+}
+
+/**
+ * remoteBackupDraft backs up the target's folder of a remote (the open
+ * folder, or the one folder selected) with restic, through a mirror. A
+ * Local directory remote is a folder on a worker: back that up instead.
+ */
+export function remoteBackupDraft(t: DraftTarget): JobDraft | undefined {
+  if (t.place.kind !== "remote" || t.place.local) return undefined;
+  const folder = draftFolder(t);
+  if (folder === undefined) return undefined;
+  return makeJobDraft(
+    {
+      operation: {
+        case: "resticBackup",
+        value: {
+          repositoryId: "",
+          remoteSource: {
+            remoteId: t.place.remoteId,
+            path: folder.replace(/^\/+|\/+$/g, ""),
+            method: ResticRemoteSourceMethod.MIRROR,
+          },
+        },
+      },
+    },
     t.workerId,
   );
 }

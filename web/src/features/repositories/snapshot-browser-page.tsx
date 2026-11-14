@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WorkerAdminService } from "@/gen/syncr/v1/api_pb";
 import { ProbeEntryType, type ProbeEntry, type ResticSnapshot } from "@/gen/syncr/v1/link_pb";
+import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
 import { ResticService } from "@/gen/syncr/v1/restic_pb";
 import { useFolderMeasure } from "@/hooks/use-folder-measure";
 import { sourceKey, type PathSource } from "@/hooks/use-path-listing";
@@ -39,8 +40,10 @@ import { RestoreSheet, type RestoreSheetProps } from "./restore-sheet";
 import { runScan } from "./scan-run";
 import { olderFirst } from "./scans";
 import type { SnapshotSearch } from "./search";
+import { RemoteBadge } from "./remote-badge";
 import { findSnapshot } from "./snapshot-groups";
 import { SnapshotMenu } from "./snapshot-menu";
+import { isRemoteSnapshot, REMOTE_RESTORE_HINT, remoteNames, userTags } from "./snapshot-origin";
 import { SnapshotSwitcher } from "./snapshot-switcher";
 
 /**
@@ -48,7 +51,8 @@ import { SnapshotSwitcher } from "./snapshot-switcher";
  * starts restores: of ticked items, of the open folder, or of everything,
  * and of items back to their original location (each row's menu and the
  * selection). The switcher moves to another snapshot and keeps the open
- * folder.
+ * folder. A snapshot of a remote is named after its remote, and is never
+ * restored to an original location: it has none on any worker.
  */
 export function SnapshotBrowserPage({
   repositoryId,
@@ -68,6 +72,7 @@ export function SnapshotBrowserPage({
     workerId: "",
   });
   const workers = useQuery(WorkerAdminService.method.listWorkers, {});
+  const remotes = useQuery(RemoteService.method.listRemotes, {});
   const source: PathSource = { kind: "snapshot", repositoryId, snapshotId, workerId: worker };
   const [selection, setSelection] = useBrowserSelection(sourceKey(source));
   // A restore takes from this snapshot, or from another one a version is in.
@@ -90,6 +95,9 @@ export function SnapshotBrowserPage({
     );
   }
   const snapshot = findSnapshot(snaps.data?.snapshots ?? [], snapshotId);
+  const names = remoteNames(remotes.data?.remotes ?? []);
+  // A snapshot of a remote has no original location to restore to.
+  const inPlace = !isRemoteSnapshot(snapshot);
   const sum = snapshot?.summary;
   const windows = isWindowsTree(snapshot?.paths ?? []);
   const open = (id: string, to: string, via = worker) =>
@@ -114,12 +122,16 @@ export function SnapshotBrowserPage({
       disabled: locked,
       onSelect: () => setRestore({ mode: "items", paths: [e.path] }),
     },
-    {
-      label: "Restore to original location…",
-      icon: Undo2,
-      disabled: locked,
-      onSelect: () => setRestore({ mode: "original", paths: [e.path] }),
-    },
+    ...(inPlace
+      ? [
+          {
+            label: "Restore to original location…",
+            icon: Undo2,
+            disabled: locked,
+            onSelect: () => setRestore({ mode: "original", paths: [e.path] }),
+          },
+        ]
+      : []),
     // Versions of files and links only: a folder's mean little, and its
     // whole subtree would use up the search's matches.
     ...(e.type === ProbeEntryType.DIR
@@ -170,6 +182,12 @@ export function SnapshotBrowserPage({
             {snapshot?.time && (
               <>
                 , taken <RelativeTime date={tsDate(snapshot.time)} />
+              </>
+            )}
+            {snapshot && !inPlace && (
+              <>
+                {" "}
+                <RemoteBadge snapshot={snapshot} names={names} className="align-middle" />
               </>
             )}
           </span>
@@ -232,21 +250,24 @@ export function SnapshotBrowserPage({
                 { label: "Host", value: snapshot?.host || "–" },
                 { label: "User", value: snapshot?.username || "–" },
                 {
-                  label: "Paths",
-                  value: snapshot?.paths.length ? (
-                    <span className="flex flex-col gap-0.5">
-                      {snapshot.paths.map((p) => (
-                        <span key={p} className="break-all">
-                          {p}
-                        </span>
-                      ))}
-                    </span>
-                  ) : (
-                    "–"
-                  ),
-                  mono: true,
+                  label: inPlace ? "Paths" : "Source",
+                  value:
+                    snapshot && !inPlace ? (
+                      <RemoteBadge snapshot={snapshot} names={names} />
+                    ) : snapshot?.paths.length ? (
+                      <span className="flex flex-col gap-0.5">
+                        {snapshot.paths.map((p) => (
+                          <span key={p} className="break-all">
+                            {p}
+                          </span>
+                        ))}
+                      </span>
+                    ) : (
+                      "–"
+                    ),
+                  mono: inPlace,
                 },
-                { label: "Tags", value: snapshot?.tags.join(", ") || "–" },
+                { label: "Tags", value: (snapshot ? userTags(snapshot) : []).join(", ") || "–" },
                 ...(sum
                   ? [
                       { label: "Files", value: formatCount(sum.totalFilesProcessed) },
@@ -260,6 +281,9 @@ export function SnapshotBrowserPage({
                   : []),
               ]}
             />
+          )}
+          {snapshot && !inPlace && (
+            <p className="mt-3 text-xs leading-5 text-muted-foreground">{REMOTE_RESTORE_HINT}.</p>
           )}
           {!snaps.isPending && !snapshot && (
             <p className="mt-3 text-xs leading-5 text-muted-foreground">
@@ -280,17 +304,31 @@ export function SnapshotBrowserPage({
           driveRoot={windows}
           rowMenu={rowMenu}
           measure={measure}
-          selectionActions={(ctx) => (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={locked}
-              onClick={() => setRestore({ mode: "original", paths: ctx.items.map((i) => i.path) })}
-            >
-              <Undo2 aria-hidden />
-              Restore to original location…
-            </Button>
-          )}
+          selectionActions={(ctx) =>
+            inPlace ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={locked}
+                onClick={() =>
+                  setRestore({ mode: "original", paths: ctx.items.map((i) => i.path) })
+                }
+              >
+                <Undo2 aria-hidden />
+                Restore to original location…
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={locked}
+                onClick={() => setRestore({ mode: "items", paths: ctx.items.map((i) => i.path) })}
+              >
+                <ListChecks aria-hidden />
+                Restore…
+              </Button>
+            )
+          }
           workerChoice={{
             workers: workers.data?.workers ?? [],
             op: "restic_ls",

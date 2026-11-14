@@ -28,6 +28,11 @@ export interface TargetPickerProps {
    * disabled and the reason shown.
    */
   labelDisabled?: string;
+  /**
+   * unavailable returns why a worker cannot run the job ("outdated"): the
+   * worker list shows it with the reason, and it cannot be chosen.
+   */
+  unavailable?: (w: Worker) => string | undefined;
 }
 
 /**
@@ -42,6 +47,7 @@ export function TargetPicker({
   workers,
   error,
   labelDisabled,
+  unavailable,
 }: TargetPickerProps) {
   const allLabels = [...new Set(workers.flatMap((w) => w.labels))].sort();
   const matching = labelledWorkers(workers, value.label);
@@ -110,6 +116,7 @@ export function TargetPicker({
             value={value.workerId}
             onChange={(workerId) => onChange({ ...value, workerId })}
             invalid={!!error}
+            unavailable={unavailable}
             className="bg-card sm:max-w-md"
           />
         </FieldShell>

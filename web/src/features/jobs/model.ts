@@ -2,15 +2,21 @@ import type {
   Job,
   JobDefinition,
   JobLocation,
+  JobRemoteRef,
   JobRepositoryRef,
   RcloneTransferDefinition,
 } from "@/gen/syncr/v1/api_pb";
-import { ResticRestoreOverwrite } from "@/gen/syncr/v1/link_pb";
+import {
+  JobErrorCode,
+  ResticRemoteSourceMethod,
+  ResticRestoreOverwrite,
+} from "@/gen/syncr/v1/link_pb";
 import { durationSeconds, toNumber, tsDate } from "@/lib/format";
 import { describeRetention } from "@/lib/retention";
-import { isTerminal, transferModeLabel } from "@/lib/status";
+import { errorCodeLabel, isTerminal, transferModeLabel } from "@/lib/status";
 
 import { bisyncOf } from "./bisync-definition";
+import { remoteSourceTitle } from "./remote-source";
 import { retentionState } from "./restic-definition";
 
 /** transferOf returns the job's transfer definition, if it is one. */
@@ -119,11 +125,13 @@ export function overwriteLabel(o: ResticRestoreOverwrite): string {
 
 /**
  * resticSummary describes a restic definition (of a job or a schedule), or
- * returns undefined for a transfer. repo names its repository.
+ * returns undefined for a transfer. repo names its repository, and remotes
+ * (the job's or schedule's remote refs) the remote a backup reads.
  */
 export function resticSummary(
   def: JobDefinition | undefined,
   repo?: JobRepositoryRef,
+  remotes: Pick<JobRemoteRef, "id" | "name">[] = [],
 ): ResticSummary | undefined {
   const op = def?.operation;
   const name = repo?.name || "a repository";
@@ -131,6 +139,22 @@ export function resticSummary(
   switch (op?.case) {
     case "resticBackup": {
       const d = op.value;
+      const src = d.remoteSource;
+      if (src) {
+        const n = src.filters.length;
+        return {
+          title: `Back up ${remoteSourceTitle(src, remotes)} → ${name}`,
+          detail: parts(
+            n > 0 && `${n} ${n === 1 ? "filter" : "filters"}`,
+            src.discardMirror && "deletes the mirror after each run",
+            src.allowEmpty && "an empty folder is allowed",
+            d.tags.length > 0 && `tagged ${d.tags.join(", ")}`,
+            d.excludeCaches && "skips caches",
+            d.host && `as host ${d.host}`,
+            d.dryRun && "dry run",
+          ),
+        };
+      }
       const paths =
         d.paths.length > 2 ? `${d.paths[0]} and ${d.paths.length - 1} more` : d.paths.join(", ");
       return {
@@ -203,7 +227,10 @@ export function resticSummary(
  */
 export function jobTitle(job: Job): string {
   const t = transferOf(job);
-  if (!t) return job.title || resticSummary(job.definition, job.repository)?.title || job.kind;
+  if (!t)
+    return (
+      job.title || resticSummary(job.definition, job.repository, job.remotes)?.title || job.kind
+    );
   const name = (e: EndpointLabel) => e.name ?? (e.path || "Worker filesystem");
   return `${name(endpoint(job, t.source))} → ${name(endpoint(job, t.destination))}`;
 }
@@ -231,4 +258,41 @@ export function jobProgress(job: Job): {
     files: toNumber(job.stats?.files),
     totalFiles: toNumber(job.stats?.totalFiles),
   };
+}
+
+/**
+ * errorHint says what to do about a backup of a remote that failed for a
+ * reason of its own: an empty folder (SOURCE_EMPTY), or a way of reading
+ * the remote its worker cannot use (TOOL_UNAVAILABLE). Undefined otherwise.
+ */
+export function errorHint(job: Job): string | undefined {
+  const op = job.definition?.operation;
+  const src = op?.case === "resticBackup" ? op.value.remoteSource : undefined;
+  if (!src) return undefined;
+  switch (job.error?.code) {
+    case JobErrorCode.SOURCE_EMPTY:
+      return "Nothing was backed up, so an emptied or wrong folder cannot push real snapshots out of retention. Check the folder; if it may be empty, turn on “Back up an empty folder” under Advanced: such a run then ends without a snapshot.";
+    case JobErrorCode.TOOL_UNAVAILABLE:
+      return src.method === ResticRemoteSourceMethod.MOUNT
+        ? "Its worker cannot mount remotes, so the job never started. Choose the mirror, or a worker that can mount: the Workers page shows what each one can do."
+        : "Its worker does not keep mirrors, so the job never started. Choose the mount, or another worker: the Workers page shows what each one can do.";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * errorTitle names a job's error: the code's label, except for a backup of
+ * a remote whose worker cannot use its method (TOOL_UNAVAILABLE, which the
+ * controller also sets before dispatch), named after what happened.
+ */
+export function errorTitle(job: Job): string {
+  const code = job.error?.code ?? JobErrorCode.UNSPECIFIED;
+  const op = job.definition?.operation;
+  const src = op?.case === "resticBackup" ? op.value.remoteSource : undefined;
+  if (src && code === JobErrorCode.TOOL_UNAVAILABLE)
+    return src.method === ResticRemoteSourceMethod.MOUNT
+      ? "The worker cannot mount remotes"
+      : "The worker does not keep mirrors";
+  return errorCodeLabel(code);
 }
