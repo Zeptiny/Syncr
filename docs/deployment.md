@@ -77,7 +77,7 @@ tag, such as `2.0.0-rc.1`). To build them from source:
 
 ```sh
 docker build -f deploy/Dockerfile.controller -t syncr-controller .   # web UI embedded, distroless, non-root, HEALTHCHECK via -healthcheck
-docker build -f deploy/Dockerfile.worker -t syncr-worker .           # Debian slim, rclone v1.75.2, restic 0.19.1 (with their licences), fuse3, non-root
+docker build -f deploy/Dockerfile.worker -t syncr-worker .           # Debian slim, rclone v1.76.0, restic 0.19.1 (with their licences), fuse3, non-root
 ```
 
 [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) runs the

@@ -76,7 +76,7 @@ Syncr worker setup: active worker, system scope
 
 ==> Preparing directories
 ==> Provisioning rclone and restic (pinned versions, checksum-verified)
-    rclone 1.75.2 (managed) /var/lib/syncr/tools/rclone/1.75.2/linux-amd64/rclone
+    rclone 1.76.0 (managed) /var/lib/syncr/tools/rclone/1.76.0/linux-amd64/rclone
     restic 0.19.1 (managed) /var/lib/syncr/tools/restic/0.19.1/linux-amd64/restic
 ==> Enrolling with https://syncr.example.com
     enrolled as "myhost", worker ID 0b6f8f0e-52a5-4a3f-9a5d-2f2a7c9f1e11

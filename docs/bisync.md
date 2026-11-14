@@ -6,7 +6,7 @@ on the other at the next run. Each side is a folder on a worker or a path
 on a remote. The typical case is one folder on two machines, a desktop and
 a laptop, kept in step through a bucket that both reach.
 
-The worker runs it with the pinned rclone's `bisync` command (1.75.2). In
+The worker runs it with the pinned rclone's `bisync` command (1.76.0). In
 the web UI it is the job kind **Two-way sync**; in the API and in hooks it
 is `rclone_bisync`.
 
