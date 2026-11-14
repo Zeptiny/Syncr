@@ -2,7 +2,7 @@ import { create } from "@bufbuild/protobuf";
 import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   JobProgressSchema,
@@ -14,21 +14,11 @@ import { ResticRemoteSourceMethod } from "@/gen/syncr/v1/link_pb";
 import type { CreateScheduleRequest } from "@/gen/syncr/v1/schedules_pb";
 import * as m5 from "@/mock/m5";
 import * as rb from "@/mock/remote-backup";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, formatRate } from "@/lib/format";
 import { signedIn } from "@/test/app-api";
 import * as fx from "@/test/fixtures";
 import { m5Api } from "@/test/m5-api";
 import { mockTransport, renderApp } from "@/test/render";
-
-// uPlot needs a canvas, which jsdom lacks (the job page's throughput
-// chart would draw after a test ended); these tests read the page around it.
-vi.mock("uplot", () => ({
-  default: class {
-    setData() {}
-    setSize() {}
-    destroy() {}
-  },
-}));
 
 const now = Date.now();
 const MIRROR = ResticRemoteSourceMethod.MIRROR;
@@ -71,12 +61,12 @@ describe("backups of a remote in the forms", { timeout: 30_000 }, () => {
     expect(screen.queryByRole("switch", { name: "Stay on one file system" })).toBeNull();
     expect(screen.queryByRole("switch", { name: /VSS/ })).toBeNull();
     expect(screen.getByText(/A mirror is still brought up to date for real/)).toBeVisible();
-    await user.type(screen.getByLabelText(/^Folder/), "Photos");
+    await user.type(screen.getByRole("textbox", { name: /^Folder/ }), "Photos");
 
     await user.click(screen.getByRole("radio", { name: /^Folders on a worker/ }));
     expect(screen.getByLabelText("Path to back up 1")).toHaveValue("/srv/photos");
     await user.click(screen.getByRole("radio", { name: /^A folder on a remote/ }));
-    expect(screen.getByLabelText(/^Folder/)).toHaveValue("Photos");
+    expect(screen.getByRole("textbox", { name: /^Folder/ })).toHaveValue("Photos");
   });
 
   it("offers a Local directory remote disabled, with the controller's reason", async () => {
@@ -95,7 +85,7 @@ describe("backups of a remote in the forms", { timeout: 30_000 }, () => {
     await choose(user, /^Worker/, /^nas-01/);
     await choose(user, /^Repository/, /^Nextcloud photos/);
     await choose(user, /^Remote/, /^Nextcloud/);
-    await user.type(screen.getByLabelText(/^Folder/), "Photos");
+    await user.type(screen.getByRole("textbox", { name: /^Folder/ }), "Photos");
     await user.click(screen.getByRole("button", { name: "Add filter" }));
     await user.type(screen.getByLabelText("Filter 1 pattern"), "*.tmp");
     await user.click(screen.getByRole("switch", { name: "Delete the mirror after each run" }));
@@ -129,7 +119,7 @@ describe("backups of a remote in the forms", { timeout: 30_000 }, () => {
     await choose(user, /^Worker/, /^nas-01/);
     await choose(user, /^Repository/, /^Nextcloud photos/);
     await choose(user, /^Remote/, /^Storage box/);
-    await user.type(screen.getByLabelText(/^Folder/), "Scans");
+    await user.type(screen.getByRole("textbox", { name: /^Folder/ }), "Scans");
     await user.click(screen.getByRole("switch", { name: "Delete the mirror after each run" }));
     await user.click(screen.getByRole("radio", { name: /^Mount/ }));
     await user.click(screen.getByRole("button", { name: "Run job" }));
@@ -150,9 +140,23 @@ describe("backups of a remote in the forms", { timeout: 30_000 }, () => {
     expect(screen.getByRole("radio", { name: /^Mount/ })).toBeEnabled();
     await choose(user, /^Worker/, /^backup-host/);
     const mount = screen.getByRole("radio", { name: /^Mount/ });
-    expect(mount).toBeDisabled();
-    expect(mount).toHaveTextContent("backup-host cannot mount a remote: /dev/fuse is missing.");
-    expect(screen.getByRole("radio", { name: /^Mirror/ })).toBeEnabled();
+    const mirror = screen.getByRole("radio", { name: /^Mirror/ });
+    // Disabled but focusable: keyboard users reach it and hear why.
+    expect(mount).toHaveAttribute("aria-disabled", "true");
+    expect(mount).not.toBeDisabled();
+    expect(mount).toHaveAccessibleDescription(
+      expect.stringContaining("backup-host cannot mount a remote: /dev/fuse is missing."),
+    );
+    expect(mirror).not.toHaveAttribute("aria-disabled");
+    // Tab reaches it after the chosen mirror card (and its options).
+    mirror.focus();
+    for (let i = 0; i < 6 && document.activeElement !== mount; i++) await user.tab();
+    expect(mount).toHaveFocus();
+    // Neither a click nor the keyboard chooses it.
+    await user.keyboard(" ");
+    await user.click(mount);
+    expect(mount).toHaveAttribute("aria-checked", "false");
+    expect(mirror).toHaveAttribute("aria-checked", "true");
 
     // Chosen on nas-01, then the worker changes: the choice stays, with a warning.
     await choose(user, /^Worker/, /^nas-01/);
@@ -174,7 +178,7 @@ describe("backups of a remote in the forms", { timeout: 30_000 }, () => {
     await choose(user, /^Worker/, /^nas-01/);
     await choose(user, /^Repository/, /^Nextcloud photos/);
     await choose(user, /^Remote/, /^MinIO archive/);
-    await user.type(screen.getByLabelText(/^Folder/), "restic");
+    await user.type(screen.getByRole("textbox", { name: /^Folder/ }), "restic");
     // The browser already sees the overlap.
     expect(screen.getByText(/This folder holds repository Nextcloud photos/)).toBeVisible();
     await user.type(screen.getByLabelText(/^Tags/), "syncr-remote:x,");
@@ -257,6 +261,26 @@ describe("backups of a remote on the job page", { timeout: 30_000 }, () => {
     expect(card).toHaveTextContent(formatBytes(50));
     expect(card).toHaveTextContent(`of ${formatBytes(2000)}`);
     expect(screen.queryByText("Mirrored")).toBeNull();
+  });
+
+  it("averages a finished mirror run over its backup phase, as the chart does", async () => {
+    const api = m5Api(now, "admin", { remoteBackup: true });
+    // The newest night: 90 s of mirroring, then 3 minutes of backup.
+    const night = rb.history(now).jobs.find((j) => j.id.endsWith("000000000100"))!;
+    renderApp(`/jobs/${night.id}`, api.transport);
+    const card = (await screen.findByText("Backup average")).parentElement!;
+    expect(card).toHaveTextContent(formatRate(Number(night.stats!.bytes) / 180));
+    expect(card).toHaveTextContent("Over 3m 00s, mirroring left out");
+    expect(screen.queryByText("Average speed")).toBeNull();
+    // The mirror's deletes are under Mirrored; restic's zero counters are not shown.
+    expect(screen.queryByText("Checks and deletes")).toBeNull();
+  });
+
+  it("averages a mount run over the whole job", async () => {
+    const api = m5Api(now, "admin", { remoteBackup: true });
+    renderApp(`/jobs/${rb.ids.mountJob}`, api.transport);
+    expect(await screen.findByText("Average speed")).toBeVisible();
+    expect(screen.queryByText("Backup average")).toBeNull();
   });
 
   it("says when an allowed empty folder made no snapshot", async () => {
@@ -369,7 +393,7 @@ describe("workers and the remote browser", { timeout: 30_000 }, () => {
       "aria-checked",
       "true",
     );
-    expect(screen.getByLabelText(/^Folder/)).toHaveValue("Photos");
+    expect(screen.getByRole("textbox", { name: /^Folder/ })).toHaveValue("Photos");
     expect(screen.getByRole("combobox", { name: /^Remote/ })).toHaveTextContent("Nextcloud");
     expect(screen.getByRole("radio", { name: /^Mirror/ })).toHaveAttribute("aria-checked", "true");
   });

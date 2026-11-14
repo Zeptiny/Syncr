@@ -107,13 +107,15 @@ func defaultRun(t *testing.T) func(context.Context, proc.Spec) (proc.Result, err
 	}
 }
 
-// fakeMounter records mount requests; err fails them.
+// fakeMounter records mount requests; err fails them. ended is what the
+// mount's Ended reports (rclone ended on its own).
 type fakeMounter struct {
 	mu         sync.Mutex
 	reqs       []mount.Request
 	err        error
 	unmounts   int
 	unmountErr error
+	ended      error
 }
 
 func (f *fakeMounter) Mount(_ context.Context, req mount.Request) (Mounted, error) {
@@ -127,6 +129,19 @@ func (f *fakeMounter) Mount(_ context.Context, req mount.Request) (Mounted, erro
 }
 
 type fakeMounted struct{ f *fakeMounter }
+
+func (m fakeMounted) Ended() error {
+	m.f.mu.Lock()
+	defer m.f.mu.Unlock()
+	return m.f.ended
+}
+
+// die makes the mount end on its own, as rclone crashing does.
+func (f *fakeMounter) die(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ended = err
+}
 
 func (m fakeMounted) Unmount() error {
 	m.f.mu.Lock()
@@ -220,7 +235,8 @@ func TestRemoteSourceMirror(t *testing.T) {
 	}
 
 	lsf := e.sup.spec("rclone lsf")
-	if want := []string{"lsf", "--config=", "--use-json-log", "--log-level=NOTICE", "--max-depth=1", "--", "src:bucket/photos"}; !slices.Equal(lsf.Args, want) {
+	if want := []string{"lsf", "--config=", "--use-json-log", "--log-level=NOTICE", "-R", "--files-only",
+		"--filter-from=" + filepath.Join(e.jobScratch(), filtersFileName), "--fast-list", "--", "src:bucket/photos"}; !slices.Equal(lsf.Args, want) {
 		t.Errorf("lsf args = %q", lsf.Args)
 	}
 	if lsf.Env["RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY"] != sourceSecret || lsf.Env["RESTIC_PASSWORD"] != "" ||
@@ -420,7 +436,8 @@ func TestRemoteSourcePrecheck(t *testing.T) {
 	}{
 		"missing": {exit: 3, stderr: []string{notFound}, code: syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND,
 			want: `the folder "bucket/photos" on the remote does not exist: rclone lsf failed: directory not found (exit code 3): error listing: directory not found`},
-		"empty": {code: syncrv1.JobErrorCode_JOB_ERROR_CODE_SOURCE_EMPTY, want: `the folder "bucket/photos" on the remote is empty`},
+		"empty": {code: syncrv1.JobErrorCode_JOB_ERROR_CODE_SOURCE_EMPTY,
+			want: `the folder "bucket/photos" on the remote is empty: it holds no file that the backup's filters keep, at any depth`},
 		"temporary": {exit: 5, stderr: []string{`{"level":"error","msg":"error listing: exceeded maximum number of attempts"}`},
 			code: syncrv1.JobErrorCode_JOB_ERROR_CODE_TEMPORARY, want: "cannot list the folder"},
 		"denied": {exit: 1, stderr: []string{`{"level":"error","msg":"error listing: SignatureDoesNotMatch for key ` + sourceSecret + `"}`},
@@ -775,8 +792,9 @@ func putFile(t *testing.T, path string, data []byte) {
 
 // TestRemoteSourceEmptySnapshot: restic 0.19.1 makes no snapshot of a
 // folder without any entry. With allow_empty and an empty folder the run
-// succeeds without one, and says so; when only the filters leave nothing,
-// it fails.
+// succeeds without one, and says so; when the check found a file but
+// restic saved nothing (its own limits, or the folder emptied since), it
+// fails.
 func TestRemoteSourceEmptySnapshot(t *testing.T) {
 	t.Parallel()
 	exitEmpty := `{"message_type":"exit_error","code":1,"message":"Fatal: unable to save snapshot: snapshot is empty"}`
@@ -784,8 +802,8 @@ func TestRemoteSourceEmptySnapshot(t *testing.T) {
 		entries []string
 		ok      bool
 	}{
-		"empty folder allowed":         {nil, true},
-		"filters leave nothing behind": {[]string{"only.tmp"}, false},
+		"empty folder allowed": {nil, true},
+		"restic saves nothing": {[]string{"big.bin"}, false},
 	} {
 		e := newRSEnv(t, bothMethods())
 		base := e.sup.script
@@ -803,7 +821,7 @@ func TestRemoteSourceEmptySnapshot(t *testing.T) {
 		res, _, err := e.run(remoteBackup(func(_ *syncrv1.ResticBackup, s *syncrv1.ResticBackupRemoteSource) { s.AllowEmpty = true }))
 		if !tt.ok {
 			mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED)
-			if !strings.Contains(err.Error(), "the filters leave out everything") {
+			if !strings.Contains(err.Error(), "restic found nothing to save in the folder") {
 				t.Errorf("%s: %v", name, err)
 			}
 			continue
@@ -843,5 +861,140 @@ func TestRemoteSourceMirrorDeletes(t *testing.T) {
 	}
 	if snaps[0].Phase != "mirror" || snaps[0].Deletes != 2 || snaps[0].Checks != 3 {
 		t.Errorf("mirror sample = %+v", snaps[0])
+	}
+}
+
+// TestRemoteSourcePrecheckStopsAtTheFirstFile: rclone's listing is stopped
+// once it printed a file, and the run goes on; --fast-list only when the
+// backup asks for it.
+func TestRemoteSourcePrecheckStopsAtTheFirstFile(t *testing.T) {
+	t.Parallel()
+	e := newRSEnv(t, bothMethods())
+	base := e.sup.script
+	var cause error
+	e.sup.script = func(ctx context.Context, spec proc.Spec) (proc.Result, error) {
+		if commandOf(spec) != "rclone lsf" {
+			return base(ctx, spec)
+		}
+		replayLines(spec.Stdout, "", "deep/down/a.bin")
+		// A huge tree: rclone would go on listing until stopped.
+		<-ctx.Done()
+		cause = context.Cause(ctx)
+		return proc.Result{ExitCode: -1}, &proc.CanceledError{Path: spec.Path, ExitCode: -1, Cause: cause}
+	}
+	if _, _, err := e.run(remoteBackup()); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(cause, errFileFound) {
+		t.Errorf("the listing was stopped with %v", cause)
+	}
+	if got := e.sup.commands(); !slices.Equal(got, []string{"rclone lsf", "rclone sync", "restic backup"}) {
+		t.Errorf("commands = %q", got)
+	}
+	if args := e.sup.spec("rclone lsf").Args; slices.Contains(args, "--fast-list") || !slices.Contains(args, "--files-only") || !slices.Contains(args, "-R") {
+		t.Errorf("lsf args = %q", args)
+	}
+
+	// A cancelled job stays cancelled, even when the listing found a file.
+	e = newRSEnv(t, bothMethods())
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	e.sup.script = func(c context.Context, spec proc.Spec) (proc.Result, error) {
+		cancel()
+		replayLines(spec.Stdout, "a.bin")
+		<-c.Done()
+		return proc.Result{ExitCode: -1}, &proc.CanceledError{Path: spec.Path, ExitCode: -1, Cause: context.Cause(c)}
+	}
+	if _, err := e.runners[kindBackup].Run(ctx, runnerJob(remoteBackup()), nil); !runner.Canceled(err) {
+		t.Errorf("cancelled run = %v", err)
+	}
+	if got := e.sup.commands(); !slices.Equal(got, []string{"rclone lsf"}) {
+		t.Errorf("commands after a cancel = %q", got)
+	}
+}
+
+// TestRemoteSourceMountEnded: when rclone ends on its own while restic
+// reads the mount, the job fails with EXECUTION_FAILED and rclone's reason,
+// whatever restic made of it (exit code 3 with an incomplete snapshot, a
+// fatal error, "snapshot is empty" before it read anything, or success);
+// the mount is unmounted. A mount that stays up keeps restic's exit code 3
+// semantics (succeeded with warnings).
+func TestRemoteSourceMountEnded(t *testing.T) {
+	t.Parallel()
+	died := &mount.Error{Msg: "rclone mount ended while the folder was mounted (it was killed): IO error: key " + sourceSecret}
+	warn := fixture(t, "backup_warn.out")
+	warnErr := fixture(t, "backup_warn.stderr")
+	summary := fixture(t, "backup_summary.out")
+	exitEmpty := `{"message_type":"exit_error","code":1,"message":"Fatal: unable to save snapshot: snapshot is empty"}`
+	for name, tt := range map[string]struct {
+		stdout, stderr []string
+		exit           int
+		dies           bool
+		code           syncrv1.JobErrorCode
+		want           string
+	}{
+		"exit 3 after it died": {stdout: warn, stderr: warnErr, exit: 3, dies: true, code: syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED,
+			want: `the mount of the folder "bucket/photos" on the remote ended during the backup, so restic could not read all of it; ` +
+				"the snapshot f683cdf1 that restic saved is incomplete: rclone mount ended while the folder was mounted (it was killed): IO error: key [redacted]"},
+		"died before restic read anything": {stdout: []string{exitEmpty}, exit: 1, dies: true, code: syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED,
+			want: "ended during the backup, so restic could not read all of it; if restic saved a snapshot, it is incomplete: rclone mount ended"},
+		"fatal after it died": {stderr: []string{"Fatal: unable to open the folder"}, exit: 1, dies: true, code: syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED,
+			want: "if restic saved a snapshot, it is incomplete"},
+		"success after it died": {stdout: summary, dies: true, code: syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED,
+			want: "that restic saved is incomplete"},
+		"exit 3, mount up": {stdout: warn, stderr: warnErr, exit: 3},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newRSEnv(t, bothMethods())
+			e.sup.script = func(_ context.Context, spec proc.Spec) (proc.Result, error) {
+				switch commandOf(spec) {
+				case "rclone lsf":
+					replayLines(spec.Stdout, "a.bin")
+				case "restic backup":
+					if tt.dies {
+						e.mounter.die(died)
+					}
+					replayLines(spec.Stdout, tt.stdout...)
+					replayLines(spec.Stderr, tt.stderr...)
+					if tt.exit != 0 {
+						return proc.Result{ExitCode: tt.exit}, &proc.ExitError{Path: spec.Path, ExitCode: tt.exit}
+					}
+				}
+				return proc.Result{}, nil
+			}
+			res, _, err := e.run(remoteBackup(func(_ *syncrv1.ResticBackup, s *syncrv1.ResticBackupRemoteSource) { s.Method = mountMethod }))
+			if e.mounter.unmounts != 1 {
+				t.Errorf("unmounts = %d", e.mounter.unmounts)
+			}
+			if tt.code == syncrv1.JobErrorCode_JOB_ERROR_CODE_UNSPECIFIED {
+				if err != nil || len(res.Warnings) == 0 || res.Output.GetResticBackup().GetSnapshotId() == "" {
+					t.Errorf("run = %v, warnings %q, output %v", err, res.Warnings, res.Output)
+				}
+				return
+			}
+			mustFail(t, err, tt.code)
+			if !strings.Contains(err.Error(), tt.want) || strings.Contains(err.Error(), sourceSecret) || strings.Contains(err.Error(), "filters") {
+				t.Errorf("error = %v", err)
+			}
+		})
+	}
+
+	// A cancelled job is cancelled, not failed, even when its mount ended.
+	e := newRSEnv(t, bothMethods())
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	base := e.sup.script
+	e.sup.script = func(c context.Context, spec proc.Spec) (proc.Result, error) {
+		if commandOf(spec) == "restic backup" {
+			e.mounter.die(died)
+			cancel()
+			return proc.Result{ExitCode: -1}, &proc.CanceledError{Path: spec.Path, ExitCode: -1, Cause: context.Canceled}
+		}
+		return base(c, spec)
+	}
+	spec := remoteBackup(func(_ *syncrv1.ResticBackup, s *syncrv1.ResticBackupRemoteSource) { s.Method = mountMethod })
+	if _, err := e.runners[kindBackup].Run(ctx, runnerJob(spec), nil); !runner.Canceled(err) {
+		t.Errorf("cancelled run = %v", err)
 	}
 }

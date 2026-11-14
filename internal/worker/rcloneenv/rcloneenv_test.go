@@ -622,3 +622,45 @@ func TestBuilderEnvReturnsOnlyRemoteVariables(t *testing.T) {
 		t.Errorf("second Env = %v, %v", again, err)
 	}
 }
+
+// reservingResolver accepts paths below /data/ and reserves
+// /data/lib/syncr/sources, as *localfs.Policy does for the worker's folder
+// of backups of remotes.
+type reservingResolver struct{}
+
+func (reservingResolver) Resolve(p string) (string, error) {
+	if !strings.HasPrefix(p, "/data/") || strings.HasPrefix(p+"/", "/data/lib/syncr/sources/") {
+		return "", errOutside
+	}
+	return path.Clean(p), nil
+}
+
+func (reservingResolver) HoldsReserved(p string) (string, bool) {
+	const reserved = "/data/lib/syncr/sources"
+	return reserved, strings.HasPrefix(reserved, strings.TrimSuffix(p, "/")+"/")
+}
+
+// TestUnionUpstreamHoldingReserved: a local union upstream that holds a
+// folder the worker keeps for itself is refused (ErrLocalPath); one beside
+// it is fine.
+func TestUnionUpstreamHoldingReserved(t *testing.T) {
+	t.Parallel()
+	rw := syncrv1.UnionUpstreamMode_UNION_UPSTREAM_MODE_READ_WRITE
+	for _, tt := range []struct {
+		path string
+		ok   bool
+	}{
+		{"/data/lib", false},
+		{"/data/lib/syncr", false},
+		{"/data/lib/syncr/sources/mirror", false},
+		{"/data/lib/syncr/bisync", true},
+		{"/data/srv", true},
+	} {
+		_, err := NewBuilder(reservingResolver{}).Remotes([]*syncrv1.RemoteDefinition{
+			remote("aa", "memory"), remote("un", "union", withUpstreams(upstream("aa", "", rw), upstream("", tt.path, rw))),
+		})
+		if (err == nil) != tt.ok || (err != nil && !errors.Is(err, ErrLocalPath)) {
+			t.Errorf("upstream %s: %v", tt.path, err)
+		}
+	}
+}

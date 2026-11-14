@@ -312,3 +312,77 @@ func TestPruneStaleLogs(t *testing.T) {
 		t.Errorf("the mirror was kept: %v", err)
 	}
 }
+
+// TestPruneDeletesOutsideTheLock: Prune moves a stale mirror into the trash
+// under the store's lock and deletes it after releasing it, so a run that
+// opens a mirror meanwhile does not wait for the deletion.
+func TestPruneDeletesOutsideTheLock(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	stale := filepath.Join(s.MirrorsDir(), keyA)
+	writeFile(t, filepath.Join(stale, DataDirName, "photo.jpg"), "x")
+	writeFile(t, filepath.Join(stale, LastRunFileName), testNow.Add(-retention-time.Hour).Format(time.RFC3339Nano))
+	deleting, proceed := make(chan string), make(chan struct{})
+	s.removeAll = func(path string) error {
+		deleting <- path
+		<-proceed
+		return os.RemoveAll(path)
+	}
+	type result struct {
+		removed []string
+		err     error
+	}
+	done := make(chan result)
+	go func() {
+		removed, err := s.Prune(context.Background(), retention)
+		done <- result{removed, err}
+	}()
+	trashed := <-deleting
+	if filepath.Dir(trashed) != s.TrashDir() || !strings.HasPrefix(filepath.Base(trashed), keyA+"-") {
+		t.Errorf("deleting %s, want a folder of %s", trashed, s.TrashDir())
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the mirror is still in mirror/ while it is deleted: %v", err)
+	}
+	if got := readFile(t, filepath.Join(trashed, MirrorsDirName, DataDirName, "photo.jpg")); got != "x" {
+		t.Errorf("trashed mirror = %q", got)
+	}
+	// The store's lock is free: another mirror opens at once.
+	m, err := s.OpenMirror(keyB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	close(proceed)
+	res := <-done
+	if res.err != nil || !slices.Equal(res.removed, []string{keyA}) {
+		t.Errorf("Prune = %v, %v", res.removed, res.err)
+	}
+	if entries, err := os.ReadDir(s.TrashDir()); err != nil || len(entries) != 0 {
+		t.Errorf("trash = %v, %v", entries, err)
+	}
+}
+
+// TestPruneEmptiesTheTrash: what an earlier pass or a killed worker left
+// in the trash goes on the next pass, which runs at start-up too; a
+// deletion that fails is reported and tried again.
+func TestPruneEmptiesTheTrash(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	left := filepath.Join(s.TrashDir(), keyA+"-12345", MirrorsDirName, DataDirName, "photo.jpg")
+	writeFile(t, left, "x")
+	s.removeAll = func(string) error { return errors.New("the file is in use") }
+	if _, err := s.Prune(t.Context(), retention); err == nil || !strings.Contains(err.Error(), "the file is in use") {
+		t.Errorf("Prune with a failing deletion = %v", err)
+	}
+	s.removeAll = os.RemoveAll
+	removed, err := s.Prune(t.Context(), retention)
+	if err != nil || len(removed) != 0 {
+		t.Errorf("Prune = %v, %v", removed, err)
+	}
+	if entries, err := os.ReadDir(s.TrashDir()); err != nil || len(entries) != 0 {
+		t.Errorf("trash = %v, %v", entries, err)
+	}
+}

@@ -2322,11 +2322,13 @@ export const ResticBackupSchema: GenMessage<ResticBackup> = /*@__PURE__*/
  *
  * A run goes:
  *
- *  1. Check: the worker lists the folder, one level deep and without the
- *     filters. A folder that does not exist fails the job with NOT_FOUND
- *     (on remotes whose folders exist only through the files in them, such
- *     as S3 or B2, an empty folder may look like a missing one); an empty
- *     folder fails it with SOURCE_EMPTY unless allow_empty is set; a remote
+ *  1. Check: the worker lists the folder's files recursively, with the
+ *     backup's filters, and stops at the first file. A folder that does not
+ *     exist fails the job with NOT_FOUND (on remotes whose folders exist
+ *     only through the files in them, such as S3 or B2, a missing folder in
+ *     an existing bucket lists as empty, and only a missing bucket is
+ *     NOT_FOUND); a folder without a file (folders alone do not count)
+ *     fails it with SOURCE_EMPTY unless allow_empty is set; a remote
  *     that cannot be listed fails it with the code rclone's failure maps to
  *     for transfers (e.g. TEMPORARY or EXECUTION_FAILED). Nothing has
  *     changed on the worker by then.
@@ -5005,7 +5007,8 @@ export enum JobErrorCode {
 
   /**
    * Set by workers (restic_backup with a remote_source): the remote's
-   * folder holds no entry at all, so the worker made no snapshot. An
+   * folder holds no file at any depth once the backup's filters apply
+   * (folders alone do not count), so the worker made no snapshot. An
    * emptied or mistyped folder would otherwise add empty snapshots that
    * push real ones out of retention. The worker checks this first, before
    * it touches the mirror or mounts anything, so a mirror stays as it was.

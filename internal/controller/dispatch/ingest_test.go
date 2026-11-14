@@ -721,3 +721,49 @@ func TestRemovedWorkerIsRefused(t *testing.T) {
 		t.Errorf("running job = %s %q", got.Status, got.Error.Code)
 	}
 }
+
+// TestInvalidSpecSaysWhy: a job whose definition the builder refuses with
+// field errors fails with invalid_spec and their messages (at most five,
+// without repeats), so a scheduled run that breaks a rule later says why;
+// other invalid definitions keep the generic message.
+func TestInvalidSpecSaysWhy(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const generic = "the job's definition cannot be turned into a spec"
+	overlap := "the folder of the remote holds the repository: a backup cannot read its own repository; choose a folder beside it"
+	many := &domain.ValidationError{}
+	for i := range 7 {
+		many.Fields = append(many.Fields, domain.FieldError{Field: fmt.Sprintf("f%d", i), Message: "is wrong"})
+	}
+	for _, tt := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"field errors", fmt.Errorf("job x: build restic_backup: %w", &domain.ValidationError{Fields: []domain.FieldError{
+			{Field: "restic_backup.remote_source.path", Message: overlap},
+			{Field: "restic_backup.remote_source.path", Message: overlap},
+		}}), generic + ": restic_backup.remote_source.path: " + overlap},
+		{"many field errors", many, generic + ": f0: is wrong; f1: is wrong; f2: is wrong; f3: is wrong; f4: is wrong; and 2 more"},
+		{"no fields", fmt.Errorf("decode: %w: empty", domain.ErrInvalidArgument), generic},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			wid := e.enroll("w")
+			e.hello(wid, "ep")
+			j := e.run(wid)
+			specs := specBuilderFunc(func(context.Context, jobs.Job) (*syncrv1.JobSpec, error) { return nil, tt.err })
+			disp, err := dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Specs: specs, Clock: e.clock, Hub: e.hub}, e.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := disp.Commands(ctx, wid, "ep"); err != nil {
+				t.Fatal(err)
+			}
+			if got := e.job(j.ID); got.Status != domain.JobFailed || got.Error.Code != jobs.CodeInvalidSpec || got.Error.Message != tt.want {
+				t.Errorf("job = %s %+v\nwant message %q", got.Status, got.Error, tt.want)
+			}
+		})
+	}
+}

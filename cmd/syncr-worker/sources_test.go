@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -72,8 +73,12 @@ func TestBuildWorkerReportsRemoteSources(t *testing.T) {
 	}
 }
 
-// TestBuildWorkerOnThisMachine: the real detection runs; without /dev/fuse
-// the reason says so.
+// TestBuildWorkerOnThisMachine: the real detection runs. The fixture's
+// rclone is not a real program, so the worker never reports that it can
+// mount, and it says why: on Linux without /dev/fuse the static check says
+// so before any trial; on Windows the static check names WinFsp when it is
+// missing, and with WinFsp installed (as on CI) the trial mount runs the
+// fixture's rclone and fails; elsewhere mounting is not supported.
 func TestBuildWorkerOnThisMachine(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -82,12 +87,23 @@ func TestBuildWorkerOnThisMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("remote sources on this machine: %v", w.remoteSources)
-	if !w.remoteSources.GetMirror() || (!w.remoteSources.GetMount() && w.remoteSources.GetMountReason() == "") {
+	reason := w.remoteSources.GetMountReason()
+	if !w.remoteSources.GetMirror() || w.remoteSources.GetMount() || reason == "" {
 		t.Errorf("remote sources = %v", w.remoteSources)
 	}
-	if _, err := os.Stat("/dev/fuse"); errors.Is(err, os.ErrNotExist) && w.remoteSources.GetMountReason() != "/dev/fuse is missing" &&
-		!strings.Contains(w.remoteSources.GetMountReason(), "not supported") && !strings.Contains(w.remoteSources.GetMountReason(), "WinFsp") {
-		t.Errorf("mount reason = %q", w.remoteSources.GetMountReason())
+	switch runtime.GOOS {
+	case "linux":
+		if _, err := os.Stat("/dev/fuse"); errors.Is(err, os.ErrNotExist) && reason != "/dev/fuse is missing" {
+			t.Errorf("mount reason without /dev/fuse = %q", reason)
+		}
+	case "windows":
+		if !strings.Contains(reason, "WinFsp") && !strings.HasPrefix(reason, "a trial mount failed") {
+			t.Errorf("mount reason = %q, want WinFsp missing or a failed trial with the fixture's rclone", reason)
+		}
+	default:
+		if !strings.Contains(reason, "not supported") {
+			t.Errorf("mount reason = %q", reason)
+		}
 	}
 }
 

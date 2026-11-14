@@ -265,7 +265,7 @@ export function RemoteMethodFields({
               <Toggle
                 id={`${idPrefix}-allow-empty`}
                 label="Back up an empty folder"
-                help="Off: an empty folder fails the run, so an emptied or wrong folder never pushes real snapshots out of retention. On: an empty folder ends the run without a snapshot."
+                help="Off: a folder without a single file the filters keep, at any depth, fails the run (empty sub-folders don't count), so an emptied or wrong folder never pushes real snapshots out of retention. On: it is backed up anyway; a folder with nothing at all in it ends the run without a snapshot."
                 checked={s.allowEmpty}
                 onChange={(v) => set("allowEmpty", v)}
               />

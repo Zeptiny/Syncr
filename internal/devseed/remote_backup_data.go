@@ -118,7 +118,7 @@ func demoRemoteBackupSchedules(time.Time) []demoSchedule {
 			if n == 9 {
 				// The worker fails it before restic runs: no exit code.
 				return failedRun(6*time.Second, link.ErrorCodeName(syncrv1.JobErrorCode_JOB_ERROR_CODE_SOURCE_EMPTY),
-					`the folder "Photos" on the remote is empty, so nothing was backed up (an emptied or wrong folder would push real snapshots out of retention); `+
+					`the folder "Photos" on the remote is empty: it holds no file, at any depth, so nothing was backed up (an emptied or wrong folder would push real snapshots out of retention); `+
 						"allow an empty folder in the backup's options to back it up anyway", -1, jobs.Stats{})
 			}
 			run := time.Duration(varied(n, 3, 14))*m + time.Duration(varied(n, 5, 55))*time.Second

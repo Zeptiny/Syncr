@@ -1087,7 +1087,7 @@ async function remoteEditor(page, { worker, repo, remote, folder } = {}) {
   await page.getByRole("radio", { name: /^A folder on a remote/ }).click();
   if (repo) await pick(page, /^Repository/, new RegExp(`^${repo}`));
   if (remote) await pick(page, /^Remote/, new RegExp(`^${remote}`));
-  if (folder) await page.getByLabel(/^Folder/).fill(folder);
+  if (folder) await page.getByRole("textbox", { name: /^Folder/ }).fill(folder);
   await settle(page, 300);
 }
 
@@ -1203,7 +1203,7 @@ const remoteBackupShots = [
         .getByText(/a backup cannot read its own repository/)
         .first()
         .waitFor();
-      await scrollTo(p, p.getByLabel(/^Folder/), 160);
+      await scrollTo(p, p.getByRole("textbox", { name: /^Folder/ }), 160);
     },
   ],
   [
@@ -1244,7 +1244,8 @@ const remoteBackupShots = [
     "10-job-mirror-run",
     async (p) => {
       await remoteJob(p, /^Back up Nextcloud\/Photos \(mirror\)/, "JOB_STATUS_SUCCEEDED");
-      await scrollTo(p, p.getByText("Read through").first(), 120);
+      // The stat cards (the backup phase's average), then the summary.
+      await scrollTo(p, p.getByText("Backup average").first(), 40);
     },
   ],
   [

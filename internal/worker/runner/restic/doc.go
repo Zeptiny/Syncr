@@ -29,16 +29,18 @@
 // of one of the job's remotes instead of local paths. It is checked first
 // (INVALID_SPEC: the source key's format, the alias, the method, the
 // refused combinations; TOOL_UNAVAILABLE: a method this worker cannot
-// use), before anything touches the data directory. Then: "rclone lsf
-// --max-depth=1" of the folder (NOT_FOUND, SOURCE_EMPTY, or the transfer
+// use), before anything touches the data directory. Then: "rclone lsf -R
+// --files-only" of the folder with the filters, stopped at the first file
+// (NOT_FOUND, SOURCE_EMPTY when there is none, or the transfer
 // classification of rclone's exit); with the mirror method, "rclone sync"
 // into <data_dir>/sources/mirror/<key>/data under the mirror's lock
 // (internal/worker/sourcestate), with --create-empty-src-dirs,
 // --delete-excluded and the filters as --filter-from; with the mount
 // method, "rclone mount --read-only" at <data_dir>/sources/mount/<key>
-// (internal/worker/mount), unmounted on every path out; then "restic
-// backup --ignore-inode -- ." with the copy or the mount as its working
-// directory. Progress carries the phase ("mirror", then "backup"), whose
+// (internal/worker/mount), unmounted on every path out, and a mount whose
+// rclone ended before the unmount fails the job (EXECUTION_FAILED) whatever
+// restic made of it; then "restic backup --ignore-inode -- ." with the copy
+// or the mount as its working directory. Progress carries the phase ("mirror", then "backup"), whose
 // counters start from zero; ResticBackupOutput.remote_source says how the
 // folder was read. rclone's flags, log and exit codes are read as the
 // rclone runner reads them (internal/worker/runner/rclonetool).
@@ -55,7 +57,11 @@
 // runner escapes them into --include patterns (includePattern), or passes a
 // single folder as "<snapshot>:<folder>" so its contents land directly in
 // the target. Existing files are handled as the spec's overwrite behavior
-// says; the controller always sets it.
+// says; the controller always sets it. A target that holds the worker's
+// folder of sources (such as "/") gets an --exclude of the snapshot paths
+// that would land there; a restore of selected items that would land in it,
+// one with include patterns, and any such restore on Windows are refused
+// with PATH_NOT_ALLOWED (restoreKeepsOutOfSources).
 //
 // # Deleting a repository's data
 //

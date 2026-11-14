@@ -302,7 +302,8 @@ after changing the block or the machine.
 | `sources/mirror/<key>/lock`, `last-run` | Only one run uses a mirror at a time, also across processes; when it was last used |
 | `sources/mount/<key>` | A mount point, mounted only while a job runs |
 | `sources/mount/<key>.lock` | The mount point's lock |
-| `sources/.syncr-sources` | The marker that keeps the folder out of backups and copies of a folder that holds it |
+| `sources/.syncr-sources` | The marker that keeps the folder out of backups of a folder that holds it |
+| `sources/trash/` | Mirrors being deleted after pruning; emptied by the next pass |
 
 `<key>` is 32 hex digits the controller computes from the remote's
 non-secret settings and the folder: a changed password keeps the mirror, a
@@ -311,9 +312,12 @@ mode `0700`.
 
 - **Mirrors are kept** between runs, so a run downloads only what changed.
   At startup and then once a day the worker deletes mirrors whose last run
-  is older than `mirror_retention`, skipping those in use. A backup with
-  **Delete the mirror after each run** removes its own. A mirror is as
-  large as its folder: watch the data directory's disk.
+  is older than `mirror_retention`, skipping those in use. It moves each
+  into `sources/trash` first and deletes it from there, so a large mirror's
+  deletion does not hold back backups that start meanwhile; what a
+  deletion left there (an error, a stopped worker) goes on the next pass.
+  A backup with **Delete the mirror after each run** removes its own. A
+  mirror is as large as its folder: watch the data directory's disk.
 - **Mounts last one job.** The worker unmounts on every way a job ends
   (success, failure, cancel, time limit): rclone is stopped, then killed
   after 10 seconds, then `fusermount3 -u -z` runs if the mount is still
@@ -326,10 +330,21 @@ mode `0700`.
   copies of users' remotes and live mounts, and every signed-in user may
   browse a worker's folders, so a path that is `sources`, or inside it,
   fails with `path_not_allowed`, even when `local_roots` covers the data
-  directory. A backup or copy of a folder that holds it (such as `/`, or
-  the data directory's parent) leaves its contents out
-  (`--exclude-if-present=.syncr-sources`); folder sizes count it as
-  empty.
+  directory (it is refused by its written form before anything on disk is
+  looked at, so a hung mount cannot block the check). **Jobs on a folder
+  that holds it** (such as `/`, or the data directory's parent) keep out
+  of it on both sides, reading and writing:
+  - a backup leaves its contents out (`--exclude-if-present=.syncr-sources`);
+  - a copy, sync or move gets an anchored exclude rule for its path, before
+    the job's own filters, so nothing in it is read, written or deleted;
+  - a restore excludes what would land in it, and is refused when it
+    cannot (selected items that would land there, include patterns, any
+    such restore on Windows);
+  - a two-way sync side, or a union remote's local folder, that holds it is
+    refused;
+  - folder sizes count it as empty.
+
+  Details are in [restic](restic.md#the-workers-own-folder).
 
 ## Child process limits
 

@@ -95,6 +95,35 @@ func stripVerbatim(p string) string {
 	return p
 }
 
+// shortComponents returns the components of the existing path's 8.3
+// short form (GetShortPathName), aligned with its n long components, or
+// nil when there is none (8.3 names off, the path missing, or a different
+// number of components).
+func shortComponents(path string, n int) []string {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil
+	}
+	buf := make([]uint16, windows.MAX_PATH)
+	for {
+		size, err := windows.GetShortPathName(p, &buf[0], uint32(len(buf))) //nolint:gosec // len(buf) is at most the 32767-character Windows path limit
+		if err != nil || size == 0 {
+			return nil
+		}
+		if int(size) < len(buf) {
+			buf = buf[:size]
+			break
+		}
+		buf = make([]uint16, size) // size includes the terminating NUL when too small
+	}
+	short := windows.UTF16ToString(buf)
+	parts := components(short[len(filepath.VolumeName(short)):])
+	if len(parts) != n {
+		return nil
+	}
+	return parts
+}
+
 // nameEqual compares volume names and path components case-insensitively, as
 // NTFS and SMB do by default. Unicode simple folding approximates the
 // filesystem's upcase table.

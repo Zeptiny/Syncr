@@ -228,11 +228,11 @@ func TestIntegrationRemoteSourceMirror(t *testing.T) {
 		t.Errorf("allowed empty run = %v, warnings %q", out, res.Warnings)
 	}
 	// A folder whose files the filters all leave out has nothing to back
-	// up either.
+	// up either: the check applies the filters.
 	writeFile(t, filepath.Join(photos, "only.tmp"), []byte("x"))
 	_, err = h.remoteRun(t.Context(), "src", "photos", nil, skipTmp)
-	mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED)
-	if !strings.Contains(err.Error(), "the filters leave out everything") {
+	mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_SOURCE_EMPTY)
+	if !strings.Contains(err.Error(), "holds no file that the backup's filters keep") {
 		t.Errorf("error = %v", err)
 	}
 
@@ -240,6 +240,74 @@ func TestIntegrationRemoteSourceMirror(t *testing.T) {
 	_, err = h.remoteRun(t.Context(), "src", "nope", nil)
 	mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND)
 	t.Logf("missing folder: %v", err)
+}
+
+// TestIntegrationRemoteSourceEmptyCheck: the check looks for a file the
+// filters keep, at any depth, before the mirror is touched. A folder whose
+// files are gone but whose folders remain, as a mass deletion or a sync
+// client leaves it, and one whose files the filters all leave out, are
+// SOURCE_EMPTY and the mirror stays as it was; one file deep down is
+// enough to run.
+func TestIntegrationRemoteSourceEmptyCheck(t *testing.T) {
+	h := newHarness(t)
+	remote := localSource(h)
+	store := withSources(h, &syncrv1.RemoteSourceSupport{Mirror: true}, nil)
+	h.init(itPassword)
+	photos := filepath.Join(remote, "photos")
+	writeFile(t, filepath.Join(photos, "2024", "jan", "a.jpg"), randomBytes(t, 1000))
+	writeFile(t, filepath.Join(photos, "2025", "b.tmp"), []byte("x"))
+	if err := os.MkdirAll(filepath.Join(photos, "2026", "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skipTmp := func(_ *syncrv1.ResticBackup, s *syncrv1.ResticBackupRemoteSource) {
+		s.Filters = []*syncrv1.FilterRule{excludeRule("*.tmp")}
+	}
+	first := h.mustRemoteRun("src", "photos")
+	before := []string{"2024/jan/a.jpg", "2025/b.tmp"}
+	if got := mirrored(t, store); !slices.Equal(got, before) {
+		t.Fatalf("mirror = %q", got)
+	}
+
+	// 1. Every file deleted, every folder kept.
+	for _, f := range []string{"2024/jan/a.jpg", "2025/b.tmp"} {
+		if err := os.Remove(filepath.Join(photos, filepath.FromSlash(f))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := h.remoteRun(t.Context(), "src", "photos", nil)
+	mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_SOURCE_EMPTY)
+	if !strings.Contains(err.Error(), `the folder "photos" on the remote is empty: it holds no file, at any depth`) {
+		t.Errorf("folders only: %v", err)
+	}
+	if got := mirrored(t, store); !slices.Equal(got, before) {
+		t.Errorf("mirror after a folder with folders only = %q", got)
+	}
+
+	// 2. Files the filters all leave out, in several folders.
+	writeFile(t, filepath.Join(photos, "2025", "c.tmp"), []byte("x"))
+	writeFile(t, filepath.Join(photos, "2024", "jan", "d.tmp"), []byte("x"))
+	_, err = h.remoteRun(t.Context(), "src", "photos", nil, skipTmp)
+	mustFail(t, err, syncrv1.JobErrorCode_JOB_ERROR_CODE_SOURCE_EMPTY)
+	if !strings.Contains(err.Error(), "holds no file that the backup's filters keep") {
+		t.Errorf("filtered out: %v", err)
+	}
+	if got := mirrored(t, store); !slices.Equal(got, before) {
+		t.Errorf("mirror after a filtered-out folder = %q", got)
+	}
+
+	// 3. One file the filters keep, deep down: the run goes on.
+	deep := "2026/empty/d1/d2/d3/d4/deep.jpg"
+	writeFile(t, filepath.Join(photos, filepath.FromSlash(deep)), randomBytes(t, 500))
+	out := h.mustRemoteRun("src", "photos", skipTmp)
+	if out.GetSnapshotId() == "" || out.GetSnapshotId() == first.GetSnapshotId() || out.GetFilesNew() != 1 {
+		t.Errorf("run with one deep file = %v", out)
+	}
+	if got := mirrored(t, store); !slices.Equal(got, []string{deep}) {
+		t.Errorf("mirror = %q", got)
+	}
+	if got := h.tree(out.GetSnapshotId(), "/2026/empty/d1/d2/d3/d4"); !slices.Equal(got, []string{"deep.jpg"}) {
+		t.Errorf("snapshot = %q", got)
+	}
 }
 
 // TestIntegrationRemoteSourceDiscardAndPrune: a discarded mirror is

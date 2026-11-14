@@ -175,6 +175,14 @@ func (p *Policy) Resolve(path string) (string, error) {
 	if len(p.roots) == 0 {
 		return "", &PathError{Path: path, Err: fmt.Errorf("%w (no local_roots configured)", ErrNotAllowed)}
 	}
+	// A reserved folder as written is refused before anything touches the
+	// file system: resolving a path inside a live mount point stats the
+	// mount, which blocks while its rclone hangs.
+	for _, r := range p.reserved {
+		if within(r.clean, clean) {
+			return "", &PathError{Path: path, Err: fmt.Errorf("%w: %w (%s)", ErrNotAllowed, ErrReserved, r.clean)}
+		}
+	}
 	resolved, err := resolve(clean)
 	if err != nil {
 		return "", err
@@ -247,6 +255,79 @@ func Overlap(a, b string) (bool, error) {
 		return false, err
 	}
 	return within(ra, rb) || within(rb, ra), nil
+}
+
+// HoldsReserved returns the reserved folder (Reserve) that the absolute
+// path holds, as written or resolved (Overlap), and whether there is one.
+// Resolve already refuses a path that is or lies inside a reserved folder;
+// this finds the folders above one, such as "/" or the data directory, for
+// the callers that must keep a tool working there out of it. A path that
+// cannot be resolved counts as holding nothing.
+func (p *Policy) HoldsReserved(path string) (string, bool) {
+	for _, r := range p.reserved {
+		if ok, err := Overlap(path, r.clean); err == nil && ok {
+			return r.clean, true
+		}
+	}
+	return "", false
+}
+
+// RelPath is a path relative to a folder (Inside), one entry per
+// component. Each entry lists the names that open that component: its
+// name first and, on Windows, its 8.3 short name when that differs.
+type RelPath [][]string
+
+// Inside returns how a tool that walks the folder outer meets the folder
+// inner when outer holds it (strictly): inner's path relative to outer, as
+// written (both cleaned) and as resolved (symbolic links, junctions, the
+// names as the file system spells them), without duplicates. It returns
+// nil when outer does not hold inner, or is inner. Both must be absolute;
+// errors are *PathError values, as from Resolve. Names compare as Resolve
+// compares them (case-insensitively on Windows), so a caller that matches
+// names must do so too.
+func Inside(outer, inner string) ([]RelPath, error) {
+	co, err := cleanAbs(outer)
+	if err != nil {
+		return nil, err
+	}
+	ci, err := cleanAbs(inner)
+	if err != nil {
+		return nil, err
+	}
+	var out []RelPath
+	add := func(o, i string) {
+		if !within(o, i) || within(i, o) {
+			return
+		}
+		depth := len(components(o[len(filepath.VolumeName(o)):]))
+		names := components(i[len(filepath.VolumeName(i)):])
+		short := shortComponents(i, len(names))
+		rel := make(RelPath, 0, len(names)-depth)
+		for k := depth; k < len(names); k++ {
+			alts := []string{names[k]}
+			if short != nil && !nameEqual(short[k], names[k]) {
+				alts = append(alts, short[k])
+			}
+			rel = append(rel, alts)
+		}
+		for _, have := range out {
+			if slices.EqualFunc(have, rel, slices.Equal[[]string]) {
+				return
+			}
+		}
+		out = append(out, rel)
+	}
+	add(co, ci)
+	ro, err := resolve(co)
+	if err != nil {
+		return nil, err
+	}
+	ri, err := resolve(ci)
+	if err != nil {
+		return nil, err
+	}
+	add(ro, ri)
+	return out, nil
 }
 
 // cleanAbs validates path and returns it cleaned.

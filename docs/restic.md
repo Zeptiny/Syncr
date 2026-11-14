@@ -130,6 +130,13 @@ to it first, in one of two ways (**How the worker reads it**):
   reaches its time limit. A mount left behind by a killed worker is
   unmounted at the next start or before the next run. A mount uses no
   disk, but every file restic reads is downloaded while it reads it.
+  **If rclone ends while restic reads the mount** (it crashed, was killed
+  or lost its connection), every read fails from then on, so the job
+  **fails** (`execution_failed`) with rclone's last error messages, even
+  when restic saved a snapshot: that snapshot is incomplete, and the
+  message names it. Otherwise restic's own read errors make the job
+  succeed with warnings and an incomplete snapshot, as for a backup of
+  folders.
 - **Advanced:** parallel downloads and fast listing (mirror only) and a
   bandwidth limit (both), as in a copy job.
 
@@ -162,9 +169,10 @@ mirror what the new filters leave out.
   not recorded in restic; the job and schedule pages show it.
 - **The host** is the worker's host name, as for any backup, unless you
   set one.
-- **restic itself shows the internal folder** (for example
-  `/var/lib/syncr/sources/mirror/3f…/data`) as the snapshot's path, in the
-  restic command line and in **Group by host and paths**.
+- **restic itself shows the internal folder** as the snapshot's path, in
+  the restic command line and in **Group by host and paths**: the mirror's
+  copy (for example `/var/lib/syncr/sources/mirror/3f…/data`) or the mount
+  folder (`/var/lib/syncr/sources/mount/3f…`).
 
 ### One worker per backup of a remote
 
@@ -182,6 +190,15 @@ To move a backup of a remote to another worker, change the schedule's
 worker and expect one full read; the old worker's mirror is deleted
 after 30 days unused.
 
+**Two backups of the same folder on one worker share one mirror.** The
+mirror is named after the remote and the folder, not the backup, so a
+second backup of `Photos` on the same worker (for example into an off-site
+repository as well) syncs the same copy, one run at a time. Give them the
+same filters: with different ones, each run deletes from the mirror what
+its filters leave out and downloads again what the other run's filters
+skipped, so both download more on every run. **Delete the mirror after
+each run** on one of them deletes the shared copy too.
+
 ### Retention
 
 The tag lets a retention job pick these snapshots out: a **Retention**
@@ -193,21 +210,29 @@ remote folder, method and worker.
 
 ### Empty folders
 
-**An empty folder fails the backup** with *The remote folder is empty*
-(`source_empty`), before anything is downloaded or deleted from the
-mirror. A folder that was emptied by mistake, or a wrong path, would
-otherwise make empty snapshots that push the real ones out of retention.
+**A folder without a file fails the backup** with *The remote folder is
+empty* (`source_empty`), before anything is downloaded or deleted from
+the mirror and before anything is mounted. A folder that was emptied by
+mistake, or a wrong path, would otherwise make empty snapshots that push
+the real ones out of retention.
 
-- The check lists the folder's top level, without the filters.
-- On S3 and compatibles, a folder that does not exist in an existing
-  bucket lists as empty, so it is reported as empty rather than missing; a
-  missing bucket is *not found*.
-- **Back up an empty folder** (Advanced) lets the run go on. restic makes
-  no empty snapshot, so such a run **succeeds without a snapshot** and
-  says so (*No snapshot: the remote folder was empty*, and a warning); the
-  mirror is still emptied to match.
-- A folder that has files, all of which the filters leave out, fails: "the
-  filters leave out everything".
+- **The check looks for one file, at any depth, that the filters keep**
+  (`rclone lsf -R --files-only` with the backup's filters). Folders do not
+  count: a folder whose files were all deleted but whose sub-folders
+  remain, as a mass deletion or a sync client often leaves it, is empty.
+  So is a folder whose files the filters all leave out.
+- The listing stops at the first file it finds, so a large folder costs
+  about one listing. It uses fast listing only when the backup asks for it
+  (fast listing reads the whole tree before it shows anything).
+- A folder that does not exist fails with *not found* instead. On S3 and
+  compatibles, a folder that does not exist in an existing bucket lists as
+  empty, so it is reported as empty rather than missing; a missing bucket
+  is *not found*.
+- **Back up an empty folder** (Advanced) lets the run go on: the mirror
+  follows the folder, and restic backs up what is there. restic makes no
+  snapshot of a folder with nothing at all in it, so such a run
+  **succeeds without a snapshot** and says so (*No snapshot: the remote
+  folder was empty*, and a warning).
 
 ### Dry run
 
@@ -241,10 +266,32 @@ straight to a remote is planned.
 `<data_dir>/sources` holds mirrors of other users' remotes and live mounts,
 so no job, folder listing or folder size may use it or anything inside it
 (`path_not_allowed`), even when `local_roots` covers the data directory.
-A backup or copy of a folder that holds it, such as `/` or the data
-directory's parent, leaves it out: the worker keeps a marker file
-(`.syncr-sources`) in it and passes `--exclude-if-present=.syncr-sources`,
-so the snapshot keeps the empty folder and nothing of its contents.
+A job on a folder that **holds** it, such as `/` or the data directory's
+parent, works, but never reads, writes or deletes anything in it:
+
+- **A backup** of such a folder leaves it out: the worker keeps a marker
+  file (`.syncr-sources`) in it and passes
+  `--exclude-if-present=.syncr-sources`, so the snapshot keeps the empty
+  folder and nothing of its contents.
+- **A copy, sync or move** whose source or destination holds it gets an
+  exclude rule for the folder's path relative to that side, anchored and
+  placed before your own filters, for example `- /lib/syncr/sources/**`
+  for `/var`. rclone applies a transfer's filters on both sides, so it
+  neither copies the folder out nor writes, replaces or deletes anything
+  in it, whatever the source holds at that path. On Windows the rule
+  matches the folder's names in any case and by their short (8.3) names.
+- **A restore** into a target that holds it leaves out what would land in
+  it (an `--exclude` of that path, relative to what is restored). restic
+  cannot combine excludes with selected items, so a restore of selected
+  items goes on only when none of them would land in or over the folder,
+  and is refused otherwise (`path_not_allowed`), as is one with include
+  patterns. On Windows, where other spellings of a name open the same
+  folder, every restore into a target that holds it is refused: restore
+  into a folder beside it.
+- **A two-way sync** side that holds it is refused, as one that holds the
+  state of two-way syncs is.
+- **A union remote** with a local folder that holds it is refused: its
+  paths cannot be kept out with rules.
 
 ### What a worker needs for the mount
 

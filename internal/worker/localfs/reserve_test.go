@@ -127,3 +127,45 @@ func TestMeasureSkipsReservedFolders(t *testing.T) {
 		t.Errorf("the walk opened the reserved folder: %q", opened)
 	}
 }
+
+// TestHoldsReservedAndInside: HoldsReserved finds the reserved folder above
+// a path, as written and through a link; Inside gives the folder's path
+// relative to each folder that holds it, as written and resolved.
+func TestHoldsReservedAndInside(t *testing.T) {
+	t.Parallel()
+	root := realTempDir(t)
+	// The data directory is reached through a link: lib/syncr -> disk/syncr.
+	realDir := filepath.Join(root, "disk", "syncr")
+	mkdirs(t, filepath.Join(realDir, "sources"), filepath.Join(root, "lib"), filepath.Join(root, "srv"))
+	symlink(t, realDir, filepath.Join(root, "lib", "syncr"))
+	sources := filepath.Join(root, "lib", "syncr", "sources")
+	p, err := mustPolicy(t, root).Reserve(sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		path   string
+		holds  bool
+		inside []RelPath
+	}{
+		{root, true, []RelPath{{{"lib"}, {"syncr"}, {"sources"}}, {{"disk"}, {"syncr"}, {"sources"}}}},
+		{filepath.Join(root, "lib"), true, []RelPath{{{"syncr"}, {"sources"}}}},
+		{filepath.Join(root, "lib", "syncr"), true, []RelPath{{{"sources"}}}},
+		{filepath.Join(root, "disk"), true, []RelPath{{{"syncr"}, {"sources"}}}},
+		{filepath.Join(root, "srv"), false, nil},
+		{filepath.Join(root, "disk", "syncr2"), false, nil},
+		{sources, true, nil}, // the folder itself: Resolve refuses it
+	} {
+		dir, holds := p.HoldsReserved(tt.path)
+		if holds != tt.holds || (holds && dir != sources) {
+			t.Errorf("HoldsReserved(%q) = %q, %v", tt.path, dir, holds)
+		}
+		got, err := Inside(tt.path, sources)
+		if err != nil || !slices.EqualFunc(got, tt.inside, func(a, b RelPath) bool { return slices.EqualFunc(a, b, slices.Equal[[]string]) }) {
+			t.Errorf("Inside(%q) = %q, %v; want %q", tt.path, got, err, tt.inside)
+		}
+	}
+	if _, err := Inside("relative", sources); !errors.Is(err, ErrInvalidPath) {
+		t.Errorf("Inside(relative) = %v", err)
+	}
+}

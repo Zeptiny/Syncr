@@ -82,9 +82,13 @@ curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/j
   `JOB_ERROR_CODE_WORKER_OUTDATED`.
 - A schedule of it must target a worker: `target.workerLabel` is refused
   with a field error on `target.worker_label`.
-- An empty folder fails with `JOB_ERROR_CODE_SOURCE_EMPTY` (32) unless
-  `allowEmpty` is set; then the job succeeds with an empty `snapshotId`
-  and a warning (restic makes no empty snapshot).
+- A folder without a file that the filters keep, at any depth, fails with
+  `JOB_ERROR_CODE_SOURCE_EMPTY` (32) unless `allowEmpty` is set; with it, a
+  folder with nothing in it ends the job successfully with an empty
+  `snapshotId` and a warning (restic makes no empty snapshot).
+- With the mount method, a mount whose rclone ends during the backup fails
+  the job with `JOB_ERROR_CODE_EXECUTION_FAILED`, even when restic saved
+  an (incomplete) snapshot.
 - Live progress (`WatchJob`) carries `phase`: `mirror` (rclone's
   counters) then `backup` (restic's, from zero again). Stored samples
   (`ListJobSamples`) have no phase. A successful run's

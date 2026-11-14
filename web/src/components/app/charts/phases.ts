@@ -11,17 +11,24 @@ export interface PhaseChange {
 
 /**
  * phaseChanges finds where a job's phases change. A backup of a remote
- * mirrors, then backs up, and the counters restart at the change. Live
- * samples name their phase; stored ones don't, so known holds the times
- * the job's result gives (the mirror's end) and, without them, a drop of
- * the cumulative bytes marks a change (within a phase they only grow).
+ * through a mirror mirrors, then backs up, and the counters restart at the
+ * change. Live samples name their phase; stored ones don't, so known holds
+ * the times the job's result gives (the mirror's end) and, without them,
+ * guess lets a drop of the cumulative bytes mark a change (within a phase
+ * they only grow). Only a job with several phases may guess: any other
+ * job's counters can drop too (a worker restart, a requeued run), and that
+ * is no phase change.
  */
-export function phaseChanges(samples: JobSample[], known: number[] = []): PhaseChange[] {
+export function phaseChanges(
+  samples: JobSample[],
+  known: number[] = [],
+  guess = false,
+): PhaseChange[] {
   const out = new Map<number, PhaseChange>();
   for (let i = 1; i < samples.length; i++) {
     const a = samples[i - 1];
     const b = samples[i];
-    const guess = { index: i, at: (a.t + b.t) / 2 };
+    const at = { index: i, at: (a.t + b.t) / 2 };
     const c = known.find((k) => a.t < k && k <= b.t);
     // Strictly before the next sample, so the time axis keeps increasing.
     const exact =
@@ -29,8 +36,8 @@ export function phaseChanges(samples: JobSample[], known: number[] = []): PhaseC
         ? undefined
         : { index: i, at: Math.min(c, b.t - (b.t - a.t) / 1000), exact: true };
     if (exact) out.set(i, exact);
-    else if (a.phase && b.phase && a.phase !== b.phase) out.set(i, guess);
-    else if (known.length === 0 && b.bytes < a.bytes) out.set(i, guess);
+    else if (a.phase && b.phase && a.phase !== b.phase) out.set(i, at);
+    else if (guess && known.length === 0 && b.bytes < a.bytes) out.set(i, at);
   }
   return [...out.values()];
 }

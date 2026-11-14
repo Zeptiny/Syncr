@@ -1,25 +1,11 @@
 import { render, screen } from "@testing-library/react";
-import type uPlot from "uplot";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { formatRate } from "@/lib/format";
+import { builtCharts } from "@/test/uplot";
 
 import { averageRate, chartData, phaseChanges } from "../charts/phases";
 import { ProgressChart } from "../progress-chart";
-
-// uPlot needs a canvas, which jsdom lacks; the mock keeps the options the
-// chart was built with.
-const built = vi.hoisted(() => [] as uPlot.Options[]);
-vi.mock("uplot", () => ({
-  default: class {
-    constructor(opts: uPlot.Options) {
-      built.push(opts);
-    }
-    setData() {}
-    setSize() {}
-    destroy() {}
-  },
-}));
 
 describe("ProgressChart", () => {
   it("ticks whole seconds and whole bytes, so a short idle job repeats no label", () => {
@@ -35,7 +21,7 @@ describe("ProgressChart", () => {
         ]}
       />,
     );
-    const axes = built.at(-1)?.axes ?? [];
+    const axes = builtCharts.at(-1)?.axes ?? [];
     expect(axes).toHaveLength(3);
     for (const axis of axes) {
       const incrs = axis.incrs as number[];
@@ -57,16 +43,33 @@ describe("ProgressChart", () => {
   it("finds a phase change by its name, its known time, or the counters restarting", () => {
     expect(phaseChanges(phased)).toEqual([{ index: 3, at: 125 }]);
     // Stored samples carry no phase: the job's result says when the
-    // mirror ended, or else the drop of the bytes marks it.
+    // mirror ended, or else the drop of the bytes marks it in a job with
+    // phases.
     expect(phaseChanges(stored, [127])).toEqual([{ index: 3, at: 127, exact: true }]);
-    expect(phaseChanges(stored)).toEqual([{ index: 3, at: 125 }]);
+    expect(phaseChanges(stored, [], true)).toEqual([{ index: 3, at: 125 }]);
     // A known time wins over a drop, which then marks nothing more.
     const grows = stored.map((s, i) => (i >= 3 ? { ...s, bytes: s.bytes + 1000 } : s));
-    expect(phaseChanges(grows)).toEqual([]);
-    expect(phaseChanges(grows, [121])).toEqual([{ index: 3, at: 121, exact: true }]);
+    expect(phaseChanges(grows, [], true)).toEqual([]);
+    expect(phaseChanges(grows, [121], true)).toEqual([{ index: 3, at: 121, exact: true }]);
     // A change at a sample's own time stays just before it.
     expect(phaseChanges(stored, [130])[0].at).toBeLessThan(130);
-    expect(phaseChanges(stored.slice(0, 3))).toEqual([]);
+    expect(phaseChanges(stored.slice(0, 3), [], true)).toEqual([]);
+  });
+
+  it("takes no drop of a job without phases for a phase change", () => {
+    // A transfer or a two-way sync whose counters restart (a worker
+    // restart, a requeued run) has no phases.
+    expect(phaseChanges(stored)).toEqual([]);
+    expect(phaseChanges(stored, [], false)).toEqual([]);
+    render(<ProgressChart samples={stored} startedAt={95} />);
+    expect(screen.queryByText(/counters restart/)).toBeNull();
+    expect(screen.getByText("Average")).toBeInTheDocument();
+  });
+
+  it("guesses a stored mirror run's change from the drop", () => {
+    render(<ProgressChart samples={stored} startedAt={95} phases={["Mirror", "Backup"]} />);
+    expect(screen.getByText("Mirror → Backup: the counters restart")).toBeInTheDocument();
+    expect(screen.getByText("Backup average")).toBeInTheDocument();
   });
 
   it("breaks both lines at a phase change and takes no rate across it", () => {
@@ -99,7 +102,7 @@ describe("ProgressChart", () => {
     expect(screen.getByText("Backup average")).toBeInTheDocument();
     expect(screen.getByText(formatRate(30))).toBeInTheDocument();
     expect(screen.getByText("Mirror → Backup: the counters restart")).toBeInTheDocument();
-    const opts = built.at(-1);
+    const opts = builtCharts.at(-1);
     expect(opts?.hooks?.draw).toHaveLength(1);
   });
 

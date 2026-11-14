@@ -3,13 +3,17 @@ package dispatch_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
+	"github.com/Zeptiny/Syncr/internal/controller/dispatch"
 	"github.com/Zeptiny/Syncr/internal/domain"
+	"github.com/Zeptiny/Syncr/internal/jobkind"
 	"github.com/Zeptiny/Syncr/internal/link"
 )
 
@@ -145,5 +149,40 @@ func TestProgressPhaseIsLive(t *testing.T) {
 		if s.Phase != "" {
 			t.Errorf("stored sample with phase %q", s.Phase)
 		}
+	}
+}
+
+// TestRemoteSourceRefusedAtBuildSaysWhy: a backup of a remote that became
+// invalid after it was scheduled (here its repository now lies in the
+// folder it backs up) fails with invalid_spec and the builder's reason.
+func TestRemoteSourceRefusedAtBuildSaysWhy(t *testing.T) {
+	t.Parallel()
+	repoID := domain.NewResticRepoID()
+	repos := &fakeRepos{repo: restic.Resolved{ID: repoID, OwnerID: testOwner, RemoteID: testRemote(), Path: "photos/vault", Password: testRepoPassword}}
+	e := newEnv(t)
+	specs, err := dispatch.NewSpecs(e.remotes, repos, kinds(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.disp, err = dispatch.New(dispatch.Deps{Jobs: e.jobs, Workers: e.workers, Specs: specs, Clock: e.clock, Hub: e.hub}, e.cfg); err != nil {
+		t.Fatal(err)
+	}
+	w := e.newProbeWorker(e.enroll("nas"))
+	w.remoteSources = &syncrv1.RemoteSourceSupport{Mirror: true}
+	w.restart()
+	w.report()
+	def := remoteBackupDef(syncrv1.ResticRemoteSourceMethod_RESTIC_REMOTE_SOURCE_METHOD_MIRROR)
+	def.GetResticBackup().RepositoryId = repoID.String()
+	j := e.runDef(w.id, def)
+	if got := started(w.poll()); len(got) != 0 {
+		t.Fatalf("the worker was sent %v", got)
+	}
+	got := e.job(j.ID)
+	want := "the job's definition cannot be turned into a spec: definition.restic_backup.remote_source.path: " + jobkind.RemoteSourceHoldsRepository
+	if got.Status != domain.JobFailed || got.Error.Code != jobs.CodeInvalidSpec || got.Error.Message != want {
+		t.Errorf("job = %s %q %q\nwant message %q", got.Status, got.Error.Code, got.Error.Message, want)
+	}
+	if strings.Contains(got.Error.Message, testRepoPassword) {
+		t.Error("the message holds the repository's password")
 	}
 }

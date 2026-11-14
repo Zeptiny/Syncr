@@ -22,7 +22,10 @@
 // whose process exited. On Linux a folder still mounted after rclone ended
 // (it was killed) is unmounted lazily with "fusermount3 -uz" (or
 // "fusermount"). The runner calls Unmount on every path out of a job:
-// success, failure, cancel, time limit and shutdown.
+// success, failure, cancel, time limit and shutdown. Before it does, it
+// asks Mount.Ended whether rclone ended on its own while the folder was
+// mounted (a crash, a kill, a mount taken away): the backup then read a
+// dead mount and is not complete.
 //
 // # Where the mount point lives
 //
@@ -239,9 +242,14 @@ type Mount struct {
 	m      *Mounter
 	point  string
 	cancel context.CancelFunc
-	done   <-chan runOutcome
-	once   sync.Once
-	err    error
+	// ended is closed once rclone has ended; out holds how (written
+	// before the close).
+	ended chan struct{}
+	out   runOutcome
+	// diag returns rclone's last error messages, scrubbed.
+	diag func() []string
+	once sync.Once
+	err  error
 }
 
 // runOutcome is how rclone's run ended.
@@ -281,7 +289,7 @@ func (m *Mounter) Mount(ctx context.Context, req Request) (*Mount, error) {
 		}
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	done := make(chan runOutcome, 1)
+	mt := &Mount{m: m, point: req.Point, cancel: cancel, ended: make(chan struct{}), diag: t.Diagnostics}
 	go func() {
 		res, err := m.cfg.Supervisor.Run(runCtx, proc.Spec{
 			Path:        m.cfg.Rclone,
@@ -292,9 +300,9 @@ func (m *Mounter) Mount(ctx context.Context, req Request) (*Mount, error) {
 			Stderr:      t.Line,
 			GracePeriod: m.cfg.Grace,
 		})
-		done <- runOutcome{res: res, err: err}
+		mt.out = runOutcome{res: res, err: err}
+		close(mt.ended)
 	}()
-	mt := &Mount{m: m, point: req.Point, cancel: cancel, done: done}
 
 	tick, stopTick := m.cfg.Clock.Ticker(m.cfg.Poll)
 	defer stopTick()
@@ -305,15 +313,14 @@ func (m *Mounter) Mount(ctx context.Context, req Request) (*Mount, error) {
 		case <-ctx.Done():
 			_ = mt.Unmount()
 			return nil, context.Cause(ctx)
-		case out := <-done:
-			// rclone ended before the folder was mounted. Put the outcome
-			// back for Unmount, which cleans up after it.
-			done <- out
+		case <-mt.ended:
+			// rclone ended before the folder was mounted; Unmount cleans
+			// up after it.
 			_ = mt.Unmount()
 			if ctx.Err() != nil {
 				return nil, context.Cause(ctx)
 			}
-			return nil, exitedError(out, t.Diagnostics())
+			return nil, exitedError(mt.out, t.Diagnostics())
 		case <-expired:
 			_ = mt.Unmount()
 			msg := fmt.Sprintf("the remote was not mounted within %s (remote_sources.mount_timeout)", req.Timeout)
@@ -374,6 +381,45 @@ func unavailable(diag []string) bool {
 	return false
 }
 
+// Ended returns nil while rclone serves the mount, and once Unmount or
+// the context of Mount stopped it. When rclone ended on its own since the
+// folder was mounted (it crashed or was killed, or the mount was taken
+// away under it), it returns an *Error that says so, with rclone's exit
+// code and last error messages: every read of the folder failed from then
+// on, so whatever read it may have missed files. Check it before Unmount,
+// which stops rclone.
+func (mt *Mount) Ended() error {
+	select {
+	case <-mt.ended:
+	default:
+		return nil
+	}
+	if isStop(mt.out.err) {
+		return nil
+	}
+	return endedError(mt.out, mt.diag())
+}
+
+// endedError describes an rclone mount that ended on its own while the
+// folder was mounted.
+func endedError(out runOutcome, diag []string) error {
+	var b strings.Builder
+	b.WriteString("rclone mount ended while the folder was mounted")
+	switch {
+	case out.err == nil:
+		b.WriteString(" (it exited without an error: the folder was unmounted under it)")
+	case out.res.ExitCode >= 0:
+		fmt.Fprintf(&b, " (exit code %d)", out.res.ExitCode)
+	default:
+		b.WriteString(" (it was killed)")
+	}
+	if len(diag) > 0 {
+		b.WriteString(": ")
+		b.WriteString(strings.Join(diag, "; "))
+	}
+	return &Error{Msg: b.String(), Err: out.err}
+}
+
 // Unmount stops rclone and waits until it has ended, then makes sure the
 // folder is not mounted any more (Linux: a lazy unmount with the FUSE
 // helper) and cleans up the mount point. It returns an error only when the
@@ -382,7 +428,8 @@ func unavailable(diag []string) bool {
 func (mt *Mount) Unmount() error {
 	mt.once.Do(func() {
 		mt.cancel()
-		out := <-mt.done
+		<-mt.ended
+		out := mt.out
 		if out.err != nil && !isStop(out.err) {
 			mt.m.cfg.Logger.Info("rclone mount ended with an error", "mount_point", mt.point, "error", out.err.Error())
 		}

@@ -6,6 +6,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -291,6 +292,7 @@ func planRestore(e *engine, spec *syncrv1.JobSpec) (command, error) {
 			return command{}, err
 		}
 	}
+	trees := make([]string, 0, len(op.GetPaths()))
 	for _, tree := range op.GetPaths() {
 		if err := checkTreePath("path", tree); err != nil {
 			return command{}, err
@@ -305,8 +307,14 @@ func planRestore(e *engine, spec *syncrv1.JobSpec) (command, error) {
 			}
 			tree = rel
 		}
+		trees = append(trees, tree)
 		args = append(args, "--include="+includePattern(tree, e.goos))
 	}
+	keepOut, err := e.restoreKeepsOutOfSources(target, op, trees)
+	if err != nil {
+		return command{}, err
+	}
+	args = append(args, keepOut...)
 	for _, pat := range op.GetExcludes() {
 		if err := checkText("exclude pattern", pat); err != nil {
 			return command{}, err
@@ -324,6 +332,85 @@ func planRestore(e *engine, spec *syncrv1.JobSpec) (command, error) {
 	}
 	args = append(args, "--", positional)
 	return command{repo: op.GetRepository(), verb: "restore", args: args}, nil
+}
+
+// restoreKeepsOutOfSources keeps a restore into target, a resolved local
+// path, out of the worker's folder of backups of remotes when target holds
+// it (the path policy refuses the folder itself and what lies inside it).
+// A file at tree path P of what is restored (the snapshot, or the
+// subfolder's contents with P relative to it) lands at target/P, so the
+// items that would land in the folder are those at "/<the folder's path
+// relative to target>" (localfs.Inside: as written and resolved):
+//
+//   - a restore of everything gets an --exclude of each such path, escaped
+//     as a literal (restic leaves out an excluded folder's contents too);
+//   - restic refuses --exclude with --include, so a restore of selected
+//     items (trees, relative as restic matches them) is checked instead:
+//     it may go on when no item is, holds or lies inside such a path
+//     (restic restores only those items and the folders above them);
+//     otherwise it fails;
+//   - a restore with include patterns cannot be checked, and fails;
+//   - so does any such restore on Windows, where names that differ in
+//     case, short 8.3 names and trailing dots or spaces open the same
+//     folder, which no literal pattern covers.
+//
+// Failures are PATH_NOT_ALLOWED. A target that does not hold the folder
+// changes nothing.
+func (e *engine) restoreKeepsOutOfSources(target string, op *syncrv1.ResticRestore, trees []string) ([]string, error) {
+	store := e.cfg.RemoteSources.Store
+	if store == nil {
+		return nil, nil
+	}
+	rels, err := localfs.Inside(target, store.Root())
+	if err != nil {
+		return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
+			"restore target %q: cannot tell whether it holds the worker's folder of backups of remotes: %w", target, err)
+	}
+	if len(rels) == 0 {
+		return nil, nil
+	}
+	refuse := func(why string) error {
+		return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
+			"restore target %q holds the folder where the worker keeps the copies and mount points of backups of remotes (%s), "+
+				"and %s; restore into a folder beside it", target, store.Root(), why)
+	}
+	switch {
+	case e.goos == "windows":
+		return nil, refuse("on Windows a restore cannot be kept out of it exactly (names in another case, short names and trailing dots or spaces reach it)")
+	case len(op.GetIncludes()) > 0:
+		return nil, refuse("a restore with include patterns cannot be kept out of it")
+	}
+	var excludes []string
+	for _, rel := range rels {
+		names := make([]string, len(rel))
+		for i, alts := range rel {
+			names[i] = alts[0]
+		}
+		if len(trees) == 0 {
+			excludes = append(excludes, "--exclude="+includePattern("/"+strings.Join(names, "/"), e.goos))
+			continue
+		}
+		for _, tree := range trees {
+			if treesNested(tree, names) {
+				return nil, refuse(fmt.Sprintf("the selected item %q would be restored into it or over it", tree))
+			}
+		}
+	}
+	return excludes, nil
+}
+
+// treesNested reports whether the snapshot tree path tree and the path of
+// names (relative to the same root) are the same item or one lies inside
+// the other.
+func treesNested(tree string, names []string) bool {
+	var parts []string
+	for p := range strings.SplitSeq(pathpkg.Clean(tree), "/") {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	n := min(len(parts), len(names))
+	return slices.Equal(parts[:n], names[:n])
 }
 
 // checkTreePath checks a snapshot tree path: absolute with forward slashes,

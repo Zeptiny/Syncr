@@ -81,7 +81,7 @@ export const MIRROR_PATH = "/var/lib/syncr/sources/mirror/5d1e0c3b9a7f4e2d8c6b0a
 export const NO_SNAPSHOT = "No snapshot: the remote folder was empty";
 export const messages = {
   sourceEmpty:
-    'the folder "Photos" on the remote is empty, so nothing was backed up (an emptied or wrong folder would push real snapshots out of retention); allow an empty folder in the backup\'s options to back it up anyway',
+    'the folder "Photos" on the remote is empty: it holds no file, at any depth, so nothing was backed up (an emptied or wrong folder would push real snapshots out of retention); allow an empty folder in the backup\'s options to back it up anyway',
   emptyWarning:
     'the folder "Inbox" on the remote is empty and restic makes no empty snapshot, so no snapshot was made',
   cannotMount: 'worker "backup-host" cannot mount a remote: /dev/fuse is missing',

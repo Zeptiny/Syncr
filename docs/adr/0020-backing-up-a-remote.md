@@ -42,8 +42,18 @@ What the pinned tools do, checked against rclone 1.75.2 and restic 0.19.1:
 - `rclone sync` and `rclone mount` both keep the remote's modification
   times. `rclone sync --delete-excluded` removes what new filters leave out;
   after any error rclone deletes nothing. Filters apply to a mount as well.
-- `rclone lsf --max-depth 1` of a missing folder exits 3 ("directory not
-  found"); on S3 only a missing bucket does, a missing prefix lists empty.
+- `rclone lsf` of a missing folder exits 3 ("directory not found"); on S3
+  only a missing bucket does, a missing prefix lists empty. `rclone lsf -R
+  --files-only` with `--filter-from` lists only the files the filters keep,
+  at any depth, and nothing for a tree of empty folders.
+- A copy, sync or move applies its filters to paths relative to each side's
+  root, and an anchored rule placed first (`- /a/b/**`) wins over the rules
+  after it: rclone then neither lists, copies, overwrites nor deletes
+  anything at that path on either side. `--exclude-if-present` is checked
+  per listed folder, so a marker that only one side has keeps that side's
+  folder out of its own listing but not the other side's files out of it.
+- restic restore refuses `--include` together with `--exclude`; an
+  `--exclude` of a folder leaves out its contents too.
 - `rclone mount` without `/dev/fuse` fails at once with "fuse device not
   found"; on Windows a mount point must not exist yet and needs WinFsp.
   The process stops and unmounts on SIGINT or SIGTERM.
@@ -68,9 +78,14 @@ the two), and a method:
   scanner and archiver share one listing (safe: read-only, one job).
   Costs no disk; needs FUSE 3 or WinFsp.
 
-The worker runs the steps in order: a pre-check that lists the folder
-(missing: `NOT_FOUND`; empty: see below), the mirror or mount, restic,
-clean-up. Progress carries a phase (`mirror`, then `backup`), and the
+The worker runs the steps in order: a pre-check that looks for a file in
+the folder (missing: `NOT_FOUND`; none: see below), the mirror or mount,
+restic, clean-up. If rclone ends on its own while the folder is mounted
+(it crashed, was killed, or the mount was taken away), the job fails with
+`EXECUTION_FAILED` and rclone's last error messages, whatever restic made
+of the dead mount; a snapshot restic saved anyway is named as incomplete.
+With the mount up, restic's exit code 3 (some files unreadable) stays a
+success with warnings, as for a backup of paths. Progress carries a phase (`mirror`, then `backup`), and the
 counters restart at the change. Skipping uses rclone filter rules in both
 methods, so a mirror never downloads what is skipped; restic's excludes,
 `one_file_system` and `use_fs_snapshot` are refused there. Dry run brings
@@ -106,13 +121,18 @@ apart, next to the repository's key.
 
 ### Empty folders fail
 
-A source whose folder is empty fails with the new code `SOURCE_EMPTY`
-(32) before the sync, so an emptied or mis-pointed folder neither wipes
-the mirror nor makes empty snapshots that push real ones out of retention.
-`allow_empty` lets it pass; since restic makes no empty snapshot, such a
+A source whose folder holds no file that the filters keep, at any depth,
+fails with the new code `SOURCE_EMPTY` (32) before the sync or the mount,
+so an emptied or mis-pointed folder neither wipes the mirror nor makes
+empty snapshots that push real ones out of retention. Folders do not count:
+a mass deletion or a sync client usually leaves the folder tree behind,
+and restic would save that tree as a snapshot without files. The check is
+`rclone lsf -R --files-only` with the backup's filters (and `--fast-list`
+only when the backup asks for it), stopped as soon as it printed one file,
+so a large folder costs about one listing. `allow_empty` lets the run go
+on; since restic makes no snapshot of a folder with nothing in it, such a
 run succeeds **without a snapshot**, with a warning, and the controller's
-summary and the UI say so. A folder whose files the filters all leave out
-fails with `EXECUTION_FAILED`.
+summary and the UI say so.
 
 ### Detection, reported in Hello
 
@@ -143,11 +163,31 @@ mount can hang, so no walk ever enters `sources/`.
 Mirrors hold one user's remote data, and every user may browse worker
 folders and run jobs anywhere. So every job path, probe path and browse
 path that is or lies inside `<data_dir>/sources` fails with
-`PATH_NOT_ALLOWED`, even when `local_roots` covers the data directory.
-Backups and copies of a folder that holds it (such as `/`) get
-`--exclude-if-present=.syncr-sources`, with that marker kept in the
-folder, so they never read another user's mirror or walk into a live
-mount; folder sizes count it as empty.
+`PATH_NOT_ALLOWED`, even when `local_roots` covers the data directory; a
+path that does so as written is refused before anything on disk is
+touched. Jobs on a folder that **holds** it (such as `/`) keep working but
+never read, write or delete anything in it:
+
+- backups get `--exclude-if-present=.syncr-sources`, with that marker kept
+  in the folder, so they never read another user's mirror or walk into a
+  live mount; folder sizes count it as empty;
+- copies, syncs and moves get an anchored exclude rule for the folder's
+  path relative to each local side that holds it (as written and through
+  links), before the user's filters; rclone applies it on both sides, so
+  nothing there is read, written or deleted. On Windows the rule matches
+  each name in any case and by its 8.3 short name, as NTFS opens it;
+- restores into a target that holds it exclude the snapshot path that
+  would land there; since restic refuses excludes with includes, a restore
+  of selected items is checked item by item and refused when one would
+  land in or over the folder, as is a restore with include patterns and
+  any such restore on Windows (case, short names and trailing dots or
+  spaces reach the folder under other names);
+- a two-way sync side that holds it is refused (it holds the bisync state
+  too), and so is a union's local upstream that holds it.
+
+A marker alone is not enough for writes: rclone reads it per listed
+folder, so a destination's marker hides the destination's folder from its
+listing and the source's files are copied in.
 
 ## Consequences
 
@@ -172,6 +212,9 @@ mount; folder sizes count it as empty.
   of the same storage are not detected.
 - CI installs `fuse3` and WinFsp and requires the real-mount tests to run
   (`SYNCR_REQUIRE_MOUNT=1`).
+- Two backups of one folder on one worker share its mirror (the key holds
+  no filters); with different filters each run downloads again what the
+  other skipped. The docs say to give them the same filters.
 - Out for now: restoring straight back to a remote, mount schedules over
   labels (they need a retention `group_by`), several sources in one backup,
   and a per-worker list of mirrors.

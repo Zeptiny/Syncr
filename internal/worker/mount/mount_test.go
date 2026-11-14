@@ -497,3 +497,93 @@ func TestUnavailable(t *testing.T) {
 		}
 	}
 }
+
+// TestMountEnded: Ended is nil while rclone serves the mount and after
+// Unmount stopped it; once rclone ended on its own while the folder was
+// mounted (an error, a kill, an unmount from outside), it says so with
+// rclone's last error messages, scrubbed, before and after Unmount.
+func TestMountEnded(t *testing.T) {
+	t.Parallel()
+	const secret = "s3cr3t-key"
+	for name, tt := range map[string]struct {
+		lines []string
+		res   proc.Result
+		err   func(spec proc.Spec) error
+		want  string
+	}{
+		"error": {
+			lines: []string{`{"level":"error","msg":"IO error: read tcp: connection reset by peer, key ` + secret + `"}`},
+			res:   proc.Result{ExitCode: 1},
+			err:   func(spec proc.Spec) error { return &proc.ExitError{Path: spec.Path, ExitCode: 1} },
+			want:  "rclone mount ended while the folder was mounted (exit code 1): IO error: read tcp: connection reset by peer, key [redacted]",
+		},
+		"killed": {
+			res:  proc.Result{ExitCode: -1},
+			err:  func(spec proc.Spec) error { return &proc.ExitError{Path: spec.Path, ExitCode: -1} },
+			want: "rclone mount ended while the folder was mounted (it was killed)",
+		},
+		"unmounted from outside": {
+			err:  func(proc.Spec) error { return nil },
+			want: "(it exited without an error: the folder was unmounted under it)",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			die := make(chan struct{})
+			run := func(ctx context.Context, spec proc.Spec) (proc.Result, error) {
+				select {
+				case <-ctx.Done():
+					return untilStopped(ctx, spec)
+				case <-die:
+				}
+				for _, l := range tt.lines {
+					spec.Stderr(proc.Line{Data: []byte(l)})
+				}
+				return tt.res, tt.err(spec)
+			}
+			plat := &fakePlatform{readyAfter: 1}
+			m, _ := newTestMounter(t, run, plat, newFakeClock(1, false))
+			req := testRequest(filepath.Join(t.TempDir(), "0123"))
+			req.Scrub = scrub.New([]string{secret})
+			mt, err := m.Mount(t.Context(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := mt.Ended(); err != nil {
+				t.Fatalf("Ended while mounted = %v", err)
+			}
+			close(die)
+			<-mt.ended
+			for _, when := range []string{"before Unmount", "after Unmount"} {
+				err := mt.Ended()
+				me, ok := errors.AsType[*Error](err)
+				if !ok || me.Unavailable || !strings.Contains(me.Msg, tt.want) || strings.Contains(me.Msg, secret) {
+					t.Errorf("%s: Ended = %#v", when, err)
+				}
+				if when == "before Unmount" {
+					if err := mt.Unmount(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if got := plat.recorded(); !slices.Contains(got, "cleanup 0123") {
+				t.Errorf("calls = %q", got)
+			}
+		})
+	}
+
+	// Stopped by Unmount, or by the context: not an end of its own.
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	for _, stop := range []func(*Mount){func(mt *Mount) { _ = mt.Unmount() }, func(mt *Mount) { cancel(); <-mt.ended }} {
+		m, _ := newTestMounter(t, untilStopped, &fakePlatform{readyAfter: 1}, newFakeClock(1, false))
+		mt, err := m.Mount(ctx, testRequest(filepath.Join(t.TempDir(), "0123")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		stop(mt)
+		if err := mt.Ended(); err != nil {
+			t.Errorf("Ended after a stop = %v", err)
+		}
+	}
+}

@@ -271,7 +271,7 @@ export function errorHint(job: Job): string | undefined {
   if (!src) return undefined;
   switch (job.error?.code) {
     case JobErrorCode.SOURCE_EMPTY:
-      return "Nothing was backed up, so an emptied or wrong folder cannot push real snapshots out of retention. Check the folder; if it may be empty, turn on “Back up an empty folder” under Advanced: such a run then ends without a snapshot.";
+      return "The folder holds no file that the backup's filters keep, at any depth (empty sub-folders don't count). Nothing was backed up, so an emptied or wrong folder cannot push real snapshots out of retention. Check the folder and the filters; if it may be empty, turn on “Back up an empty folder” under Advanced.";
     case JobErrorCode.TOOL_UNAVAILABLE:
       return src.method === ResticRemoteSourceMethod.MOUNT
         ? "Its worker cannot mount remotes, so the job never started. Choose the mirror, or a worker that can mount: the Workers page shows what each one can do."

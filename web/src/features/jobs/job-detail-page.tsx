@@ -306,17 +306,13 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
           }
         : stored;
   const elapsed = jobElapsed(job, now);
-  const rate = terminal
-    ? elapsed
-      ? p.bytes / elapsed
-      : 0
-    : currentRate(phase ? phaseTail(watch.samples) : watch.samples);
   const hint = errorHint(job);
   const started = tsDate(job.startedAt);
   const startedAt = started ? started.getTime() / 1000 : undefined;
   // A mirror is brought up to date, then backed up (a mount has one
   // phase); a finished job's result says when the mirror was done.
-  const mirrored = remoteSourceOf(job.definition)?.method === ResticRemoteSourceMethod.MIRROR;
+  const remoteSource = remoteSourceOf(job.definition);
+  const mirrored = remoteSource?.method === ResticRemoteSourceMethod.MIRROR;
   const phases = mirrored ? ["Mirror", "Backup"] : undefined;
   const mirrorTime = durationSeconds(
     job.output?.output.case === "resticBackup"
@@ -325,6 +321,19 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
   );
   const phaseChangedAt =
     mirrored && startedAt !== undefined && mirrorTime > 0 ? [startedAt + mirrorTime] : undefined;
+  // A finished mirror run's counters are its backup phase's: its average
+  // leaves the mirror's time out, as the chart's legend does.
+  const backupTime =
+    terminal && mirrored && mirrorTime > 0 && elapsed !== undefined && elapsed > mirrorTime
+      ? elapsed - mirrorTime
+      : undefined;
+  const rate = terminal
+    ? backupTime !== undefined
+      ? p.bytes / backupTime
+      : elapsed
+        ? p.bytes / elapsed
+        : 0
+    : currentRate(phase ? phaseTail(watch.samples) : watch.samples);
   const errors = toNumber(job.stats?.errors);
   const owner = foreign ? users.data?.users.find((u) => u.id === job.ownerId) : undefined;
 
@@ -445,10 +454,18 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
             }
           />
           <StatCard
-            label={terminal ? "Average speed" : "Speed"}
+            label={
+              terminal ? (backupTime !== undefined ? "Backup average" : "Average speed") : "Speed"
+            }
             value={formatRate(rate)}
             tone={!terminal && rate > 0 ? "live" : "default"}
-            sub={terminal ? undefined : "Last 15 seconds"}
+            sub={
+              terminal
+                ? backupTime !== undefined
+                  ? `Over ${formatDuration(backupTime)}, mirroring left out`
+                  : undefined
+                : "Last 15 seconds"
+            }
           />
           <StatCard
             label={terminal ? "Duration" : "Time left"}
@@ -630,7 +647,9 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
                             ]
                           : []),
                       ]),
-                ...(job.stats
+                // A backup of a remote reports the mirror's deletes under
+                // Mirrored; restic's own counters here are always zero.
+                ...(job.stats && !remoteSource
                   ? [
                       {
                         label: "Checks and deletes",

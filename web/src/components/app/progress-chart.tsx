@@ -33,7 +33,9 @@ export interface ProgressChartProps {
   /**
    * phases names the phases of a job that has several, in order (e.g.
    * "Mirror", "Backup"), for the legend; samples that name their phase
-   * need none.
+   * need none. With two or more, a drop of the stored samples' bytes is
+   * taken for a phase change when phaseChangedAt does not say when it was;
+   * other jobs never get a phase change from a drop.
    */
   phases?: string[];
   /** phaseChangedAt holds when later phases began (seconds), if known. */
@@ -51,9 +53,10 @@ function phaseName(phase: string | undefined, phases: string[] | undefined, inde
 /**
  * ProgressChart plots throughput (area, left axis) and cumulative bytes
  * (line, right axis). New samples are appended in place; the chart follows
- * the theme. A phase change (counters restart) breaks both lines at a
- * dashed marker. A finished job's legend shows the average of its last
- * phase until a point is hovered.
+ * the theme. A phase change of a job that has phases (counters restart)
+ * breaks both lines at a dashed marker. A finished job's legend shows its
+ * average (of its last phase, for a job with phases) until a point is
+ * hovered, not the rate of its last few seconds.
  */
 export function ProgressChart({
   samples,
@@ -70,11 +73,12 @@ export function ProgressChart({
   const plot = useRef<uPlot | null>(null);
   const { resolved } = useTheme();
   const knownKey = (phaseChangedAt ?? []).join(",");
+  const multiPhase = (phases?.length ?? 0) > 1;
   const changes = useMemo(
-    () => phaseChanges(samples, phaseChangedAt),
+    () => phaseChanges(samples, phaseChangedAt, multiPhase),
     // phaseChangedAt is compared by value.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [samples, knownKey],
+    [samples, knownKey, multiPhase],
   );
   const data = useMemo(() => chartData(samples, changes), [samples, changes]);
   const dataRef = useRef(data);

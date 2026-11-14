@@ -16,3 +16,6 @@ func resolveExisting(path string) (string, error) {
 // nameEqual compares volume names and path components; Unix names are
 // case-sensitive.
 func nameEqual(a, b string) bool { return a == b }
+
+// shortComponents returns nil: Unix file systems have no short names.
+func shortComponents(string, int) []string { return nil }

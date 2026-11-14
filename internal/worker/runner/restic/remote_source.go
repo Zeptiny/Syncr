@@ -51,6 +51,12 @@ type Mounter interface {
 
 // Mounted is a mounted folder.
 type Mounted interface {
+	// Ended returns nil while the mount serves the folder, and once
+	// Unmount or the context stopped it. When rclone ended on its own
+	// since the folder was mounted (it crashed, was killed, or its FUSE
+	// connection was aborted), it returns why, with rclone's last error
+	// messages: whatever read the folder since then read nothing more.
+	Ended() error
 	// Unmount stops the mount and waits until it has ended.
 	Unmount() error
 }
@@ -285,7 +291,7 @@ type remoteRun struct {
 	// env defines the remotes for rclone, isolated in scratch.
 	env   map[string]string
 	stats *syncrv1.RemoteSourceStats
-	// empty reports that the check found the folder empty (and
+	// empty reports that the check found no file in the folder (and
 	// allow_empty let the run go on).
 	empty bool
 }
@@ -446,23 +452,54 @@ func (rs *remoteRun) rcloneOutcome(cmd string, err error, pres proc.Result, diag
 	return rclonetool.Failure(cmd, pres.ExitCode, diag, err)
 }
 
-// precheck lists the folder one level deep, without the filters
-// ("rclone lsf --max-depth=1"): a folder that does not exist is NOT_FOUND
-// (rclone exit 3; on S3 and B2 that is a bucket that does not exist, while
-// a prefix without objects lists as an empty folder), one without entries
-// is SOURCE_EMPTY unless allow_empty is set, and any other failure is
-// classified as for transfers. A path that names a file lists that file,
-// so it counts as a folder that holds it.
+// errFileFound is the cause with which precheck stops rclone once the
+// listing has shown a file.
+var errFileFound = errors.New("the listing found a file")
+
+// precheckArgs are rclone's arguments of the check: a recursive listing of
+// files only (no folders), with the backup's filters, so it shows only
+// what the mirror or the mount would hold; --fast-list only when the
+// backup asks for it (it lists the whole tree before printing anything).
+func (rs *remoteRun) precheckArgs() []string {
+	args := []string{"lsf", "--config=", "--use-json-log", "--log-level=NOTICE", "-R", "--files-only",
+		"--filter-from=" + filepath.Join(rs.scratch, filtersFileName)}
+	if rs.plan.src.GetFastList() {
+		args = append(args, "--fast-list")
+	}
+	return append(args, "--", rs.plan.target)
+}
+
+// precheck looks for one file in the folder that the backup's filters
+// keep, at any depth ("rclone lsf -R --files-only" with the filters), and
+// stops rclone as soon as it printed one, so a large folder costs about
+// one listing. A folder that does not exist is NOT_FOUND (rclone exit 3;
+// on S3 and B2 that is a bucket that does not exist, while a prefix
+// without objects lists as an empty folder). A folder without such a file
+// (empty, only empty folders left, or every file filtered out) is
+// SOURCE_EMPTY unless allow_empty is set: backing it up would make an
+// empty snapshot that pushes real ones out of retention. Any other failure
+// is classified as for transfers. A path that names a file lists that
+// file, so it counts as a folder that holds it.
 func (rs *remoteRun) precheck(ctx context.Context) error {
-	entries := 0
+	lctx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
+	// Lines arrive on this goroutine, before rclone's run returns
+	// (proc.LineFunc).
+	found := false
 	stdout := func(l proc.Line) {
-		if len(bytes.TrimSpace(l.Data)) > 0 {
-			entries++
+		if !found && len(bytes.TrimSpace(l.Data)) > 0 {
+			found = true
+			stop(errFileFound)
 		}
 	}
 	t := rclonetool.NewTracker(nil, rs.sc)
-	args := []string{"lsf", "--config=", "--use-json-log", "--log-level=NOTICE", "--max-depth=1", "--", rs.plan.target}
-	pres, err := rs.rclone(ctx, args, stdout, t.Line)
+	pres, err := rs.rclone(lctx, rs.precheckArgs(), stdout, t.Line)
+	if found && ctx.Err() == nil {
+		// Stopped on purpose, or it ended by itself after the file: a
+		// failure elsewhere in the folder is the sync's or the backup's
+		// to report.
+		return nil
+	}
 	if err := rs.rcloneOutcome("lsf", err, pres, t.Diagnostics()); err != nil {
 		code := runner.CodeOf(err)
 		switch {
@@ -473,11 +510,15 @@ func (rs *remoteRun) precheck(ctx context.Context) error {
 		}
 		return runner.Errorf(code, "cannot list the folder %s: %w", rs.where(), err)
 	}
-	rs.empty = entries == 0
-	if rs.empty && !rs.plan.src.GetAllowEmpty() {
+	rs.empty = true
+	if !rs.plan.src.GetAllowEmpty() {
+		what := "holds no file"
+		if len(rs.plan.filters) > 0 {
+			what = "holds no file that the backup's filters keep"
+		}
 		return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_SOURCE_EMPTY,
-			"the folder %s is empty, so nothing was backed up (an emptied or wrong folder would push real snapshots out of retention); "+
-				"allow an empty folder in the backup's options to back it up anyway", rs.where())
+			"the folder %s is empty: it %s, at any depth, so nothing was backed up (an emptied or wrong folder would push real snapshots out of retention); "+
+				"allow an empty folder in the backup's options to back it up anyway", rs.where(), what)
 	}
 	return nil
 }
@@ -631,10 +672,38 @@ func (rs *remoteRun) viaMount(ctx context.Context) (runner.Result, error) {
 	defer func() { _ = unmount() }()
 
 	res, err = rs.backup(ctx, lock.Point())
+	// rclone may have ended while restic read the mount, or before it read
+	// anything. Every read failed from then on, so whatever restic made of
+	// it (an incomplete snapshot with exit code 3, a fatal error, "snapshot
+	// is empty", even success), the backup is not complete.
+	if ended := mt.Ended(); ended != nil && ctx.Err() == nil {
+		err = rs.mountEnded(res, ended)
+	}
 	if uerr := unmount(); uerr != nil && err == nil {
 		res.Warnings = append(res.Warnings, "the remote could not be unmounted after the backup; the next run and the worker's next start try again: "+uerr.Error())
 	}
 	return res, err
+}
+
+// mountEnded is the failure of a backup whose mount ended before it was
+// unmounted: EXECUTION_FAILED, naming the snapshot restic saved anyway,
+// which is incomplete, and rclone's reason.
+func (rs *remoteRun) mountEnded(res runner.Result, ended error) error {
+	partial := "if restic saved a snapshot, it is incomplete"
+	if id := res.Output.GetResticBackup().GetSnapshotId(); id != "" {
+		partial = fmt.Sprintf("the snapshot %s that restic saved is incomplete", shortSnapshotID(id))
+	}
+	return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED,
+		"the mount of the folder %s ended during the backup, so restic could not read all of it; %s: %w", rs.where(), partial, ended)
+}
+
+// shortSnapshotID is the first 8 digits of a snapshot ID, as restic
+// shows it.
+func shortSnapshotID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // backup runs restic in dir, the mirror's copy or the mount point, and
@@ -647,10 +716,14 @@ func (rs *remoteRun) backup(ctx context.Context, dir string) (runner.Result, err
 	})
 	res.Stats.Phase = link.ProgressPhaseBackup
 	if ee, ok := errors.AsType[*ExitError](err); ok && ee.ExitCode == exitFatal && strings.Contains(ee.Message, emptySnapshot) {
-		// restic makes no snapshot of a folder without any entry.
+		// restic makes no snapshot of a folder without any entry. The
+		// check found a file the filters keep, so restic's own limits left
+		// everything out, or the folder was emptied since (a mount that
+		// ended is reported by viaMount instead).
 		if !rs.empty {
 			return res, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED,
-				"nothing to back up: the filters leave out everything in the folder %s, and restic makes no empty snapshot", rs.where())
+				"nothing to back up: restic found nothing to save in the folder %s (the size limit or the cache exclusion left out every file, "+
+					"or the folder was emptied after the check), and restic makes no empty snapshot", rs.where())
 		}
 		res.Output = &syncrv1.JobOutput{Output: &syncrv1.JobOutput_ResticBackup{ResticBackup: &syncrv1.ResticBackupOutput{RemoteSource: rs.stats}}}
 		res.Warnings = []string{fmt.Sprintf("the folder %s is empty and restic makes no empty snapshot, so no snapshot was made", rs.where())}

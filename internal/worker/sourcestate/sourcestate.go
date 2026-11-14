@@ -10,6 +10,7 @@
 //	        data/               the copy of the remote's folder
 //	    mount/<source_key>      the mount point of a mounted source
 //	    mount/<source_key>.lock its lock
+//	    trash/<key>-<random>/   a pruned mirror being deleted
 //
 // A source key is 32 lower-case hex digits computed by the controller
 // (link.ValidSourceKey). The store checks only its format, before it
@@ -20,7 +21,11 @@
 // ends, which records the time again. Prune removes mirrors that have not
 // been used for the retention the worker's configuration sets and whose
 // lock is free; Open and Prune are serialized, so a mirror is never removed
-// while a run takes it. A mounted run locks its mount point (Store.LockMount)
+// while a run takes it. Prune holds the store's lock only to move a stale
+// mirror into trash/ (one rename on the same file system) and deletes it
+// from there afterwards, so a large mirror's deletion holds back no run;
+// whatever a deletion left in trash/ (an error, a killed worker) goes on the
+// next pass, which also runs at start-up. A mounted run locks its mount point (Store.LockMount)
 // for as long as it mounts there. The store never looks inside mount/
 // beyond its own names: a stale FUSE mount blocks whoever touches it, and
 // sweeping those is internal/worker/mount's work.
@@ -56,6 +61,9 @@ const (
 	LockFileName    = "lock"
 	LastRunFileName = "last-run"
 	DataDirName     = "data"
+	// TrashDirName is the folder in the root where Prune moves a mirror
+	// before it deletes it.
+	TrashDirName = "trash"
 	// MountLockSuffix follows a source key in the name of a mount point's
 	// lock file, next to the mount point.
 	MountLockSuffix = ".lock"
@@ -94,9 +102,12 @@ type Config struct {
 type Store struct {
 	root string
 	now  func() time.Time
-	// mu is held while a mirror's lock is taken (OpenMirror) and while a
-	// mirror is removed (Prune), never while a run uses its mirror.
+	// mu is held while a mirror's lock is taken (OpenMirror) and while
+	// Prune moves a mirror into the trash, never while a run uses its
+	// mirror nor while a mirror is deleted.
 	mu sync.Mutex
+	// removeAll deletes a folder of the trash; tests replace it.
+	removeAll func(path string) error
 }
 
 // New returns a Store for cfg. It touches nothing on disk.
@@ -104,7 +115,7 @@ func New(cfg Config) (*Store, error) {
 	if !filepath.IsAbs(cfg.Root) {
 		return nil, fmt.Errorf("sourcestate: root %q is not absolute", cfg.Root)
 	}
-	s := &Store{root: filepath.Clean(cfg.Root), now: cfg.Now}
+	s := &Store{root: filepath.Clean(cfg.Root), now: cfg.Now, removeAll: os.RemoveAll}
 	if s.now == nil {
 		s.now = time.Now
 	}
@@ -119,6 +130,9 @@ func (s *Store) MirrorsDir() string { return filepath.Join(s.root, MirrorsDirNam
 
 // MountsDir returns the folder that holds the mount points.
 func (s *Store) MountsDir() string { return filepath.Join(s.root, MountsDirName) }
+
+// TrashDir returns the folder where pruned mirrors are deleted.
+func (s *Store) TrashDir() string { return filepath.Join(s.root, TrashDirName) }
 
 // Prepare creates the root and dir below it (mode 0700) and writes the
 // marker file into the root if it is missing.
@@ -243,9 +257,35 @@ func (l *MountLock) Close() error {
 // maxAge and whose lock is free, and returns the keys it removed. A mirror
 // without a readable last-run counts from the modification time of that
 // file, or of its folder. Entries that are not mirrors' folders are left
-// alone, and nothing outside mirror/ is ever read. It stops early, with
-// ctx's cause, when ctx ends.
+// alone, and nothing outside mirror/ and trash/ is ever read. It first
+// deletes what earlier passes left in trash/. It stops early, with ctx's
+// cause, when ctx ends.
 func (s *Store) Prune(ctx context.Context, maxAge time.Duration) ([]string, error) {
+	errTrash := s.emptyTrash()
+	removed, err := s.prune(ctx, maxAge)
+	return removed, errors.Join(errTrash, err)
+}
+
+// emptyTrash deletes everything in trash/: mirrors whose deletion an
+// earlier pass or process did not finish. Nothing else uses the folder.
+func (s *Store) emptyTrash() error {
+	entries, err := os.ReadDir(s.TrashDir())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read the trash folder: %w", err)
+	}
+	var errs []error
+	for _, e := range entries {
+		if err := s.removeAll(filepath.Join(s.TrashDir(), e.Name())); err != nil {
+			errs = append(errs, fmt.Errorf("delete %s from the trash: %w", e.Name(), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Store) prune(ctx context.Context, maxAge time.Duration) ([]string, error) {
 	entries, err := os.ReadDir(s.MirrorsDir())
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -276,7 +316,9 @@ func (s *Store) Prune(ctx context.Context, maxAge time.Duration) ([]string, erro
 }
 
 // pruneOne removes the mirror key if it last ran before cutoff and its
-// lock is free, and reports whether it did.
+// lock is free, and reports whether it did. Under the store's lock it only
+// moves the mirror's folder into the trash; it deletes it from there after
+// releasing it.
 func (s *Store) pruneOne(key string, cutoff time.Time) (bool, error) {
 	dir := filepath.Join(s.MirrorsDir(), key)
 	if last, err := lastRun(dir); err != nil || !last.Before(cutoff) {
@@ -285,30 +327,48 @@ func (s *Store) pruneOne(key string, cutoff time.Time) (bool, error) {
 		}
 		return false, err
 	}
+	trashed, err := s.trash(dir, key, cutoff)
+	if err != nil || trashed == "" {
+		return false, err
+	}
+	// The mirror is gone from mirror/; a deletion that fails here is
+	// finished by the next pass.
+	return true, s.removeAll(trashed)
+}
 
+// trash moves the mirror in dir into a new folder of the trash, if its lock
+// is free and no run used it since cutoff, and returns that folder ("" when
+// the mirror stays).
+func (s *Store) trash(dir, key string, cutoff time.Time) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	release, ok, err := filelock.TryLock(filepath.Join(dir, LockFileName))
 	if err != nil || !ok {
-		return false, err // a run holds it, so it is not stale
+		return "", err // a run holds it, so it is not stale
 	}
 	// A run may have opened and closed the mirror since the first look; it
 	// recorded the time in last-run. (Taking the lock may have created the
 	// lock file, so the folder's time no longer tells.)
 	if ranSince(dir, cutoff) {
-		return false, release()
+		return "", release()
 	}
-	// Everything but the lock file goes while the lock is held; Windows
-	// does not delete a file that is open, so the lock file goes after the
-	// release. OpenMirror waits on mu meanwhile.
-	errContents := removeAllExcept(dir, LockFileName)
-	if err := errors.Join(errContents, release()); err != nil {
-		return false, err
+	// The lock is released before the rename, since Windows renames no
+	// folder that holds an open file; OpenMirror, which alone takes it in
+	// this process, waits on mu meanwhile.
+	if err := release(); err != nil {
+		return "", err
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		return false, err
+	if err := os.MkdirAll(s.TrashDir(), 0o700); err != nil {
+		return "", fmt.Errorf("create the trash folder: %w", err)
 	}
-	return true, nil
+	trashed, err := os.MkdirTemp(s.TrashDir(), key+"-")
+	if err != nil {
+		return "", fmt.Errorf("create a folder in the trash: %w", err)
+	}
+	if err := os.Rename(dir, filepath.Join(trashed, MirrorsDirName)); err != nil {
+		return "", errors.Join(fmt.Errorf("move the mirror into the trash: %w", err), os.Remove(trashed))
+	}
+	return trashed, nil
 }
 
 // lastRun returns when the mirror in dir was last used: the time recorded
@@ -342,21 +402,6 @@ func ranSince(dir string, cutoff time.Time) bool {
 	}
 	t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(data)))
 	return err == nil && !t.Before(cutoff)
-}
-
-// removeAllExcept removes every entry of dir except keep.
-func removeAllExcept(dir, keep string) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	var errs []error
-	for _, e := range entries {
-		if e.Name() != keep {
-			errs = append(errs, os.RemoveAll(filepath.Join(dir, e.Name())))
-		}
-	}
-	return errors.Join(errs...)
 }
 
 // PruneStale removes the mirrors that have not been used for maxAge (Prune)
