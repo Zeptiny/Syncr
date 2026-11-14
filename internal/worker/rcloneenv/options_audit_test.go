@@ -12,7 +12,7 @@ import (
 )
 
 // reviewedOptions lists, for each supported backend, the options of the
-// pinned rclone (v1.75.2) that were reviewed and are accepted from the
+// pinned rclone (v1.76.0) that were reviewed and are accepted from the
 // controller: they only change how rclone talks to the remote service.
 // Every other option of a supported backend is rejected by checkOption
 // because it runs a local command, touches local files or sockets, or uses
@@ -31,6 +31,8 @@ import (
 //     sftp remote needs a pass or key_pem anyway (checkCredentials).
 //   - sftp socks_proxy and http_proxy, like host and endpoint, only pick
 //     where the remote is.
+//   - sftp multithread_upload (rclone 1.76) only uploads a file's chunks
+//     over several SFTP connections at once.
 //
 // TestSupportedBackendOptionsReviewed fails when the pinned rclone has an
 // option that is in neither group, so an rclone upgrade cannot add one
@@ -65,8 +67,8 @@ func reviewedOptions() map[string][]string {
 			set_modtime shell_type hashes md5sum_command sha1sum_command crc32sum_command
 			sha256sum_command blake3sum_command xxh3sum_command xxh128sum_command skip_links
 			subsystem server_command use_fstat disable_concurrent_reads disable_concurrent_writes
-			idle_timeout chunk_size concurrency connections set_env ciphers key_exchange macs
-			host_key_algorithms socks_proxy http_proxy copy_is_hardlink description`),
+			multithread_upload idle_timeout chunk_size concurrency connections set_env ciphers
+			key_exchange macs host_key_algorithms socks_proxy http_proxy copy_is_hardlink description`),
 		"union": strings.Fields(`action_policy create_policy search_policy cache_time
 			min_free_space description`),
 		"webdav": strings.Fields(`url vendor user pass bearer_token encoding headers

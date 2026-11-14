@@ -1,6 +1,6 @@
 {
   "about": "Selections turned into rclone transfers by selectionFilters (rclone-filters.ts). For each case: the selected items (paths relative to the tree's root, as a remote's are), the transfer's source folder and filter lines, and what `rclone lsf -R` lists with those filters in the source folder (folders end in /). Build the tree from `tree` (entries ending in / are empty folders; a file's content does not matter). Some names are not valid on Windows.",
-  "rclone": "v1.75.2",
+  "rclone": "v1.76.0",
   "tree": [
     "awkward/star*.txt",
     "awkward/starX.txt",

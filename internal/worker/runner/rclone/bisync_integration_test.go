@@ -731,7 +731,7 @@ func TestIntegrationBisyncRemoteSide(t *testing.T) {
 // make its transfer take a few seconds (2 MiB/s).
 //
 // The callers cancel at the first progress with bytes, about a second in,
-// with a file of 12 MiB: about 6 s of transfer. On SIGINT, rclone 1.75.2
+// with a file of 12 MiB: about 6 s of transfer. On SIGINT, rclone 1.76.0
 // bisync lets transfers in flight finish for up to 30 s before it cancels
 // them, so the graceful stop ends with that file, within proc's 10 s grace
 // period.

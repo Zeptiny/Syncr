@@ -258,7 +258,7 @@ func loadFilterGolden(t *testing.T) filterGolden {
 	if err := json.Unmarshal(b, &g); err != nil {
 		t.Fatal(err)
 	}
-	if g.Rclone != "v1.75.2" || len(g.Cases) == 0 {
+	if g.Rclone != "v1.76.0" || len(g.Cases) == 0 {
 		t.Fatalf("the golden file is for rclone %s with %d cases", g.Rclone, len(g.Cases))
 	}
 	return g

@@ -4,7 +4,7 @@
 // selection's common parent P and keeps only the selected items with
 // anchored filter rules: "+ /rel" for a file, "+ /rel/**" for a folder,
 // then "- **". Names are escaped for rclone's glob syntax. The rules are
-// pinned against rclone 1.75.2 by rclone-filters.golden.json.
+// pinned against rclone 1.76.0 by rclone-filters.golden.json.
 
 /** FilterItem is one selected item: its path in the source and whether it is a folder. */
 export interface FilterItem {

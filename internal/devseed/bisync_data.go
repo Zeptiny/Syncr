@@ -71,7 +71,7 @@ func sharedResyncRun(seed time.Time) time.Time {
 }
 
 // Messages of the two-way sync's failed runs, as the worker words them
-// (internal/worker/runner/rclone, bisync_log.go) from rclone 1.75.2's.
+// (internal/worker/runner/rclone, bisync_log.go) from rclone 1.76.0's.
 const (
 	sharedSideUnavailable = "Folder A (path1) is empty; refusing to sync it with the other side (is the drive mounted and the path right?)"
 	sharedCriticalError   = "the two-way sync stopped with a critical error: failed to open source object: open " + sharedLocal +

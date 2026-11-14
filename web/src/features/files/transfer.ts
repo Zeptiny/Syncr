@@ -334,7 +334,7 @@ const location = (e: Endpoint) => ({
 /**
  * transferDefinition is the job of a plan. Empty folders are copied too (a
  * selected empty folder must arrive), and a move removes the folders it
- * emptied: with the filters, rclone 1.75 removes only those.
+ * emptied: with the filters, rclone 1.76 removes only those.
  */
 export function transferDefinition(
   plan: TransferPlan,

@@ -116,7 +116,7 @@ func TestTransferKeepsOutOfSources(t *testing.T) {
 // TestExcludeRule: the rule of a relative path, escaped for rclone's
 // globs; on Windows case-insensitive (every rune of the letter's case
 // orbit, such as the long s for "s"), with short names as alternatives.
-// The patterns were checked against rclone v1.75.2 (lsf with the rule
+// The patterns were checked against rclone v1.76.0 (lsf with the rule
 // lists none of the folder's files and every sibling's).
 func TestExcludeRule(t *testing.T) {
 	t.Parallel()

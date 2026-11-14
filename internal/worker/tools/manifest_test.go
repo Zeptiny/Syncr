@@ -11,7 +11,7 @@ func TestDefaultManifest(t *testing.T) {
 	if err := m.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"rclone": "1.75.2", "restic": "0.19.1"}
+	want := map[string]string{"rclone": "1.76.0", "restic": "0.19.1"}
 	platforms := []Platform{{"linux", "amd64"}, {"linux", "arm64"}, {"windows", "amd64"}}
 	for name, version := range want {
 		spec, ok := m.Lookup(name)

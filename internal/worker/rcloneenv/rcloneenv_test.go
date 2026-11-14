@@ -202,8 +202,8 @@ func contains(list []string, s string) bool {
 
 func TestObscureMatchesRclone(t *testing.T) {
 	t.Parallel()
-	// Produced by `rclone obscure 'pa:ss,w"o rd'` (rclone v1.75.2).
-	if got := reveal(t, "HWnu4-iiEBw0YVJuNADGQ83Z1jLYlGWmmiYJAA"); got != `pa:ss,w"o rd` {
+	// Produced by `rclone obscure 'pa:ss,w"o rd'` (rclone v1.76.0).
+	if got := reveal(t, "I-At8FGtn9_ajd8giFCEMXauDypizi0xb698JQ"); got != `pa:ss,w"o rd` {
 		t.Errorf("reveal(rclone output) = %q", got)
 	}
 	for _, plain := range []string{"", "x", weird, strings.Repeat("long", 1000)} {
