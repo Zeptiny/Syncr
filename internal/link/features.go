@@ -52,6 +52,17 @@ const (
 	// sends it only to a worker with this feature (jobkind
 	// DefinitionFeatures) and fails the job with WORKER_OUTDATED otherwise.
 	FeatureResticRestoreSubfolderPaths = "restic.restore_subfolder_paths"
+	// FeatureResticRemoteSource: the worker backs up a folder of a remote
+	// (ResticBackup.remote_source) by mirroring it into its data directory
+	// or mounting it with rclone mount, and reports which of the two it can
+	// use in Hello.remote_sources. It reports such a backup's phases in
+	// Progress.phase (ProgressPhaseMirror, ProgressPhaseBackup), how it read
+	// the folder in ResticBackupOutput.remote_source, and an empty folder
+	// as SOURCE_EMPTY. An older worker would drop the field and see a
+	// backup without paths, so the backup kind requires the feature for a
+	// definition with a remote source (jobkind DefinitionFeatures) and the
+	// job fails with WORKER_OUTDATED on a worker without it.
+	FeatureResticRemoteSource = "restic.remote_source"
 )
 
 // Features returns every link feature this build defines, in a fixed order.

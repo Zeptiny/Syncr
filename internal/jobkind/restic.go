@@ -277,6 +277,11 @@ func (ResticBackup) Check(def *syncrv1.JobDefinition) (Refs, error) {
 		return Refs{}, v.Err()
 	}
 	refs := Refs{RepositoryID: checkRepositoryID(&v, backupField, op.GetRepositoryId())}
+	// Backups of a remote are not built yet: refuse the field rather than
+	// drop it and back up the paths alone.
+	if op.GetRemoteSource() != nil {
+		v.Add(backupField+".remote_source", "is not supported yet")
+	}
 	switch n := len(op.GetPaths()); {
 	case n == 0:
 		v.Add(backupField+".paths", "needs at least one path")

@@ -1,7 +1,8 @@
 // Package config defines the worker's configuration file and environment
 // variables: logging, directories, tools, job settings (concurrency,
-// progress interval), the hooks jobs may run (see HookConfig) and the link
-// to the controller (see LinkConfig).
+// progress interval), the hooks jobs may run (see HookConfig), backups of
+// a remote's folder (see RemoteSourcesConfig) and the link to the
+// controller (see LinkConfig).
 //
 // Paths are validated for the host the worker runs on: they must be
 // absolute there (a Windows worker needs "C:\..." paths, a Linux worker
@@ -59,6 +60,10 @@ type Config struct {
 	// hook; what runs is what this file says. Empty means jobs can run no
 	// hooks here. They have no environment form.
 	Hooks map[string]HookConfig `yaml:"hooks"`
+
+	// RemoteSources configures backups of a folder of a remote: the mirror
+	// and mount methods (see RemoteSourcesConfig).
+	RemoteSources RemoteSourcesConfig `yaml:"remote_sources"`
 
 	// Link is how the worker talks to the controller. `syncr-worker setup`
 	// fills it in; an empty link means the worker is not enrolled.
@@ -150,6 +155,7 @@ func Default() Config {
 		Log:               logging.DefaultConfig(),
 		MaxConcurrentJobs: DefaultMaxConcurrentJobs,
 		ProgressInterval:  DefaultProgressInterval,
+		RemoteSources:     DefaultRemoteSources(),
 	}
 }
 
@@ -168,6 +174,7 @@ func (c *Config) Validate() error {
 	}
 	errs = append(errs, c.Link.Validate())
 	errs = append(errs, validateHooks(c.Hooks))
+	errs = append(errs, c.RemoteSources.validate())
 	seen := make(map[string]bool, len(c.LocalRoots))
 	for i, root := range c.LocalRoots {
 		field := fmt.Sprintf("local_roots[%d]", i)

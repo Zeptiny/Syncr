@@ -175,6 +175,7 @@ const errorCodes: Partial<Record<JobErrorCode, string>> = {
   [JobErrorCode.RESYNC_REQUIRED]: "Resync required",
   [JobErrorCode.SAFETY_ABORT]: "Safety check stopped the sync",
   [JobErrorCode.SIDE_UNAVAILABLE]: "A folder looked unavailable",
+  [JobErrorCode.SOURCE_EMPTY]: "The remote folder is empty",
 };
 
 /** errorCodeLabel names a job error code. */

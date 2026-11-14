@@ -26,7 +26,9 @@ type document struct {
 	ProgressInterval  time.Duration  `yaml:"progress_interval"`
 	// Hooks keep their order by name (yaml sorts map keys).
 	Hooks map[string]HookConfig `yaml:"hooks,omitempty"`
-	Link  linkDocument          `yaml:"link"`
+	// RemoteSources is written only when it differs from the defaults.
+	RemoteSources *RemoteSourcesConfig `yaml:"remote_sources,omitempty"`
+	Link          linkDocument         `yaml:"link"`
 }
 
 type linkDocument struct {
@@ -72,6 +74,9 @@ func Marshal(cfg Config) ([]byte, error) {
 	}
 	if cfg.Tools != (ToolsConfig{}) {
 		doc.Tools = &cfg.Tools
+	}
+	if cfg.RemoteSources != DefaultRemoteSources() {
+		doc.RemoteSources = &cfg.RemoteSources
 	}
 	body, err := yaml.Marshal(doc)
 	if err != nil {

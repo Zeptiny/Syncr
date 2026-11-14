@@ -35,6 +35,9 @@
 //     schedule may not set them (a two-way sync's resync and force).
 //   - SingleWorker: its jobs keep state on the worker that ran them, so a
 //     schedule must target a worker, not a label (two-way sync).
+//   - DefinitionSingleWorker: the same, for some of its definitions only
+//     (a backup of a remote, which keeps its mirror or mount folder on the
+//     worker).
 //   - SystemOnly: only the controller creates its jobs, never RunJob or a
 //     schedule (restic_delete_data).
 //   - Requirer: the link features a worker must report to run it.
@@ -43,11 +46,11 @@
 //   - Labeled: a short label for people ("Backup").
 //   - Summarizer: display details of a finished job's output.
 //
-// The Registry answers these per kind name (Schedulable,
-// LabelTargetAllowed, UserStartable, RequiredFeatures, Label, Summarize)
-// or definition (CheckSchedulable, RequiredOS), with neutral answers for
-// kinds that do not implement them. Schedules ask Schedulable,
-// CheckSchedulable and LabelTargetAllowed; RunJob asks none of them. The
+// The Registry answers these per kind name (Schedulable, UserStartable,
+// RequiredFeatures, Label, Summarize) or definition (CheckSchedulable,
+// LabelTargetAllowed, RequiredOS), with neutral answers for kinds that do
+// not implement them. Schedules ask Schedulable, CheckSchedulable and
+// LabelTargetAllowed; RunJob asks none of them. The
 // worker requirements (Requirer, OSBound) apply wherever a worker is
 // chosen or checked: the API and the scheduler refuse a chosen worker on
 // another operating system, the scheduler picks a label's worker by both,
@@ -239,6 +242,22 @@ type SingleWorker interface {
 	// schedule's "target.worker_label"), e.g. "a two-way sync keeps its
 	// state on one worker; choose a worker".
 	SingleWorker() string
+}
+
+// DefinitionSingleWorker is implemented by kinds some of whose definitions
+// keep state on the worker that ran them, while others do not: a backup of
+// a remote keeps its mirror or mount folder on the worker, and restic's
+// parent snapshots and retention groups follow that folder, whereas a
+// backup of worker paths may run anywhere. A schedule of such a definition
+// must target a worker, not a label (Registry.LabelTargetAllowed), as for
+// a SingleWorker kind. RunJob always names a worker.
+type DefinitionSingleWorker interface {
+	// SingleWorkerFor returns why the checked definition def must run on
+	// one worker, for people (a field error message on the schedule's
+	// "target.worker_label"), e.g. "a backup of a remote keeps its mirror
+	// or mount folder on one worker; choose a worker"; "" when def may run
+	// on any worker of a label.
+	SingleWorkerFor(def *syncrv1.JobDefinition) string
 }
 
 // SystemOnly is implemented by kinds whose jobs only the controller itself
@@ -500,17 +519,25 @@ func (r *Registry) CheckSchedulable(def *syncrv1.JobDefinition) error {
 	return nil
 }
 
-// LabelTargetAllowed reports whether a schedule of kind may target a
-// worker label, and if not why (for people): an unregistered kind, as for
-// Schedulable, or a SingleWorker one. A schedule that targets one worker
-// needs no such check.
-func (r *Registry) LabelTargetAllowed(kind string) (ok bool, reason string) {
+// LabelTargetAllowed reports whether a schedule of the checked definition
+// def may target a worker label, and if not why (for people): a definition
+// of no registered kind (or without an operation, as kind ""), as for
+// Schedulable; a SingleWorker kind; or a definition its
+// DefinitionSingleWorker kind keeps on one worker. A schedule that targets
+// one worker needs no such check.
+func (r *Registry) LabelTargetAllowed(def *syncrv1.JobDefinition) (ok bool, reason string) {
+	kind := KindOf(def)
 	k, found := r.kinds[kind]
 	if !found {
 		return false, fmt.Sprintf("job kind %q is not supported", kind)
 	}
 	if s, is := k.(SingleWorker); is {
 		return false, s.SingleWorker()
+	}
+	if d, is := k.(DefinitionSingleWorker); is {
+		if why := d.SingleWorkerFor(def); why != "" {
+			return false, why
+		}
 	}
 	return true, ""
 }

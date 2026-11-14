@@ -322,10 +322,11 @@ func (h *scheduleHandler) input(ctx context.Context, procedure string, m *syncrv
 			} else if err != nil {
 				return schedules.Input{}, h.fail(ctx, procedure, err)
 			}
-			// Kinds whose state stays on the worker that ran them (two-way
-			// sync) target one worker, never a label.
+			// Definitions whose state stays on the worker that ran them
+			// (two-way sync, a backup of a remote) target one worker,
+			// never a label.
 			if _, onLabel := m.GetTarget().GetTarget().(*syncrv1.ScheduleTarget_WorkerLabel); onLabel {
-				if ok, why := h.kinds.LabelTargetAllowed(kind); !ok {
+				if ok, why := h.kinds.LabelTargetAllowed(def); !ok {
 					v.Add("target.worker_label", why)
 				}
 			}

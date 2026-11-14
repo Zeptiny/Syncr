@@ -17,6 +17,9 @@ func TestFeatures(t *testing.T) {
 		FeatureJobHooks != want[4] || FeatureRcloneBisync != want[5] || FeatureResticRestoreSubfolderPaths != want[6] {
 		t.Error("feature constants changed: they are part of the wire contract")
 	}
+	if FeatureResticRemoteSource != "restic.remote_source" {
+		t.Error("FeatureResticRemoteSource changed: it is part of the wire contract")
+	}
 }
 
 func TestProbeOpOf(t *testing.T) {
