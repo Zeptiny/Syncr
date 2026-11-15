@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -118,6 +119,9 @@ type Env struct {
 	vars    map[string]string
 	types   map[string]string // alias -> backend type
 	secrets []string          // raw secret values, plain and obscured
+	// local are the local folders of each union (alias -> resolved
+	// upstream paths, without their mode suffix).
+	local map[string][]string
 }
 
 // Vars returns the variables to add to the child's environment (proc.Spec.Env).
@@ -135,6 +139,26 @@ func (e *Env) Vars() map[string]string {
 func (e *Env) BackendType(alias string) (string, bool) {
 	t, ok := e.types[alias]
 	return t, ok
+}
+
+// LocalPaths returns the local folders that the remote alias reads and
+// writes: the resolved paths of a union's local upstreams, joined with
+// path, a location on the remote. rclone gives each upstream the same
+// location and keeps it inside the upstream. Remotes without local
+// upstreams return nil.
+func (e *Env) LocalPaths(alias, path string) []string {
+	ups := e.local[alias]
+	if len(ups) == 0 {
+		return nil
+	}
+	// rclone remote paths separate with "/" only (its local backend
+	// encodes a backslash in a name on Windows).
+	rel := strings.TrimPrefix(pathpkg.Clean("/"+path), "/")
+	out := make([]string, len(ups))
+	for i, up := range ups {
+		out[i] = filepath.Join(up, filepath.FromSlash(rel))
+	}
+	return out
 }
 
 // Secrets returns the secret values of all remotes, in the forms they could
@@ -164,7 +188,7 @@ func (b *Builder) Build(dir string, remotes []*syncrv1.RemoteDefinition) (*Env, 
 // Remotes validates remotes and returns only their RCLONE_CONFIG_* variables,
 // without isolation variables. Most callers want Build.
 func (b *Builder) Remotes(remotes []*syncrv1.RemoteDefinition) (*Env, error) {
-	env := &Env{vars: make(map[string]string), types: make(map[string]string, len(remotes))}
+	env := &Env{vars: make(map[string]string), types: make(map[string]string, len(remotes)), local: make(map[string][]string)}
 	if err := checkAliases(remotes); err != nil {
 		return nil, err
 	}
@@ -181,6 +205,18 @@ func (b *Builder) Remotes(remotes []*syncrv1.RemoteDefinition) (*Env, error) {
 	}
 	env.secrets = secrets
 	return env, nil
+}
+
+// LocalPaths returns the local folders that the remote alias of remotes
+// uses at path (Env.LocalPaths), after the same validation as Env. It
+// lets the restic runner check a repository on a union with local
+// upstreams like a local one (restic.LocalPather).
+func (b *Builder) LocalPaths(remotes []*syncrv1.RemoteDefinition, alias, path string) ([]string, error) {
+	env, err := b.Remotes(remotes)
+	if err != nil {
+		return nil, err
+	}
+	return env.LocalPaths(alias, path), nil
 }
 
 // Env returns the variables that define remotes (RCLONE_CONFIG_<ALIAS>_*
@@ -533,6 +569,9 @@ func (b *Builder) unionUpstream(env *Env, self string, up *syncrv1.UnionUpstream
 	upstream, err := b.upstreamPath(env, self, loc.GetRemote(), path)
 	if err != nil {
 		return "", err
+	}
+	if loc.GetRemote() == "" {
+		env.local[self] = append(env.local[self], upstream)
 	}
 	// rclone strips one mode suffix from the end of the upstream as it is
 	// passed, so a read-write one must not end with one. This checks the

@@ -47,6 +47,10 @@ type command struct {
 	collect bool
 	// ls, if set, collects the nodes of a "restic ls" listing.
 	ls *lsFilter
+	// reads are the local paths a backup reads, and target the local
+	// folder a restore writes (engine.checkLocal claims them).
+	reads  []string
+	target string
 }
 
 var (
@@ -131,9 +135,67 @@ func planBackup(e *engine, spec *syncrv1.JobSpec) (command, error) {
 	if e.holdsSources(paths) {
 		args = append(args, "--exclude-if-present="+sourcestate.MarkerName)
 	}
+	keepOut, err := e.backupKeepsOutOfReserved(paths)
+	if err != nil {
+		return command{}, err
+	}
+	args = append(args, keepOut...)
 	args = append(args, "--")
 	args = append(args, paths...)
-	return command{repo: op.GetRepository(), verb: "backup", args: args}, nil
+	return command{repo: op.GetRepository(), verb: "backup", args: args, reads: paths}, nil
+}
+
+// backupKeepsOutOfReserved returns the flags that keep a backup of paths
+// (resolved local paths) out of the folders and files the worker keeps
+// for its own use (Config.Reserved) that one of them holds. The path
+// policy refuses each one and what lies inside it, but a backup of a
+// folder that holds one, such as "/" or the data directory's parent,
+// would read it: the worker's secret in its config file, other users'
+// mirrors, its tools. A marked folder (Config.Marked) is left out with
+// --exclude-if-present and its marker, whatever spelling reaches it;
+// anything else with an --exclude pattern per form of its path as restic
+// sees it below each path holding it (localfs.Inside: as written and
+// resolved, escaped as a literal; restic leaves out an excluded folder's
+// contents too). On Windows, where names that differ in case, short 8.3
+// names and trailing dots or spaces reach the same file, no literal
+// pattern covers it, so such a backup fails with PATH_NOT_ALLOWED. Paths
+// that hold nothing reserved change nothing.
+func (e *engine) backupKeepsOutOfReserved(paths []string) ([]string, error) {
+	var flags []string
+	addFlag := func(f string) {
+		if !slices.Contains(flags, f) {
+			flags = append(flags, f)
+		}
+	}
+	for _, reserved := range e.cfg.Reserved {
+		for _, p := range paths {
+			rels, err := localfs.Inside(p, reserved)
+			if err != nil {
+				return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
+					"backup path %q: cannot tell whether it holds %s, which the worker keeps for its own use: %w", p, reserved, err)
+			}
+			if len(rels) == 0 {
+				continue
+			}
+			if marker, ok := e.cfg.Marked[reserved]; ok {
+				addFlag("--exclude-if-present=" + marker)
+				continue
+			}
+			if e.goos == "windows" {
+				return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
+					"backup path %q holds %s, which the worker keeps for its own use, and on Windows a backup cannot be kept out of it exactly "+
+						"(names in another case, short names and trailing dots or spaces reach it); back up the folders beside it", p, reserved)
+			}
+			for _, rel := range rels {
+				parts := []string{p}
+				for _, alts := range rel {
+					parts = append(parts, alts[0])
+				}
+				addFlag("--exclude=" + includePattern(filepath.Join(parts...), e.goos))
+			}
+		}
+	}
+	return flags, nil
 }
 
 // holdsSources reports whether one of the resolved paths holds the
@@ -310,7 +372,7 @@ func planRestore(e *engine, spec *syncrv1.JobSpec) (command, error) {
 		trees = append(trees, tree)
 		args = append(args, "--include="+includePattern(tree, e.goos))
 	}
-	keepOut, err := e.restoreKeepsOutOfSources(target, op, trees)
+	keepOut, err := e.restoreKeepsOutOfReserved(target, op, trees)
 	if err != nil {
 		return command{}, err
 	}
@@ -331,16 +393,18 @@ func planRestore(e *engine, spec *syncrv1.JobSpec) (command, error) {
 		positional = id + ":" + pathpkg.Clean(sub)
 	}
 	args = append(args, "--", positional)
-	return command{repo: op.GetRepository(), verb: "restore", args: args}, nil
+	return command{repo: op.GetRepository(), verb: "restore", args: args, target: target}, nil
 }
 
-// restoreKeepsOutOfSources keeps a restore into target, a resolved local
-// path, out of the worker's folder of backups of remotes when target holds
-// it (the path policy refuses the folder itself and what lies inside it).
-// A file at tree path P of what is restored (the snapshot, or the
+// restoreKeepsOutOfReserved keeps a restore into target, a resolved local
+// path, out of the folders and files the worker keeps for its own use
+// (reservedPaths: its data directory with the folder of backups of
+// remotes, its tools directory, its config and TLS files) that target
+// holds (the path policy refuses each one and what lies inside it). A
+// file at tree path P of what is restored (the snapshot, or the
 // subfolder's contents with P relative to it) lands at target/P, so the
-// items that would land in the folder are those at "/<the folder's path
-// relative to target>" (localfs.Inside: as written and resolved):
+// items that would land there are those at "/<its path relative to
+// target>" (localfs.Inside: as written and resolved):
 //
 //   - a restore of everything gets an --exclude of each such path, escaped
 //     as a literal (restic leaves out an excluded folder's contents too);
@@ -354,49 +418,59 @@ func planRestore(e *engine, spec *syncrv1.JobSpec) (command, error) {
 //     case, short 8.3 names and trailing dots or spaces open the same
 //     folder, which no literal pattern covers.
 //
-// Failures are PATH_NOT_ALLOWED. A target that does not hold the folder
-// changes nothing.
-func (e *engine) restoreKeepsOutOfSources(target string, op *syncrv1.ResticRestore, trees []string) ([]string, error) {
-	store := e.cfg.RemoteSources.Store
-	if store == nil {
-		return nil, nil
-	}
-	rels, err := localfs.Inside(target, store.Root())
-	if err != nil {
-		return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
-			"restore target %q: cannot tell whether it holds the worker's folder of backups of remotes: %w", target, err)
-	}
-	if len(rels) == 0 {
-		return nil, nil
-	}
-	refuse := func(why string) error {
-		return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
-			"restore target %q holds the folder where the worker keeps the copies and mount points of backups of remotes (%s), "+
-				"and %s; restore into a folder beside it", target, store.Root(), why)
-	}
-	switch {
-	case e.goos == "windows":
-		return nil, refuse("on Windows a restore cannot be kept out of it exactly (names in another case, short names and trailing dots or spaces reach it)")
-	case len(op.GetIncludes()) > 0:
-		return nil, refuse("a restore with include patterns cannot be kept out of it")
-	}
+// Failures are PATH_NOT_ALLOWED. A target that holds none of them changes
+// nothing.
+func (e *engine) restoreKeepsOutOfReserved(target string, op *syncrv1.ResticRestore, trees []string) ([]string, error) {
 	var excludes []string
-	for _, rel := range rels {
-		names := make([]string, len(rel))
-		for i, alts := range rel {
-			names[i] = alts[0]
+	for _, reserved := range e.reservedPaths() {
+		rels, err := localfs.Inside(target, reserved)
+		if err != nil {
+			return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
+				"restore target %q: cannot tell whether it holds %s, which the worker keeps for its own use: %w", target, reserved, err)
 		}
-		if len(trees) == 0 {
-			excludes = append(excludes, "--exclude="+includePattern("/"+strings.Join(names, "/"), e.goos))
+		if len(rels) == 0 {
 			continue
 		}
-		for _, tree := range trees {
-			if treesNested(tree, names) {
-				return nil, refuse(fmt.Sprintf("the selected item %q would be restored into it or over it", tree))
+		refuse := func(why string) error {
+			return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
+				"restore target %q holds %s, which the worker keeps for its own use, "+
+					"and %s; restore into a folder beside it", target, reserved, why)
+		}
+		switch {
+		case e.goos == "windows":
+			return nil, refuse("on Windows a restore cannot be kept out of it exactly (names in another case, short names and trailing dots or spaces reach it)")
+		case len(op.GetIncludes()) > 0:
+			return nil, refuse("a restore with include patterns cannot be kept out of it")
+		}
+		for _, rel := range rels {
+			names := make([]string, len(rel))
+			for i, alts := range rel {
+				names[i] = alts[0]
+			}
+			if len(trees) == 0 {
+				if f := "--exclude=" + includePattern("/"+strings.Join(names, "/"), e.goos); !slices.Contains(excludes, f) {
+					excludes = append(excludes, f)
+				}
+				continue
+			}
+			for _, tree := range trees {
+				if treesNested(tree, names) {
+					return nil, refuse(fmt.Sprintf("the selected item %q would be restored into it or over it", tree))
+				}
 			}
 		}
 	}
 	return excludes, nil
+}
+
+// reservedPaths returns Config.Reserved and, when it is not among them,
+// the folder of backups of remotes (RemoteSources.Store's root).
+func (e *engine) reservedPaths() []string {
+	out := slices.Clone(e.cfg.Reserved)
+	if store := e.cfg.RemoteSources.Store; store != nil && !slices.Contains(out, store.Root()) {
+		out = append(out, store.Root())
+	}
+	return out
 }
 
 // treesNested reports whether the snapshot tree path tree and the path of

@@ -113,6 +113,13 @@ func windowsDataDir(mode Mode, env Env) (string, error) {
 	return filepath.Join(base, "Syncr"), nil
 }
 
+// DataMarkerName is the file the worker keeps in its data directory so
+// that restic backups of a folder holding it leave the data directory out
+// (--exclude-if-present). The worker reserves the whole data directory: no
+// job, probe or folder listing may use a path inside it
+// (PATH_NOT_ALLOWED), even when local_roots covers it.
+const DataMarkerName = ".syncr-data"
+
 // ToolsDir returns the default managed tools directory under dataDir.
 func ToolsDir(dataDir string) string { return filepath.Join(dataDir, "tools") }
 

@@ -606,6 +606,10 @@ func (leakyPolicy) Resolve(string) (string, error) {
 	return "", errors.New("denied for password " + testPassword)
 }
 
+func (leakyPolicy) WriteAreas(context.Context, string, func(string) error) error {
+	return errors.New("denied for password " + testPassword)
+}
+
 func keys(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

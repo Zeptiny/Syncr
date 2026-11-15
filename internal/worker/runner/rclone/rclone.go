@@ -12,7 +12,13 @@
 //   - every RcloneTransferOptions field maps to one fixed flag after range
 //     checks (see buildArgs);
 //   - paths follow "--", remote paths are "<alias>:<path>" with a validated
-//     alias, and local paths must pass the local path policy.
+//     alias, and local paths must pass the local path policy;
+//   - a local folder rclone writes into (a destination, a two-way sync's
+//     side, a union's local upstream) must hold no link that leads where
+//     jobs may not write (localfs.Policy.WriteAreas), and the job records
+//     the local folders it uses (localfs.Claims): it fails with TEMPORARY
+//     beside a restore into an overlapping folder, and a move with a local
+//     source runs beside no other job on its folders.
 //
 // The Prober (probe.go, probe_measure.go) answers the probe operations
 // list_remote, about and measure_remote with the same validation,
@@ -42,6 +48,7 @@ import (
 	"strings"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/worker/localfs"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
@@ -64,9 +71,12 @@ type EnvBuilder interface {
 }
 
 // PathPolicy checks local paths against the worker's local_roots and returns
-// the path to use; *localfs.Policy implements it.
+// the path to use, and checks a folder rclone will write into for links
+// that lead where jobs may not write, visiting each folder rclone can
+// reach there (localfs.Policy.WriteAreas); *localfs.Policy implements it.
 type PathPolicy interface {
 	Resolve(path string) (string, error)
+	WriteAreas(ctx context.Context, dir string, visit func(folder string) error) error
 }
 
 // Config holds the runner's dependencies.
@@ -84,12 +94,18 @@ type Config struct {
 	// private directory (rclone config, cache), removed when the job ends.
 	// It is created if missing.
 	ScratchDir string
-	// SourcesDir is the worker's folder of backups of remotes
-	// (paths.SourcesDir), which the path policy refuses; a transfer whose
-	// local source or destination holds it gets filter rules that keep
-	// rclone out of it on both sides (sourcesRules), and a two-way sync
-	// side that holds it is refused. Empty: none.
-	SourcesDir string
+	// Reserved are the folders and files the worker keeps for its own use
+	// (localfs.Policy.Reserved), which the path policy refuses: its data
+	// directory with the folder of backups of remotes, its tools directory,
+	// its config and TLS files. A transfer whose local source or
+	// destination holds one gets filter rules that keep rclone out of it on
+	// both sides (reservedRules), and a two-way sync side that holds one is
+	// refused. Empty: none.
+	Reserved []string
+	// Claims records the local folders the worker's running jobs use
+	// (localfs.Claims). One value must be shared by every runner of the
+	// worker; nil gives the runner its own, which sees only its own jobs.
+	Claims *localfs.Claims
 	// Logger receives operational warnings (never job secrets). Nil
 	// discards them.
 	Logger *slog.Logger
@@ -129,6 +145,9 @@ func New(cfg Config) (*Runner, error) {
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.DiscardHandler)
+	}
+	if cfg.Claims == nil {
+		cfg.Claims = &localfs.Claims{}
 	}
 	return &Runner{cfg: cfg, goos: runtime.GOOS}, nil
 }
@@ -173,11 +192,25 @@ func (r *Runner) Run(ctx context.Context, job runner.Job, emit runner.EmitFunc) 
 	if err != nil {
 		return res, runner.Fail(syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, err)
 	}
-	rules, err := r.sourcesRules(src, dst)
+	rules, err := r.reservedRules(src, dst)
 	if err != nil {
 		return res, err
 	}
 	args = withRules(args, rules)
+
+	// A move whose source is local can move whole folders with their
+	// links (rclone renames a folder when both sides are on one file
+	// system), so it takes both sides exclusively.
+	claim := r.cfg.Claims.Take(Kind)
+	defer claim.Release()
+	move := transfer.GetMode() == syncrv1.RcloneTransferMode_RCLONE_TRANSFER_MODE_MOVE
+	exclusive := move && len(localDirs(transfer.GetSource(), src, env)) > 0
+	if err := r.claim(ctx, claim, "source", localDirs(transfer.GetSource(), src, env), false, exclusive); err != nil {
+		return res, err
+	}
+	if err := r.claim(ctx, claim, "destination", localDirs(transfer.GetDestination(), dst, env), true, exclusive); err != nil {
+		return res, err
+	}
 
 	sc := scrub.New(env.Secrets())
 	t := newTracker(emit, sc)
@@ -248,6 +281,43 @@ func (r *Runner) location(role string, loc *syncrv1.Location, env *rcloneenv.Env
 		return "", runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, "%s remote %q is not defined in the job", role, alias)
 	}
 	return rcloneenv.RemotePath(alias, path), nil
+}
+
+// localDirs returns the local folders of a validated location whose rclone
+// path is path: the path itself for a local location, the local upstreams
+// of a union (rcloneenv.Env.LocalPaths), else none.
+func localDirs(loc *syncrv1.Location, path string, env *rcloneenv.Env) []string {
+	if loc.GetRemote() == "" {
+		return []string{path}
+	}
+	return env.LocalPaths(loc.GetRemote(), loc.GetPath())
+}
+
+// claim adds the local folders dirs of one side (role) to the job's claim,
+// exclusively or not. A side rclone writes (writes) is checked for links
+// first (PathPolicy.WriteAreas), and every folder those links lead to is
+// claimed too, before it is checked. Errors: TEMPORARY when another job
+// uses an overlapping folder, PATH_NOT_ALLOWED when a folder may not be
+// written or checked, ctx's when it ended.
+func (r *Runner) claim(ctx context.Context, claim *localfs.Claim, role string, dirs []string, writes, exclusive bool) error {
+	for _, dir := range dirs {
+		var err error
+		if writes {
+			err = r.cfg.Paths.WriteAreas(ctx, dir, func(folder string) error { return claim.Add(folder, exclusive) })
+		} else {
+			err = claim.Add(dir, exclusive)
+		}
+		switch {
+		case err == nil:
+		case errors.Is(err, localfs.ErrInUse):
+			return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_TEMPORARY, "%s: %w", role, err)
+		case ctx.Err() != nil:
+			return fmt.Errorf("rclone: not started: %w", context.Cause(ctx))
+		default:
+			return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED, "%s: %w", role, err)
+		}
+	}
+	return nil
 }
 
 // scratchDir creates the job's private directory under cfg.ScratchDir.

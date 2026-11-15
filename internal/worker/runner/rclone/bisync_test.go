@@ -786,7 +786,7 @@ func TestBisyncRefusesSidesHoldingSources(t *testing.T) {
 			t.Fatal(err)
 		}
 		cfg := f.runner.r.cfg
-		cfg.Paths, cfg.Env, cfg.SourcesDir = policy, rcloneenv.NewBuilder(policy), sources
+		cfg.Paths, cfg.Env, cfg.Reserved = policy, rcloneenv.NewBuilder(policy), []string{sources}
 		r, err := NewBisync(cfg, f.states)
 		if err != nil {
 			t.Fatal(err)
@@ -796,7 +796,7 @@ func TestBisyncRefusesSidesHoldingSources(t *testing.T) {
 		}{
 			{"a folder that holds it", holder, map[bool]string{
 				false: "the folder where the worker keeps the state of two-way syncs",
-				true:  "holds the folder where the worker keeps the copies and mount points of backups of remotes",
+				true:  "holds " + sources + ", which the worker keeps for its own use",
 			}[moved]},
 			{"a folder inside it", filepath.Join(sources, "mirror"), "reserved for the worker's own use"},
 		} {

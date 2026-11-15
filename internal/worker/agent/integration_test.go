@@ -231,6 +231,14 @@ func (p rootPolicy) Resolve(path string) (string, error) {
 	return pol.Resolve(path)
 }
 
+func (p rootPolicy) WriteAreas(ctx context.Context, dir string, visit func(string) error) error {
+	pol, err := localfs.NewPolicy([]string{p.root})
+	if err != nil {
+		return err
+	}
+	return pol.WriteAreas(ctx, dir, visit)
+}
+
 // liveProcessesWith returns the PIDs of live processes whose command line
 // contains s (Linux).
 func liveProcessesWith(t *testing.T, s string) []int {

@@ -53,6 +53,9 @@ type workerDeps struct {
 	// detectMount finds out whether the worker can mount remotes; nil
 	// means (*mount.Mounter).Detect.
 	detectMount func(ctx context.Context, m *mount.Mounter, opts mount.DetectOptions) (ok bool, reason string)
+	// configFile is the config file the worker read, if any. Jobs may not
+	// use it (reservedPaths).
+	configFile string
 }
 
 // worker is the assembled job-execution side of the worker: everything the
@@ -66,6 +69,9 @@ type worker struct {
 	supervisor *proc.Supervisor
 	// policy is the local_roots policy shared by the runners.
 	policy *localfs.Policy
+	// claims records the local folders of the running jobs, shared by the
+	// runners (localfs.Claims).
+	claims *localfs.Claims
 	// probes runs the short operations the controller asks for over the
 	// link (folder listings, remote tests, restic's snapshot listings),
 	// with the runners' binaries, remote definitions and local_roots.
@@ -123,16 +129,31 @@ func buildWorker(ctx context.Context, cfg workerconfig.Config, deps workerDeps, 
 	if err != nil {
 		return nil, fmt.Errorf("local_roots: %w", err)
 	}
-	// The copies and mount points of backups of remotes are no job's,
-	// probe's or folder listing's business, even inside local_roots.
-	if w.policy, err = w.policy.Reserve(paths.SourcesDir(dataDir)); err != nil {
+	// The worker's own folders and files are no job's, probe's or folder
+	// listing's business, even inside local_roots: the data directory holds
+	// other users' mirrors and the state of their two-way syncs, the tools
+	// directory the binaries the worker runs, and the config and TLS files
+	// the worker's secret and key.
+	if err := writeDataMarker(dataDir); err != nil {
+		return nil, err
+	}
+	if w.policy, err = w.policy.Reserve(reservedPaths(cfg, dataDir, toolsDir, deps.configFile)...); err != nil {
 		return nil, fmt.Errorf("local_roots: %w", err)
 	}
+	w.claims = &localfs.Claims{}
 	if roots := w.policy.Roots(); len(roots) == 0 {
 		log.Warn("no local_roots configured: jobs cannot read or write local paths; " +
 			"set local_roots (SYNCR_LOCAL_ROOTS) to the directories jobs may use")
 	} else {
-		log.Info("local roots", "roots", roots)
+		log.Info("local roots", "roots", roots, "reserved", w.policy.Reserved())
+		for _, root := range roots {
+			for _, r := range w.policy.Reserved() {
+				if overlap, err := localfs.Overlap(root, r); err == nil && overlap && len(insideOf(root, r)) == 0 {
+					log.Warn("a local root is, or lies inside, a folder the worker keeps for its own use; jobs cannot use it",
+						"root", root, "reserved", r)
+				}
+			}
+		}
 	}
 
 	w.supervisor = proc.New(proc.Options{MaxLineBytes: maxToolLineBytes, Logger: log})
@@ -155,6 +176,61 @@ func buildWorker(ctx context.Context, cfg workerconfig.Config, deps workerDeps, 
 	}
 	return w, nil
 }
+
+// reservedPaths returns what the worker keeps for its own use, which no
+// job, probe or folder listing may use even inside local_roots
+// (localfs.Policy.Reserve): the data directory (with the folder of backups
+// of remotes, the state of two-way syncs, the scratch space, the restic
+// cache, the logs and, by default, the tools, the TLS files and, on
+// Windows and in the image, the config file), and the tools directory,
+// the config file and the TLS files where they lie outside it. A path
+// that is not absolute is made so; one that cannot be is left out.
+func reservedPaths(cfg workerconfig.Config, dataDir, toolsDir, configFile string) []string {
+	out := []string{dataDir}
+	for _, p := range []string{toolsDir, configFile, cfg.Link.TLSCertFile, cfg.Link.TLSKeyFile, cfg.Link.ControllerCAFile} {
+		if p == "" {
+			continue
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			continue
+		}
+		if slices.ContainsFunc(out, func(o string) bool { return o == abs || len(insideOf(o, abs)) > 0 }) {
+			continue
+		}
+		out = append(out, abs)
+	}
+	return out
+}
+
+// insideOf returns how outer holds inner (localfs.Inside), or nil when it
+// does not or they cannot be compared.
+func insideOf(outer, inner string) []localfs.RelPath {
+	rels, err := localfs.Inside(outer, inner)
+	if err != nil {
+		return nil
+	}
+	return rels
+}
+
+// writeDataMarker writes the marker file (paths.DataMarkerName) into the
+// data directory if it is missing: a backup of a folder that holds the
+// data directory leaves it out with --exclude-if-present, whatever
+// spelling of the path reaches it.
+func writeDataMarker(dataDir string) error {
+	marker := filepath.Join(dataDir, paths.DataMarkerName)
+	if _, err := os.Lstat(marker); err == nil {
+		return nil
+	}
+	if err := os.WriteFile(marker, []byte(dataMarkerText), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w (set data_dir or SYNCR_DATA_DIR to a directory this user can write)", marker, err)
+	}
+	return nil
+}
+
+// dataMarkerText is the content of the data directory's marker file, for
+// whoever finds it.
+const dataMarkerText = "This folder is the data directory of a Syncr worker. Backups made by the worker leave it out.\n"
 
 // mirrorOffReason is the reason when the configuration turns mirrors off.
 const mirrorOffReason = "remote_sources.mirror is off in worker.yaml"
@@ -351,13 +427,17 @@ func (e *toolsUnavailableError) Error() string {
 
 func (e *toolsUnavailableError) Unwrap() error { return e.err }
 
+// The builder gives the restic runner the local folders of unions.
+var _ restic.LocalPather = (*rcloneenv.Builder)(nil)
+
 // registerRunners builds the rclone runners (transfers, and two-way syncs
 // over the state store in <data_dir>/bisync, w.bisync) and the restic
 // runners and registers them, and builds the probe executor (w.probes)
 // from the same configurations. The rcloneenv builder is both engines'
 // remote definition port and the localfs policy their path port, so every
 // remote and every local path a job or a probe names is validated by the
-// same code.
+// same code; the runners share one record of the local folders that
+// running jobs use (w.claims).
 func registerRunners(w *worker, resticCache string, log *slog.Logger) error {
 	remotes := rcloneenv.NewBuilder(w.policy)
 	rcloneBin, resticBin := w.tools[toolRclone].Path, w.tools[toolRestic].Path
@@ -368,7 +448,8 @@ func registerRunners(w *worker, resticCache string, log *slog.Logger) error {
 		Env:        remotes,
 		Paths:      w.policy,
 		ScratchDir: filepath.Join(w.scratchDir, "rclone"),
-		SourcesDir: w.sources.Root(),
+		Reserved:   w.policy.Reserved(),
+		Claims:     w.claims,
 		Logger:     log,
 	}
 	rcloneRunner, err := rclone.New(rcloneCfg)
@@ -391,6 +472,9 @@ func registerRunners(w *worker, resticCache string, log *slog.Logger) error {
 		Paths:       w.policy,
 		ScratchRoot: filepath.Join(w.scratchDir, "restic"),
 		CacheDir:    resticCache,
+		Reserved:    w.policy.Reserved(),
+		Marked:      map[string]string{w.dataDir: paths.DataMarkerName},
+		Claims:      w.claims,
 		RemoteSources: restic.RemoteSources{
 			Store:        w.sources,
 			Mounter:      resticMounter{m: w.mounter},

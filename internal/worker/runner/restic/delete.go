@@ -12,6 +12,7 @@ import (
 	"time"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/worker/localfs"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
 	"github.com/Zeptiny/Syncr/internal/worker/runner/scrub"
@@ -110,7 +111,9 @@ func (r *deleteRunner) Run(ctx context.Context, job runner.Job, emit runner.Emit
 		return res, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "invalid job ID %q", job.ID)
 	}
 	secrets := secretsOf(job.Spec)
-	d := &deletion{e: r.e, job: job, op: job.Spec.GetResticDeleteData(), emit: emit, start: time.Now(), sc: scrub.New(secrets), secrets: secrets}
+	claim := r.e.cfg.Claims.Take(kindDeleteData)
+	defer claim.Release()
+	d := &deletion{e: r.e, job: job, op: job.Spec.GetResticDeleteData(), emit: emit, start: time.Now(), sc: scrub.New(secrets), secrets: secrets, claim: claim}
 	out, err := d.run(ctx)
 	res.Stats = runner.Progress{Deletes: d.deleted, Elapsed: time.Since(d.start)}
 	if err != nil {
@@ -136,6 +139,8 @@ type deletion struct {
 	start   time.Time
 	sc      *scrub.Scrubber
 	secrets []string
+	// claim records the repository's local folders (engine.checkLocal).
+	claim *localfs.Claim
 
 	scratch string
 	// loc is the repository's location as an rclone path, and local whether
@@ -346,7 +351,7 @@ func (d *deletion) part(name string) string {
 func (d *deletion) restic(ctx context.Context, cmd command) (*session, error) {
 	_, s, _, err := d.e.exec(ctx, execution{
 		kind: kindDeleteData, dir: d.scratch, logID: d.job.ID,
-		remotes: d.job.Spec.GetRemotes(), cmd: cmd, secrets: d.secrets,
+		remotes: d.job.Spec.GetRemotes(), cmd: cmd, secrets: d.secrets, claim: d.claim,
 	})
 	return s, err
 }

@@ -118,7 +118,7 @@ func TestIntegrationTransfersKeepOutOfSources(t *testing.T) {
 	}
 }
 
-// withSources returns a runner like it's, with SourcesDir set and the path
+// withSources returns a runner like it's, with Reserved set and the path
 // policy reserving it.
 func (it *itest) withSources(t *testing.T, policy *localfs.Policy, sources string) *Runner {
 	t.Helper()
@@ -127,7 +127,7 @@ func (it *itest) withSources(t *testing.T, policy *localfs.Policy, sources strin
 		t.Fatal(err)
 	}
 	cfg := it.cfg
-	cfg.Paths, cfg.SourcesDir = p, sources
+	cfg.Paths, cfg.Reserved = p, []string{sources}
 	r, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
