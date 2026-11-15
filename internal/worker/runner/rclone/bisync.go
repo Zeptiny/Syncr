@@ -36,7 +36,10 @@ const BisyncKind = "rclone_bisync"
 //
 //  1. checks the spec: the state key's format, the options, both
 //     locations (neither may be the state store's folder, inside it or
-//     hold it), and the two rclone paths together at most 200 bytes;
+//     hold it, nor hold another folder the worker keeps), and the two
+//     rclone paths together at most 200 bytes; checks each local side for
+//     links that lead where jobs may not write and records its folders
+//     (TEMPORARY beside a restore into an overlapping folder);
 //  2. opens the pair (its lock; TEMPORARY if another run holds it) and
 //     removes rclone lock files a killed run left;
 //  3. resyncs when the spec asks (reason REQUESTED) or the pair has no
@@ -127,6 +130,18 @@ func (b *BisyncRunner) Run(ctx context.Context, job runner.Job, emit runner.Emit
 	}
 	for _, side := range [...][2]string{{"path1", path1}, {"path2", path2}} {
 		if err := b.outsideState(side[0], side[1]); err != nil {
+			return res, err
+		}
+	}
+	// rclone writes into both sides.
+	claim := b.r.cfg.Claims.Take(BisyncKind)
+	defer claim.Release()
+	for _, side := range [...]struct {
+		role string
+		loc  *syncrv1.Location
+		path string
+	}{{"path1", spec.GetPath1(), path1}, {"path2", spec.GetPath2(), path2}} {
+		if err := b.r.claim(ctx, claim, side.role, localDirs(side.loc, side.path, env), true, false); err != nil {
 			return res, err
 		}
 	}
@@ -268,13 +283,15 @@ func (b *BisyncRunner) next(pair *bisyncstate.Pair) pairNext {
 // of the two-way sync state store, is inside it, or holds it, also through
 // a symbolic link: a run there would sync rclone's own listings, and let
 // the job read or change the state of other pairs. It refuses a side that
-// holds the folder of backups of remotes (Config.SourcesDir) too, which
-// the path policy does not (it refuses only that folder and what lies
-// inside it): every such side also holds the state store, both being in
-// the data directory, unless one of them was moved elsewhere through a
-// symbolic link. local_roots may cover the worker's data directory; this
-// keeps the pairs' state and other users' mirrors out of reach anyway.
-// path is a side's rclone path; remotes are not checked.
+// holds a folder or file the worker keeps for its own use
+// (Config.Reserved: the data directory, which holds the state store and
+// the folder of backups of remotes, the tools directory, the config and
+// TLS files) too, which the path policy does not (it refuses only those
+// and what lies inside them): a two-way sync's filters cannot keep a
+// folder out of both sides. local_roots may cover the worker's data
+// directory; this keeps the pairs' state, other users' mirrors and the
+// worker's secrets out of reach anyway. path is a side's rclone path;
+// remotes are not checked.
 func (b *BisyncRunner) outsideState(role, path string) error {
 	if !filepath.IsAbs(path) {
 		return nil
@@ -287,14 +304,14 @@ func (b *BisyncRunner) outsideState(role, path string) error {
 		return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
 			"%s: %s is, holds or is inside the folder where the worker keeps the state of two-way syncs (%s)", role, path, b.states.Root())
 	}
-	if sources := b.r.cfg.SourcesDir; sources != "" {
-		overlap, err := localfs.Overlap(path, sources)
+	for _, reserved := range b.r.cfg.Reserved {
+		overlap, err := localfs.Overlap(path, reserved)
 		if err != nil {
 			return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED, "%s: %w", role, err)
 		}
 		if overlap {
 			return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
-				"%s: %s holds the folder where the worker keeps the copies and mount points of backups of remotes (%s)", role, path, sources)
+				"%s: %s holds %s, which the worker keeps for its own use", role, path, reserved)
 		}
 	}
 	return nil

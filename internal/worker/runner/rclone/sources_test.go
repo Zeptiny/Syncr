@@ -18,7 +18,8 @@ import (
 // anchored exclude rule for each form of the folder's path relative to
 // that side (as written and through symbolic links), before the user's
 // filters; any other transfer is unchanged, the marker flag is gone, and a
-// path inside the folder is refused by the policy.
+// path inside the folder is refused by the policy, as is a destination
+// holding a link to a folder that holds it.
 func TestTransferKeepsOutOfSources(t *testing.T) {
 	t.Parallel()
 	base, err := filepath.EvalSymlinks(t.TempDir())
@@ -59,7 +60,12 @@ func TestTransferKeepsOutOfSources(t *testing.T) {
 		{name: "neither side holds it", src: &syncrv1.Location{Path: filepath.Join(root, "srv")}, dst: remote},
 		{name: "source is the root", src: &syncrv1.Location{Path: root}, dst: remote,
 			want: []string{"- /var/lib/syncr/sources/**", "- /disk/syncr/sources/**"}},
-		{name: "destination as written", src: remote, dst: &syncrv1.Location{Path: filepath.Join(root, "var")},
+		// rclone could write through the link var/lib/syncr into the
+		// folder that holds it, so the destination is refused
+		// (localfs.Policy.WriteAreas).
+		{name: "destination as written, through a link", src: remote, dst: &syncrv1.Location{Path: filepath.Join(root, "var")},
+			code: syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED},
+		{name: "source as written", src: &syncrv1.Location{Path: filepath.Join(root, "var")}, dst: remote,
 			want: []string{"- /lib/syncr/sources/**"}},
 		{name: "destination through the link", src: remote, dst: &syncrv1.Location{Path: filepath.Join(root, "var", "lib", "syncr")},
 			want: []string{"- /sources/**"}},
@@ -77,7 +83,7 @@ func TestTransferKeepsOutOfSources(t *testing.T) {
 			sup := &fakeSupervisor{}
 			r, err := New(Config{
 				Binary: "/opt/syncr/rclone", Supervisor: sup, Env: rcloneenv.NewBuilder(policy), Paths: policy,
-				ScratchDir: filepath.Join(base, "scratch"), SourcesDir: sources,
+				ScratchDir: filepath.Join(base, "scratch"), Reserved: []string{sources},
 			})
 			if err != nil {
 				t.Fatal(err)

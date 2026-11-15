@@ -334,7 +334,11 @@ resync.
 
 A two-way sync may not use the state folder as a side, nor a folder inside
 it or one that holds it (`path_not_allowed`), even when the worker's
-`local_roots` covers its data directory.
+`local_roots` covers its data directory; nor a side that holds another
+folder or file the worker keeps for itself
+([restic](restic.md#the-workers-own-folders)). Before each run the worker
+checks a local side for links that lead outside `local_roots`, as for a
+copy ([local folders](worker-config.md#local-folders)).
 
 ## Limits and known gaps
 

@@ -97,6 +97,15 @@ func (p rootPolicy) Resolve(path string) (string, error) {
 	return clean, nil
 }
 
+// WriteAreas visits the folder itself: the fake knows no links.
+func (p rootPolicy) WriteAreas(_ context.Context, dir string, visit func(string) error) error {
+	clean, err := p.Resolve(dir)
+	if err != nil {
+		return err
+	}
+	return visit(clean)
+}
+
 // testEnv is a configured engine with fakes.
 type testEnv struct {
 	t       *testing.T

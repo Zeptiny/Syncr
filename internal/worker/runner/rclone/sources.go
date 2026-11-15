@@ -1,6 +1,7 @@
 package rclone
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,36 +12,46 @@ import (
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
 )
 
-// sourcesRules returns the filter rules ("- pattern") that keep rclone out
-// of the worker's folder of backups of remotes (Config.SourcesDir) when a
-// local side of a transfer holds it, such as "/" or the data directory
-// (the path policy refuses the folder itself and everything in it). rclone
+// reservedRules returns the filter rules ("- pattern") that keep rclone
+// out of the folders and files the worker keeps for its own use
+// (Config.Reserved: its data directory, with the folder of backups of
+// remotes, its tools directory, its config and TLS files) when a local
+// side of a transfer holds one, such as "/" or the data directory's
+// parent (the path policy refuses each one and everything in it). rclone
 // applies a transfer's filters to paths relative to each side's root, and
 // a file at path X on one side lands at X on the other, so one rule per
-// form of the folder's path relative to such a side (localfs.Inside: as
+// form of the reserved path relative to such a side (localfs.Inside: as
 // written and resolved), anchored at the root, covers both sides:
-// "- /<path>/**". Placed before the user's filters, the rules decide first
-// (the first matching rule wins), so rclone neither lists, reads, writes
-// nor deletes anything there, on either side, whatever the mode. A side
-// that is not an absolute path (a remote) adds nothing. Errors are
-// PATH_NOT_ALLOWED: a side that cannot be compared is not used.
-func (r *Runner) sourcesRules(sides ...string) ([]string, error) {
-	if r.cfg.SourcesDir == "" {
-		return nil, nil
-	}
+// "- /<path>/**" for a folder, "- /<path>" for a file. Placed before the
+// user's filters, the rules decide first (the first matching rule wins),
+// so rclone neither lists, reads, writes nor deletes anything there, on
+// either side, whatever the mode. A side that is not an absolute path (a
+// remote) adds nothing. Errors are PATH_NOT_ALLOWED: a side that cannot be
+// compared is not used.
+func (r *Runner) reservedRules(sides ...string) ([]string, error) {
 	var rules []string
-	for _, side := range sides {
-		if !filepath.IsAbs(side) {
-			continue
+	for _, reserved := range r.cfg.Reserved {
+		file := false
+		if info, err := os.Stat(reserved); err == nil && !info.IsDir() {
+			file = true
 		}
-		rels, err := localfs.Inside(side, r.cfg.SourcesDir)
-		if err != nil {
-			return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
-				"cannot tell whether %s holds the worker's folder of backups of remotes: %w", side, err)
-		}
-		for _, rel := range rels {
-			if rule := excludeRule(rel, r.goos); !slices.Contains(rules, rule) {
-				rules = append(rules, rule)
+		for _, side := range sides {
+			if !filepath.IsAbs(side) {
+				continue
+			}
+			rels, err := localfs.Inside(side, reserved)
+			if err != nil {
+				return nil, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED,
+					"cannot tell whether %s holds %s, which the worker keeps for its own use: %w", side, reserved, err)
+			}
+			for _, rel := range rels {
+				rule := excludeRule(rel, r.goos)
+				if file {
+					rule = strings.TrimSuffix(rule, "/**")
+				}
+				if !slices.Contains(rules, rule) {
+					rules = append(rules, rule)
+				}
 			}
 		}
 	}

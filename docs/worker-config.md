@@ -16,7 +16,8 @@ log:
 
 # Where scratch space, the restic cache, managed tools, the state of
 # two-way syncs (<data_dir>/bisync) and the mirrors and mounts of backups
-# of a remote (<data_dir>/sources) live.
+# of a remote (<data_dir>/sources) live. Jobs may not use it, even inside
+# local_roots (see "Local folders" below).
 # Default: /var/lib/syncr (Linux, root), ~/.local/share/syncr (Linux, user),
 # %ProgramData%\Syncr (Windows service), %LocalAppData%\Syncr (Windows user).
 data_dir: /var/lib/syncr     # SYNCR_DATA_DIR
@@ -24,9 +25,10 @@ data_dir: /var/lib/syncr     # SYNCR_DATA_DIR
 # Directories jobs may read and write locally: backup sources, restore
 # targets, local repositories, local transfer endpoints and two-way sync
 # folders. Symlinks (and
-# Windows junctions) are resolved before the check. An empty list denies all
-# local access; the worker logs a warning at startup. In the environment the
-# list is comma-separated.
+# Windows junctions) are resolved before the check, and a folder a job
+# writes into must hold no link to a folder outside these (see "Local
+# folders" below). An empty list denies all local access; the worker logs a
+# warning at startup. In the environment the list is comma-separated.
 local_roots:                 # SYNCR_LOCAL_ROOTS
   - /srv/data
   - /home/alice/documents
@@ -186,6 +188,46 @@ never contain a secret value. Prefer environment variables
 (`SYNCR_WORKER_SECRET`, ...) over the file if you inject secrets from a
 secret store; they override the file.
 
+## Local folders
+
+Every signed-in user may run jobs on every worker, inside its
+`local_roots`. The worker checks each local path a job names after
+resolving its links (`path_not_allowed` outside the roots), and also:
+
+- **Links in a folder a job writes into.** rclone writes through a link to
+  a folder that it finds where it writes, so before a copy, sync or move
+  into a local folder, a two-way sync, or a job on a local restic
+  repository (or a union's local folder used that way), the worker reads
+  the whole folder. Each link (symbolic link, or Windows junction) must
+  lead to a file, which rclone replaces rather than writes through, or to
+  a folder inside `local_roots` that is not one of the worker's own
+  (below); that folder is checked the same way. A link whose target does
+  not exist must name a path inside `local_roots` without `..`. Otherwise
+  the job fails with `path_not_allowed` and names the link: remove it, or
+  add the folder it leads to to `local_roots`. Folders the worker cannot
+  read are skipped, and so are the worker's own folders. The check takes
+  about as long as listing the folder.
+- **Restores and moves run alone on their folders.** A restore recreates
+  the links of its snapshot, and a move with a local source can carry
+  links elsewhere, so while one runs, no other job of the worker may use a
+  folder that is, holds or lies inside its target or sides (for a job that
+  writes, the folders the links in its folder lead to count too): such a
+  job fails with `temporary`, and so does a restore or move that would
+  start beside one. Run it again when the other job has ended. Other jobs
+  share their folders.
+- **The worker's own folders and files** are refused to every job, folder
+  listing and folder size, even inside `local_roots`: the data directory,
+  the tools directory, the config file and the TLS files
+  (`tls_cert_file`, `tls_key_file`, `controller_ca_file`). Jobs on a folder
+  that holds one (such as `/`) keep out of it on both sides
+  ([restic](restic.md#the-workers-own-folders)); the data directory holds a
+  marker file, `.syncr-data`, that backups use for that. A local root that
+  is one of them or lies inside one cannot be used; the worker logs a
+  warning at startup.
+
+Links that local users create while a job runs are not covered: keep the
+folders in `local_roots` out of reach of accounts you do not trust.
+
 ## Tools
 
 Each of rclone and restic is looked up in this order and used only if it
@@ -326,7 +368,8 @@ mode `0700`.
   `sources/mount` (it reads only `/proc/self/mountinfo`, because a hung
   FUSE mount blocks anything that looks at the folder), and the start-up
   clean-up of the scratch space never walks into `sources/`.
-- **Refused to every job, listing and folder size.** The folder holds
+- **Refused to every job, listing and folder size,** like the rest of the
+  data directory ([local folders](#local-folders)). The folder holds
   copies of users' remotes and live mounts, and every signed-in user may
   browse a worker's folders, so a path that is `sources`, or inside it,
   fails with `path_not_allowed`, even when `local_roots` covers the data
@@ -334,7 +377,8 @@ mode `0700`.
   looked at, so a hung mount cannot block the check). **Jobs on a folder
   that holds it** (such as `/`, or the data directory's parent) keep out
   of it on both sides, reading and writing:
-  - a backup leaves its contents out (`--exclude-if-present=.syncr-sources`);
+  - a backup leaves its contents out (`--exclude-if-present=.syncr-sources`,
+    and `.syncr-data` for the data directory);
   - a copy, sync or move gets an anchored exclude rule for its path, before
     the job's own filters, so nothing in it is read, written or deleted;
   - a restore excludes what would land in it, and is refused when it
@@ -344,7 +388,7 @@ mode `0700`.
     refused;
   - folder sizes count it as empty.
 
-  Details are in [restic](restic.md#the-workers-own-folder).
+  Details are in [restic](restic.md#the-workers-own-folders).
 
 ## Child process limits
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -107,32 +108,64 @@ func TestBuildWorkerOnThisMachine(t *testing.T) {
 	}
 }
 
-// TestBuildWorkerReservesTheSourcesFolder: even with the data directory
-// inside local_roots, no job, probe or listing may use <data_dir>/sources.
-func TestBuildWorkerReservesTheSourcesFolder(t *testing.T) {
+// TestBuildWorkerReservesItsOwnFolders: even with the data directory
+// inside local_roots, no job, probe or listing may use the data directory
+// (<data_dir>/sources, bisync, scratch...), the tools directory, the config
+// file or the TLS files; the marker files that keep backups of a folder
+// holding them out are there from the start.
+func TestBuildWorkerReservesItsOwnFolders(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	f.cfg.LocalRoots = []string{f.base}
+	configDir := filepath.Join(f.base, "etc")
+	f.deps.configFile = filepath.Join(configDir, "worker.yaml")
+	f.cfg.Link.TLSKeyFile = filepath.Join(configDir, "tls", "key.pem")
 	w, err := f.build()
 	if err != nil {
 		t.Fatal(err)
 	}
 	sources := paths.SourcesDir(f.cfg.DataDir)
-	for _, p := range []string{sources, filepath.Join(sources, "mirror", strings.Repeat("a", 32), "data")} {
+	for _, p := range []string{
+		sources, filepath.Join(sources, "mirror", strings.Repeat("a", 32), "data"),
+		f.cfg.DataDir, paths.BisyncDir(f.cfg.DataDir), paths.ScratchDir(f.cfg.DataDir),
+		f.deps.configFile, f.cfg.Link.TLSKeyFile,
+	} {
 		if _, err := w.policy.Resolve(p); !errors.Is(err, localfs.ErrReserved) {
 			t.Errorf("Resolve(%q) = %v", p, err)
 		}
 	}
-	if _, err := w.policy.Resolve(paths.BisyncDir(f.cfg.DataDir)); err != nil {
-		t.Errorf("the rest of the data directory: %v", err)
+	for _, p := range []string{f.base, configDir, filepath.Join(configDir, "other.yaml")} {
+		if _, err := w.policy.Resolve(p); err != nil {
+			t.Errorf("Resolve(%q) = %v", p, err)
+		}
 	}
 	if w.sources.Root() != sources {
 		t.Errorf("sources root = %q", w.sources.Root())
 	}
-	// The marker that keeps backups of a folder holding it out is there
-	// from the start.
-	if _, err := os.Stat(filepath.Join(sources, sourcestate.MarkerName)); err != nil {
-		t.Errorf("marker: %v", err)
+	for _, marker := range []string{filepath.Join(sources, sourcestate.MarkerName), filepath.Join(f.cfg.DataDir, paths.DataMarkerName)} {
+		if _, err := os.Stat(marker); err != nil {
+			t.Errorf("marker: %v", err)
+		}
+	}
+}
+
+// TestReservedPaths: the data directory, and the tools directory, config
+// and TLS files outside it, made absolute.
+func TestReservedPaths(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	data := filepath.Join(base, "data")
+	var cfg workerconfig.Config
+	cfg.Link.TLSCertFile = filepath.Join(data, "tls", "cert.pem")
+	cfg.Link.TLSKeyFile = filepath.Join(base, "tls", "key.pem")
+	got := reservedPaths(cfg, data, filepath.Join(data, "tools"), filepath.Join(base, "etc", "worker.yaml"))
+	want := []string{data, filepath.Join(base, "etc", "worker.yaml"), filepath.Join(base, "tls", "key.pem")}
+	if !slices.Equal(got, want) {
+		t.Errorf("reservedPaths() = %q, want %q", got, want)
+	}
+	got = reservedPaths(workerconfig.Config{}, data, filepath.Join(base, "tools"), "")
+	if want := []string{data, filepath.Join(base, "tools")}; !slices.Equal(got, want) {
+		t.Errorf("reservedPaths() = %q, want %q", got, want)
 	}
 }
 

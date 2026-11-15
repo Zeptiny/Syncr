@@ -14,9 +14,15 @@
 // ("\\.\", "\\?\") as well as reserved names (NUL, CON...) and alternate data
 // streams ("file:stream") are rejected.
 //
-// Checks are made at the time of Resolve; a symlink created inside a root
-// afterwards can still redirect the tool. Roots should therefore not be
-// writable by untrusted local users.
+// Checks are made at the time of Resolve, and links below a path are not
+// checked by it: a tool that writes into a folder follows the links to
+// folders it finds there. Jobs can create such links (a restore recreates
+// a snapshot's links), so the runners check every folder a tool will write
+// into first (WriteAreas), and record the folders running jobs use
+// (Claims) so that no job that can create or move links runs beside
+// another job on an overlapping folder. Links created by local users while
+// a job runs are not covered: roots should not be writable by untrusted
+// local users.
 //
 // Allowed dependencies: the standard library and golang.org/x/sys.
 package localfs
@@ -113,10 +119,11 @@ func NewPolicy(roots []string) (*Policy, error) {
 // junctions), even when a root covers it: Resolve fails with ErrReserved
 // (joined with ErrNotAllowed), so List and Measure refuse it too, and
 // Measure never enters such a folder below the folder it measures. The
-// worker reserves <data_dir>/sources, which holds one user's copies of a
-// remote and the mount points of remotes, while every user may run jobs on
-// and browse a worker's roots. Every dir must be an absolute path; it need
-// not exist.
+// worker reserves its data directory (with <data_dir>/sources, which holds
+// one user's copies of a remote and the mount points of remotes), its tools
+// directory, its config file and its TLS files, while every user may run
+// jobs on and browse a worker's roots. A dir may also be a file. Every dir
+// must be an absolute path; it need not exist.
 func (p *Policy) Reserve(dirs ...string) (*Policy, error) {
 	out := &Policy{roots: p.roots, reserved: slices.Clone(p.reserved)}
 	var errs []error

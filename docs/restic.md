@@ -261,36 +261,43 @@ straight to a remote is planned.
 - Folders of a worker together with a remote folder, or several remote
   folders in one backup.
 
-### The worker's own folder
+### The worker's own folders
 
-`<data_dir>/sources` holds mirrors of other users' remotes and live mounts,
-so no job, folder listing or folder size may use it or anything inside it
-(`path_not_allowed`), even when `local_roots` covers the data directory.
-A job on a folder that **holds** it, such as `/` or the data directory's
-parent, works, but never reads, writes or deletes anything in it:
+The worker keeps some folders and files for itself: its **data directory**
+(with `<data_dir>/sources`, which holds mirrors of other users' remotes and
+live mounts, and the state of two-way syncs), its **tools directory**, its
+**config file** (which holds its secret) and its **TLS files**. No job,
+folder listing or folder size may use them or anything inside them
+(`path_not_allowed`), even when `local_roots` covers them. A job on a
+folder that **holds** one, such as `/` or the data directory's parent,
+works, but never reads, writes or deletes anything in it:
 
-- **A backup** of such a folder leaves it out: the worker keeps a marker
-  file (`.syncr-sources`) in it and passes
-  `--exclude-if-present=.syncr-sources`, so the snapshot keeps the empty
-  folder and nothing of its contents.
-- **A copy, sync or move** whose source or destination holds it gets an
-  exclude rule for the folder's path relative to that side, anchored and
-  placed before your own filters, for example `- /lib/syncr/sources/**`
-  for `/var`. rclone applies a transfer's filters on both sides, so it
-  neither copies the folder out nor writes, replaces or deletes anything
-  in it, whatever the source holds at that path. On Windows the rule
-  matches the folder's names in any case and by their short (8.3) names.
-- **A restore** into a target that holds it leaves out what would land in
-  it (an `--exclude` of that path, relative to what is restored). restic
-  cannot combine excludes with selected items, so a restore of selected
-  items goes on only when none of them would land in or over the folder,
+- **A backup** of such a folder leaves it out. The data directory holds a
+  marker file (`.syncr-data`, and `.syncr-sources` in `sources`) and the
+  backup passes `--exclude-if-present` with it, so the snapshot keeps the
+  folder and its marker and nothing else of it. Anything else (a tools
+  directory or a config file outside the data directory) is left out with
+  an `--exclude` of its path. On Windows, where other spellings of a name
+  open the same file, a backup of a folder that holds one of those is
+  refused: back up the folders beside it.
+- **A copy, sync or move** whose source or destination holds one gets an
+  exclude rule for its path relative to that side, anchored and placed
+  before your own filters, for example `- /lib/syncr/**` for `/var` (and
+  `- /syncr/worker.yaml` for `/etc`). rclone applies a transfer's filters
+  on both sides, so it neither copies it out nor writes, replaces or
+  deletes anything there, whatever the source holds at that path. On
+  Windows the rule matches the names in any case and by their short (8.3)
+  names.
+- **A restore** into a target that holds one leaves out what would land
+  there (an `--exclude` of that path, relative to what is restored).
+  restic cannot combine excludes with selected items, so a restore of
+  selected items goes on only when none of them would land in or over it,
   and is refused otherwise (`path_not_allowed`), as is one with include
   patterns. On Windows, where other spellings of a name open the same
-  folder, every restore into a target that holds it is refused: restore
+  folder, every restore into a target that holds one is refused: restore
   into a folder beside it.
-- **A two-way sync** side that holds it is refused, as one that holds the
-  state of two-way syncs is.
-- **A union remote** with a local folder that holds it is refused: its
+- **A two-way sync** side that holds one is refused.
+- **A union remote** with a local folder that holds one is refused: its
   paths cannot be kept out with rules.
 
 ### What a worker needs for the mount
@@ -365,6 +372,15 @@ From the snapshot browser:
 The target is a folder of the worker, inside its `local_roots`. The sheet
 proposes the worker and target you used last for this repository (kept in
 your browser), as long as that worker is online.
+
+**A restore recreates the snapshot's symbolic links,** wherever they
+lead. rclone writes through a link to a folder that it finds where it
+writes, so a later copy, sync, move or two-way sync into a folder holding
+a link to a folder outside the worker's `local_roots` is refused
+([local folders](worker-config.md#local-folders)). While a restore runs,
+no other job of that worker may use its target or a folder that overlaps
+it: such a job fails with `temporary` (run it again later), and a restore
+fails the same way while another job uses an overlapping folder.
 
 **Existing files are kept by default.** Choose what happens when a file
 already exists:

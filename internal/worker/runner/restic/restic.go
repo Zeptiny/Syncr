@@ -14,6 +14,7 @@ import (
 	"time"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/worker/localfs"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
 	"github.com/Zeptiny/Syncr/internal/worker/runner/scrub"
@@ -35,9 +36,21 @@ type RemoteEnv interface {
 // PathPolicy enforces the worker's admin-configured local_roots. Resolve
 // returns the cleaned, absolute, symlink-resolved path to use, or an error if
 // path is not allowed. It is applied to backup sources, local repositories
-// and restore targets. The implementation lives in internal/worker/localfs.
+// and restore targets. WriteAreas checks a folder restic (or the rclone it
+// starts) writes into, a repository, for links that lead where jobs may
+// not write, and visits each folder the tool can reach there. The
+// implementation lives in internal/worker/localfs.
 type PathPolicy interface {
 	Resolve(path string) (string, error)
+	WriteAreas(ctx context.Context, dir string, visit func(folder string) error) error
+}
+
+// LocalPather is what a RemoteEnv also implements when remotes can have
+// local folders (*rcloneenv.Builder: a union's local upstreams). LocalPaths
+// returns the local folders that remote alias of remotes uses at path. A
+// repository there is checked for links like a local one.
+type LocalPather interface {
+	LocalPaths(remotes []*syncrv1.RemoteDefinition, alias, path string) ([]string, error)
 }
 
 // Config holds the dependencies of the restic runners.
@@ -65,6 +78,23 @@ type Config struct {
 	// (RESTIC_CACHE_DIR). Empty disables the cache (--no-cache), so restic
 	// never writes to the worker user's own cache.
 	CacheDir string
+
+	// Reserved are the folders and files the worker keeps for its own use
+	// (localfs.Policy.Reserved), which the path policy refuses: its data
+	// directory with the folder of backups of remotes, its tools directory,
+	// its config and TLS files. A backup of a folder that holds one leaves
+	// it out, and a restore into one keeps out of it or is refused
+	// (plan.go). Marked are those of them that hold a marker file named by
+	// the value: a backup leaves them out with --exclude-if-present, which
+	// matches every spelling of the folder; the others with --exclude
+	// patterns, except on Windows, where such a backup is refused.
+	Reserved []string
+	Marked   map[string]string
+
+	// Claims records the local folders the worker's running jobs use
+	// (localfs.Claims). One value must be shared by every runner of the
+	// worker; nil gives these runners their own.
+	Claims *localfs.Claims
 
 	// RemoteSources runs backups of a folder of a remote
 	// (ResticBackup.remote_source, remote_source.go). The zero value makes
@@ -114,6 +144,9 @@ func newEngine(cfg Config) (*engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("restic: Config.RclonePath: %w", err)
 	}
+	if cfg.Claims == nil {
+		cfg.Claims = &localfs.Claims{}
+	}
 	e := &engine{cfg: cfg, goos: runtime.GOOS, log: cfg.Logger, rcloneOpts: rcloneOpts}
 	if e.log == nil {
 		e.log = slog.New(slog.DiscardHandler)
@@ -156,9 +189,11 @@ func (r *kindRunner) Run(ctx context.Context, job runner.Job, emit runner.EmitFu
 	if err != nil {
 		return res, scrub.New(secrets).Error(err)
 	}
+	claim := r.e.cfg.Claims.Take(r.kind)
+	defer claim.Release()
 	res, s, sc, err := r.e.exec(ctx, execution{
 		kind: r.kind, scratch: "restic-" + job.ID, logID: job.ID,
-		remotes: job.Spec.GetRemotes(), cmd: cmd, emit: emit, secrets: secrets,
+		remotes: job.Spec.GetRemotes(), cmd: cmd, emit: emit, secrets: secrets, claim: claim,
 	})
 	if err == nil && res.Output == nil {
 		var out *syncrv1.JobOutput
@@ -205,6 +240,9 @@ type execution struct {
 	stdout func(proc.Line)
 	chunks bool
 	grace  time.Duration
+	// claim, set for jobs, records the local folders the invocation uses
+	// (checkLocal); probes leave it nil.
+	claim *localfs.Claim
 }
 
 // exec runs a planned command. It returns the session that read restic's
@@ -225,6 +263,9 @@ func (e *engine) exec(ctx context.Context, x execution) (runner.Result, *session
 
 	repo, viaRclone, err := e.repository(x.remotes, cmd.repo)
 	if err != nil {
+		return res, s, sc, err
+	}
+	if err := e.checkLocal(ctx, x, repo, viaRclone); err != nil {
 		return res, s, sc, err
 	}
 	env, err := e.baseEnv(x.remotes, cmd.repo.GetPassword(), viaRclone)
@@ -299,6 +340,79 @@ func (e *engine) exec(ctx context.Context, x execution) (runner.Result, *session
 		e.log.Warn("restic output not fully collected", "job_id", x.logID, "error", err.Error())
 	}
 	return res, s, sc, nil
+}
+
+// checkLocal checks the local folders of an invocation and records them in
+// its claim (a job's; probes have none):
+//
+//   - a repository restic may write (every command without --no-lock), a
+//     local one or a union's local upstreams, is checked for links that
+//     lead where jobs may not write (PathPolicy.WriteAreas), and each
+//     folder restic or rclone can reach there is claimed, before it is
+//     checked; a repository read with --no-lock is only claimed;
+//   - a backup's paths are claimed;
+//   - a restore's target is claimed exclusively: restic recreates the
+//     snapshot's links there, so no other job may use an overlapping
+//     folder meanwhile. It is not checked for links: restic replaces a
+//     link it finds where it restores an item, and never writes through
+//     one.
+//
+// Errors: TEMPORARY when another job uses an overlapping folder,
+// PATH_NOT_ALLOWED when a folder may not be written or checked, ctx's when
+// it ended.
+func (e *engine) checkLocal(ctx context.Context, x execution, repo string, viaRclone bool) error {
+	add := func(exclusive bool) func(string) error {
+		return func(folder string) error {
+			if x.claim == nil {
+				return nil
+			}
+			return x.claim.Add(folder, exclusive)
+		}
+	}
+	fail := func(what string, err error) error {
+		switch {
+		case errors.Is(err, localfs.ErrInUse):
+			return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_TEMPORARY, "%s: %w", what, err)
+		case ctx.Err() != nil:
+			return fmt.Errorf("restic: not started: %w", context.Cause(ctx))
+		}
+		return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED, "%s: %w", what, err)
+	}
+	cmd := x.cmd
+	dirs := []string{repo}
+	if viaRclone {
+		dirs = nil
+		if lp, ok := e.cfg.Remotes.(LocalPather); ok {
+			loc := cmd.repo.GetLocation()
+			var err error
+			if dirs, err = lp.LocalPaths(x.remotes, loc.GetRemote(), loc.GetPath()); err != nil {
+				return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, "repository remote: %w", err)
+			}
+		}
+	}
+	readOnly := slices.Contains(cmd.global, "--no-lock")
+	for _, dir := range dirs {
+		var err error
+		if readOnly {
+			err = add(false)(dir)
+		} else {
+			err = e.cfg.Paths.WriteAreas(ctx, dir, add(false))
+		}
+		if err != nil {
+			return fail("repository", err)
+		}
+	}
+	for _, p := range cmd.reads {
+		if err := add(false)(p); err != nil {
+			return fail("backup path", err)
+		}
+	}
+	if cmd.target != "" {
+		if err := add(true)(cmd.target); err != nil {
+			return fail("restore target", err)
+		}
+	}
+	return nil
 }
 
 // exitFailure maps a non-zero restic exit to the job outcome. A backup that

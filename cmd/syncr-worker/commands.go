@@ -165,6 +165,7 @@ func runWorker(ctx context.Context, e *env, configPath string, logOut io.Writer,
 		paths:      e.pathsEnv(),
 		bundledDir: executableDir(),
 		tools:      e.tools,
+		configFile: configPath,
 	}, logger)
 	if err != nil {
 		return err

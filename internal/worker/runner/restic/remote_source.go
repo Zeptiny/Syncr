@@ -16,6 +16,7 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/link"
+	"github.com/Zeptiny/Syncr/internal/worker/localfs"
 	"github.com/Zeptiny/Syncr/internal/worker/mount"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
@@ -294,6 +295,8 @@ type remoteRun struct {
 	// empty reports that the check found no file in the folder (and
 	// allow_empty let the run go on).
 	empty bool
+	// claim records the local folders of the run (a local repository).
+	claim *localfs.Claim
 }
 
 // runRemoteSource runs a backup of a folder of a remote: check (list the
@@ -310,7 +313,9 @@ func (e *engine) runRemoteSource(ctx context.Context, job runner.Job, emit runne
 		emit = func(runner.Progress) {}
 	}
 	secrets := secretsOf(job.Spec)
-	rs := &remoteRun{e: e, job: job, emit: emit, secrets: secrets, sc: scrub.New(secrets)}
+	claim := e.cfg.Claims.Take(kindBackup)
+	defer claim.Release()
+	rs := &remoteRun{e: e, job: job, emit: emit, secrets: secrets, sc: scrub.New(secrets), claim: claim}
 	res, err := rs.run(ctx)
 	if err != nil && !runner.Canceled(err) && ctx.Err() == nil {
 		err = rs.sc.Error(err)
@@ -713,6 +718,7 @@ func (rs *remoteRun) backup(ctx context.Context, dir string) (runner.Result, err
 	res, s, sc, err := rs.e.exec(ctx, execution{
 		kind: kindBackup, dir: rs.scratch, workdir: dir, logID: rs.job.ID,
 		remotes: rs.job.Spec.GetRemotes(), cmd: rs.plan.backup, emit: rs.phase(link.ProgressPhaseBackup), secrets: rs.secrets,
+		claim: rs.claim,
 	})
 	res.Stats.Phase = link.ProgressPhaseBackup
 	if ee, ok := errors.AsType[*ExitError](err); ok && ee.ExitCode == exitFatal && strings.Contains(ee.Message, emptySnapshot) {
