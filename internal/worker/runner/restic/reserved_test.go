@@ -86,8 +86,8 @@ func TestBackupLeavesReservedOut(t *testing.T) {
 			t.Errorf("backup of %s: flags %q, want %q", tt.path, got, tt.want)
 		}
 	}
-	if want := "/etc[[]1]/worker.yaml"; !strings.HasSuffix(includePattern(re.config, "linux"), want) {
-		t.Errorf("pattern %q does not escape the name", includePattern(re.config, "linux"))
+	if got, want := includePattern("/srv/etc[1]/worker.yaml", "linux"), "/srv/etc[[]1]/worker.yaml"; got != want {
+		t.Errorf("pattern %q, want %q", got, want)
 	}
 
 	setGOOS(t, re.testEnv, "windows")

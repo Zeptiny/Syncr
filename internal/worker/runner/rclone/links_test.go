@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
@@ -68,8 +67,9 @@ func TestTransferRefusesLinksOutOfRoots(t *testing.T) {
 		{"union destination", remote, &syncrv1.Location{Remote: "both", Path: ""}},
 	} {
 		err := run(tt.src, tt.dst)
+		var pe *localfs.PathError
 		if runner.CodeOf(err) != syncrv1.JobErrorCode_JOB_ERROR_CODE_PATH_NOT_ALLOWED || !errors.Is(err, localfs.ErrLink) ||
-			!strings.Contains(err.Error(), evil) || f.sup.called {
+			!errors.As(err, &pe) || pe.Path != evil || f.sup.called {
 			t.Errorf("%s: Run() = %v (code %v, rclone started %v)", tt.name, err, runner.CodeOf(err), f.sup.called)
 		}
 	}
