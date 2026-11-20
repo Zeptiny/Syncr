@@ -524,6 +524,100 @@ func TestRemoteSourceCryptFolderCheck(t *testing.T) {
 	}
 }
 
+// TestRemoteSourceCryptPassword: a backup of a folder of a crypt remote
+// checks the remote's password first, from its root, by reading the first
+// byte of a file (rclone cat, standard output in chunks). Whatever the
+// folder, the method or allow_empty, a file that does not decrypt
+// (recorded rclone 1.75.2 output) fails the job with EXECUTION_FAILED
+// before the precheck, the mirror, the mount or restic run; a block that
+// decrypts, or nothing to decrypt, lets the backup go on.
+func TestRemoteSourceCryptPassword(t *testing.T) {
+	t.Parallel()
+	const badBlock = `{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"gYfkfj/S.iRn","objectType":"*crypt.Object","source":"operations/operations.go:1365"}`
+	vault := &syncrv1.RemoteDefinition{
+		Alias: "vault", BackendType: "crypt", Wrapped: &syncrv1.Location{Remote: "src", Path: "bucket/vault"},
+		Secrets: map[string]string{"password": sourceSecret}, ObscureKeys: []string{"password"},
+	}
+	for _, tt := range []struct {
+		name       string
+		remote     string
+		path       string
+		method     syncrv1.ResticRemoteSourceMethod
+		allowEmpty bool
+		stdout     string   // the check's decrypted data
+		stderr     []string // the check's log
+		exit       int
+		commands   []string
+		code       syncrv1.JobErrorCode
+	}{
+		{"wrong password, root, mirror", "vault", "", mirrorMethod, false, "", []string{badBlock, badBlock, badBlock}, 1,
+			[]string{"rclone cat"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED},
+		{"wrong password, root, allow_empty", "vault", "", mirrorMethod, true, "", []string{badBlock}, 1,
+			[]string{"rclone cat"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED},
+		{"wrong password, folder, mount", "vault", "photos/2024", mountMethod, true, "", []string{badBlock}, 1,
+			[]string{"rclone cat"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED},
+		{"right password", "vault", "", mirrorMethod, false, "\x00", nil, 0,
+			[]string{"rclone cat", "rclone lsf", "rclone sync", "restic backup"}, 0},
+		{"nothing to decrypt", "vault", "", mirrorMethod, false, "", nil, 0,
+			[]string{"rclone cat", "rclone lsf", "rclone sync", "restic backup"}, 0},
+		{"another remote", "src", "bucket/photos", mirrorMethod, false, "", nil, 0,
+			[]string{"rclone lsf", "rclone sync", "restic backup"}, 0},
+		{"check fails", "vault", "", mirrorMethod, false, "", []string{`{"level":"error","msg":"error listing: 403 Forbidden","object":""}`}, 1,
+			[]string{"rclone cat"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newRSEnv(t, bothMethods())
+			base := e.sup.script
+			var check proc.Spec
+			e.sup.script = func(ctx context.Context, spec proc.Spec) (proc.Result, error) {
+				if commandOf(spec) != "rclone cat" {
+					return base(ctx, spec)
+				}
+				check = spec
+				if tt.stdout != "" {
+					spec.Stdout(proc.Line{Data: []byte(tt.stdout)})
+				}
+				replayLines(spec.Stderr, tt.stderr...)
+				if tt.exit != 0 {
+					return proc.Result{ExitCode: tt.exit}, &proc.ExitError{Path: spec.Path, ExitCode: tt.exit}
+				}
+				return proc.Result{}, nil
+			}
+			spec := remoteBackup(func(_ *syncrv1.ResticBackup, s *syncrv1.ResticBackupRemoteSource) {
+				s.Remote, s.Path, s.Method, s.AllowEmpty = tt.remote, tt.path, tt.method, tt.allowEmpty
+			})
+			spec.Remotes = append(spec.Remotes, vault)
+			_, _, err := e.run(spec)
+			if got := e.sup.commands(); !slices.Equal(got, tt.commands) {
+				t.Errorf("commands = %q, want %q", got, tt.commands)
+			}
+			if check.Path != "" {
+				want := []string{"cat", "--config=", "--use-json-log", "--log-level=NOTICE", "--count=1", "--min-size=1B", "--", "vault:"}
+				if !slices.Equal(check.Args, want) || !check.StdoutChunks {
+					t.Errorf("check args = %q (chunks %v), want %q", check.Args, check.StdoutChunks, want)
+				}
+			}
+			if tt.code == 0 {
+				if err != nil {
+					t.Errorf("run = %v, want the backup to go on", err)
+				}
+				return
+			}
+			mustFail(t, err, tt.code)
+			if strings.Contains(err.Error(), sourceSecret) {
+				t.Errorf("err leaks the secret: %v", err)
+			}
+			if tt.name != "check fails" && !strings.Contains(err.Error(), "the remote: the encrypted remote cannot decrypt the files stored in its folder, so its password is wrong") {
+				t.Errorf("err = %v", err)
+			}
+			if len(e.mounter.reqs) != 0 {
+				t.Errorf("mounted after a failed check: %v", e.mounter.reqs)
+			}
+		})
+	}
+}
+
 // TestRemoteSourceUnavailableMethod: a method the worker cannot use fails
 // with TOOL_UNAVAILABLE and its reason, before anything runs.
 func TestRemoteSourceUnavailableMethod(t *testing.T) {

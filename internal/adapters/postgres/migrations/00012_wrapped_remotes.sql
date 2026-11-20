@@ -18,6 +18,23 @@ ALTER TABLE remotes
 CREATE INDEX remotes_wrapped_remote_idx ON remotes (wrapped_remote_id) WHERE wrapped_remote_id IS NOT NULL;
 
 -- +goose Down
+
+-- Dropping the columns would lose where the live encrypted remotes store
+-- their data, and leave remotes of a type older versions do not know:
+-- refuse until they are deleted. Deleted remotes are never used again.
+-- +goose StatementBegin
+DO $$
+DECLARE
+    n bigint;
+BEGIN
+    SELECT count(*) INTO n FROM remotes WHERE wrapped_remote_id IS NOT NULL AND deleted_at IS NULL;
+    IF n > 0 THEN
+        RAISE EXCEPTION 'cannot undo migration 00012: % encrypted remote(s) store their data in other remotes, and undoing it would lose where; delete them first', n;
+    END IF;
+END
+$$;
+-- +goose StatementEnd
+
 DROP INDEX remotes_wrapped_remote_idx;
 ALTER TABLE remotes
     DROP CONSTRAINT remotes_wrapped_path,

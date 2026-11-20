@@ -579,6 +579,8 @@ func checkOption(backend, key string) error {
 			return fmt.Errorf("option %q is not allowed; the worker always sets it, so a wrong password fails instead of hiding every file", key)
 		case "pass_bad_blocks":
 			return fmt.Errorf("option %q is not allowed; with a wrong password it would read every file as zeros", key)
+		case "no_data_encryption":
+			return fmt.Errorf("option %q is not allowed; with a wrong password files would read without an error, so it could not be found", key)
 		}
 	}
 	return nil

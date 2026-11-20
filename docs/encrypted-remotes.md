@@ -30,7 +30,7 @@ Under **Remotes, Add remote**, choose **Encrypted (crypt)**:
 | **Salt (second password)** | Optional. Also needed to read the files: keep it with the password. |
 | **File name encryption** | **Standard** (the default) encrypts names; **Obfuscate** hides them but keeps their length; **Off** leaves them readable. |
 | **Encrypt folder names** | On by default; only with file name encryption. |
-| **Name encoding** (Advanced) | How encrypted names are written: base32 (the default, safe everywhere), base64 (shorter, needs a case-sensitive remote) or base32768 (for remotes that limit name length in characters, such as OneDrive and Dropbox). |
+| **Name encoding** (Advanced) | How encrypted names are written: base32 (the default, safe everywhere), base64 (shorter, needs a case-sensitive remote) or base32768 (for remotes that limit name length in characters rather than bytes). |
 | **Suffix** (Advanced) | Added to file names when names are not encrypted (`.bin` by default; `none` for no suffix). |
 
 **Store in** can be any of your remotes except a **Local directory**, a
@@ -39,8 +39,9 @@ its own: anything else in it, such as files another tool wrote, makes the
 encrypted remote's listings fail (Syncr has rclone refuse names it cannot
 decrypt instead of skipping them).
 
-**Test remote** lists the encrypted remote's root: with a wrong password
-and data already there, the test fails.
+**Test remote** reads the first bytes of one of the files already stored,
+then lists the encrypted remote's root: with a wrong password the test
+fails, whatever the name settings ([a wrong password](#a-wrong-password)).
 
 The remote you store in shows the encrypted remote under **Used by** in the
 Remotes list, and cannot be deleted until the encrypted remote is deleted
@@ -109,41 +110,59 @@ it, so a damaged or tampered file fails to read.
 
 Since the password is fixed, a wrong one only happens with a **second
 encrypted remote over the same folder**, made with a mistyped password,
-salt or name setting. Syncr always has rclone refuse names it cannot
-decrypt (`strict_names`), so a source never silently looks empty to a
-transfer, a backup of a remote or a two-way sync, and a sync from it never
-empties its destination.
+salt or name setting.
 
-| File name encryption | What a job reading it does |
+**Before anything uses an encrypted remote, the worker checks its
+password.** It lists the remote from its root and reads the first bytes of
+one of its files that is not empty, which must decrypt. With a wrong
+password nothing decrypts (rclone checks every block it decrypts), so:
+
+- a **copy, sync or move** from or into the remote (a dry run too), a
+  **two-way sync** with a side on it and a **backup** of a folder of it
+  (mirror or mount) fail with `execution_failed` before rclone changes
+  anything: *the encrypted remote cannot decrypt the files stored in its
+  folder, so its password is wrong…*, followed by rclone's message.
+  Nothing is copied, deleted or overwritten, no mirror is touched and no
+  snapshot is made, whatever folder the job uses;
+- **Test remote**, the file browser and the folder pickers fail the same
+  way.
+
+This holds for every name setting and on every storage. It costs one short
+rclone run per encrypted remote per job or listing: a listing that stops at
+the first file with data, and one read of at most 64 KiB (three reads with
+a wrong password, so that one damaged file does not stop every job).
+
+Why each name setting needs it (rclone 1.75.2; Syncr always has rclone
+refuse names it cannot decrypt, `strict_names`):
+
+| File name encryption | With a wrong password, without the check |
 |---|---|
-| **Standard** | Listing the root fails: "undecryptable" (`execution_failed`). A folder inside it fails as not found (`not_found`), see below. |
-| **Obfuscate** | Names list, garbled; reading a file fails ("bad password?"), and a sync deletes nothing. A two-way sync sees every file as changed, and its delete limit stops it. Prefer standard names. |
-| **Off** | Names list as they are; reading any file fails ("failed to authenticate decrypted block - bad password?"), and a sync deletes nothing. |
+| **Standard** | Listings fail: "undecryptable". |
+| **Obfuscate** | Names list, garbled, without an error. A garbled folder's name encrypts to another name: on SFTP that folder is missing, but on S3 and B2 it lists as **empty**. A sync from the remote's root would empty its destination, a sync into it would delete the files at its root, and a backup would empty its mirror. |
+| **Off** | Names list as they are; only reading a file fails ("failed to authenticate decrypted block - bad password?"). |
 
-**Folders on S3 and B2.** With another password, a folder's name encrypts
-to another name. On SFTP that folder is missing (`not_found`), but a
-bucket lists a folder that does not exist as **empty**, without an error.
-So before a transfer or a backup of a remote reads a folder of an
-encrypted remote, the worker looks for that folder in its parent's
-listing. If it is not there, the job fails with `not_found`: *…is not in
-its parent folder on the crypt remote…; if it exists, the remote's
-password is wrong*. A side effect: a folder of an encrypted remote that
-really does not exist is also `not_found` on S3 and B2, where a missing
-folder of a plain bucket is an empty source.
+**What the check cannot see.** A remote that holds no file with data
+(nothing yet, or only empty files) has nothing to decrypt, so its jobs run.
+With obfuscated names and a wrong password, a sync from such a remote can
+then replace its destination's copies of those empty files with garbled
+names; nothing with contents is at stake. And if a mistyped second remote
+writes into a folder while it is still empty, its files use its own
+password: the first remote then fails the check once it reads one of them.
+Use a folder of its own for each encrypted remote.
 
-**Destinations are not checked.** A copy or sync *into* an encrypted remote
-with the wrong password writes its files under other encrypted names; it
-neither overwrites nor deletes what the right password wrote. Checking
-would cost a listing before every job for a case that only a second remote
-can cause. Those files stay in the folder, though, and the right remote
-cannot decrypt their names: listing its **root** then fails with
-"undecryptable" (its other folders still work) until you delete them,
-for example by deleting the folders the wrong remote wrote with rclone and
-its settings. Delete the mistyped remote once you notice.
+**Folders that do not exist.** Before a transfer or a backup reads a folder
+below the remote's root, the worker also looks for that folder in its
+parent's listing. A missing one fails with `not_found`: *…is not in its
+parent folder on the crypt remote…; if it exists, the remote's password is
+wrong*. On S3 and B2, where a missing folder of a plain bucket is an empty
+source, a missing folder of an encrypted remote is `not_found`.
 
-**The file browser** lists without that check: with a wrong password, a
-folder inside an encrypted remote on S3 or B2 may show as **empty**, and
-its folder size as zero. The root fails as above.
+**Two-way syncs** check both sides the same way. Besides, a second
+encrypted remote has its own pair state (the state key includes the
+remote), so its first run is a resync, which never deletes.
+
+**Folder sizes** are not checked: with a wrong password they may count a
+folder as empty.
 
 ## Reading the data without Syncr
 

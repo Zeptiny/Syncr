@@ -84,11 +84,11 @@ func TestIntegrationCryptTransfers(t *testing.T) {
 		}
 	}
 
-	// The wrong password: the worker sets strict_names, so a listing of
-	// the crypt remote's root fails on the names it cannot decrypt, and a
-	// folder below it is not found (its name encrypts to another one).
-	// The runner lists a source's parent first (checkCryptSource). Nothing
-	// looks empty, and a sync deletes nothing.
+	// The wrong password: the runners check a crypt remote's password
+	// before they use it (checkCryptPassword). With encrypted names the
+	// check's recursive listing fails on the names it cannot decrypt (the
+	// worker sets strict_names), whatever the folder. Nothing looks empty,
+	// and a sync deletes nothing.
 	wrong := []*syncrv1.RemoteDefinition{box, cryptRemote("vault", "box", "upload/vault", wrongPass)}
 	retry := &syncrv1.RcloneTransferOptions{Retries: ptr[int32](1), LowLevelRetries: ptr[int32](1)}
 	for _, tt := range []struct {
@@ -101,10 +101,10 @@ func TestIntegrationCryptTransfers(t *testing.T) {
 	}{
 		{"", syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "undecryptable",
 			syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "undecryptable", ""},
-		{"photos", syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "undecryptable",
-			syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "directory not found", "photos"},
-		{"photos/dir", syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "directory not found",
-			syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "directory not found", "photos/dir"},
+		{"photos", syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "password is wrong",
+			syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "password is wrong", "photos"},
+		{"photos/dir", syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "password is wrong",
+			syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "undecryptable", "photos/dir"},
 	} {
 		dst := it.dir(t, "dst-"+strings.ReplaceAll(tt.from, "/", "-"))
 		writeFiles(t, dst, map[string]int{"keep.txt": 10, "photos/a.txt": 7, "a.txt": 3})
@@ -201,9 +201,10 @@ func TestIntegrationCryptBisync(t *testing.T) {
 // of a crypt remote read with the wrong password is not an error for
 // rclone: its name encrypts to another prefix, which has no objects and
 // so lists as an empty folder, and a sync from it would empty its
-// destination (checked here with the bare rclone). The runner lists the
-// folder's parent first and fails with NOT_FOUND; the destination keeps
-// everything. With the right password the same sync works.
+// destination (checked here with the bare rclone). The runner checks the
+// password first and fails; the destination keeps everything. With the
+// right password the same sync works. (TestIntegrationCryptPasswordCheck
+// covers every name mode.)
 func TestIntegrationCryptOverS3WrongPassword(t *testing.T) {
 	it := newITest(t)
 	minio := startMinIO(t)
@@ -241,9 +242,8 @@ func TestIntegrationCryptOverS3WrongPassword(t *testing.T) {
 		t.Log("the bare rclone emptied the destination: the runner's check is needed")
 	}
 
-	// The runner refuses before it syncs: the parent of a folder below
-	// the root lists as empty (NOT_FOUND), and the root's listing fails on
-	// the names it cannot decrypt.
+	// The runner refuses before it syncs: the password check's recursive
+	// listing fails on the names it cannot decrypt.
 	dst := it.dir(t, "dst")
 	writeFiles(t, dst, map[string]int{"keep.txt": 10, "a.txt": 3})
 	before := tree(t, dst)
@@ -252,7 +252,7 @@ func TestIntegrationCryptOverS3WrongPassword(t *testing.T) {
 		code syncrv1.JobErrorCode
 		msg  string
 	}{
-		{"photos/dir", syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "password is wrong"},
+		{"photos/dir", syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "password is wrong"},
 		{"photos", syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "undecryptable"},
 		{"", syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "undecryptable"},
 	} {

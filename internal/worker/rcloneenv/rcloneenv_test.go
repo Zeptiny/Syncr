@@ -448,6 +448,8 @@ func TestCheckOptionDenies(t *testing.T) {
 		{"crypt", "strict_names", "the worker always sets it"},
 		{"crypt", "Strict-Names", "the worker always sets it"},
 		{"crypt", "pass_bad_blocks", "wrong password"},
+		{"crypt", "no_data_encryption", "wrong password"},
+		{"crypt", "No-Data-Encryption", "wrong password"},
 	} {
 		err := checkOption(tt.backend, tt.key)
 		if err == nil || !strings.Contains(err.Error(), tt.reason) || !strings.Contains(err.Error(), strconv.Quote(tt.key)) {

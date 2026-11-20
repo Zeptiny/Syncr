@@ -432,10 +432,7 @@ func (s *Scheduler) checkWith(ctx context.Context, sc schedules.Schedule) (strin
 func kindInfos(in map[domain.RemoteID]remotes.Info) map[domain.RemoteID]jobkind.RemoteInfo {
 	out := make(map[domain.RemoteID]jobkind.RemoteInfo, len(in))
 	for id, info := range in {
-		out[id] = jobkind.RemoteInfo{
-			Wraps:      jobkind.Wrap{RemoteID: info.Wrapped.RemoteID, Path: info.Wrapped.Path},
-			NoChecksum: info.Capabilities.NoChecksum,
-		}
+		out[id] = jobkind.NewRemoteInfo(info.Wrapped.RemoteID, info.Wrapped.Path, info.Capabilities)
 	}
 	return out
 }

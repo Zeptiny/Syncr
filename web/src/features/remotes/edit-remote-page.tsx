@@ -6,7 +6,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/app/confirm-dialog";
-import { RemoteForm } from "@/components/app/descriptor-form";
+import { fixedSecretFields, RemoteForm } from "@/components/app/descriptor-form";
 import { ErrorState } from "@/components/app/error-state";
 import { PageHeader } from "@/components/app/page-header";
 import { Panel } from "@/components/app/panel";
@@ -15,7 +15,7 @@ import { TestRemoteButton } from "@/components/app/test-remote-button";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WorkerAdminService } from "@/gen/syncr/v1/api_pb";
-import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
+import { RemoteService, type Backend, type Remote } from "@/gen/syncr/v1/remotes_pb";
 import { ResticService } from "@/gen/syncr/v1/restic_pb";
 import { ScheduleService } from "@/gen/syncr/v1/schedules_pb";
 import { useBackendMap } from "@/hooks/use-backends";
@@ -66,6 +66,12 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
     unionNames.length &&
       `This remote is a member of ${unionNames.join(", ")}. Remove it from ${unionNames.length === 1 ? "that union" : "those unions"} first.`,
   ].filter((b): b is string => !!b);
+  const notes = [
+    schedules.length
+      ? `${schedules.map((x) => x.name).join(", ")} ${schedules.length === 1 ? "uses" : "use"} it, and will be paused at ${schedules.length === 1 ? "its" : "their"} next run. Its saved credentials are erased; past jobs keep its name.`
+      : "Its saved credentials are erased. Past jobs keep its name; queued jobs that use it will fail.",
+    secretLossNote(backend, remote, nameOf),
+  ].filter((n): n is string => !!n);
 
   return (
     <>
@@ -135,18 +141,12 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
         onOpenChange={setDeleting}
         destructive
         title={`Delete ${remote.name}?`}
-        description={
-          blockers.length
-            ? blockers.map((b, i) => (
-                // The description is a paragraph: one line per reason, without nesting blocks in it.
-                <span key={b} className={i > 0 ? "mt-2 block" : "block"}>
-                  {b}
-                </span>
-              ))
-            : schedules.length
-              ? `${schedules.map((x) => x.name).join(", ")} ${schedules.length === 1 ? "uses" : "use"} it, and will be paused at ${schedules.length === 1 ? "its" : "their"} next run. Its saved credentials are erased; past jobs keep its name.`
-              : "Its saved credentials are erased. Past jobs keep its name; queued jobs that use it will fail."
-        }
+        description={(blockers.length ? blockers : notes).map((b, i) => (
+          // The description is a paragraph: one line per reason or note, without nesting blocks in it.
+          <span key={b} className={i > 0 ? "mt-2 block" : "block"}>
+            {b}
+          </span>
+        ))}
         confirmLabel="Delete remote"
         // The controller refuses while repositories, unions or wrapper remotes use the remote.
         confirmDisabled={repos.isPending || blockers.length > 0}
@@ -159,4 +159,24 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
       />
     </>
   );
+}
+
+/**
+ * secretLossNote warns, for a remote whose type has fixed secrets (such as
+ * an encrypted remote's password), that deleting it erases the only copy
+ * Syncr keeps of the ones that are set, while the files it stored stay,
+ * unreadable without them. Undefined for other remotes.
+ */
+function secretLossNote(
+  backend: Backend,
+  remote: Remote,
+  nameOf: (id: string) => string,
+): string | undefined {
+  const lost = fixedSecretFields(backend).filter((f) => remote.secretsSet.includes(f.name));
+  if (!lost.length) return undefined;
+  const what = lost.map((f) => (f.label || f.name).toLowerCase()).join(" and ");
+  const one = lost.length === 1;
+  const w = remote.wrapped;
+  const where = w?.remoteId ? ` in ${nameOf(w.remoteId)}${w.path ? ` / ${w.path}` : ""}` : "";
+  return `Its ${what} ${one ? "is" : "are"} erased too, and Syncr keeps no other copy. The files it stores${where} are not deleted, but without ${one ? "it" : "them"} nobody can read them.`;
 }

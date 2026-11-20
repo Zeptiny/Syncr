@@ -1480,6 +1480,17 @@ const cryptShots = [
       await scrollTo(p, p.getByText("How a run tells that a file changed."), 120);
     },
   ],
+  [
+    "11-delete-encrypted",
+    {},
+    async (p) => {
+      const { remotes } = await seedIds(p);
+      await open(p, `/remotes/${remotes["Vault"]}`, 900);
+      await p.getByRole("button", { name: "Delete remote" }).click();
+      await p.getByRole("alertdialog").waitFor();
+      await settle(p, 300);
+    },
+  ],
 ];
 
 // cryptSet takes the encrypted remote shots. It signs in once and reuses

@@ -37,11 +37,24 @@ What rclone 1.75.2 does, checked against the pinned binary:
   cannot decrypt ("Skipping undecryptable file name") and exits 0, so a
   `sync` from it **deleted every file of its destination**. With
   `strict_names=true` the listing fails. Obfuscated and unencrypted names
-  list, but reading fails ("bad password?") and a sync deletes nothing.
+  list without an error; reading a file fails ("bad password?").
 - On S3 (and by the same semantics B2) a folder below the crypt root read
   with the wrong password lists as **empty** even with `strict_names`: the
   folder's name encrypts to a prefix that does not exist, and a bucket
   lists a missing prefix as empty. SFTP reports it missing.
+- With obfuscated names this holds for every folder: a garbled folder name
+  encrypts to another one. So a `sync` from the crypt root, which walks
+  folder by folder, sees only empty folders and **empties its
+  destination**; with `--fast-list` it reads the files and fails, but an
+  include filter (`+ photos/**`) matches no garbled name, and it deletes
+  again. A `sync` into the root deletes the (garbled) files there. The
+  bucket's own recursive listing (`ListR`, which `lsf -R` uses whenever no
+  folder filter is set) lists every file, garbled.
+- Reading a file's first block is the one test that fails in every mode:
+  each block is authenticated. `rclone cat` of a file by its garbled path
+  does not work (the path encrypts to another object, which lists as an
+  empty folder); `rclone cat` of the remote's root, which lists first,
+  does.
 - `pass_bad_blocks` with a wrong password and unencrypted names makes
   `copy` exit 0 and write files of zeros.
 - `suffix` takes almost anything (a value without a leading dot gets one,
@@ -81,25 +94,36 @@ deep, the worker's checks stay simple (one alias, one kind), and a wrong
 password has one place to be wrong. Unions of encrypted remotes, crypt over
 a union and crypt over a worker's local folder are follow-ups.
 
-### `strict_names` always, and a parent-listing guard
+### `strict_names` always, a password check, and a parent-listing guard
 
 The worker always sets `strict_names=true` and refuses the options
-`remote`, `strict_names` and `pass_bad_blocks` for crypt, and crypt
-passwords that are not obscured secrets. A wrong password then fails a
-listing instead of presenting an empty remote.
+`remote`, `strict_names`, `pass_bad_blocks` and `no_data_encryption` for
+crypt (the last two would let a wrong password read files as zeros or
+without decrypting), and crypt passwords that are not obscured secrets.
+With standard names a wrong password then fails a listing instead of
+presenting an empty remote.
 
-That is not enough on buckets (above), so the worker guards the sources
-that could empty something: before a **transfer** reads a folder below a
-crypt root, it looks for the folder in its parent's listing
-(`lsjson --max-depth=1`, stopping once found); a **backup of a remote**
-does the same when its empty-source pre-check finds nothing. A missing
-folder is `NOT_FOUND`, naming the password as a likely cause. Two-way sync
-needs no guard: rclone aborts on an empty side listing, even with `--force`.
+That is not enough with obfuscated or unencrypted names (above), so the
+worker **checks the password** of every crypt remote a job or a listing
+uses, before rclone touches anything (`rclonetool.CryptCheck`): `rclone
+cat --count=1 --min-size=1B` of the remote's root, stopped at the first
+decrypted byte (the password is right), or after three files that fail to
+decrypt. A file or name that does not decrypt, or a folder of the
+listing's own that is missing, fails the job with `EXECUTION_FAILED`
+("…so its password is wrong…"); a remote with no file with data, or whose
+folder does not exist yet, has nothing to check. It runs for both sides of
+a transfer, both sides of a two-way sync, the source of a backup of a
+remote (before its empty-source pre-check, so before any mirror or mount)
+and the folder listings (the browser and Test remote); not for folder
+sizes.
 
-Destinations are not guarded: a wrong password writes new files under
-other names and deletes nothing, and since the password is fixed (below),
-only a second remote over the same folder can have a wrong one. Probes
-(the browser, folder sizes) are read-only and are not guarded either.
+Before a **transfer** reads a folder below a crypt root, the worker also
+looks for the folder in its parent's listing (`lsjson --max-depth=1`,
+stopping once found); a **backup of a remote** does the same when its
+empty-source pre-check finds nothing. A missing folder is `NOT_FOUND`,
+naming the password as a likely cause. This still covers a remote with no
+file to check, and makes a missing folder on a bucket an error instead of
+an empty source.
 
 ### Fixed fields
 
@@ -161,12 +185,18 @@ hit `worker_outdated`.
 - A crypt source folder that does not exist on S3 or B2 is `NOT_FOUND`
   where a plain bucket's missing folder is an empty source; each such
   transfer costs one more listing.
-- A wrong password can still write files under foreign names into the
-  folder (a second remote, destinations unguarded); the right remote's
-  root listing then fails until they are removed. The docs say so.
-- With obfuscated names and a wrong password, a two-way sync sees every
-  file as changed; its delete limit is the backstop. The docs recommend
-  standard names.
+- Every job and listing on a crypt remote costs one short rclone run more
+  (a listing up to the first file with data and a read of at most 64 KiB),
+  and one damaged or foreign file among the first three read with the
+  right password does not fail it, but three do.
+- A remote that holds no file with data cannot be checked. With obfuscated
+  names and a wrong password, a sync from it can then replace its
+  destination's copies of those empty files with garbled names, and a
+  mistyped remote can write into a folder that is still empty with its own
+  password. The docs say so.
+- A second remote over the same folder has its own two-way sync state, so
+  its first run is a resync, which never deletes; the check fails it before
+  that.
 - Changing a wrapper's folder leaves queued jobs with the concurrency keys
   computed at creation, as for union members.
 - Mixed worker versions behind a label can fail with `worker_outdated`.
@@ -193,9 +223,18 @@ hit `worker_outdated`.
 - **Leaving `strict_names` to the user or `pass_bad_blocks` available:**
   both turn a wrong password into an empty or zeroed source that a sync
   copies over good data.
-- **Guarding destinations too:** a listing before every write, for a case
-  that only a second remote over the same folder can cause and that
-  deletes nothing.
+- **`--fast-list` on syncs from a crypt remote** (the backend's recursive
+  listing sees every garbled file, and reading them fails): an include
+  filter matches no garbled name, so such a sync still emptied its
+  destination's matching files (rclone 1.75.2, MinIO); it does nothing for
+  destinations or for the mount, which walks folder by folder; and it
+  changes how much memory every such sync uses.
+- **Comparing a recursive listing with a walk folder by folder** (files
+  found by one and not the other): the same filter problem, no answer for
+  destinations, and a root that holds a file passes it while its folders
+  still look empty. Reading a block tests the password itself.
+- **Refusing obfuscated names:** the user approved them as an option, and
+  the check makes them safe.
 - **Hiding checksum in the editors only:** the API, schedules stored
   before, and scripts would still send it, and rclone would silently fall
   back to size only.

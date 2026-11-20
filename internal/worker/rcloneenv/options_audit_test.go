@@ -20,7 +20,7 @@ import (
 // bearer_token_command and unix_socket; s3 env_auth and
 // shared_credentials_file; union upstreams), or because the worker sets it
 // itself (crypt remote and strict_names) or it would hide a wrong password
-// (crypt pass_bad_blocks).
+// (crypt pass_bad_blocks and no_data_encryption).
 //
 // Judgment calls:
 //   - s3 profile only selects a profile of the host's AWS config, which
@@ -41,9 +41,10 @@ import (
 //     with its encrypted form (a NOTICE): names are not secrets, and the
 //     log is the job's own output. server_side_across_configs (deprecated)
 //     only lets rclone copy server-side between two remotes of the job.
-//     no_data_encryption leaves file contents unencrypted, which is the
-//     user's choice and hides nothing from a wrong password (names still
-//     fail with strict_names). The controller emits only the first six.
+//     The controller emits only the first six. no_data_encryption is
+//     denied: file contents would be read without decrypting, so with
+//     obfuscated or unencrypted names nothing would show a wrong password
+//     (the runners check it by decrypting a file's first block).
 //     Checked against rclone 1.75.2's "config providers" help and
 //     backend/crypt (Options, NewFs), which reads no file and starts no
 //     process: "remote" is opened with fs.NewFs like any other remote.
@@ -59,8 +60,7 @@ func reviewedOptions() map[string][]string {
 			sse_customer_algorithm sse_customer_key sse_customer_key_base64 sse_customer_key_md5
 			description`),
 		"crypt": strings.Fields(`filename_encryption directory_name_encryption password password2
-			filename_encoding suffix description no_data_encryption show_mapping
-			server_side_across_configs`),
+			filename_encoding suffix description show_mapping server_side_across_configs`),
 		"memory": strings.Fields(`discard description`),
 		"s3": strings.Fields(`provider access_key_id secret_access_key region endpoint
 			location_constraint acl bucket_acl requester_pays server_side_encryption

@@ -2,6 +2,8 @@ package rclone
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -62,8 +64,9 @@ func (s *listingSupervisor) last() proc.Spec {
 // TestRunCryptSides: a transfer between two crypt remotes over one sftp
 // remote reaches rclone as the crypt aliases; each crypt remote's "remote"
 // is built from its wrapped location, strict_names is on, and the
-// passwords are obscured and never on the command line. The source's
-// parent folder is listed first, and lists it.
+// passwords are obscured and never on the command line. Each crypt
+// remote's password is checked first, then the source's parent folder is
+// listed, and lists it.
 func TestRunCryptSides(t *testing.T) {
 	t.Parallel()
 	const pass, other = "crypt pa:ss w'rd", "second-crypt-pass"
@@ -78,10 +81,15 @@ func TestRunCryptSides(t *testing.T) {
 	if _, err := f.runner.Run(t.Context(), job, nil); err != nil {
 		t.Fatalf("Run() = %v", err)
 	}
-	if got := sup.commands(); !slices.Equal(got, []string{"lsjson", "copy"}) {
-		t.Fatalf("commands = %q, want the listing of the source's parent, then the copy", got)
+	if got := sup.commands(); !slices.Equal(got, []string{"cat", "cat", "lsjson", "copy"}) {
+		t.Fatalf("commands = %q, want the password checks, the listing of the source's parent, then the copy", got)
 	}
-	if args := sup.specs[0].Args; args[len(args)-1] != "old:photos/" {
+	for i, want := range []string{"old:", "vault:"} {
+		if sp := sup.specs[i]; sp.Args[len(sp.Args)-1] != want || !sp.StdoutChunks {
+			t.Errorf("password check %d: args = %q (stdout in chunks: %v), want the root of %s", i, sp.Args, sp.StdoutChunks, want)
+		}
+	}
+	if args := sup.specs[2].Args; args[len(args)-1] != "old:photos/" {
 		t.Errorf("listing args = %q, want the parent of the source", args)
 	}
 	spec := sup.last()
@@ -116,7 +124,8 @@ func TestRunCryptSides(t *testing.T) {
 // NOT_FOUND when the folder is missing (with the wrong password its name
 // encrypts to another one, which a bucket lists as empty), the listing's
 // own failure (undecryptable names, scrubbed) otherwise. A source at the
-// root, or on another remote, is not checked.
+// root, or on another remote, is not checked. (The password check runs
+// first, for the crypt remote; here it finds nothing to decrypt.)
 func TestRunCryptSourceCheck(t *testing.T) {
 	t.Parallel()
 	const secret = "TOP-SECRET-PASS"
@@ -130,24 +139,24 @@ func TestRunCryptSourceCheck(t *testing.T) {
 		message  string
 	}{
 		{"folder in its parent", &syncrv1.Location{Remote: "vault", Path: "a/photos/"},
-			&listingSupervisor{stdout: lsjson(item("other", true, -1), item("photos", true, -1))}, []string{"lsjson", "sync"}, 0, ""},
+			&listingSupervisor{stdout: lsjson(item("other", true, -1), item("photos", true, -1))}, []string{"cat", "lsjson", "sync"}, 0, ""},
 		{"file in its parent", &syncrv1.Location{Remote: "vault", Path: "notes.txt"},
-			&listingSupervisor{stdout: lsjson(item("notes.txt", false, 5))}, []string{"lsjson", "sync"}, 0, ""},
-		{"root", &syncrv1.Location{Remote: "vault", Path: "/"}, &listingSupervisor{}, []string{"sync"}, 0, ""},
+			&listingSupervisor{stdout: lsjson(item("notes.txt", false, 5))}, []string{"cat", "lsjson", "sync"}, 0, ""},
+		{"root", &syncrv1.Location{Remote: "vault", Path: "/"}, &listingSupervisor{}, []string{"cat", "sync"}, 0, ""},
 		{"another remote", &syncrv1.Location{Remote: "box", Path: "upload/x"}, &listingSupervisor{}, []string{"sync"}, 0, ""},
 		{"missing folder", &syncrv1.Location{Remote: "vault", Path: "a/photos"},
-			&listingSupervisor{stdout: lsjson(item("photos2", true, -1), item("photo", false, 1))}, []string{"lsjson"},
+			&listingSupervisor{stdout: lsjson(item("photos2", true, -1), item("photo", false, 1))}, []string{"cat", "lsjson"},
 			syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, `"a/photos" is not in its parent folder on the crypt remote "vault"`},
 		{"empty parent", &syncrv1.Location{Remote: "vault", Path: "photos"},
-			&listingSupervisor{stdout: lsjson()}, []string{"lsjson"},
+			&listingSupervisor{stdout: lsjson()}, []string{"cat", "lsjson"},
 			syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "the remote's password is wrong"},
 		{"undecryptable names", &syncrv1.Location{Remote: "vault", Path: "photos"},
 			&listingSupervisor{exit: 1, stderr: []string{
 				"2026/11/20 03:27:20 ERROR : error listing: there were 2 undecryptable name errors. first error: r2ufo1mensmf7iupqctcvvjsfk: undecryptable dir name detected: bad PKCS#7 padding - too long " + secret,
-			}}, []string{"lsjson"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "undecryptable"},
+			}}, []string{"cat", "lsjson"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "undecryptable"},
 		{"parent not found", &syncrv1.Location{Remote: "vault", Path: "a/photos"},
 			&listingSupervisor{exit: 3, stderr: []string{"2026/11/20 03:27:21 ERROR : error listing: directory not found"}},
-			[]string{"lsjson"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "directory not found"},
+			[]string{"cat", "lsjson"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "directory not found"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -172,6 +181,268 @@ func TestRunCryptSourceCheck(t *testing.T) {
 			}
 			if left := f.scratchEntries(t); len(left) != 0 {
 				t.Errorf("scratch dir not cleaned up: %q", left)
+			}
+		})
+	}
+}
+
+// The password check's output, recorded with rclone 1.75.2 (rclonetool's
+// testdata has the whole runs): a file whose first block does not decrypt,
+// and the notice of a recursive listing that failed on encrypted names.
+const (
+	badBlockLine     = `{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"gYfkfj/S.iRn","objectType":"*crypt.Object","source":"operations/operations.go:1365"}`
+	undecryptableEnd = `{"level":"notice","msg":"Failed to cat: there were 3 undecryptable name errors. first error: 9gjpins6c3djaqkmt8pl0sp8sk/1mrr09b3qo5h7mvor19it4gco0: undecryptable file name detected: bad PKCS#7 padding - too long","source":"cmd/cmd.go:334"}`
+)
+
+// catRun is how cryptSupervisor answers the password check of one crypt
+// remote: data on stdout (in chunks), lines on stderr, an exit code.
+type catRun struct {
+	stdout string
+	stderr []string
+	exit   int
+}
+
+// cryptSupervisor answers "rclone cat" (the password check) per remote
+// root as cats says (no entry: nothing to decrypt) and everything else
+// with success. It records every spec, and whether a check ended because
+// the runner stopped it.
+type cryptSupervisor struct {
+	cats map[string]catRun
+
+	mu      sync.Mutex
+	specs   []proc.Spec
+	stopped []string
+}
+
+func (s *cryptSupervisor) Run(ctx context.Context, spec proc.Spec) (proc.Result, error) {
+	s.mu.Lock()
+	s.specs = append(s.specs, spec)
+	s.mu.Unlock()
+	if spec.Args[0] != "cat" {
+		return proc.Result{}, nil
+	}
+	target := spec.Args[len(spec.Args)-1]
+	run := s.cats[target]
+	if run.stdout != "" {
+		spec.Stdout(proc.Line{Data: []byte(run.stdout)})
+	}
+	for _, l := range run.stderr {
+		if ctx.Err() != nil {
+			break
+		}
+		spec.Stderr(proc.Line{Data: []byte(l)})
+	}
+	if ctx.Err() != nil {
+		s.mu.Lock()
+		s.stopped = append(s.stopped, target)
+		s.mu.Unlock()
+		return proc.Result{ExitCode: -1}, &proc.CanceledError{Path: spec.Path, ExitCode: -1, Cause: context.Cause(ctx)}
+	}
+	if run.exit != 0 {
+		return proc.Result{ExitCode: run.exit}, &proc.ExitError{Path: spec.Path, ExitCode: run.exit}
+	}
+	return proc.Result{}, nil
+}
+
+func (s *cryptSupervisor) commands() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.specs))
+	for i, sp := range s.specs {
+		out[i] = sp.Args[0] + " " + sp.Args[len(sp.Args)-1]
+	}
+	return out
+}
+
+// TestRunCryptPasswordCheck: before a transfer, the password of each crypt
+// remote among its sides is checked once, by reading the first byte of a
+// file from the remote's root. A block that decrypts, or nothing to
+// decrypt, lets the transfer run; a file or a name that does not decrypt
+// (whatever the mode, the path or the side) fails it with
+// EXECUTION_FAILED before rclone transfers anything; a check that cannot
+// run is classified as rclone's failures are.
+func TestRunCryptPasswordCheck(t *testing.T) {
+	t.Parallel()
+	const secret = "TOP-SECRET-PASS"
+	wrong := catRun{stderr: []string{badBlockLine, badBlockLine, badBlockLine + secret, badBlockLine}, exit: 1}
+	remotes := []*syncrv1.RemoteDefinition{sftpRemote("box", secret), cryptRemote("vault", "box", "upload/vault", secret)}
+	vault := func(path string) *syncrv1.Location { return &syncrv1.Location{Remote: "vault", Path: path} }
+	for _, tt := range []struct {
+		name     string
+		mode     syncrv1.RcloneTransferMode
+		src, dst *syncrv1.Location // nil: the local folder
+		cats     map[string]catRun
+		stopped  []string // checks the runner stopped
+		commands []string
+		code     syncrv1.JobErrorCode // unspecified: the transfer runs
+		message  string
+	}{
+		{"readable root", modeSync, vault(""), nil, map[string]catRun{"vault:": {stdout: "\xd5"}}, []string{"vault:"},
+			[]string{"cat vault:", "sync <local>"}, 0, ""},
+		{"nothing to decrypt", modeSync, vault(""), nil, nil, nil, []string{"cat vault:", "sync <local>"}, 0, ""},
+		{"folder not created yet", modeCopy, nil, vault("new"),
+			map[string]catRun{"vault:": {stderr: []string{`{"level":"notice","msg":"Failed to cat: directory not found"}`}, exit: 3}}, nil,
+			[]string{"cat vault:", "copy vault:new"}, 0, ""},
+		{"wrong password, root source", modeSync, vault(""), nil, map[string]catRun{"vault:": wrong}, []string{"vault:"},
+			[]string{"cat vault:"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "source: the encrypted remote cannot decrypt the files stored in its folder, so its password is wrong"},
+		{"wrong password, folder source", modeMove, vault("photos/2024"), nil, map[string]catRun{"vault:": wrong}, []string{"vault:"},
+			[]string{"cat vault:"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "bad password?"},
+		{"wrong password, destination", modeSync, nil, vault(""), map[string]catRun{"vault:": wrong}, []string{"vault:"},
+			[]string{"cat vault:"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "destination: the encrypted remote cannot decrypt"},
+		{"undecryptable names", modeCopy, vault("photos"), nil, map[string]catRun{"vault:": {stderr: []string{undecryptableEnd}, exit: 1}}, nil,
+			[]string{"cat vault:"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "undecryptable name errors"},
+		{"one remote on both sides, checked once", modeSync, vault(""), vault("b"),
+			map[string]catRun{"vault:": {stdout: "x"}}, []string{"vault:"},
+			[]string{"cat vault:", "sync vault:b"}, 0, ""},
+		{"check fails", modeSync, vault(""), nil,
+			map[string]catRun{"vault:": {stderr: []string{`{"level":"error","msg":"error listing: connection reset by peer","object":""}`}, exit: 5}}, nil,
+			[]string{"cat vault:"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_TEMPORARY, "source: cannot check the encrypted remote's password: rclone cat"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sup := &cryptSupervisor{cats: tt.cats}
+			f := newFixture(t, &fakeSupervisor{})
+			f.runner.cfg.Supervisor = sup
+			src, dst := tt.src, tt.dst
+			if src == nil {
+				src = &syncrv1.Location{Path: f.data}
+			}
+			if dst == nil {
+				dst = &syncrv1.Location{Path: f.data}
+			}
+			job := transferJob(src, dst, remotes...)
+			job.Spec.GetRcloneTransfer().Mode = tt.mode
+			_, err := f.runner.Run(t.Context(), job, nil)
+			got := sup.commands()
+			for i, c := range got {
+				if strings.HasPrefix(c, "sync /") || strings.HasPrefix(c, "copy /") || strings.HasPrefix(c, "move /") {
+					got[i] = strings.Fields(c)[0] + " <local>"
+				}
+			}
+			if !slices.Equal(got, tt.commands) {
+				t.Errorf("commands = %q, want %q", got, tt.commands)
+			}
+			if !slices.Equal(sup.stopped, tt.stopped) {
+				t.Errorf("checks stopped by the runner = %q, want %q", sup.stopped, tt.stopped)
+			}
+			switch {
+			case tt.code == 0 && err != nil:
+				t.Errorf("Run() = %v, want the transfer to run", err)
+			case tt.code != 0 && (runner.CodeOf(err) != tt.code || !strings.Contains(err.Error(), tt.message)):
+				t.Errorf("Run() = %v (code %v), want code %v and %q", err, runner.CodeOf(err), tt.code, tt.message)
+			}
+			if err != nil && strings.Contains(err.Error(), secret) {
+				t.Errorf("error leaks the secret: %v", err)
+			}
+			for _, sp := range sup.specs {
+				if sp.Args[0] == "cat" && (!sp.StdoutChunks || !slices.Contains(sp.Args, "--min-size=1B") || !slices.Contains(sp.Args, "--count=1")) {
+					t.Errorf("check args = %q, chunks %v", sp.Args, sp.StdoutChunks)
+				}
+			}
+		})
+	}
+}
+
+// TestRunCryptPasswordCheckCanceled: a job canceled during the check stops
+// there, canceled, without running the transfer.
+func TestRunCryptPasswordCheckCanceled(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	sup := &cryptSupervisor{cats: map[string]catRun{"vault:": {stderr: []string{badBlockLine}}}}
+	f := newFixture(t, &fakeSupervisor{})
+	f.runner.cfg.Supervisor = canceling{sup, cancel}
+	job := transferJob(&syncrv1.Location{Remote: "vault"}, &syncrv1.Location{Path: f.data},
+		sftpRemote("box", "x"), cryptRemote("vault", "box", "upload/vault", "y"))
+	_, err := f.runner.Run(ctx, job, nil)
+	if !runner.Canceled(err) {
+		t.Errorf("Run() = %v, want canceled", err)
+	}
+	if got := sup.commands(); !slices.Equal(got, []string{"cat vault:"}) {
+		t.Errorf("commands = %q", got)
+	}
+}
+
+// canceling cancels the job's context before each run.
+type canceling struct {
+	Supervisor
+	cancel context.CancelFunc
+}
+
+func (c canceling) Run(ctx context.Context, spec proc.Spec) (proc.Result, error) {
+	c.cancel()
+	return c.Supervisor.Run(ctx, spec)
+}
+
+// TestBisyncCryptPasswordCheck: a two-way sync checks the password of each
+// crypt side before it opens the pair's state, and a wrong one fails it
+// (EXECUTION_FAILED, naming the side) before rclone bisync runs.
+func TestBisyncCryptPasswordCheck(t *testing.T) {
+	t.Parallel()
+	const secret = "TOP-SECRET-PASS"
+	f := newBisyncFixture(t, &fakeSupervisor{})
+	sup := &cryptSupervisor{cats: map[string]catRun{"vault:": {stderr: []string{badBlockLine, badBlockLine, badBlockLine}, exit: 1}}}
+	f.runner.r.cfg.Supervisor = sup
+	job := f.job(func(op *syncrv1.RcloneBisync) { op.Path2 = &syncrv1.Location{Remote: "vault", Path: "pair"} })
+	job.Spec.Remotes = []*syncrv1.RemoteDefinition{sftpRemote("box", secret), cryptRemote("vault", "box", "upload/vault", secret)}
+	_, err := f.runner.Run(t.Context(), job, nil)
+	if runner.CodeOf(err) != syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED || !strings.Contains(err.Error(), "path2: the encrypted remote cannot decrypt") {
+		t.Errorf("Run() = %v (code %v)", err, runner.CodeOf(err))
+	}
+	if got := sup.commands(); !slices.Equal(got, []string{"cat vault:"}) {
+		t.Errorf("commands = %q, want only the check", got)
+	}
+	if _, err := os.Stat(f.pairDir()); !os.IsNotExist(err) {
+		t.Errorf("the pair's state was opened: %v", err)
+	}
+
+	// The right password: the first run resyncs (the local side has a
+	// file, so it may).
+	writeTestFile(t, filepath.Join(f.data, "a", "f1.txt"), "x")
+	sup.cats = map[string]catRun{"vault:": {stdout: "x"}}
+	if _, err := f.runner.Run(t.Context(), job, nil); err != nil {
+		t.Errorf("Run() with the right password = %v", err)
+	}
+	if got := sup.commands(); len(got) < 3 || got[1] != "cat vault:" || !strings.HasPrefix(got[2], "bisync ") {
+		t.Errorf("commands = %q, want the check, then rclone bisync", got)
+	}
+}
+
+// TestProbeListCryptPasswordCheck: listing a folder of a crypt remote (the
+// file browser, and "Test remote", which lists its root) checks the
+// password first: a wrong one fails the probe in every name mode instead
+// of showing garbled names or an empty folder.
+func TestProbeListCryptPasswordCheck(t *testing.T) {
+	t.Parallel()
+	remotes := []*syncrv1.RemoteDefinition{sftpRemote("box", "x"), cryptRemote("vault", "box", "upload/vault", "y")}
+	for _, tt := range []struct {
+		name     string
+		loc      *syncrv1.Location
+		cat      catRun
+		commands []string
+		code     syncrv1.JobErrorCode
+	}{
+		{"right password", &syncrv1.Location{Remote: "vault", Path: "photos"}, catRun{stdout: "x"}, []string{"cat vault:", "lsjson vault:photos"}, 0},
+		{"wrong password, root", &syncrv1.Location{Remote: "vault"}, catRun{stderr: []string{badBlockLine}, exit: 1}, []string{"cat vault:"},
+			syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED},
+		{"wrong password, folder", &syncrv1.Location{Remote: "vault", Path: "photos"}, catRun{stderr: []string{undecryptableEnd}, exit: 1}, []string{"cat vault:"},
+			syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED},
+		{"not a crypt remote", &syncrv1.Location{Remote: "box", Path: "upload"}, catRun{}, []string{"lsjson box:upload"}, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sup := &cryptSupervisor{cats: map[string]catRun{"vault:": tt.cat}}
+			f := newFixture(t, &fakeSupervisor{})
+			f.runner.cfg.Supervisor = sup
+			p := &Prober{r: f.runner}
+			_, err := p.List(t.Context(), "0195f0a4-3b7c-7d1e-9f00-0000000000f1", remotes, &syncrv1.ProbeListRemote{Location: tt.loc})
+			if got := sup.commands(); !slices.Equal(got, tt.commands) {
+				t.Errorf("commands = %q, want %q", got, tt.commands)
+			}
+			switch {
+			case tt.code == 0 && err != nil:
+				t.Errorf("List() = %v", err)
+			case tt.code != 0 && (runner.CodeOf(err) != tt.code || !strings.HasPrefix(err.Error(), "the encrypted remote cannot decrypt")):
+				t.Errorf("List() = %v (code %v), want code %v", err, runner.CodeOf(err), tt.code)
 			}
 		})
 	}

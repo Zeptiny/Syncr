@@ -161,6 +161,7 @@ func TestCryptRejects(t *testing.T) {
 		{"strict_names off", []*syncrv1.RemoteDefinition{mem("aa"), crypt("cr", withOptions("strict_names", "false"))}, `option "strict_names" is not allowed; the worker always sets it`},
 		{"STRICT-NAMES off", []*syncrv1.RemoteDefinition{mem("aa"), crypt("cr", withOptions("STRICT-NAMES", "false"))}, `option "STRICT-NAMES" is not allowed`},
 		{"pass_bad_blocks", []*syncrv1.RemoteDefinition{mem("aa"), crypt("cr", withOptions("pass_bad_blocks", "true"))}, `option "pass_bad_blocks" is not allowed`},
+		{"no_data_encryption", []*syncrv1.RemoteDefinition{mem("aa"), crypt("cr", withOptions("no_data_encryption", "true"))}, `option "no_data_encryption" is not allowed`},
 		{"password as an option", []*syncrv1.RemoteDefinition{mem("aa"), crypt("cr", withOptions("password", secret))}, `option "password" must be a secret`},
 		{"password2 as an option", []*syncrv1.RemoteDefinition{mem("aa"), crypt("cr", withOptions("Password2", secret))}, `option "Password2" must be a secret`},
 		{"password not obscured", []*syncrv1.RemoteDefinition{mem("aa"), crypt("cr", withObscure())}, `secret "password" must be listed in obscure_keys`},

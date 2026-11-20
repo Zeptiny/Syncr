@@ -15,6 +15,7 @@ import (
 	"connectrpc.com/connect"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/gen/go/syncr/v1/syncrv1connect"
 	"github.com/Zeptiny/Syncr/internal/link"
 )
 
@@ -58,10 +59,12 @@ func cryptRemote(name, on, folder, password string) *syncrv1.RemoteInput {
 // API. MinIO holds only encrypted names and no plaintext (read back raw
 // with a copy from the S3 remote), the files come back byte for byte, and
 // RunJob refuses checksum comparison with the encrypted side. A second
-// encrypted remote over the same folder with a mistyped password fails
-// (NOT_FOUND for a sub-folder, which on S3 would otherwise list as empty)
-// and deletes nothing from the destination of a sync; so does a folder that
-// does not exist. No password appears in a response or a log.
+// encrypted remote over the same folder with a mistyped password, with
+// standard or obfuscated names, fails its jobs (the worker reads one of its
+// files first, which does not decrypt; on S3 a folder would otherwise list
+// as empty) and its "Test remote", and a sync from it deletes nothing from
+// its destination, whatever the folder; a folder that does not exist is
+// NOT_FOUND. No password appears in a response or a log.
 func TestSystemEncryptedRemote(t *testing.T) {
 	t.Parallel()
 	rclone, restic := requirements(t)
@@ -170,24 +173,34 @@ func TestSystemEncryptedRemote(t *testing.T) {
 	}
 
 	// 5. A sync from a folder that cannot be read deletes nothing: a
-	// mistyped password on a second remote over the same folder, or a
-	// folder that does not exist.
+	// mistyped password on a second remote over the same folder, with
+	// standard names or obfuscated ones (whose root lists garbled names,
+	// and on S3 every garbled folder as empty), or a folder that does not
+	// exist.
 	typo := c.createRemote(cryptRemote("Vault (typo)", minio, "vault", cryptTypo))
+	obfuscated := cryptRemote("Obfuscated", minio, "obfuscated", cryptPassword)
+	obfuscated.Options = map[string]string{"filename_encryption": "obfuscate"}
+	obf := c.createRemote(obfuscated)
+	j, _ = c.watch(c.runJob(w.id, copyDef(local(src), onRemote(obf, "docs"), 0)))
+	wantStatus(t, j, syncrv1.JobStatus_JOB_STATUS_SUCCEEDED)
+	obfuscated.Name, obfuscated.Secrets = "Obfuscated (typo)", map[string]string{"password": cryptTypo, "password2": cryptSalt}
+	obfTypo := c.createRemote(obfuscated)
 	kept := filepath.Join(w.root, "kept")
 	write(t, filepath.Join(kept, "keep.txt"), "must survive")
+	write(t, filepath.Join(kept, "docs", "plans", "holiday plan.md"), "must survive too")
 	for _, tt := range []struct {
 		name   string
 		src    *syncrv1.JobLocation
 		code   syncrv1.JobErrorCode
 		marker string
 	}{
-		// On S3 the sub-folder's name encrypts to a prefix that does not
-		// exist, which lists as empty: the worker's check of its parent
-		// folder makes it NOT_FOUND.
-		{"a sub-folder with the wrong password", onRemote(typo, "docs/plans"), syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "password is wrong"},
-		// A top-level folder's parent is the root, whose names do not
-		// decrypt.
+		// The worker reads the first block of one of the remote's files
+		// before the sync, from its root: it does not decrypt.
+		{"the root with the wrong password", onRemote(typo, ""), syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "password is wrong"},
+		{"a sub-folder with the wrong password", onRemote(typo, "docs/plans"), syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "password is wrong"},
 		{"a top-level folder with the wrong password", onRemote(typo, "docs"), syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "undecryptable"},
+		{"the obfuscated root with the wrong password", onRemote(obfTypo, ""), syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "bad password?"},
+		{"an obfuscated folder with the wrong password", onRemote(obfTypo, "docs"), syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "password is wrong"},
 		{"a folder that does not exist", onRemote(vault.GetId(), "docs/missing"), syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "is not in its parent folder"},
 	} {
 		j, _ := c.watch(c.runJob(w.id, syncDef(tt.src, local(kept))))
@@ -198,6 +211,26 @@ func TestSystemEncryptedRemote(t *testing.T) {
 		}
 		if got := read(t, filepath.Join(kept, "keep.txt")); got != "must survive" {
 			t.Errorf("%s: the destination's file = %q", tt.name, got)
+		}
+		if got := read(t, filepath.Join(kept, "docs", "plans", "holiday plan.md")); got != "must survive too" {
+			t.Errorf("%s: the destination's file in a folder = %q", tt.name, got)
+		}
+	}
+
+	// "Test remote" reads one file too: it fails with the wrong password,
+	// in either name mode, and passes with the right one.
+	probes := syncrv1connect.NewProbeServiceClient(c.client(), c.base)
+	for _, tt := range []struct {
+		id string
+		ok bool
+	}{{vault.GetId(), true}, {obf, true}, {typo, false}, {obfTypo, false}} {
+		res, err := probes.TestRemote(ctx, connect.NewRequest(&syncrv1.TestRemoteRequest{RemoteId: tt.id, WorkerId: w.id}))
+		if err != nil {
+			t.Fatalf("TestRemote(%s): %v", tt.id, err)
+		}
+		seen = append(seen, res.Msg.String())
+		if res.Msg.GetOk() != tt.ok || (!tt.ok && !strings.Contains(res.Msg.GetError(), "password is wrong")) {
+			t.Errorf("TestRemote(%s) = %v, want ok %v", tt.id, res.Msg, tt.ok)
 		}
 	}
 

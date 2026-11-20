@@ -966,9 +966,38 @@ func (h *latestHooked) LatestJobSample(ctx context.Context, id domain.JobID) (jo
 // subscription). It is delivered once; later samples still are.
 func TestWatchSampleRecordedWhileSubscribing(t *testing.T) {
 	t.Parallel()
+	t0 := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	got := watchSamples(t, func(r jobs.SampleRepository) jobs.SampleRepository { return r },
+		func(record func(time.Time, int64)) {
+			record(t0, 1)
+			// Published and stored, as more than SampleInterval passed.
+			record(t0.Add(time.Minute), 2)
+		},
+		func(record func(time.Time, int64)) { record(t0.Add(time.Minute+time.Second), 3) })
+	if want := []string{"running", "progress 2", "progress 3", "succeeded"}; !slices.Equal(got, want) {
+		t.Errorf("updates = %v, want %v", got, want)
+	}
+}
+
+// truncating stores sample times with microseconds, as Postgres does
+// (postgres.pgTime), while the broker delivers them with nanoseconds.
+type truncating struct{ jobs.SampleRepository }
+
+func (r truncating) AppendJobSample(ctx context.Context, smp jobs.Sample) error {
+	smp.Time = smp.Time.Truncate(time.Microsecond)
+	return r.SampleRepository.AppendJobSample(ctx, smp)
+}
+
+// watchSamples runs Watch on a running job of a service whose samples go
+// to samples, calls during between Watch's subscription and its read of
+// the latest stored sample, then after once Watch has sent the job and
+// that sample, finishes the job and returns what Watch delivered: job
+// statuses and "progress <bytes>".
+func watchSamples(t *testing.T, wrap func(jobs.SampleRepository) jobs.SampleRepository, during, after func(record func(time.Time, int64))) []string {
+	t.Helper()
 	ctx := context.Background()
 	e := newEnv(t)
-	samples := &latestHooked{SampleRepository: e.store}
+	samples := &latestHooked{SampleRepository: wrap(e.store)}
 	svc, err := jobs.New(jobs.Deps{
 		Jobs: e.store, Samples: samples, Clock: e.clock, IDs: &idgen.Sequential{},
 		Broker: e.rec, Notifier: e.rec, Waker: e.rec,
@@ -978,18 +1007,13 @@ func TestWatchSampleRecordedWhileSubscribing(t *testing.T) {
 	}
 	e.svc = svc
 	j := e.at(t, domain.JobRunning)
-	t0 := e.clock.Now()
 	record := func(at time.Time, bytes int64) {
 		t.Helper()
 		if ok, err := svc.RecordProgress(ctx, e.worker, j.ID, epoch, jobs.Sample{Time: at, Stats: jobs.Stats{Bytes: bytes}}); !ok || err != nil {
 			t.Errorf("RecordProgress(%d) = (%v, %v)", bytes, ok, err)
 		}
 	}
-	record(t0, 1)
-	// Recorded (published and stored, as more than SampleInterval passed)
-	// between Watch's subscription and its read of the latest sample.
-	samples.before = func() { record(t0.Add(time.Minute), 2) }
-
+	samples.before = func() { during(record) }
 	updates := make(chan jobs.Update, 32)
 	done := make(chan error, 1)
 	go func() {
@@ -1011,12 +1035,14 @@ func TestWatchSampleRecordedWhileSubscribing(t *testing.T) {
 			t.Fatalf("no update after %v", got)
 		}
 	}
-	// The broker coalesces consecutive progress updates, so a job update
-	// (stale, filtered) keeps the duplicate in the subscription apart
-	// from the next sample.
+	// The broker coalesces consecutive progress updates in a queue, so a
+	// job update (stale, filtered) keeps each sample apart.
 	stale := j
 	e.rec.Publish(jobs.Update{JobID: j.ID, Job: &stale})
-	record(t0.Add(time.Minute+time.Second), 3)
+	after(func(at time.Time, bytes int64) {
+		record(at, bytes)
+		e.rec.Publish(jobs.Update{JobID: j.ID, Job: &stale})
+	})
 	if _, _, err := svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobSucceeded}); err != nil {
 		t.Fatal(err)
 	}
@@ -1027,7 +1053,45 @@ func TestWatchSampleRecordedWhileSubscribing(t *testing.T) {
 	for u := range updates {
 		add(u)
 	}
-	if want := []string{"running", "progress 2", "progress 3", "succeeded"}; !slices.Equal(got, want) {
+	return got
+}
+
+// TestWatchSampleStoredWithMicroseconds: the store keeps microseconds (as
+// Postgres does), the subscription the worker's nanoseconds. The copy of
+// the sample recorded while Watch subscribed is still found, and the
+// samples after it are delivered.
+func TestWatchSampleStoredWithMicroseconds(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 11, 4, 12, 0, 0, 123_456_789, time.UTC)
+	got := watchSamples(t, func(r jobs.SampleRepository) jobs.SampleRepository { return truncating{r} },
+		func(record func(time.Time, int64)) {
+			record(t0, 1)
+			record(t0.Add(time.Minute), 2) // published, then stored without its nanoseconds
+		},
+		func(record func(time.Time, int64)) {
+			record(t0.Add(time.Minute+time.Second), 3)
+			record(t0.Add(time.Minute+2*time.Second+1), 4)
+		})
+	if want := []string{"running", "progress 2", "progress 3", "progress 4", "succeeded"}; !slices.Equal(got, want) {
+		t.Errorf("updates = %v, want %v", got, want)
+	}
+}
+
+// TestWatchSamplesOfAnEarlierClock: sample times are the worker's clock,
+// which may be behind the stored sample's (a job requeued to a worker
+// whose clock is behind, or a clock set back). Those samples are new all
+// the same: every one is delivered.
+func TestWatchSamplesOfAnEarlierClock(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	got := watchSamples(t, func(r jobs.SampleRepository) jobs.SampleRepository { return truncating{r} },
+		func(record func(time.Time, int64)) { record(t0.Add(time.Hour), 1) },
+		func(record func(time.Time, int64)) {
+			record(t0, 2)
+			record(t0.Add(time.Second), 3)
+			record(t0.Add(2*time.Second), 4)
+		})
+	if want := []string{"running", "progress 1", "progress 2", "progress 3", "progress 4", "succeeded"}; !slices.Equal(got, want) {
 		t.Errorf("updates = %v, want %v", got, want)
 	}
 }

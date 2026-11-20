@@ -64,4 +64,32 @@ describe("RemotesPage", () => {
     );
     expect(api.of("DeleteRemote")).toHaveLength(0);
   });
+
+  it("warns that deleting an encrypted remote erases the only copy of its password", async () => {
+    const user = userEvent.setup();
+    const api = m5Api(Date.now());
+    renderApp(`/remotes/${fx.ids.vault}`, api.transport);
+
+    await user.click(await screen.findByRole("button", { name: "Delete remote" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(
+      "Its password and salt (second password) are erased too, and Syncr keeps no other copy. The files it stores in B2 offsite / vault are not deleted, but without them nobody can read them.",
+    );
+    // The usual note stays; the delete is allowed.
+    expect(dialog).toHaveTextContent(/Its saved credentials are erased/);
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: "Delete remote" })).toBeEnabled(),
+    );
+  });
+
+  it("adds no such warning for a remote without fixed secrets", async () => {
+    const user = userEvent.setup();
+    const api = m5Api(Date.now());
+    renderApp(`/remotes/${fx.ids.nextcloud}`, api.transport);
+
+    await user.click(await screen.findByRole("button", { name: "Delete remote" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(/Its saved credentials are erased/);
+    expect(dialog).not.toHaveTextContent(/Syncr keeps no other copy/);
+  });
 });

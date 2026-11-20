@@ -106,8 +106,11 @@ opens the same form with the folder filled in.
 
 An [encrypted remote](encrypted-remotes.md) works like any other: the
 worker decrypts its files as it mirrors or mounts them, so the snapshot
-holds the files as they are (encrypted by restic). A folder of it that is
-missing (or a wrong password) fails `not_found`, also on S3 and B2.
+holds the files as they are (encrypted by restic). Before anything else,
+the worker checks the remote's password by reading one of its files: a
+wrong one fails `execution_failed`, so the mirror is untouched and no
+snapshot is made. A folder of it that is missing fails `not_found`, also on
+S3 and B2.
 
 restic reads only local folders, so the worker brings the remote's folder
 to it first, in one of two ways (**How the worker reads it**):

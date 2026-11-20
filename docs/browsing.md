@@ -250,11 +250,12 @@ remote (`rclone lsjson -R` through a worker) and in a snapshot
   With **Keep existing**, files already at the destination stay in the
   source.
 - A copy between two workers' folders needs a remote in between.
-- A folder inside an [encrypted remote](encrypted-remotes.md#a-wrong-password)
-  on S3 or B2, listed with a wrong password (a second encrypted remote over
-  the same folder with a mistyped one), shows as empty, and its size as
-  zero: a bucket lists a folder that does not exist as empty. Jobs check
-  for this and fail instead. The remote's root fails to list.
+- An [encrypted remote](encrypted-remotes.md#a-wrong-password) listed with
+  a wrong password (a second encrypted remote over the same folder with a
+  mistyped one) fails to list, in every folder: the worker reads one of
+  its files first. A remote that holds no file with data cannot be checked.
+  Its folder sizes are not checked: on S3 or B2 a folder may count as
+  empty.
 - Scans have no progress and cannot run longer than `probe.scan_timeout`;
   what does not fit is reported as "at least".
 - Copy and move send at most 999 selected items in one job.

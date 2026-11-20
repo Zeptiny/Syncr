@@ -41,10 +41,7 @@ func (s *Seed) check(ctx context.Context, owner domain.UserID, def *syncrv1.JobD
 	}
 	infos := make(map[domain.RemoteID]jobkind.RemoteInfo, len(got))
 	for id, info := range got {
-		infos[id] = jobkind.RemoteInfo{
-			Wraps:      jobkind.Wrap{RemoteID: info.Wrapped.RemoteID, Path: info.Wrapped.Path},
-			NoChecksum: info.Capabilities.NoChecksum,
-		}
+		infos[id] = jobkind.NewRemoteInfo(info.Wrapped.RemoteID, info.Wrapped.Path, info.Capabilities)
 	}
 	return s.d.Kinds.CheckWith(def, infos)
 }

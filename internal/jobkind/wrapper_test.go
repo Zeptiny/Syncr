@@ -402,3 +402,17 @@ func TestCheckWithOtherKinds(t *testing.T) {
 		t.Errorf("CheckWith(no operation) = %v", err)
 	}
 }
+
+// TestNewRemoteInfo: the one mapping from a remote's wrapped location and
+// capabilities to what checks need.
+func TestNewRemoteInfo(t *testing.T) {
+	t.Parallel()
+	id := domain.NewRemoteID()
+	got := jobkind.NewRemoteInfo(id, "vault", backend.Capabilities{Wrapper: true, NoChecksum: true})
+	if want := (jobkind.RemoteInfo{Wraps: jobkind.Wrap{RemoteID: id, Path: "vault"}, NoChecksum: true}); got != want {
+		t.Errorf("NewRemoteInfo = %+v, want %+v", got, want)
+	}
+	if got := jobkind.NewRemoteInfo(domain.RemoteID{}, "", backend.Capabilities{}); !got.Wraps.IsZero() || got.NoChecksum {
+		t.Errorf("NewRemoteInfo of a plain remote = %+v", got)
+	}
+}

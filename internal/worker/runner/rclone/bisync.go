@@ -133,6 +133,13 @@ func (b *BisyncRunner) Run(ctx context.Context, job runner.Job, emit runner.Emit
 			return res, err
 		}
 	}
+	// A side on an encrypted remote whose password is wrong would list
+	// garbled names, or none, and receive files it cannot read back.
+	sc := scrub.New(env.Secrets())
+	if err := b.r.checkCryptPasswords(ctx, dir, env, sc, []string{"path1", "path2"},
+		[]*syncrv1.Location{spec.GetPath1(), spec.GetPath2()}); err != nil {
+		return res, err
+	}
 	// rclone writes into both sides.
 	claim := b.r.cfg.Claims.Take(BisyncKind)
 	defer claim.Release()
@@ -175,7 +182,6 @@ func (b *BisyncRunner) Run(ctx context.Context, job runner.Job, emit runner.Emit
 		return res, runner.Fail(syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, err)
 	}
 
-	sc := scrub.New(env.Secrets())
 	t := newTracker(emit, sc)
 	log := &bisyncLog{sc: sc, stateDir: pair.Dir()}
 	t.observe = log.line

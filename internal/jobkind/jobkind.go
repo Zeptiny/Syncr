@@ -155,6 +155,15 @@ type RemoteInfo struct {
 	NoChecksum bool
 }
 
+// NewRemoteInfo returns the RemoteInfo of a remote whose type has caps and
+// that stores its data in the folder path of the remote wrapped (zero for
+// a remote that is not a wrapper). Callers that know remotes in their own
+// terms (remotes.Info) convert them here, so the mapping lives in one
+// place.
+func NewRemoteInfo(wrapped domain.RemoteID, path string, caps backend.Capabilities) RemoteInfo {
+	return RemoteInfo{Wraps: Wrap{RemoteID: wrapped, Path: path}, NoChecksum: caps.NoChecksum}
+}
+
 // Member is one member of a union remote.
 type Member struct {
 	RemoteID domain.RemoteID

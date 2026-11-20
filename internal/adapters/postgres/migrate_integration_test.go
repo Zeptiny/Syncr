@@ -651,8 +651,9 @@ func TestMigrateEnrollmentTokenIDs(t *testing.T) {
 // TestMigrateWrappedRemotes checks migration 00012: remotes get a wrapped
 // remote and path (unset for the remotes already there), a remote cannot
 // wrap itself or have a path without a remote, ListRemotesUsing finds both
-// the unions and the wrappers that use a remote, and down removes the
-// columns, the constraints and the index.
+// the unions and the wrappers that use a remote, down is refused while a
+// live wrapper exists (it would lose where its data is stored), and once
+// none is left down removes the columns, the constraints and the index.
 func TestMigrateWrappedRemotes(t *testing.T) {
 	s := openStore(t, createDB(t, true))
 	ctx := t.Context()
@@ -734,6 +735,17 @@ func TestMigrateWrappedRemotes(t *testing.T) {
 	if got := names(unused); len(got) != 0 {
 		t.Errorf("ListRemotesUsing(unused) = %v, want none", got)
 	}
+	// Down is refused while Vault is live, and changes nothing.
+	if _, err := p.DownTo(ctx, 11); err == nil || !strings.Contains(err.Error(), "cannot undo migration 00012: 1 encrypted remote(s) store their data in other remotes") {
+		t.Errorf("down to 11 with a live encrypted remote = %v, want it refused", err)
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) || !columnExists(t, s, "remotes", "wrapped_remote_id") {
+		t.Errorf("after the refused down: applied versions = %v, wrapped_remote_id exists: %v", got, columnExists(t, s, "remotes", "wrapped_remote_id"))
+	}
+	if got := names(store); !slices.Equal(got, []string{"All", "Vault"}) {
+		t.Errorf("ListRemotesUsing(store) after the refused down = %v", got)
+	}
+
 	if _, err := s.pool.Exec(ctx, `UPDATE remotes SET deleted_at = now() WHERE id IN ($1, $2)`, vault, union); err != nil {
 		t.Fatal(err)
 	}

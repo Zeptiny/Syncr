@@ -471,16 +471,17 @@ func (s *Service) Cancel(ctx context.Context, actor domain.Actor, id domain.JobI
 // with every update until the job reaches a terminal status (at once if it
 // already has), ctx ends, or fn returns an error, which Watch returns. Job
 // updates are delivered in version order without duplicates; Progress
-// updates only while the job runs, each newer (by sample time) than the
-// last one delivered.
+// updates only while the job runs, the latest stored sample first, and
+// that sample only once.
 func (s *Service) Watch(ctx context.Context, actor domain.Actor, id domain.JobID, fn func(Update) error) error {
 	if id.IsZero() {
 		return fmt.Errorf("watch job: %w", domain.ErrInvalidID)
 	}
 	// Subscribe before reading, so no change between the read and the
 	// subscription is lost. Duplicates are filtered: job updates by
-	// version, progress by sample time (a sample recorded between the
-	// subscription and the read of the latest stored one arrives twice).
+	// version, and the stored sample sent first (sentSample), which also
+	// arrives from the subscription when it was recorded between the
+	// subscription and the read.
 	sub := s.broker.Subscribe(id)
 	defer sub.Close()
 	j, err := s.Get(ctx, actor, id)
@@ -493,8 +494,7 @@ func (s *Service) Watch(ctx context.Context, actor domain.Actor, id domain.JobID
 	if j.Status.Terminal() {
 		return nil
 	}
-	// sent is the time of the last sample sent (zero before the first).
-	var sent time.Time
+	var dup sentSample
 	if j.Status == domain.JobRunning {
 		if smp, ok, err := s.LatestSample(ctx, id); err != nil {
 			return err
@@ -502,7 +502,7 @@ func (s *Service) Watch(ctx context.Context, actor domain.Actor, id domain.JobID
 			if err := fn(Update{JobID: id, Progress: &smp}); err != nil {
 				return err
 			}
-			sent = smp.Time
+			dup = newSentSample(smp.Time)
 		}
 	}
 	version, status := j.Version, j.Status
@@ -518,10 +518,9 @@ func (s *Service) Watch(ctx context.Context, actor domain.Actor, id domain.JobID
 			}
 			version, status = u.Job.Version, u.Job.Status
 		case u.Progress != nil:
-			if status != domain.JobRunning || !u.Progress.Time.After(sent) {
+			if status != domain.JobRunning || dup.repeats(u.Progress.Time) {
 				continue
 			}
-			sent = u.Progress.Time
 		default:
 			continue
 		}
@@ -532,6 +531,41 @@ func (s *Service) Watch(ctx context.Context, actor domain.Actor, id domain.JobID
 			return nil
 		}
 	}
+}
+
+// sentSample filters, from a Watch subscription, the copy of the stored
+// sample that Watch sent first. Only an equal sample time is a copy, and
+// times are compared at the store's precision: Postgres keeps
+// microseconds, while the broker delivers the worker's time with
+// nanoseconds. Nothing else is dropped: a sample of the worker's clock may
+// be older than the stored one (a requeued job on a worker whose clock is
+// behind, or a clock set back), and it is new all the same. The filter
+// ends with the copy, or with the first newer sample (after which the copy
+// cannot arrive: the broker delivers a job's samples in order).
+type sentSample struct {
+	at     time.Time
+	active bool
+}
+
+func newSentSample(at time.Time) sentSample {
+	return sentSample{at: at.Truncate(time.Microsecond), active: true}
+}
+
+// repeats reports whether a sample of time at is the copy of the sent
+// one.
+func (d *sentSample) repeats(at time.Time) bool {
+	if !d.active {
+		return false
+	}
+	at = at.Truncate(time.Microsecond)
+	switch {
+	case at.Equal(d.at):
+		d.active = false
+		return true
+	case at.After(d.at):
+		d.active = false
+	}
+	return false
 }
 
 // searchText is a job's Job.SearchText.

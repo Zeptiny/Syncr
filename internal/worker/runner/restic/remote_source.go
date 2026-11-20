@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -321,8 +322,9 @@ type remoteRun struct {
 	claim *localfs.Claim
 }
 
-// runRemoteSource runs a backup of a folder of a remote: check (list the
-// folder: NOT_FOUND, SOURCE_EMPTY), read (bring the mirror up to date, or
+// runRemoteSource runs a backup of a folder of a remote: check (a crypt
+// remote's password: EXECUTION_FAILED; list the folder: NOT_FOUND,
+// SOURCE_EMPTY), read (bring the mirror up to date, or
 // mount the folder), back up "." there with restic, clean up (discard the
 // mirror's copy if asked, unmount). See ResticBackupRemoteSource in
 // link.proto for the contract.
@@ -375,7 +377,11 @@ func (rs *remoteRun) run(ctx context.Context) (runner.Result, error) {
 		return res, runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_INTERNAL, "write the filters file: %w", err)
 	}
 
-	// 1. Check, before anything changes on the worker.
+	// 1. Check, before anything changes on the worker: the password of an
+	// encrypted remote, then the folder.
+	if err := rs.checkCryptPassword(ctx); err != nil {
+		return res, err
+	}
 	if err := rs.precheck(ctx); err != nil {
 		return res, err
 	}
@@ -440,14 +446,14 @@ func (rs *remoteRun) phase(name string) runner.EmitFunc {
 
 // rclone runs the pinned rclone with args and the job's remotes.
 func (rs *remoteRun) rclone(ctx context.Context, args []string, stdout, stderr proc.LineFunc) (proc.Result, error) {
-	return rs.e.cfg.Supervisor.Run(ctx, proc.Spec{
-		Path:   rs.e.cfg.RclonePath,
-		Args:   args,
-		Dir:    rs.e.cfg.ScratchRoot,
-		Env:    maps.Clone(rs.env),
-		Stdout: stdout,
-		Stderr: stderr,
-	})
+	return rs.rcloneSpec(ctx, proc.Spec{Args: args, Stdout: stdout, Stderr: stderr})
+}
+
+// rcloneSpec runs the pinned rclone as spec says, with the job's remotes
+// in its environment.
+func (rs *remoteRun) rcloneSpec(ctx context.Context, spec proc.Spec) (proc.Result, error) {
+	spec.Path, spec.Dir, spec.Env = rs.e.cfg.RclonePath, rs.e.cfg.ScratchRoot, maps.Clone(rs.env)
+	return rs.e.cfg.Supervisor.Run(ctx, spec)
 }
 
 // rcloneOutcome maps the result of an rclone run to the runner's error,
@@ -567,6 +573,53 @@ func (rs *remoteRun) listingTracker() *rclonetool.Tracker {
 	return t
 }
 
+// isCryptSource reports whether the folder to back up is on a crypt
+// remote.
+func (rs *remoteRun) isCryptSource() bool {
+	alias := rs.plan.src.GetRemote()
+	i := slices.IndexFunc(rs.job.Spec.GetRemotes(), func(r *syncrv1.RemoteDefinition) bool { return r.GetAlias() == alias })
+	return i >= 0 && rs.job.Spec.GetRemotes()[i].GetBackendType() == "crypt"
+}
+
+// checkCryptPassword checks the password of a crypt remote to back up
+// before anything else reads it (rclonetool.CryptCheck: the first block of
+// one of its files must decrypt). A wrong one fails the job with
+// EXECUTION_FAILED, whatever the folder, the method, the filters or
+// allow_empty: with obfuscated names it would list garbled names, and on a
+// bucket (S3, B2) every folder of them as empty, so the mirror would be
+// emptied and a snapshot made without the files. A remote that holds no
+// file with data has nothing to check. Other remotes are not checked.
+func (rs *remoteRun) checkCryptPassword(ctx context.Context) error {
+	if !rs.isCryptSource() {
+		return nil
+	}
+	lctx, stop := context.WithCancel(ctx)
+	defer stop()
+	t := rs.listingTracker()
+	check := rclonetool.NewCryptCheck(t, stop)
+	pres, err := rs.rcloneSpec(lctx, proc.Spec{
+		Args:   rclonetool.CryptCheckArgs(rs.plan.src.GetRemote(), "--config="),
+		Stdout: check.Stdout, StdoutChunks: true, Stderr: check.Stderr,
+	})
+	if ctx.Err() != nil {
+		if runner.Canceled(err) {
+			return err
+		}
+		return fmt.Errorf("restic: not started: %w", context.Cause(ctx))
+	}
+	switch check.Verdict(pres.ExitCode, err) {
+	case rclonetool.CryptReadable, rclonetool.CryptNothing:
+		return nil
+	case rclonetool.CryptUnreadable:
+		return rclonetool.CryptUnreadableError("the remote", t.Diagnostics())
+	case rclonetool.CryptFailed:
+	}
+	if err := rs.rcloneOutcome("cat", err, pres, t.Diagnostics()); err != nil {
+		return runner.Errorf(runner.CodeOf(err), "cannot check the encrypted remote's password: %w", err)
+	}
+	return nil
+}
+
 // checkCryptFolder fails (NOT_FOUND) when the folder to back up is below
 // the root of a crypt remote and its parent folder does not list it. On a
 // bucket-based remote (S3, B2) a prefix without objects lists as an empty
@@ -574,13 +627,14 @@ func (rs *remoteRun) listingTracker() *rclonetool.Tracker {
 // such a prefix: the folder would look empty instead of failing (with
 // allow_empty, the mirror would be emptied). The parent's listing fails on
 // names it cannot decrypt (the worker sets strict_names), or lacks the
-// folder. The root of a crypt remote, and other remotes, are not checked.
+// folder. It runs after the password check (checkCryptPassword), and
+// still covers a remote that holds no file with data. The root of a crypt
+// remote, and other remotes, are not checked.
 func (rs *remoteRun) checkCryptFolder(ctx context.Context) error {
-	alias := rs.plan.src.GetRemote()
-	i := slices.IndexFunc(rs.job.Spec.GetRemotes(), func(r *syncrv1.RemoteDefinition) bool { return r.GetAlias() == alias })
-	if i < 0 || rs.job.Spec.GetRemotes()[i].GetBackendType() != "crypt" {
+	if !rs.isCryptSource() {
 		return nil
 	}
+	alias := rs.plan.src.GetRemote()
 	path := strings.Trim(pathpkg.Clean("/"+rs.plan.src.GetPath()), "/")
 	if path == "" {
 		return nil
@@ -588,17 +642,19 @@ func (rs *remoteRun) checkCryptFolder(ctx context.Context) error {
 	parent, name := pathpkg.Split(path)
 	lctx, stop := context.WithCancel(ctx)
 	defer stop()
-	found := false
+	// The supervisor delivers lines on this goroutine before Run returns;
+	// atomic all the same, so the check never depends on it.
+	var found atomic.Bool
 	stdout := func(l proc.Line) {
-		if !found && strings.TrimSuffix(string(l.Data), "/") == name {
-			found = true
+		if !found.Load() && strings.TrimSuffix(string(l.Data), "/") == name {
+			found.Store(true)
 			stop()
 		}
 	}
 	t := rs.listingTracker()
 	args := []string{"lsf", "--config=", "--use-json-log", "--log-level=NOTICE", "--max-depth=1", "--", alias + ":" + parent}
 	pres, err := rs.rclone(lctx, args, stdout, t.Line)
-	if found && ctx.Err() == nil {
+	if found.Load() && ctx.Err() == nil {
 		return nil
 	}
 	if err := rs.rcloneOutcome("lsf", err, pres, t.Diagnostics()); err != nil {

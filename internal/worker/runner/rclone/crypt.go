@@ -2,15 +2,87 @@ package rclone
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	pathpkg "path"
 	"strings"
+	"sync/atomic"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
 	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
+	"github.com/Zeptiny/Syncr/internal/worker/runner/rclonetool"
 	"github.com/Zeptiny/Syncr/internal/worker/runner/scrub"
 )
+
+// checkCryptPasswords checks the password of each crypt remote among the
+// locations (rclonetool.CryptCheckArgs), once per remote, before a job
+// reads or writes them: a wrong password fails the job (EXECUTION_FAILED)
+// before rclone touches anything. roles names each location in messages
+// ("source", "path2"...).
+func (r *Runner) checkCryptPasswords(ctx context.Context, dir string, env *rcloneenv.Env, sc *scrub.Scrubber, roles []string, locs []*syncrv1.Location) error {
+	checked := map[string]bool{}
+	for i, loc := range locs {
+		alias := loc.GetRemote()
+		if !isCrypt(env, alias) || checked[alias] {
+			continue
+		}
+		checked[alias] = true
+		if err := r.checkCryptPassword(ctx, dir, env, sc, roles[i], alias); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isCrypt reports whether alias is a crypt remote of env.
+func isCrypt(env *rcloneenv.Env, alias string) bool {
+	backend, _ := env.BackendType(alias)
+	return backend == "crypt"
+}
+
+// checkCryptPassword reads the first block of a file of the crypt remote
+// alias (rclonetool.CryptCheck): it fails (EXECUTION_FAILED) when nothing
+// decrypts, so the password is wrong, and passes when a block decrypts or
+// the remote holds no file with data. A check that cannot run is
+// classified as rclone's other failures are. role names the remote in
+// messages ("source"; empty for a probe, which names nothing).
+//
+// Every file-name mode needs it: with obfuscated names a wrong password
+// lists garbled names without an error, and on a bucket (S3, B2) a garbled
+// folder lists as empty, so a sync from the remote's root would empty its
+// destination, and a sync into it would delete the files at its root.
+func (r *Runner) checkCryptPassword(ctx context.Context, dir string, env *rcloneenv.Env, sc *scrub.Scrubber, role, alias string) error {
+	cctx, stop := context.WithCancel(ctx)
+	defer stop()
+	t := newTracker(nil, sc)
+	check := rclonetool.NewCryptCheck(t.core, stop)
+	pres, err := r.cfg.Supervisor.Run(cctx, proc.Spec{
+		Path: r.cfg.Binary, Args: rclonetool.CryptCheckArgs(alias), Dir: dir, Env: env.Vars(),
+		Stdout: check.Stdout, StdoutChunks: true, Stderr: check.Stderr,
+	})
+	if ctx.Err() != nil {
+		if _, ok := errors.AsType[*proc.CanceledError](err); ok {
+			return err
+		}
+		return fmt.Errorf("rclone: not started: %w", context.Cause(ctx))
+	}
+	switch check.Verdict(pres.ExitCode, err) {
+	case rclonetool.CryptReadable, rclonetool.CryptNothing:
+		return nil
+	case rclonetool.CryptUnreadable:
+		return rclonetool.CryptUnreadableError(role, t.diagnostics())
+	case rclonetool.CryptFailed:
+	}
+	if oerr := r.outcome(err, pres, t, "cat (a check of an encrypted remote's password)"); oerr != nil {
+		if role != "" {
+			role += ": "
+		}
+		return runner.Errorf(runner.CodeOf(oerr), "%scannot check the encrypted remote's password: %w", role, oerr)
+	}
+	return nil
+}
 
 // checkCryptSource refuses (NOT_FOUND) a transfer source on a crypt remote,
 // below the crypt remote's root, that its parent folder does not list. It
@@ -26,13 +98,16 @@ import (
 // names, on undecryptable names) or lacks the folder (with obfuscated
 // names, or a folder that really does not exist).
 //
-// A source at the crypt remote's root needs no check: its own listing
-// fails with the wrong password unless names are not encrypted, and then
-// every file fails to decrypt. Other remotes are not checked: a missing
-// prefix of a bucket is an empty folder, as rclone says.
+// It runs after the password check (checkCryptPassword), which finds a
+// wrong password whenever the remote holds a file with data. This check
+// still makes a folder that is missing NOT_FOUND instead of an empty
+// source, also when the password is wrong and the remote holds no such
+// file. The crypt remote's root has no parent to look in; other remotes
+// are not checked: a missing prefix of a bucket is an empty folder, as
+// rclone says.
 func (r *Runner) checkCryptSource(ctx context.Context, dir string, env *rcloneenv.Env, sc *scrub.Scrubber, loc *syncrv1.Location) error {
 	alias := loc.GetRemote()
-	if backend, _ := env.BackendType(alias); backend != "crypt" {
+	if !isCrypt(env, alias) {
 		return nil
 	}
 	path := strings.TrimPrefix(pathpkg.Clean("/"+loc.GetPath()), "/")
@@ -43,10 +118,12 @@ func (r *Runner) checkCryptSource(ctx context.Context, dir string, env *rcloneen
 
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
-	found := false
+	// The supervisor delivers lines on this goroutine before Run returns;
+	// atomic all the same, so the check never depends on it.
+	var found atomic.Bool
 	onLine := func(l proc.Line) {
-		if e, ok := parseLsjsonLine(l.Data, parent); ok && !found && e.GetName() == name {
-			found = true
+		if e, ok := parseLsjsonLine(l.Data, parent); ok && !found.Load() && e.GetName() == name {
+			found.Store(true)
 			stop() // nothing else is needed from the listing
 		}
 	}
@@ -56,7 +133,7 @@ func (r *Runner) checkCryptSource(ctx context.Context, dir string, env *rcloneen
 		Args: []string{"lsjson", "--max-depth=1", "--no-mimetype", "--no-modtime", "--", rcloneenv.RemotePath(alias, parent)},
 		Dir:  dir, Env: env.Vars(), Stdout: onLine, Stderr: probeStderr(t),
 	})
-	if found {
+	if found.Load() {
 		return nil
 	}
 	if err != nil {
