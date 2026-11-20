@@ -14,9 +14,11 @@ snapshots, and get notified when something fails.
 ## Features
 
 - **rclone transfers.** Copy, sync or move between S3 and compatibles,
-  SFTP, Backblaze B2, WebDAV, a worker's local folders, unions of them and
+  Azure Blob Storage, Google Cloud Storage, Backblaze B2, SFTP, SMB
+  shares, FTP/FTPS, WebDAV, a worker's local folders, unions of them and
   [encrypted remotes](docs/encrypted-remotes.md) (rclone crypt, encrypted
-  on the worker), with live progress, speed and time left.
+  on the worker), with live progress, speed and time left. Every type and
+  what to enter: [remotes](docs/remotes.md).
 - **Two-way sync.** Keep one folder in step on several machines through a
   bucket or a server with rclone bisync: changes and deletions spread both
   ways, conflicts keep both versions, and safety checks stop a run that
@@ -146,6 +148,7 @@ back up the database and `SYNCR_SECRETS_KEY`: see
 - [Configuration](docs/configuration.md): every controller setting
 - Workers: [Linux](docs/setup-linux.md), [Windows](docs/setup-windows.md),
   [configuration](docs/worker-config.md), [upgrading](docs/upgrade.md)
+- [Remotes](docs/remotes.md): every type and what to enter
 - [Browsing files](docs/browsing.md), [two-way sync](docs/bisync.md),
   [encrypted remotes](docs/encrypted-remotes.md),
   [restic backups](docs/restic.md), [hooks](docs/hooks.md) and

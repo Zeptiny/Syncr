@@ -9,7 +9,8 @@
 //   SYNCR_UI_USER           sign-in user (default admin)
 //   SYNCR_UI_PASSWORD       sign-in password (default syncr-demo-admin)
 //   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3, hooks, bisync, browser,
-//                           remote-backup, crypt or readme: which shot list
+//                           remote-backup, crypt, remote-types or readme:
+//                           which shot list
 //   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/<set>)
 //   SYNCR_SCREENSHOT_ONLY   comma-separated shot names to take (default all)
 //   SYNCR_SCREENSHOT_MOBILE 1 to also take 390px-wide shots
@@ -42,6 +43,7 @@ const set = [
   "browser",
   "remote-backup",
   "crypt",
+  "remote-types",
   "readme",
 ].includes(process.env.SYNCR_SCREENSHOT_SET)
   ? process.env.SYNCR_SCREENSHOT_SET
@@ -1510,6 +1512,136 @@ async function cryptSet(browser) {
   }
 }
 
+// The remote types shots. They expect the dev seed
+// (internal/devseed/remote_types_data.go): the SMB remote "NAS share" with
+// a copy job into "B2 offsite", and nas-01 able to run the new types. No
+// credential typed here is real.
+
+// typeForm opens the new-remote form of a type and fills it: fields maps
+// a label to a value, switches lists switch labels to turn on.
+async function typeForm(page, type, { name, fields = {}, switches = [], advanced = false }) {
+  await open(page, `/remotes/new?type=${type}`);
+  await page.getByLabel("Name").first().fill(name);
+  // A label starts with the field's name; optional ones end in "(optional)".
+  const escape = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  for (const [label, value] of Object.entries(fields))
+    await page
+      .getByLabel(new RegExp(`^${escape(label)}`))
+      .first()
+      .fill(value);
+  for (const label of switches) await page.getByRole("switch", { name: label }).click();
+  if (advanced) await page.getByRole("button", { name: /Advanced options/ }).click();
+  // Back to the top, with nothing focused or hovered.
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => {
+    window.document.activeElement?.blur();
+    window.scrollTo({ top: 0 });
+  });
+  await settle(page, 300);
+}
+
+const smbForm = (p) =>
+  typeForm(p, "smb", {
+    name: "Office share",
+    fields: {
+      Host: "fileserver.lan",
+      User: "backup",
+      Password: "demo-password",
+      Share: "backups/office",
+    },
+    advanced: true,
+  });
+
+const ftpForm = (p) =>
+  typeForm(p, "ftp", {
+    name: "Old FTP mirror",
+    fields: { Host: "ftp.example.org", User: "anonymous", "Base path": "/pub/mirror" },
+    switches: ["Explicit FTPS"],
+  });
+
+// A made-up key: the same shape as Google's, with nothing real in it.
+const demoKey = `{
+  "type": "service_account",
+  "project_id": "syncr-demo",
+  "private_key_id": "0000000000000000000000000000000000000000",
+  "private_key": "-----BEGIN PRIVATE KEY-----\\nDEMO-ONLY-NOT-A-REAL-KEY\\n-----END PRIVATE KEY-----\\n",
+  "client_email": "syncr-backups@syncr-demo.iam.gserviceaccount.com",
+  "token_uri": "https://oauth2.googleapis.com/token"
+}`;
+
+const remoteTypesShots = [
+  ["01-type-picker", { height: 1000 }, async (p) => open(p, "/remotes/new", 600)],
+  ["02-smb-form", tall, smbForm],
+  [
+    "03-azure-form",
+    tall,
+    (p) =>
+      typeForm(p, "azureblob", {
+        name: "Azure cold storage",
+        fields: {
+          "Storage account": "syncrdemo",
+          "Account key": "demo-account-key",
+          Container: "cold-archive/office",
+        },
+        advanced: true,
+      }),
+  ],
+  [
+    "04-gcs-form",
+    tall,
+    (p) =>
+      typeForm(p, "gcs", {
+        name: "GCS offsite",
+        fields: { "Service account key (JSON)": demoKey, Bucket: "syncr-offsite/office" },
+      }),
+  ],
+  [
+    "05-s3-providers",
+    tall,
+    async (p) => {
+      await typeForm(p, "s3", { name: "Hetzner archive" });
+      await p.getByRole("combobox", { name: "Provider" }).click();
+      await p.getByRole("listbox").waitFor();
+      await settle(p, 300);
+    },
+  ],
+  [
+    "06-transfer-no-checksum",
+    {},
+    async (p) => {
+      await open(p, "/jobs/new");
+      await pick(p, /^Worker/, /^nas-01/);
+      await p.locator("#run-src-remote").click();
+      await p.getByRole("option", { name: /^NAS share/ }).click();
+      await p.locator("#run-src-path").fill("Documents");
+      await p.locator("#run-dst-remote").click();
+      await p.getByRole("option", { name: /^B2 offsite/ }).click();
+      await p.locator("#run-dst-path").fill("nas-share/documents");
+      await p.locator("#run-dst-path").blur();
+      await settle(p, 300);
+      await scrollTo(p, p.getByText("What", { exact: true }), 24);
+    },
+  ],
+  ["07-ftp-form-mobile", { width: 390, height: 844 }, ftpForm, true],
+  ["08-type-picker-dark", { height: 1000, dark: true }, async (p) => open(p, "/remotes/new", 600)],
+  ["09-smb-form-dark-mobile", { width: 390, height: 844, dark: true }, smbForm, true],
+];
+
+// remoteTypesSet takes the remote types shots, signed in once.
+async function remoteTypesSet(browser) {
+  const first = await newPage(browser);
+  await signIn(first);
+  const storageState = await first.context().storageState();
+  await first.context().close();
+  for (const [name, opts, go, full] of remoteTypesShots) {
+    if (!wanted(name)) continue;
+    const p = await newPage(browser, { ...opts, storageState });
+    await go(p);
+    await shot(p, name, full ? { full: true } : undefined);
+    await p.context().close();
+  }
+}
+
 // The README shots: one page per feature from the same seeded controller,
 // each in light and dark so the README can follow the reader's theme.
 const readmeShots = [
@@ -1582,6 +1714,10 @@ async function main() {
     }
     if (set === "crypt") {
       await cryptSet(browser);
+      return;
+    }
+    if (set === "remote-types") {
+      await remoteTypesSet(browser);
       return;
     }
     if (set === "m5") {

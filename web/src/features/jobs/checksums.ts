@@ -9,17 +9,26 @@ export type NoChecksumLookup = (remoteId: string) => string | undefined;
 
 /**
  * noChecksumLookup builds a NoChecksumLookup from the user's remotes and
- * the backend descriptors. It reads only the capability, never a type ID:
- * any type may declare it.
+ * the backend descriptors. It reads only the capabilities, never a type
+ * ID: any type may declare noChecksum. A remote whose type combines others
+ * (capabilities.union) keeps no checksums when one of its members' types
+ * keeps none, as the controller decides: the remote carries its members,
+ * not capabilities of its own, and the union type's capabilities stay the
+ * same whatever the members are.
  */
 export function noChecksumLookup(
   remotes: Remote[],
   backends: Map<string, Backend>,
 ): NoChecksumLookup {
   const byId = new Map(remotes.map((r) => [r.id, r]));
+  const keepsNone = (r: Remote | undefined) =>
+    !!r && !!backends.get(r.backendType)?.capabilities?.noChecksum;
   return (id) => {
     const r = id ? byId.get(id) : undefined;
-    return r && backends.get(r.backendType)?.capabilities?.noChecksum ? r.name : undefined;
+    if (!r) return undefined;
+    if (keepsNone(r)) return r.name;
+    const combines = !!backends.get(r.backendType)?.capabilities?.union;
+    return combines && r.members.some((m) => keepsNone(byId.get(m.remoteId))) ? r.name : undefined;
   };
 }
 

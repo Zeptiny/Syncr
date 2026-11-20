@@ -48,8 +48,8 @@ func (Type) Fields() []backend.Field {
 		{Name: "port", Label: "Port", Kind: backend.KindInt, Default: "445", Advanced: true},
 		{Name: "spn", Label: "Service principal name", Kind: backend.KindString, Advanced: true, Placeholder: "cifs/nas.example.com",
 			Help: "Only for servers that require one. Leave empty if unsure."},
-		{Name: "case_insensitive", Label: "Case-insensitive names", Kind: backend.KindBool, Advanced: true,
-			Help: "On unless set: Windows shares do not tell names apart by case. Turn it off for a server that does."},
+		{Name: "case_insensitive", Label: "Case-insensitive names", Kind: backend.KindBool, Default: "true", Advanced: true,
+			Help: "Windows shares do not tell names apart by case. Turn it off for a server that does."},
 	}
 }
 

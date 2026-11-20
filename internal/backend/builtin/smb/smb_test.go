@@ -65,7 +65,7 @@ func TestToRclone(t *testing.T) {
 		want backend.Rclone
 	}{
 		{"defaults", backend.Config{Options: map[string]string{"host": "nas.local", "user": "guest"}},
-			backend.Rclone{Backend: "smb", Options: map[string]string{"host": "nas.local", "user": "guest", "domain": "WORKGROUP", "port": "445"},
+			backend.Rclone{Backend: "smb", Options: map[string]string{"host": "nas.local", "user": "guest", "domain": "WORKGROUP", "port": "445", "case_insensitive": "true"},
 				Secrets: map[string]string{}}},
 		{"everything", backend.Config{
 			Options: map[string]string{"host": "fs", "user": "u", "share": "/backups//syncr/", "domain": "CORP", "port": "4450",
