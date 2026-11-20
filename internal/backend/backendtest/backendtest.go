@@ -185,9 +185,20 @@ func configFields(typ backend.Type) []backend.Field {
 	})
 }
 
+// SentinelSecreter is implemented by types whose Validate parses the
+// content of a secret field (e.g. a JSON key), so that a bare sentinel
+// would not validate. SentinelSecret returns a value of the secret field
+// name that Validate accepts, that ToRclone passes on unchanged and that
+// contains sentinel; ok is false for a field whose content Validate does
+// not parse (it gets the bare sentinel).
+type SentinelSecreter interface {
+	SentinelSecret(name, sentinel string) (value string, ok bool)
+}
+
 // examples returns the type's example configurations, or one synthesized
 // from its fields, with every secret value replaced by a unique sentinel
-// (so that leaks are detectable).
+// (so that leaks are detectable), or by a value that contains one
+// (SentinelSecreter).
 func examples(t reporter, typ backend.Type) []backend.Config {
 	t.Helper()
 	var out []backend.Config
@@ -204,6 +215,11 @@ func examples(t reporter, typ backend.Type) []backend.Config {
 		out[i] = out[i].Clone()
 		for k := range out[i].Secrets {
 			out[i].Secrets[k] = sentinel(i, k)
+			if ss, ok := typ.(SentinelSecreter); ok {
+				if v, ok := ss.SentinelSecret(k, sentinel(i, k)); ok {
+					out[i].Secrets[k] = v
+				}
+			}
 		}
 	}
 	return out

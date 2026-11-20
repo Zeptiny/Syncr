@@ -231,7 +231,7 @@ func TestCreateValidation(t *testing.T) {
 		{"long name", mod(func(in *remotes.Input) { in.Name = strings.Repeat("é", 65) }), "name"},
 		{"control character", mod(func(in *remotes.Input) { in.Name = "a\x07b" }), "name"},
 		{"no type", mod(func(in *remotes.Input) { in.Type = "" }), "type"},
-		{"unknown type", mod(func(in *remotes.Input) { in.Type = "ftp" }), "type"},
+		{"unknown type", mod(func(in *remotes.Input) { in.Type = "gopher" }), "type"},
 		{"missing required", mod(func(in *remotes.Input) { delete(in.Options, "access_key_id") }), "options.access_key_id"},
 		{"empty required secret", mod(func(in *remotes.Input) { in.Secrets["secret_access_key"] = "" }), "secrets.secret_access_key"},
 		{"secret in options", mod(func(in *remotes.Input) { in.Options["secret_access_key"] = "leak" }), "options.secret_access_key"},

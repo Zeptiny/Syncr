@@ -30,7 +30,8 @@ func (Type) Label() string { return "Amazon S3 and compatible" }
 
 // Description implements backend.Type.
 func (Type) Description() string {
-	return "Object storage that speaks the S3 API: AWS, MinIO, Cloudflare R2, Wasabi, DigitalOcean Spaces, Ceph and others."
+	return "Object storage that speaks the S3 API: AWS, MinIO, Cloudflare R2, Wasabi, DigitalOcean Spaces, Ceph, " +
+		"Hetzner, Scaleway, OVHcloud, IDrive e2, Linode, Storj and others."
 }
 
 // Fields implements backend.Type.
@@ -40,13 +41,20 @@ func (Type) Fields() []backend.Field {
 			{Value: "AWS", Label: "Amazon Web Services"}, {Value: "Minio", Label: "MinIO"},
 			{Value: "Cloudflare", Label: "Cloudflare R2"}, {Value: "Wasabi", Label: "Wasabi"},
 			{Value: "DigitalOcean", Label: "DigitalOcean Spaces"}, {Value: "Ceph", Label: "Ceph"},
+			{Value: "Linode", Label: "Akamai / Linode"}, {Value: "Alibaba", Label: "Alibaba Cloud OSS"},
+			{Value: "Hetzner", Label: "Hetzner Object Storage"}, {Value: "IBMCOS", Label: "IBM Cloud Object Storage"},
+			{Value: "IDrive", Label: "IDrive e2"}, {Value: "IONOS", Label: "IONOS Cloud"},
+			{Value: "Mega", Label: "MEGA S4"}, {Value: "OVHcloud", Label: "OVHcloud"},
+			{Value: "Scaleway", Label: "Scaleway"}, {Value: "SeaweedFS", Label: "SeaweedFS"},
+			{Value: "Storj", Label: "Storj S3 gateway"}, {Value: "Synology", Label: "Synology C2"},
 			{Value: "Other", Label: "Other S3-compatible"},
 		}},
 		{Name: "access_key_id", Label: "Access key ID", Kind: backend.KindString, Required: true},
 		{Name: "secret_access_key", Label: "Secret access key", Kind: backend.KindString, Required: true, Secret: true},
 		{Name: "region", Label: "Region", Kind: backend.KindString, Placeholder: "us-east-1"},
 		{Name: "endpoint", Label: "Endpoint", Kind: backend.KindString, Placeholder: "https://s3.example.com",
-			Help: "Required unless the provider is AWS."},
+			Help: "Required unless the provider is AWS: without one, rclone sends every request to AWS. " +
+				"Your provider's documentation lists its endpoints (they often depend on the region)."},
 		{Name: "bucket", Label: "Bucket", Kind: backend.KindString, Rclone: backend.NotRclone,
 			Help: "Bucket, optionally with a path prefix (bucket/prefix). Leave empty to name the bucket in each job's path."},
 		{Name: "location_constraint", Label: "Location constraint", Kind: backend.KindString, Advanced: true},

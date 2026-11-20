@@ -14,7 +14,11 @@ import (
 // here, and the dispatcher (jobs) and the probes' worker pick follow.
 func backendFeatures() map[string]string {
 	return map[string]string{
-		"crypt": link.FeatureRcloneCrypt,
+		"crypt":     link.FeatureRcloneCrypt,
+		"smb":       link.FeatureRcloneSMB,
+		"ftp":       link.FeatureRcloneFTP,
+		"azureblob": link.FeatureRcloneAzureBlob,
+		"gcs":       link.FeatureRcloneGCS,
 	}
 }
 

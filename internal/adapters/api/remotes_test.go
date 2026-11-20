@@ -138,7 +138,7 @@ func TestListBackends(t *testing.T) {
 		ids = append(ids, b.GetId())
 		byID[b.GetId()] = b
 	}
-	if want := []string{"s3", "b2", "crypt", "local", "sftp", "union", "webdav"}; !slices.Equal(ids, want) {
+	if want := []string{"s3", "azureblob", "b2", "crypt", "ftp", "gcs", "local", "sftp", "smb", "union", "webdav"}; !slices.Equal(ids, want) {
 		t.Errorf("backends = %v, want %v (by label)", ids, want)
 	}
 	field := func(b, name string) *syncrv1.BackendField {
@@ -178,6 +178,32 @@ func TestListBackends(t *testing.T) {
 	}
 	if f := field("s3", "endpoint"); f.GetFixed() {
 		t.Errorf("s3 endpoint is fixed: %v", f)
+	}
+
+	// The remote types of 2.3: served like any other, with their
+	// capabilities (SMB and FTP keep no checksums).
+	for _, tt := range []struct {
+		id   string
+		want *syncrv1.BackendCapabilities
+	}{
+		{"smb", &syncrv1.BackendCapabilities{UnionMember: true, ResticRepository: true, NoChecksum: true}},
+		{"ftp", &syncrv1.BackendCapabilities{UnionMember: true, ResticRepository: true, NoChecksum: true}},
+		{"azureblob", &syncrv1.BackendCapabilities{UnionMember: true, ResticRepository: true}},
+		{"gcs", &syncrv1.BackendCapabilities{UnionMember: true, ResticRepository: true}},
+	} {
+		if b := byID[tt.id]; b == nil || b.GetLabel() == "" || len(b.GetFields()) == 0 || !proto.Equal(b.GetCapabilities(), tt.want) {
+			t.Errorf("backend %s = %v, want capabilities %v", tt.id, b, tt.want)
+		}
+	}
+	if f := field("gcs", "service_account_credentials"); !f.GetSecret() || !f.GetRequired() || f.GetKind() != syncrv1.FieldKind_FIELD_KIND_TEXT {
+		t.Errorf("gcs service_account_credentials = %v", f)
+	}
+	if f := field("ftp", "pass"); !f.GetSecret() || f.GetRequired() {
+		t.Errorf("ftp pass = %v", f)
+	}
+	if f := field("s3", "provider"); f.GetChoices()[len(f.GetChoices())-1].GetValue() != "Other" ||
+		!slices.ContainsFunc(f.GetChoices(), func(c *syncrv1.FieldChoice) bool { return c.GetValue() == "Hetzner" }) {
+		t.Errorf("s3 providers = %v", f.GetChoices())
 	}
 
 	// Unauthenticated callers get nothing.
@@ -370,13 +396,11 @@ func checkSecretsNeverEcho(t *testing.T, e *remotesEnv) {
 	// What a wrapper type stores its data in.
 	store := e.create(testUser, s3RemoteInput("wrapped store"))
 
-	for _, typ := range e.reg.Types() {
-		cfg := exampleConfig(typ)
-		in := &syncrv1.RemoteInput{Name: "remote " + typ.ID(), BackendType: typ.ID(), Options: cfg.Options, Secrets: map[string]string{}}
-		for _, f := range typ.Fields() {
-			if f.Secret {
-				in.Secrets[f.Name] = sentinel(typ.ID(), f.Name, 1)
-			}
+	for _, tc := range secretCases(e.reg) {
+		typ, cfg := tc.typ, tc.cfg
+		in := &syncrv1.RemoteInput{Name: tc.name, BackendType: typ.ID(), Options: cfg.Options, Secrets: map[string]string{}}
+		for k := range cfg.Secrets {
+			in.Secrets[k] = secretValue(typ, k, sentinel(typ.ID(), k, 1))
 		}
 		if typ.Capabilities().Union {
 			in.Members = []*syncrv1.UnionMember{{RemoteId: m1.GetId()}, {RemoteId: m2.GetId()}}
@@ -388,8 +412,8 @@ func checkSecretsNeverEcho(t *testing.T, e *remotesEnv) {
 		for _, f := range typ.Fields() {
 			fixed[f.Name] = f.Fixed
 		}
-		for _, v := range in.GetSecrets() {
-			seen = append(seen, v)
+		for k := range in.GetSecrets() {
+			seen = append(seen, sentinel(typ.ID(), k, 1))
 		}
 
 		created, err := c.CreateRemote(ctx, connect.NewRequest(&syncrv1.CreateRemoteRequest{Input: in}))
@@ -417,8 +441,8 @@ func checkSecretsNeverEcho(t *testing.T, e *remotesEnv) {
 				delete(upd.Secrets, k)
 				continue
 			}
-			upd.Secrets[k] = sentinel(typ.ID(), k, 2)
-			seen = append(seen, upd.Secrets[k])
+			upd.Secrets[k] = secretValue(typ, k, sentinel(typ.ID(), k, 2))
+			seen = append(seen, sentinel(typ.ID(), k, 2))
 		}
 		updated, err := c.UpdateRemote(ctx, connect.NewRequest(&syncrv1.UpdateRemoteRequest{RemoteId: r.GetId(), Version: r.GetVersion(), Input: upd}))
 		if err != nil {
@@ -484,7 +508,7 @@ func checkSecretsNeverEcho(t *testing.T, e *remotesEnv) {
 			if fixed[k] {
 				round = 1
 			}
-			if !slices.Contains(slices.Collect(maps.Values(res[mustRemoteID(t, r.GetId())].Rclone.Secrets)), sentinel(typ.ID(), k, round)) {
+			if !slices.Contains(slices.Collect(maps.Values(res[mustRemoteID(t, r.GetId())].Rclone.Secrets)), secretValue(typ, k, sentinel(typ.ID(), k, round))) {
 				t.Errorf("%s: secret %s was not stored", typ.ID(), k)
 			}
 		}
@@ -509,6 +533,58 @@ func checkSecretsNeverEcho(t *testing.T, e *remotesEnv) {
 	if len(seen) == 0 || !strings.Contains(e.svcLogs.String(), "remote created") {
 		t.Fatal("the check saw no secrets or no log lines")
 	}
+}
+
+// secretCase is a remote to create in the secret echo check: a valid
+// configuration of typ whose secret keys get sentinel values.
+type secretCase struct {
+	name string
+	typ  backend.Type
+	cfg  backend.Config
+}
+
+// secretCases returns, for every type of reg, its first example
+// (exampleConfig) with every secret field set or, when the type refuses
+// that (azureblob takes one sign-in method), each of its examples with the
+// secrets it sets.
+func secretCases(reg *backend.Registry) []secretCase {
+	var out []secretCase
+	for _, typ := range reg.Types() {
+		cfg := exampleConfig(typ)
+		cfg.Secrets = map[string]string{}
+		for _, f := range typ.Fields() {
+			if f.Secret {
+				cfg.Secrets[f.Name] = secretValue(typ, f.Name, sentinel(typ.ID(), f.Name, 0))
+			}
+		}
+		ex, ok := typ.(backend.Exampler)
+		if typ.Validate(cfg) == nil || !ok {
+			out = append(out, secretCase{name: "remote " + typ.ID(), typ: typ, cfg: cfg})
+			continue
+		}
+		for i, c := range ex.Examples() {
+			out = append(out, secretCase{name: fmt.Sprintf("remote %s %d", typ.ID(), i), typ: typ, cfg: c.Clone()})
+		}
+	}
+	return out
+}
+
+// sentinelSecreter is backendtest.SentinelSecreter: a type whose Validate
+// parses a secret's content (the gcs key) wraps a sentinel in a valid
+// value.
+type sentinelSecreter interface {
+	SentinelSecret(name, sentinel string) (string, bool)
+}
+
+// secretValue is the value of typ's secret field that carries marker: the
+// marker itself, or a valid value that contains it (sentinelSecreter).
+func secretValue(typ backend.Type, field, marker string) string {
+	if ss, ok := typ.(sentinelSecreter); ok {
+		if v, ok := ss.SentinelSecret(field, marker); ok {
+			return v
+		}
+	}
+	return marker
 }
 
 // exampleConfig returns a valid configuration of typ: its first example,

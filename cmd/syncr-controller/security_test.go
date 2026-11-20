@@ -525,6 +525,58 @@ func TestSecurityEndToEnd(t *testing.T) {
 	})
 }
 
+// secretCase is a remote of the secrets check: a valid configuration of
+// typ whose secret keys get sentinel values.
+type secretCase struct {
+	name string
+	typ  backend.Type
+	cfg  backend.Config
+}
+
+// secretCases returns, for every type of reg, its first example with every
+// secret field set or, when the type refuses that (azureblob takes one
+// sign-in method), each of its examples with the secrets it sets (named
+// "<type> <n>").
+func secretCases(t *testing.T, reg *backend.Registry, sentinel func(typ, field string, n int) string) []secretCase {
+	t.Helper()
+	var out []secretCase
+	for _, typ := range reg.Types() {
+		ex, ok := typ.(backend.Exampler)
+		if !ok || len(ex.Examples()) == 0 {
+			t.Fatalf("type %s has no example configuration", typ.ID())
+		}
+		cfg := ex.Examples()[0].Clone()
+		cfg.Secrets = map[string]string{}
+		for _, f := range typ.Fields() {
+			if f.Secret {
+				cfg.Secrets[f.Name] = secretValue(typ, f.Name, sentinel(typ.ID(), f.Name, 0))
+			}
+		}
+		if typ.Validate(cfg) == nil {
+			out = append(out, secretCase{name: typ.ID(), typ: typ, cfg: cfg})
+			continue
+		}
+		for i, c := range ex.Examples() {
+			out = append(out, secretCase{name: fmt.Sprintf("%s %d", typ.ID(), i), typ: typ, cfg: c.Clone()})
+		}
+	}
+	return out
+}
+
+// secretValue is the value of typ's secret field that carries marker: the
+// marker itself or, for a type whose Validate parses the secret (the gcs
+// key; backendtest.SentinelSecreter), a valid value that contains it.
+func secretValue(typ backend.Type, field, marker string) string {
+	if ss, ok := typ.(interface {
+		SentinelSecret(name, sentinel string) (string, bool)
+	}); ok {
+		if v, ok := ss.SentinelSecret(field, marker); ok {
+			return v
+		}
+	}
+	return marker
+}
+
 // copyDefinition copies from a path of remoteID to a worker path.
 func copyDefinition(remoteID, dst string) *syncrv1.JobDefinition {
 	return &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_RcloneTransfer{RcloneTransfer: &syncrv1.RcloneTransferDefinition{
@@ -576,18 +628,12 @@ func checkSecretsStayHidden(t *testing.T, s *seeded, admin, alice *http.Client) 
 		t.Fatal(err)
 	}
 	created := map[string]*syncrv1.Remote{}
-	for _, typ := range reg.Types() {
-		ex, ok := typ.(backend.Exampler)
-		if !ok || len(ex.Examples()) == 0 {
-			t.Fatalf("type %s has no example configuration", typ.ID())
-		}
-		cfg := ex.Examples()[0]
-		in := &syncrv1.RemoteInput{Name: "Alice " + typ.ID(), BackendType: typ.ID(), Options: maps.Clone(cfg.Options), Secrets: map[string]string{}}
-		for _, f := range typ.Fields() {
-			if f.Secret {
-				in.Secrets[f.Name] = sentinel(typ.ID(), f.Name, 1)
-				sentinels = append(sentinels, in.Secrets[f.Name])
-			}
+	for _, tc := range secretCases(t, reg, sentinel) {
+		typ, cfg := tc.typ, tc.cfg
+		in := &syncrv1.RemoteInput{Name: "Alice " + tc.name, BackendType: typ.ID(), Options: maps.Clone(cfg.Options), Secrets: map[string]string{}}
+		for k := range cfg.Secrets {
+			in.Secrets[k] = secretValue(typ, k, sentinel(typ.ID(), k, 1))
+			sentinels = append(sentinels, sentinel(typ.ID(), k, 1))
 		}
 		if typ.Capabilities().Union {
 			in.Members = []*syncrv1.UnionMember{{RemoteId: members[0]}, {RemoteId: members[1]}}
@@ -611,9 +657,9 @@ func checkSecretsStayHidden(t *testing.T, s *seeded, admin, alice *http.Client) 
 		}
 		up.Secrets = map[string]string{}
 		for _, f := range typ.Fields() {
-			if f.Secret && !f.Fixed {
-				up.Secrets[f.Name] = sentinel(typ.ID(), f.Name, 2)
-				sentinels = append(sentinels, up.Secrets[f.Name])
+			if _, set := in.Secrets[f.Name]; set && f.Secret && !f.Fixed {
+				up.Secrets[f.Name] = secretValue(typ, f.Name, sentinel(typ.ID(), f.Name, 2))
+				sentinels = append(sentinels, sentinel(typ.ID(), f.Name, 2))
 				break
 			}
 		}
@@ -627,7 +673,7 @@ func checkSecretsStayHidden(t *testing.T, s *seeded, admin, alice *http.Client) 
 			t.Fatal(err)
 		}
 		record(got.Msg)
-		created[typ.ID()] = got.Msg.GetRemote()
+		created[tc.name] = got.Msg.GetRemote()
 	}
 	list, err := rc.ListRemotes(ctx, connect.NewRequest(&syncrv1.ListRemotesRequest{}))
 	if err != nil {
@@ -668,7 +714,8 @@ func checkSecretsStayHidden(t *testing.T, s *seeded, admin, alice *http.Client) 
 	// The worker's first Report carries its Hello; no StartJob comes before it.
 	// It accepts encrypted remotes.
 	hello := &syncrv1.Event{Seq: 1, Payload: &syncrv1.Event_Hello{Hello: &syncrv1.Hello{
-		Os: "linux", Arch: "amd64", JobKinds: []string{"rclone_transfer"}, Features: []string{link.FeatureRcloneCrypt},
+		Os: "linux", Arch: "amd64", JobKinds: []string{"rclone_transfer"},
+		Features: []string{link.FeatureRcloneCrypt, link.FeatureRcloneSMB, link.FeatureRcloneFTP, link.FeatureRcloneAzureBlob, link.FeatureRcloneGCS},
 	}}}
 	if _, err := linkClient.Report(ctx, connect.NewRequest(&syncrv1.ReportRequest{Epoch: "secrets-test-epoch", Events: []*syncrv1.Event{hello}})); err != nil {
 		t.Fatal(err)
@@ -691,7 +738,7 @@ func checkSecretsStayHidden(t *testing.T, s *seeded, admin, alice *http.Client) 
 		t.Fatalf("the worker got %d StartJob commands, want %d:\n%s", starts, len(jobIDs), specs)
 	}
 	// The worker, and only the worker, gets the current secrets.
-	for _, typ := range []string{"s3", "sftp", "b2", "webdav", "crypt"} {
+	for _, typ := range []string{"s3", "sftp", "b2", "webdav", "crypt", "smb", "ftp", "azureblob", "gcs"} {
 		if !strings.Contains(string(specs), "sentinel-"+typ+"-") {
 			t.Errorf("the %s secrets are not in the worker's spec", typ)
 		}

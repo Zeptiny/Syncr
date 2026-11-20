@@ -165,7 +165,7 @@ func testOnlyBackends() []string { return []string{"memory"} }
 // that uses them exists (a worker step built before the controller's
 // type). Remove a backend from here once its type is registered; the test
 // below says when.
-func awaitingBuiltinType() []string { return []string{"azureblob", "ftp", "gcs", "smb"} }
+func awaitingBuiltinType() []string { return nil }
 
 // TestSupportedBackendsMatchBuiltinTypes checks that the worker's allowlist
 // of backend types holds the rclone backend of every built-in type, and
@@ -228,7 +228,12 @@ func TestBuiltinBackendOptionsKnownToRclone(t *testing.T) {
 // whose every choice must be one of rclone's examples for the option the
 // field maps to. An S3 provider rclone does not know would not get that
 // provider's settings (endpoints, quirks), whatever the label says.
-func rcloneEnums() [][2]string { return [][2]string{{"s3", "provider"}} }
+func rcloneEnums() [][2]string {
+	return [][2]string{
+		{"s3", "provider"},
+		{"gcs", "location"}, {"gcs", "storage_class"}, {"gcs", "object_acl"}, {"gcs", "bucket_acl"},
+	}
+}
 
 // TestBuiltinEnumChoicesKnownToRclone checks with the real rclone
 // (SYNCR_TEST_RCLONE) that every choice of the rcloneEnums is a value rclone

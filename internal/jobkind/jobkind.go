@@ -128,7 +128,9 @@ type Remote struct {
 	Wrapped Wrap
 	// NoChecksum: rclone keeps no checksums on the remote
 	// (backend.Capabilities.NoChecksum), so a transfer or a two-way sync
-	// with it as a side cannot compare checksums.
+	// with it as a side cannot compare checksums. A union with a member
+	// that keeps none keeps none either, whether or not its own
+	// NoChecksum says so: Build follows the members.
 	NoChecksum bool
 }
 
@@ -151,15 +153,19 @@ type RemoteInfo struct {
 	// Wraps is, for a wrapper remote, where it stores its data; zero for
 	// other remotes.
 	Wraps Wrap
-	// NoChecksum: rclone keeps no checksums on the remote.
+	// NoChecksum: rclone keeps no checksums on the remote; for a union,
+	// also when one of its members keeps none (RemoteInfo has no members:
+	// the caller's capabilities say so, as remotes.Info's do).
 	NoChecksum bool
 }
 
-// NewRemoteInfo returns the RemoteInfo of a remote whose type has caps and
-// that stores its data in the folder path of the remote wrapped (zero for
-// a remote that is not a wrapper). Callers that know remotes in their own
-// terms (remotes.Info) convert them here, so the mapping lives in one
-// place.
+// NewRemoteInfo returns the RemoteInfo of a remote whose capabilities are
+// caps and that stores its data in the folder path of the remote wrapped
+// (zero for a remote that is not a wrapper). caps are the remote's, as
+// remotes.Info carries them: its type's, with NoChecksum also set on a
+// union with a member that keeps no checksums. Callers that know remotes
+// in their own terms (remotes.Info) convert them here, so the mapping
+// lives in one place.
 func NewRemoteInfo(wrapped domain.RemoteID, path string, caps backend.Capabilities) RemoteInfo {
 	return RemoteInfo{Wraps: Wrap{RemoteID: wrapped, Path: path}, NoChecksum: caps.NoChecksum}
 }
