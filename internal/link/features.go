@@ -73,6 +73,38 @@ const (
 	// a worker with this feature (WORKER_OUTDATED otherwise), and picks
 	// only such workers for a probe on one.
 	FeatureRcloneCrypt = "rclone.crypt"
+	// FeatureRcloneSMB: the worker accepts SMB remotes, remote definitions
+	// with backend_type "smb", and refuses one without a user (rclone
+	// would send the worker's own account name). An older worker refuses
+	// the backend, so the controller sends a job whose spec defines an SMB
+	// remote only to a worker with this feature (WORKER_OUTDATED
+	// otherwise), and picks only such workers for a probe on one.
+	FeatureRcloneSMB = "rclone.backend.smb"
+	// FeatureRcloneFTP: the worker accepts FTP and FTPS remotes, remote
+	// definitions with backend_type "ftp", and refuses one without a user
+	// (rclone would send the worker's own account name). An older worker
+	// refuses the backend, so the controller sends a job whose spec defines
+	// an FTP remote only to a worker with this feature (WORKER_OUTDATED
+	// otherwise), and picks only such workers for a probe on one.
+	FeatureRcloneFTP = "rclone.backend.ftp"
+	// FeatureRcloneAzureBlob: the worker accepts Azure Blob Storage
+	// remotes, remote definitions with backend_type "azureblob", without
+	// the options that would sign in as the worker host (env_auth, use_msi,
+	// msi_client_id, use_az) or reach a storage emulator on it
+	// (use_emulator). An older worker refuses the backend, so the
+	// controller sends a job whose spec defines an Azure Blob remote only
+	// to a worker with this feature (WORKER_OUTDATED otherwise), and picks
+	// only such workers for a probe on one.
+	FeatureRcloneAzureBlob = "rclone.backend.azureblob"
+	// FeatureRcloneGCS: the worker accepts Google Cloud Storage remotes,
+	// remote definitions with backend_type "gcs" (rclone's "google cloud
+	// storage"), and refuses one without service_account_credentials
+	// (rclone would sign in with the worker host's Google credentials). An
+	// older worker refuses the backend, so the controller sends a job whose
+	// spec defines a GCS remote only to a worker with this feature
+	// (WORKER_OUTDATED otherwise), and picks only such workers for a probe
+	// on one.
+	FeatureRcloneGCS = "rclone.backend.gcs"
 )
 
 // Features returns every link feature this build defines, in a fixed order.
@@ -81,6 +113,7 @@ func Features() []string {
 	return []string{
 		FeatureProbe, FeatureResticV2, FeatureResticDelete, FeatureJobTimeLimit, FeatureJobHooks,
 		FeatureRcloneBisync, FeatureResticRestoreSubfolderPaths, FeatureResticRemoteSource, FeatureRcloneCrypt,
+		FeatureRcloneSMB, FeatureRcloneFTP, FeatureRcloneAzureBlob, FeatureRcloneGCS,
 	}
 }
 

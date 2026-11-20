@@ -268,7 +268,8 @@ func TestRemotesRejects(t *testing.T) {
 		{"archive backend without remote", []*syncrv1.RemoteDefinition{remote("src", "archive")}, false},
 		{"crypt backend without wrapped", []*syncrv1.RemoteDefinition{ok("aa"), remote("src", "crypt", withOptions("remote", "/etc"))}, false},
 		{"combine backend", []*syncrv1.RemoteDefinition{remote("src", "combine")}, false},
-		{"azureblob backend", []*syncrv1.RemoteDefinition{remote("src", "azureblob", withOptions("account", "a"))}, false},
+		{"azurefiles backend", []*syncrv1.RemoteDefinition{remote("src", "azurefiles", withOptions("account", "a"))}, false},
+		{"azureblob emulator", []*syncrv1.RemoteDefinition{remote("src", "azureblob", withOptions("use_emulator", "true"))}, false},
 		{"drive backend", []*syncrv1.RemoteDefinition{remote("src", "drive")}, false},
 		{"unknown backend", []*syncrv1.RemoteDefinition{remote("src", "gopher")}, false},
 		{"empty option key", []*syncrv1.RemoteDefinition{remote("src", "s3", withOptions("", "x"))}, false},
@@ -386,7 +387,7 @@ func TestCheckBackend(t *testing.T) {
 	// host's identity, among others.
 	for _, b := range []string{
 		"alias", "archive", "cache", "chunker", "combine", "compress", "hasher",
-		"azureblob", "azurefiles", "drive", "oracleobjectstorage", "smb", "swift", "http", "ftp", "hdfs",
+		"azurefiles", "drive", "oracleobjectstorage", "swift", "http", "hdfs", "sharefile",
 	} {
 		err := checkBackend(b)
 		if err == nil || !strings.Contains(err.Error(), "not supported by this worker") || !strings.Contains(err.Error(), strconv.Quote(b)) {
