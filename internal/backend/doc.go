@@ -16,8 +16,9 @@
 //     only emit what it accepts; a cross-check test asserts this for every
 //     built-in type.
 //   - The remotes use case (internal/app/remotes) owns names, ownership,
-//     encryption of secrets and union members: members are not part of a
-//     Config.
+//     encryption of secrets, union members and the remote a wrapper type
+//     stores its data in, fixed fields included: members and the wrapped
+//     remote are not part of a Config.
 //
 // # Writing a descriptor
 //
@@ -35,7 +36,7 @@
 // The generic field machinery (kinds, choices, configuration values,
 // CheckFields and the shape checks) lives in internal/descriptor, which
 // notification channels share; this package re-exports it (Choice, Config)
-// and adds the rclone mapping and union members.
+// and adds the rclone mapping, union members and wrapped remotes.
 //
 // Allowed dependencies: the standard library, internal/domain and
 // internal/descriptor.

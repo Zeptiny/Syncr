@@ -25,12 +25,13 @@ func testFields() []backend.Field {
 			Choices: []backend.Choice{{Value: "unix", Label: "Unix"}, {Value: "cmd", Label: "Windows cmd"}}},
 		{Name: "path", Label: "Path", Kind: backend.KindString, Rclone: backend.NotRclone},
 		{Name: "members", Label: "Members", Kind: backend.KindMembers},
+		{Name: "store", Label: "Store in", Kind: backend.KindWrapped},
 	}
 }
 
 func TestKindAndModeValid(t *testing.T) {
 	t.Parallel()
-	for _, k := range []backend.Kind{backend.KindString, backend.KindText, backend.KindInt, backend.KindBool, backend.KindEnum, backend.KindMembers} {
+	for _, k := range []backend.Kind{backend.KindString, backend.KindText, backend.KindInt, backend.KindBool, backend.KindEnum, backend.KindMembers, backend.KindWrapped} {
 		if !k.Valid() {
 			t.Errorf("%q is not valid", k)
 		}
@@ -59,9 +60,36 @@ func TestRcloneName(t *testing.T) {
 		{backend.Field{Name: "bucket", Rclone: backend.NotRclone}, ""},
 		{backend.Field{Name: "members", Kind: backend.KindMembers}, ""},
 		{backend.Field{Name: "members", Kind: backend.KindMembers, Rclone: "upstreams"}, ""},
+		{backend.Field{Name: "remote", Kind: backend.KindWrapped}, ""},
+		{backend.Field{Name: "remote", Kind: backend.KindWrapped, Rclone: "remote"}, ""},
 	} {
 		if got := tt.f.RcloneName(); got != tt.want {
 			t.Errorf("RcloneName(%+v) = %q, want %q", tt.f, got, tt.want)
+		}
+	}
+}
+
+// TestFieldDescriptor: Descriptor carries every generic attribute, Fixed
+// included, and keeps the backend-only kinds.
+func TestFieldDescriptor(t *testing.T) {
+	t.Parallel()
+	f := backend.Field{
+		Name: "mode", Label: "Mode", Help: "h", Placeholder: "p", Default: "a", Kind: backend.KindEnum,
+		Advanced: true, Fixed: true, Choices: []backend.Choice{{Value: "a", Label: "A"}},
+		Rclone: "mode_option",
+	}
+	d := f.Descriptor()
+	if d.Name != "mode" || d.Label != "Mode" || d.Help != "h" || d.Placeholder != "p" || d.Default != "a" ||
+		d.Kind != "enum" || !d.Advanced || !d.Fixed || d.Required || d.Secret || len(d.Choices) != 1 {
+		t.Errorf("Descriptor() = %+v", d)
+	}
+	d.Choices[0].Value = "changed"
+	if f.Choices[0].Value != "a" {
+		t.Error("Descriptor aliases the choices")
+	}
+	for _, k := range []backend.Kind{backend.KindMembers, backend.KindWrapped} {
+		if got := (backend.Field{Name: "x", Kind: k}).Descriptor().Kind; string(got) != string(k) {
+			t.Errorf("Descriptor of a %s field has kind %q", k, got)
 		}
 	}
 }
@@ -126,6 +154,7 @@ func TestCheckFields(t *testing.T) {
 		{"secret in options", backend.Config{Options: map[string]string{"host": "h", "pass": "x", "token": "t"}}, []string{"secrets.token", "options.pass", "options.token"}},
 		{"option in secrets", backend.Config{Options: map[string]string{}, Secrets: map[string]string{"host": "h", "token": "t"}}, []string{"options.host", "secrets.host"}},
 		{"members are not config", backend.Config{Options: map[string]string{"host": "h", "members": "a,b"}, Secrets: map[string]string{"token": "t"}}, []string{"options.members"}},
+		{"wrapped is not config", backend.Config{Options: map[string]string{"host": "h", "store": "r1:x"}, Secrets: map[string]string{"token": "t"}}, []string{"options.store"}},
 		{"bad int", cfgWith("port", "22a"), []string{"options.port"}},
 		{"int with space", cfgWith("port", " 22"), []string{"options.port"}},
 		{"bad bool", cfgWith("insecure", "yes"), []string{"options.insecure"}},
@@ -170,7 +199,7 @@ func TestCheckFieldsNeverEchoesValues(t *testing.T) {
 func TestMapFields(t *testing.T) {
 	t.Parallel()
 	cfg := backend.Config{
-		Options: map[string]string{"host": "example.org", "user": "bob", "insecure": "", "path": "/srv", "unknown": "x"},
+		Options: map[string]string{"host": "example.org", "user": "bob", "insecure": "", "path": "/srv", "unknown": "x", "store": "r1:x"},
 		Secrets: map[string]string{"pass": "hunter2", "token": "t", "key_pem": "", "stray": "y"},
 	}
 	got := backend.MapFields(testFields(), cfg)

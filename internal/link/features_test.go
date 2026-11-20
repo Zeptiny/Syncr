@@ -21,6 +21,9 @@ func TestFeatures(t *testing.T) {
 		FeatureResticRemoteSource != want[7] {
 		t.Error("feature constants changed: they are part of the wire contract")
 	}
+	if FeatureRcloneCrypt != "rclone.crypt" {
+		t.Error("FeatureRcloneCrypt changed: it is part of the wire contract")
+	}
 }
 
 func TestProbeOpOf(t *testing.T) {

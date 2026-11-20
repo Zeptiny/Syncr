@@ -63,6 +63,16 @@ const (
 	// definition with a remote source (jobkind DefinitionFeatures) and the
 	// job fails with WORKER_OUTDATED on a worker without it.
 	FeatureResticRemoteSource = "restic.remote_source"
+	// FeatureRcloneCrypt: the worker accepts encrypted remotes, remote
+	// definitions with backend_type "crypt" (RemoteDefinition.wrapped): it
+	// builds crypt's "remote" option from the wrapped location (another
+	// remote of the same spec, never a local path) and always sets
+	// strict_names, so a wrong password fails a listing instead of
+	// presenting an empty remote. An older worker refuses the backend, so
+	// the controller sends a job whose spec defines a crypt remote only to
+	// a worker with this feature (WORKER_OUTDATED otherwise), and picks
+	// only such workers for a probe on one.
+	FeatureRcloneCrypt = "rclone.crypt"
 )
 
 // Features returns every link feature this build defines, in a fixed order.

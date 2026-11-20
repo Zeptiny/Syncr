@@ -82,6 +82,11 @@ type Field struct {
 	Advanced bool
 	// Choices are the allowed values of an enum field.
 	Choices []Choice
+	// Fixed fields get their value when the instance is created and keep
+	// it (e.g. a crypt remote's password): updates refuse another value.
+	// Enforcing it is the extension point's job (internal/app/remotes for
+	// backend types); notification channels never set it.
+	Fixed bool
 }
 
 // Values is a configuration as the user entered it, keyed by field name:

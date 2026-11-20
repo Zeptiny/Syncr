@@ -42,6 +42,7 @@ func backendToProto(t backend.Type) *syncrv1.Backend {
 		Fields:      make([]*syncrv1.BackendField, 0, len(fields)),
 		Capabilities: &syncrv1.BackendCapabilities{
 			Local: caps.Local, Union: caps.Union, UnionMember: caps.UnionMember, ResticRepository: caps.ResticRepository,
+			Wrapper: caps.Wrapper, NoChecksum: caps.NoChecksum,
 		},
 	}
 	for _, f := range fields {

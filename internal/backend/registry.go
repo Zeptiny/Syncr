@@ -62,15 +62,20 @@ func (r *Registry) Types() []Type { return slices.Clone(r.sorted) }
 //
 //   - the ID matches ^[a-z][a-z0-9]{0,63}$ and the label is not empty;
 //   - capabilities are consistent: a union is neither local nor a union
-//     member;
+//     member, and a wrapper is none of local, union, union member, restic
+//     repository or object store;
 //   - the fields pass descriptor.CheckShape (names, labels, kinds, enum
 //     choices, defaults, no secret default, no required advanced field),
-//     with KindMembers as an extra kind;
+//     with KindMembers and KindWrapped as extra kinds;
 //   - rclone names are valid rclone option names (or NotRclone) and no two
 //     fields map to the same one;
 //   - Obscure implies Secret;
 //   - a members field appears only in union types, at most once, and has
-//     no secret flag, default or choices; a union type has exactly one.
+//     no secret flag, default or choices; a union type has exactly one;
+//   - a wrapped field likewise appears only in wrapper types, at most once,
+//     with no secret flag, default or choices; a wrapper type has exactly
+//     one;
+//   - members and wrapped fields are never Fixed.
 //
 // The behavior of Validate and ToRclone is checked by the contract suite
 // (internal/backend/backendtest).
@@ -89,6 +94,9 @@ func CheckDescriptor(t Type) error {
 	if caps.Union && (caps.Local || caps.UnionMember) {
 		return fail("a union type cannot be local or a union member")
 	}
+	if caps.Wrapper && (caps.Local || caps.Union || caps.UnionMember || caps.ResticRepository || caps.ObjectStore) {
+		return fail("a wrapper type cannot be local, a union, a union member, a restic repository or an object store")
+	}
 
 	fields := t.Fields()
 	shape := make([]descriptor.Field, len(fields))
@@ -96,11 +104,11 @@ func CheckDescriptor(t Type) error {
 		shape[i] = f.Descriptor()
 	}
 	var errs []error
-	if err := descriptor.CheckShape(shape, descriptor.Kind(KindMembers)); err != nil {
+	if err := descriptor.CheckShape(shape, descriptor.Kind(KindMembers), descriptor.Kind(KindWrapped)); err != nil {
 		errs = append(errs, fmt.Errorf("type %q: %w", id, err))
 	}
 	rcloneNames := map[string]string{}
-	members := 0
+	members, wrapped := 0, 0
 	for i, f := range fields {
 		ferr := func(format string, args ...any) {
 			errs = append(errs, fail("field %d (%q): %s", i, f.Name, fmt.Sprintf(format, args...)))
@@ -108,10 +116,17 @@ func CheckDescriptor(t Type) error {
 		if f.Obscure && !f.Secret {
 			ferr("only secret fields can be obscured")
 		}
-		if f.Kind == KindMembers {
-			members++
+		if f.Kind.reference() {
+			if f.Kind == KindMembers {
+				members++
+			} else {
+				wrapped++
+			}
 			if f.Secret || f.Default != "" || len(f.Choices) > 0 {
-				ferr("a members field has no secret flag, default or choices")
+				ferr("a %s field has no secret flag, default or choices", f.Kind)
+			}
+			if f.Fixed {
+				ferr("a %s field cannot be fixed", f.Kind)
 			}
 			continue
 		}
@@ -132,6 +147,14 @@ func CheckDescriptor(t Type) error {
 		errs = append(errs, fail("has a members field but is not a union"))
 	case members == 0 && caps.Union:
 		errs = append(errs, fail("is a union but has no members field"))
+	}
+	switch {
+	case wrapped > 1:
+		errs = append(errs, fail("has %d wrapped fields; at most one is allowed", wrapped))
+	case wrapped == 1 && !caps.Wrapper:
+		errs = append(errs, fail("has a wrapped field but is not a wrapper"))
+	case wrapped == 0 && caps.Wrapper:
+		errs = append(errs, fail("is a wrapper but has no wrapped field"))
 	}
 	return errors.Join(errs...)
 }

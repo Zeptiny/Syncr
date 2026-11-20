@@ -1002,9 +1002,11 @@ message RemoteDefinition {
   // because their environment variable names would overlap.
   string alias = 1;
 
-  // rclone backend type, e.g. "s3", "sftp", "union", "b2". Workers reject
-  // "local" (local paths use an empty Location.remote and are checked against
-  // local_roots) and wrapping backends other than "union".
+  // rclone backend type, e.g. "s3", "sftp", "union", "crypt", "b2". Workers
+  // reject "local" (local paths use an empty Location.remote and are checked
+  // against local_roots) and wrapping backends other than "union" and
+  // "crypt" (a worker with the link feature rclone.crypt), whose wrapped
+  // remotes come from typed locations (union_upstreams, wrapped).
   string backend_type = 2;
 
   // Non-secret options keyed by rclone option name (e.g. "provider",
@@ -1026,7 +1028,15 @@ message RemoteDefinition {
   // must not be set.
   repeated UnionUpstream union_upstreams = 6;
 
-  reserved 7 to 9;
+  // For a wrapper backend ("crypt"): where it stores its data, another
+  // remote of the same JobSpec (its alias, never empty: not a local path)
+  // plus a path on it. The wrapped remote is not a union or another
+  // wrapper. Required for a wrapper backend and forbidden otherwise; the
+  // worker builds the backend's "remote" option from it, so that option
+  // must not be set.
+  Location wrapped = 7;
+
+  reserved 8 to 9;
 }
 
 // UnionUpstream is one member of a union remote.

@@ -6,9 +6,13 @@
 // It checks, beyond backend.CheckDescriptor's static shape:
 //
 //  1. the ID and label;
-//  2. the fields: names, kinds, enum choices and defaults, secret fields
-//     without defaults, Obscure only on secrets, members only on unions and
-//     never a required field that is advanced;
+//  2. the fields and capabilities: names, kinds, enum choices and
+//     defaults, secret fields without defaults, Obscure only on secrets,
+//     never a required field that is advanced, exactly one members field
+//     in a union and none elsewhere, exactly one wrapped field in a
+//     wrapper type and none elsewhere, never a members or wrapped field
+//     that is Fixed, and a wrapper type that is none of local, union,
+//     union member, restic repository or object store;
 //  3. Validate: it accepts every example configuration (the type's
 //     backend.Exampler, or one synthesized from the fields), which together
 //     must set every field, and rejects unknown keys, values in the wrong
@@ -110,7 +114,7 @@ func checkDescriptor(t reporter, typ backend.Type) {
 	}
 	caps := typ.Capabilities()
 	seen := map[string]bool{}
-	members := 0
+	members, wrapped := 0, 0
 	for _, f := range typ.Fields() {
 		where := fmt.Sprintf("field %q", f.Name)
 		if !fieldRe.MatchString(f.Name) || seen[f.Name] {
@@ -143,8 +147,14 @@ func checkDescriptor(t reporter, typ backend.Type) {
 		if f.Required && f.Advanced {
 			t.Errorf("%s: required and advanced", where)
 		}
-		if f.Kind == backend.KindMembers {
+		switch f.Kind {
+		case backend.KindMembers:
 			members++
+		case backend.KindWrapped:
+			wrapped++
+		}
+		if f.Fixed && (f.Kind == backend.KindMembers || f.Kind == backend.KindWrapped) {
+			t.Errorf("%s: a %s field is Fixed", where, f.Kind)
 		}
 	}
 	if caps.ObjectStore && (caps.Local || caps.Union) {
@@ -152,6 +162,12 @@ func checkDescriptor(t reporter, typ backend.Type) {
 	}
 	if members > 1 || (members == 1) != caps.Union {
 		t.Errorf("%d members fields with Capabilities.Union = %v; a union has exactly one, other types none", members, caps.Union)
+	}
+	if wrapped > 1 || (wrapped == 1) != caps.Wrapper {
+		t.Errorf("%d wrapped fields with Capabilities.Wrapper = %v; a wrapper has exactly one, other types none", wrapped, caps.Wrapper)
+	}
+	if caps.Wrapper && (caps.Local || caps.Union || caps.UnionMember || caps.ResticRepository || caps.ObjectStore) {
+		t.Errorf("Capabilities.Wrapper with Local, Union, UnionMember, ResticRepository or ObjectStore: %+v", caps)
 	}
 	if fs := typ.Fields(); len(fs) > 0 {
 		fs[0].Name = "mutated"
@@ -161,9 +177,12 @@ func checkDescriptor(t reporter, typ backend.Type) {
 	}
 }
 
-// configFields are the fields that are configuration values (not members).
+// configFields are the fields that are configuration values (not members
+// or wrapped fields).
 func configFields(typ backend.Type) []backend.Field {
-	return slices.DeleteFunc(typ.Fields(), func(f backend.Field) bool { return f.Kind == backend.KindMembers })
+	return slices.DeleteFunc(typ.Fields(), func(f backend.Field) bool {
+		return f.Kind == backend.KindMembers || f.Kind == backend.KindWrapped
+	})
 }
 
 // examples returns the type's example configurations, or one synthesized

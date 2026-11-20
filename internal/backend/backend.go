@@ -11,11 +11,12 @@ import (
 )
 
 // Kind is the value type of a field, which also selects its form widget:
-// the generic descriptor kinds plus KindMembers. The string values are
-// stable: they are exposed through the API.
+// the generic descriptor kinds plus KindMembers and KindWrapped. The string
+// values are stable: they are exposed through the API.
 //
 // It is a defined type over descriptor.Kind rather than an alias, so that
-// its Valid method can accept KindMembers, which stays backend-only.
+// its Valid method can accept KindMembers and KindWrapped, which stay
+// backend-only.
 type Kind descriptor.Kind
 
 // Field kinds.
@@ -34,10 +35,19 @@ const (
 	// not a configuration value: members are managed by the remotes use
 	// case, and CheckFields and MapFields ignore the field.
 	KindMembers Kind = "members"
+	// KindWrapped marks where a wrapper type's wrapped remote (the remote
+	// and folder it stores its data in, Remote.Wrapped in
+	// internal/app/remotes) goes in the form. Like KindMembers it is not a
+	// configuration value: CheckFields and MapFields ignore the field.
+	KindWrapped Kind = "wrapped"
 )
 
 // Valid reports whether k is a known kind.
-func (k Kind) Valid() bool { return descriptor.Kind(k).Valid() || k == KindMembers }
+func (k Kind) Valid() bool { return descriptor.Kind(k).Valid() || k.reference() }
+
+// reference reports whether k is a kind that refers to other remotes
+// (KindMembers, KindWrapped) instead of holding a configuration value.
+func (k Kind) reference() bool { return k == KindMembers || k == KindWrapped }
 
 // NotRclone as a Field's Rclone name means the field is not an rclone
 // option: the descriptor's ToRclone consumes it itself (e.g. a bucket or
@@ -75,6 +85,11 @@ type Field struct {
 	Obscure bool
 	// Choices are the allowed values of an enum field.
 	Choices []Choice
+	// Fixed fields get their value when the remote is created and keep it:
+	// the remotes use case refuses another value on update (e.g. a crypt
+	// password, which would make the stored data unreadable). Never set on
+	// a members or wrapped field.
+	Fixed bool
 
 	// Rclone is the rclone option name the field maps to: "" means Name,
 	// NotRclone means the field is not an rclone option.
@@ -82,21 +97,22 @@ type Field struct {
 }
 
 // Descriptor returns the generic part of f (without its rclone mapping),
-// as the API serves it. A members field keeps its kind, "members".
+// as the API serves it. A members or wrapped field keeps its kind,
+// "members" or "wrapped".
 func (f Field) Descriptor() descriptor.Field {
 	return descriptor.Field{
 		Name: f.Name, Label: f.Label, Help: f.Help, Placeholder: f.Placeholder, Default: f.Default,
 		Kind: descriptor.Kind(f.Kind), Required: f.Required, Secret: f.Secret, Advanced: f.Advanced,
-		Choices: slices.Clone(f.Choices),
+		Fixed: f.Fixed, Choices: slices.Clone(f.Choices),
 	}
 }
 
-// valueFields returns the descriptors of fields without members fields
-// (which are not configuration values).
+// valueFields returns the descriptors of fields without members and
+// wrapped fields (which are not configuration values).
 func valueFields(fields []Field) []descriptor.Field {
 	out := make([]descriptor.Field, 0, len(fields))
 	for _, f := range fields {
-		if f.Kind != KindMembers {
+		if !f.Kind.reference() {
 			out = append(out, f.Descriptor())
 		}
 	}
@@ -104,10 +120,10 @@ func valueFields(fields []Field) []descriptor.Field {
 }
 
 // RcloneName returns the rclone option the field maps to, or "" if it maps
-// to none (NotRclone, or a members field).
+// to none (NotRclone, or a members or wrapped field).
 func (f Field) RcloneName() string {
 	switch {
-	case f.Kind == KindMembers || f.Rclone == NotRclone:
+	case f.Kind.reference() || f.Rclone == NotRclone:
 		return ""
 	case f.Rclone == "":
 		return f.Name
@@ -134,12 +150,23 @@ type Capabilities struct {
 	// as empty instead of failing. Messages about a location that holds
 	// nothing say so. Never set on a local or union type.
 	ObjectStore bool
+	// Wrapper remotes store their data, transformed (e.g. encrypted), in a
+	// folder of one other remote (Remote.Wrapped in internal/app/remotes,
+	// which also checks what may be wrapped: not a local, union or wrapper
+	// remote). The type has exactly one KindWrapped field and none of the
+	// other capabilities above: no nesting, so a wrapper is never Local,
+	// Union, UnionMember, ResticRepository or ObjectStore.
+	Wrapper bool
+	// NoChecksum: rclone keeps no checksums on remotes of the type (e.g.
+	// crypt), so transfers and two-way syncs with such a side cannot
+	// compare checksums.
+	NoChecksum bool
 }
 
 // Config is a remote's configuration as the user entered it, keyed by field
 // name: non-secret values in Options, secret values in Secrets. Union
-// members are not part of it (see internal/app/remotes). Its Clone method
-// returns a deep copy.
+// members and a wrapper's wrapped remote are not part of it (see
+// internal/app/remotes). Its Clone method returns a deep copy.
 type Config = descriptor.Values
 
 // Rclone is a typed rclone remote: what the controller sends to the worker
@@ -242,7 +269,8 @@ type InvalidExampler interface {
 // key is a declared field, in the right map (Secrets for secret fields,
 // Options otherwise), every required field has a non-empty value, and
 // non-empty values parse as their kind (int, bool, enum choice; no NUL
-// bytes; no line breaks in string fields). Members fields are ignored.
+// bytes; no line breaks in string fields). Members and wrapped fields are
+// ignored.
 // Errors are ordered by field, then by unknown key; their messages never
 // contain values.
 func CheckFields(fields []Field, cfg Config) []domain.FieldError {
@@ -253,7 +281,7 @@ func CheckFields(fields []Field, cfg Config) []domain.FieldError {
 // keyed by their rclone names. A field's value is its entry in cfg (Secrets
 // for secret fields, Options otherwise) or, when that is empty, its
 // Default; fields left without a value are omitted. Fields that are not
-// rclone options (NotRclone, members) and keys that are not declared fields
+// rclone options (NotRclone, members, wrapped) and keys that are not declared fields
 // are ignored. Secret fields marked Obscure are listed in ObscureKeys, in
 // field order. Backend and Root are left for the caller to set; Options and
 // Secrets are never nil.

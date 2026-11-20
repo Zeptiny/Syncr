@@ -4002,9 +4002,11 @@ type RemoteDefinition struct {
 	// alias may be another alias followed by "_" (e.g. "s3" and "s3_eu"),
 	// because their environment variable names would overlap.
 	Alias string `protobuf:"bytes,1,opt,name=alias,proto3" json:"alias,omitempty"`
-	// rclone backend type, e.g. "s3", "sftp", "union", "b2". Workers reject
-	// "local" (local paths use an empty Location.remote and are checked against
-	// local_roots) and wrapping backends other than "union".
+	// rclone backend type, e.g. "s3", "sftp", "union", "crypt", "b2". Workers
+	// reject "local" (local paths use an empty Location.remote and are checked
+	// against local_roots) and wrapping backends other than "union" and
+	// "crypt" (a worker with the link feature rclone.crypt), whose wrapped
+	// remotes come from typed locations (union_upstreams, wrapped).
 	BackendType string `protobuf:"bytes,2,opt,name=backend_type,json=backendType,proto3" json:"backend_type,omitempty"`
 	// Non-secret options keyed by rclone option name (e.g. "provider",
 	// "endpoint", "host"). Values are final rclone values.
@@ -4021,8 +4023,15 @@ type RemoteDefinition struct {
 	// backend_type is "union" and forbidden otherwise; the "upstreams" option
 	// must not be set.
 	UnionUpstreams []*UnionUpstream `protobuf:"bytes,6,rep,name=union_upstreams,json=unionUpstreams,proto3" json:"union_upstreams,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// For a wrapper backend ("crypt"): where it stores its data, another
+	// remote of the same JobSpec (its alias, never empty: not a local path)
+	// plus a path on it. The wrapped remote is not a union or another
+	// wrapper. Required for a wrapper backend and forbidden otherwise; the
+	// worker builds the backend's "remote" option from it, so that option
+	// must not be set.
+	Wrapped       *Location `protobuf:"bytes,7,opt,name=wrapped,proto3" json:"wrapped,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RemoteDefinition) Reset() {
@@ -4093,6 +4102,13 @@ func (x *RemoteDefinition) GetObscureKeys() []string {
 func (x *RemoteDefinition) GetUnionUpstreams() []*UnionUpstream {
 	if x != nil {
 		return x.UnionUpstreams
+	}
+	return nil
+}
+
+func (x *RemoteDefinition) GetWrapped() *Location {
+	if x != nil {
+		return x.Wrapped
 	}
 	return nil
 }
@@ -9592,20 +9608,21 @@ const file_syncr_v1_link_proto_rawDesc = "" +
 	"\amessage\x18\a \x01(\tR\amessage\x12\x16\n" +
 	"\x06output\x18\b \x01(\tR\x06output\x12)\n" +
 	"\x10output_truncated\x18\t \x01(\bR\x0foutputTruncatedJ\x04\b\n" +
-	"\x10\x14\"\xb4\x03\n" +
+	"\x10\x14\"\xe2\x03\n" +
 	"\x10RemoteDefinition\x12\x14\n" +
 	"\x05alias\x18\x01 \x01(\tR\x05alias\x12!\n" +
 	"\fbackend_type\x18\x02 \x01(\tR\vbackendType\x12A\n" +
 	"\aoptions\x18\x03 \x03(\v2'.syncr.v1.RemoteDefinition.OptionsEntryR\aoptions\x12A\n" +
 	"\asecrets\x18\x04 \x03(\v2'.syncr.v1.RemoteDefinition.SecretsEntryR\asecrets\x12!\n" +
 	"\fobscure_keys\x18\x05 \x03(\tR\vobscureKeys\x12@\n" +
-	"\x0funion_upstreams\x18\x06 \x03(\v2\x17.syncr.v1.UnionUpstreamR\x0eunionUpstreams\x1a:\n" +
+	"\x0funion_upstreams\x18\x06 \x03(\v2\x17.syncr.v1.UnionUpstreamR\x0eunionUpstreams\x12,\n" +
+	"\awrapped\x18\a \x01(\v2\x12.syncr.v1.LocationR\awrapped\x1a:\n" +
 	"\fOptionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a:\n" +
 	"\fSecretsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\a\x10\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\b\x10\n" +
 	"\"v\n" +
 	"\rUnionUpstream\x12.\n" +
 	"\blocation\x18\x01 \x01(\v2\x12.syncr.v1.LocationR\blocation\x12/\n" +
@@ -10452,115 +10469,116 @@ var file_syncr_v1_link_proto_depIdxs = []int32{
 	111, // 61: syncr.v1.RemoteDefinition.options:type_name -> syncr.v1.RemoteDefinition.OptionsEntry
 	112, // 62: syncr.v1.RemoteDefinition.secrets:type_name -> syncr.v1.RemoteDefinition.SecretsEntry
 	49,  // 63: syncr.v1.RemoteDefinition.union_upstreams:type_name -> syncr.v1.UnionUpstream
-	50,  // 64: syncr.v1.UnionUpstream.location:type_name -> syncr.v1.Location
-	5,   // 65: syncr.v1.UnionUpstream.mode:type_name -> syncr.v1.UnionUpstreamMode
-	6,   // 66: syncr.v1.RcloneTransfer.mode:type_name -> syncr.v1.RcloneTransferMode
-	50,  // 67: syncr.v1.RcloneTransfer.source:type_name -> syncr.v1.Location
-	50,  // 68: syncr.v1.RcloneTransfer.destination:type_name -> syncr.v1.Location
-	52,  // 69: syncr.v1.RcloneTransfer.options:type_name -> syncr.v1.RcloneTransferOptions
-	113, // 70: syncr.v1.RcloneTransferOptions.max_duration:type_name -> google.protobuf.Duration
-	53,  // 71: syncr.v1.RcloneTransferOptions.filters:type_name -> syncr.v1.FilterRule
-	7,   // 72: syncr.v1.FilterRule.action:type_name -> syncr.v1.FilterAction
-	50,  // 73: syncr.v1.RcloneBisync.path1:type_name -> syncr.v1.Location
-	50,  // 74: syncr.v1.RcloneBisync.path2:type_name -> syncr.v1.Location
-	55,  // 75: syncr.v1.RcloneBisync.options:type_name -> syncr.v1.RcloneBisyncOptions
-	9,   // 76: syncr.v1.RcloneBisyncOptions.compare:type_name -> syncr.v1.BisyncCompare
-	10,  // 77: syncr.v1.RcloneBisyncOptions.conflict_resolve:type_name -> syncr.v1.BisyncConflictResolve
-	11,  // 78: syncr.v1.RcloneBisyncOptions.conflict_loser:type_name -> syncr.v1.BisyncConflictLoser
-	12,  // 79: syncr.v1.RcloneBisyncOptions.resync_mode:type_name -> syncr.v1.BisyncResyncMode
-	53,  // 80: syncr.v1.RcloneBisyncOptions.filters:type_name -> syncr.v1.FilterRule
-	13,  // 81: syncr.v1.RcloneBisyncOutput.resync_reason:type_name -> syncr.v1.BisyncResyncReason
-	50,  // 82: syncr.v1.ResticRepository.location:type_name -> syncr.v1.Location
-	57,  // 83: syncr.v1.ResticInit.repository:type_name -> syncr.v1.ResticRepository
-	57,  // 84: syncr.v1.ResticBackup.repository:type_name -> syncr.v1.ResticRepository
-	60,  // 85: syncr.v1.ResticBackup.remote_source:type_name -> syncr.v1.ResticBackupRemoteSource
-	8,   // 86: syncr.v1.ResticBackupRemoteSource.method:type_name -> syncr.v1.ResticRemoteSourceMethod
-	53,  // 87: syncr.v1.ResticBackupRemoteSource.filters:type_name -> syncr.v1.FilterRule
-	62,  // 88: syncr.v1.ResticBackupOutput.remote_source:type_name -> syncr.v1.RemoteSourceStats
-	8,   // 89: syncr.v1.RemoteSourceStats.method:type_name -> syncr.v1.ResticRemoteSourceMethod
-	113, // 90: syncr.v1.RemoteSourceStats.mirror_elapsed:type_name -> google.protobuf.Duration
-	57,  // 91: syncr.v1.ResticForget.repository:type_name -> syncr.v1.ResticRepository
-	63,  // 92: syncr.v1.ResticForget.policy:type_name -> syncr.v1.ResticRetentionPolicy
-	57,  // 93: syncr.v1.ResticPrune.repository:type_name -> syncr.v1.ResticRepository
-	57,  // 94: syncr.v1.ResticCheck.repository:type_name -> syncr.v1.ResticRepository
-	57,  // 95: syncr.v1.ResticRestore.repository:type_name -> syncr.v1.ResticRepository
-	14,  // 96: syncr.v1.ResticRestore.overwrite:type_name -> syncr.v1.ResticRestoreOverwrite
-	57,  // 97: syncr.v1.ResticSnapshots.repository:type_name -> syncr.v1.ResticRepository
-	73,  // 98: syncr.v1.ResticSnapshotsOutput.snapshots:type_name -> syncr.v1.ResticSnapshot
-	114, // 99: syncr.v1.ResticSnapshot.time:type_name -> google.protobuf.Timestamp
-	74,  // 100: syncr.v1.ResticSnapshot.summary:type_name -> syncr.v1.ResticSnapshotSummary
-	114, // 101: syncr.v1.ResticSnapshotSummary.backup_start:type_name -> google.protobuf.Timestamp
-	114, // 102: syncr.v1.ResticSnapshotSummary.backup_end:type_name -> google.protobuf.Timestamp
-	57,  // 103: syncr.v1.ResticDeleteData.repository:type_name -> syncr.v1.ResticRepository
-	83,  // 104: syncr.v1.RunProbe.spec:type_name -> syncr.v1.ProbeSpec
-	113, // 105: syncr.v1.RunProbe.timeout:type_name -> google.protobuf.Duration
-	77,  // 106: syncr.v1.ProbeRequest.probe:type_name -> syncr.v1.RunProbe
-	97,  // 107: syncr.v1.ProbeResponse.result:type_name -> syncr.v1.ProbeResult
-	97,  // 108: syncr.v1.CompleteProbeRequest.result:type_name -> syncr.v1.ProbeResult
-	48,  // 109: syncr.v1.ProbeSpec.remotes:type_name -> syncr.v1.RemoteDefinition
-	84,  // 110: syncr.v1.ProbeSpec.list_local:type_name -> syncr.v1.ProbeListLocal
-	85,  // 111: syncr.v1.ProbeSpec.list_remote:type_name -> syncr.v1.ProbeListRemote
-	86,  // 112: syncr.v1.ProbeSpec.about:type_name -> syncr.v1.ProbeAbout
-	87,  // 113: syncr.v1.ProbeSpec.restic_snapshots:type_name -> syncr.v1.ProbeResticSnapshots
-	88,  // 114: syncr.v1.ProbeSpec.restic_ls:type_name -> syncr.v1.ProbeResticLs
-	89,  // 115: syncr.v1.ProbeSpec.restic_init:type_name -> syncr.v1.ProbeResticInit
-	90,  // 116: syncr.v1.ProbeSpec.restic_config:type_name -> syncr.v1.ProbeResticConfig
-	91,  // 117: syncr.v1.ProbeSpec.sftp_host_keys:type_name -> syncr.v1.ProbeSftpHostKeys
-	92,  // 118: syncr.v1.ProbeSpec.measure_local:type_name -> syncr.v1.ProbeMeasureLocal
-	93,  // 119: syncr.v1.ProbeSpec.measure_remote:type_name -> syncr.v1.ProbeMeasureRemote
-	94,  // 120: syncr.v1.ProbeSpec.restic_measure:type_name -> syncr.v1.ProbeResticMeasure
-	95,  // 121: syncr.v1.ProbeSpec.restic_find:type_name -> syncr.v1.ProbeResticFind
-	96,  // 122: syncr.v1.ProbeSpec.restic_diff:type_name -> syncr.v1.ProbeResticDiff
-	50,  // 123: syncr.v1.ProbeListRemote.location:type_name -> syncr.v1.Location
-	50,  // 124: syncr.v1.ProbeAbout.location:type_name -> syncr.v1.Location
-	57,  // 125: syncr.v1.ProbeResticSnapshots.repository:type_name -> syncr.v1.ResticRepository
-	57,  // 126: syncr.v1.ProbeResticLs.repository:type_name -> syncr.v1.ResticRepository
-	57,  // 127: syncr.v1.ProbeResticInit.repository:type_name -> syncr.v1.ResticRepository
-	57,  // 128: syncr.v1.ProbeResticConfig.repository:type_name -> syncr.v1.ResticRepository
-	50,  // 129: syncr.v1.ProbeMeasureRemote.location:type_name -> syncr.v1.Location
-	57,  // 130: syncr.v1.ProbeResticMeasure.repository:type_name -> syncr.v1.ResticRepository
-	57,  // 131: syncr.v1.ProbeResticFind.repository:type_name -> syncr.v1.ResticRepository
-	57,  // 132: syncr.v1.ProbeResticDiff.repository:type_name -> syncr.v1.ResticRepository
-	15,  // 133: syncr.v1.ProbeResult.status:type_name -> syncr.v1.ProbeStatus
-	37,  // 134: syncr.v1.ProbeResult.error:type_name -> syncr.v1.JobError
-	113, // 135: syncr.v1.ProbeResult.elapsed:type_name -> google.protobuf.Duration
-	98,  // 136: syncr.v1.ProbeResult.listing:type_name -> syncr.v1.ProbeListing
-	100, // 137: syncr.v1.ProbeResult.usage:type_name -> syncr.v1.ProbeUsage
-	72,  // 138: syncr.v1.ProbeResult.snapshots:type_name -> syncr.v1.ResticSnapshotsOutput
-	101, // 139: syncr.v1.ProbeResult.repository_config:type_name -> syncr.v1.ResticRepositoryConfig
-	102, // 140: syncr.v1.ProbeResult.sftp_host_keys:type_name -> syncr.v1.SftpHostKeys
-	104, // 141: syncr.v1.ProbeResult.measurement:type_name -> syncr.v1.ProbeMeasurement
-	106, // 142: syncr.v1.ProbeResult.find:type_name -> syncr.v1.ResticFindOutput
-	110, // 143: syncr.v1.ProbeResult.diff:type_name -> syncr.v1.ResticDiffOutput
-	99,  // 144: syncr.v1.ProbeListing.entries:type_name -> syncr.v1.ProbeEntry
-	16,  // 145: syncr.v1.ProbeEntry.type:type_name -> syncr.v1.ProbeEntryType
-	114, // 146: syncr.v1.ProbeEntry.mod_time:type_name -> google.protobuf.Timestamp
-	103, // 147: syncr.v1.SftpHostKeys.keys:type_name -> syncr.v1.SftpHostKey
-	105, // 148: syncr.v1.ProbeMeasurement.children:type_name -> syncr.v1.ProbeChildMeasurement
-	107, // 149: syncr.v1.ResticFindOutput.matches:type_name -> syncr.v1.ResticFindMatch
-	99,  // 150: syncr.v1.ResticFindMatch.entry:type_name -> syncr.v1.ProbeEntry
-	17,  // 151: syncr.v1.ResticDiffChange.modifier:type_name -> syncr.v1.ResticDiffModifier
-	108, // 152: syncr.v1.ResticDiffOutput.changes:type_name -> syncr.v1.ResticDiffChange
-	109, // 153: syncr.v1.ResticDiffOutput.stats:type_name -> syncr.v1.ResticDiffStats
-	18,  // 154: syncr.v1.ControllerLinkService.Report:input_type -> syncr.v1.ReportRequest
-	20,  // 155: syncr.v1.ControllerLinkService.Poll:input_type -> syncr.v1.PollRequest
-	81,  // 156: syncr.v1.ControllerLinkService.CompleteProbe:input_type -> syncr.v1.CompleteProbeRequest
-	22,  // 157: syncr.v1.WorkerLinkService.Command:input_type -> syncr.v1.CommandRequest
-	24,  // 158: syncr.v1.WorkerLinkService.Pull:input_type -> syncr.v1.PullRequest
-	79,  // 159: syncr.v1.WorkerLinkService.Probe:input_type -> syncr.v1.ProbeRequest
-	26,  // 160: syncr.v1.EnrollmentService.Enroll:input_type -> syncr.v1.EnrollRequest
-	19,  // 161: syncr.v1.ControllerLinkService.Report:output_type -> syncr.v1.ReportResponse
-	21,  // 162: syncr.v1.ControllerLinkService.Poll:output_type -> syncr.v1.PollResponse
-	82,  // 163: syncr.v1.ControllerLinkService.CompleteProbe:output_type -> syncr.v1.CompleteProbeResponse
-	23,  // 164: syncr.v1.WorkerLinkService.Command:output_type -> syncr.v1.CommandResponse
-	25,  // 165: syncr.v1.WorkerLinkService.Pull:output_type -> syncr.v1.PullResponse
-	80,  // 166: syncr.v1.WorkerLinkService.Probe:output_type -> syncr.v1.ProbeResponse
-	27,  // 167: syncr.v1.EnrollmentService.Enroll:output_type -> syncr.v1.EnrollResponse
-	161, // [161:168] is the sub-list for method output_type
-	154, // [154:161] is the sub-list for method input_type
-	154, // [154:154] is the sub-list for extension type_name
-	154, // [154:154] is the sub-list for extension extendee
-	0,   // [0:154] is the sub-list for field type_name
+	50,  // 64: syncr.v1.RemoteDefinition.wrapped:type_name -> syncr.v1.Location
+	50,  // 65: syncr.v1.UnionUpstream.location:type_name -> syncr.v1.Location
+	5,   // 66: syncr.v1.UnionUpstream.mode:type_name -> syncr.v1.UnionUpstreamMode
+	6,   // 67: syncr.v1.RcloneTransfer.mode:type_name -> syncr.v1.RcloneTransferMode
+	50,  // 68: syncr.v1.RcloneTransfer.source:type_name -> syncr.v1.Location
+	50,  // 69: syncr.v1.RcloneTransfer.destination:type_name -> syncr.v1.Location
+	52,  // 70: syncr.v1.RcloneTransfer.options:type_name -> syncr.v1.RcloneTransferOptions
+	113, // 71: syncr.v1.RcloneTransferOptions.max_duration:type_name -> google.protobuf.Duration
+	53,  // 72: syncr.v1.RcloneTransferOptions.filters:type_name -> syncr.v1.FilterRule
+	7,   // 73: syncr.v1.FilterRule.action:type_name -> syncr.v1.FilterAction
+	50,  // 74: syncr.v1.RcloneBisync.path1:type_name -> syncr.v1.Location
+	50,  // 75: syncr.v1.RcloneBisync.path2:type_name -> syncr.v1.Location
+	55,  // 76: syncr.v1.RcloneBisync.options:type_name -> syncr.v1.RcloneBisyncOptions
+	9,   // 77: syncr.v1.RcloneBisyncOptions.compare:type_name -> syncr.v1.BisyncCompare
+	10,  // 78: syncr.v1.RcloneBisyncOptions.conflict_resolve:type_name -> syncr.v1.BisyncConflictResolve
+	11,  // 79: syncr.v1.RcloneBisyncOptions.conflict_loser:type_name -> syncr.v1.BisyncConflictLoser
+	12,  // 80: syncr.v1.RcloneBisyncOptions.resync_mode:type_name -> syncr.v1.BisyncResyncMode
+	53,  // 81: syncr.v1.RcloneBisyncOptions.filters:type_name -> syncr.v1.FilterRule
+	13,  // 82: syncr.v1.RcloneBisyncOutput.resync_reason:type_name -> syncr.v1.BisyncResyncReason
+	50,  // 83: syncr.v1.ResticRepository.location:type_name -> syncr.v1.Location
+	57,  // 84: syncr.v1.ResticInit.repository:type_name -> syncr.v1.ResticRepository
+	57,  // 85: syncr.v1.ResticBackup.repository:type_name -> syncr.v1.ResticRepository
+	60,  // 86: syncr.v1.ResticBackup.remote_source:type_name -> syncr.v1.ResticBackupRemoteSource
+	8,   // 87: syncr.v1.ResticBackupRemoteSource.method:type_name -> syncr.v1.ResticRemoteSourceMethod
+	53,  // 88: syncr.v1.ResticBackupRemoteSource.filters:type_name -> syncr.v1.FilterRule
+	62,  // 89: syncr.v1.ResticBackupOutput.remote_source:type_name -> syncr.v1.RemoteSourceStats
+	8,   // 90: syncr.v1.RemoteSourceStats.method:type_name -> syncr.v1.ResticRemoteSourceMethod
+	113, // 91: syncr.v1.RemoteSourceStats.mirror_elapsed:type_name -> google.protobuf.Duration
+	57,  // 92: syncr.v1.ResticForget.repository:type_name -> syncr.v1.ResticRepository
+	63,  // 93: syncr.v1.ResticForget.policy:type_name -> syncr.v1.ResticRetentionPolicy
+	57,  // 94: syncr.v1.ResticPrune.repository:type_name -> syncr.v1.ResticRepository
+	57,  // 95: syncr.v1.ResticCheck.repository:type_name -> syncr.v1.ResticRepository
+	57,  // 96: syncr.v1.ResticRestore.repository:type_name -> syncr.v1.ResticRepository
+	14,  // 97: syncr.v1.ResticRestore.overwrite:type_name -> syncr.v1.ResticRestoreOverwrite
+	57,  // 98: syncr.v1.ResticSnapshots.repository:type_name -> syncr.v1.ResticRepository
+	73,  // 99: syncr.v1.ResticSnapshotsOutput.snapshots:type_name -> syncr.v1.ResticSnapshot
+	114, // 100: syncr.v1.ResticSnapshot.time:type_name -> google.protobuf.Timestamp
+	74,  // 101: syncr.v1.ResticSnapshot.summary:type_name -> syncr.v1.ResticSnapshotSummary
+	114, // 102: syncr.v1.ResticSnapshotSummary.backup_start:type_name -> google.protobuf.Timestamp
+	114, // 103: syncr.v1.ResticSnapshotSummary.backup_end:type_name -> google.protobuf.Timestamp
+	57,  // 104: syncr.v1.ResticDeleteData.repository:type_name -> syncr.v1.ResticRepository
+	83,  // 105: syncr.v1.RunProbe.spec:type_name -> syncr.v1.ProbeSpec
+	113, // 106: syncr.v1.RunProbe.timeout:type_name -> google.protobuf.Duration
+	77,  // 107: syncr.v1.ProbeRequest.probe:type_name -> syncr.v1.RunProbe
+	97,  // 108: syncr.v1.ProbeResponse.result:type_name -> syncr.v1.ProbeResult
+	97,  // 109: syncr.v1.CompleteProbeRequest.result:type_name -> syncr.v1.ProbeResult
+	48,  // 110: syncr.v1.ProbeSpec.remotes:type_name -> syncr.v1.RemoteDefinition
+	84,  // 111: syncr.v1.ProbeSpec.list_local:type_name -> syncr.v1.ProbeListLocal
+	85,  // 112: syncr.v1.ProbeSpec.list_remote:type_name -> syncr.v1.ProbeListRemote
+	86,  // 113: syncr.v1.ProbeSpec.about:type_name -> syncr.v1.ProbeAbout
+	87,  // 114: syncr.v1.ProbeSpec.restic_snapshots:type_name -> syncr.v1.ProbeResticSnapshots
+	88,  // 115: syncr.v1.ProbeSpec.restic_ls:type_name -> syncr.v1.ProbeResticLs
+	89,  // 116: syncr.v1.ProbeSpec.restic_init:type_name -> syncr.v1.ProbeResticInit
+	90,  // 117: syncr.v1.ProbeSpec.restic_config:type_name -> syncr.v1.ProbeResticConfig
+	91,  // 118: syncr.v1.ProbeSpec.sftp_host_keys:type_name -> syncr.v1.ProbeSftpHostKeys
+	92,  // 119: syncr.v1.ProbeSpec.measure_local:type_name -> syncr.v1.ProbeMeasureLocal
+	93,  // 120: syncr.v1.ProbeSpec.measure_remote:type_name -> syncr.v1.ProbeMeasureRemote
+	94,  // 121: syncr.v1.ProbeSpec.restic_measure:type_name -> syncr.v1.ProbeResticMeasure
+	95,  // 122: syncr.v1.ProbeSpec.restic_find:type_name -> syncr.v1.ProbeResticFind
+	96,  // 123: syncr.v1.ProbeSpec.restic_diff:type_name -> syncr.v1.ProbeResticDiff
+	50,  // 124: syncr.v1.ProbeListRemote.location:type_name -> syncr.v1.Location
+	50,  // 125: syncr.v1.ProbeAbout.location:type_name -> syncr.v1.Location
+	57,  // 126: syncr.v1.ProbeResticSnapshots.repository:type_name -> syncr.v1.ResticRepository
+	57,  // 127: syncr.v1.ProbeResticLs.repository:type_name -> syncr.v1.ResticRepository
+	57,  // 128: syncr.v1.ProbeResticInit.repository:type_name -> syncr.v1.ResticRepository
+	57,  // 129: syncr.v1.ProbeResticConfig.repository:type_name -> syncr.v1.ResticRepository
+	50,  // 130: syncr.v1.ProbeMeasureRemote.location:type_name -> syncr.v1.Location
+	57,  // 131: syncr.v1.ProbeResticMeasure.repository:type_name -> syncr.v1.ResticRepository
+	57,  // 132: syncr.v1.ProbeResticFind.repository:type_name -> syncr.v1.ResticRepository
+	57,  // 133: syncr.v1.ProbeResticDiff.repository:type_name -> syncr.v1.ResticRepository
+	15,  // 134: syncr.v1.ProbeResult.status:type_name -> syncr.v1.ProbeStatus
+	37,  // 135: syncr.v1.ProbeResult.error:type_name -> syncr.v1.JobError
+	113, // 136: syncr.v1.ProbeResult.elapsed:type_name -> google.protobuf.Duration
+	98,  // 137: syncr.v1.ProbeResult.listing:type_name -> syncr.v1.ProbeListing
+	100, // 138: syncr.v1.ProbeResult.usage:type_name -> syncr.v1.ProbeUsage
+	72,  // 139: syncr.v1.ProbeResult.snapshots:type_name -> syncr.v1.ResticSnapshotsOutput
+	101, // 140: syncr.v1.ProbeResult.repository_config:type_name -> syncr.v1.ResticRepositoryConfig
+	102, // 141: syncr.v1.ProbeResult.sftp_host_keys:type_name -> syncr.v1.SftpHostKeys
+	104, // 142: syncr.v1.ProbeResult.measurement:type_name -> syncr.v1.ProbeMeasurement
+	106, // 143: syncr.v1.ProbeResult.find:type_name -> syncr.v1.ResticFindOutput
+	110, // 144: syncr.v1.ProbeResult.diff:type_name -> syncr.v1.ResticDiffOutput
+	99,  // 145: syncr.v1.ProbeListing.entries:type_name -> syncr.v1.ProbeEntry
+	16,  // 146: syncr.v1.ProbeEntry.type:type_name -> syncr.v1.ProbeEntryType
+	114, // 147: syncr.v1.ProbeEntry.mod_time:type_name -> google.protobuf.Timestamp
+	103, // 148: syncr.v1.SftpHostKeys.keys:type_name -> syncr.v1.SftpHostKey
+	105, // 149: syncr.v1.ProbeMeasurement.children:type_name -> syncr.v1.ProbeChildMeasurement
+	107, // 150: syncr.v1.ResticFindOutput.matches:type_name -> syncr.v1.ResticFindMatch
+	99,  // 151: syncr.v1.ResticFindMatch.entry:type_name -> syncr.v1.ProbeEntry
+	17,  // 152: syncr.v1.ResticDiffChange.modifier:type_name -> syncr.v1.ResticDiffModifier
+	108, // 153: syncr.v1.ResticDiffOutput.changes:type_name -> syncr.v1.ResticDiffChange
+	109, // 154: syncr.v1.ResticDiffOutput.stats:type_name -> syncr.v1.ResticDiffStats
+	18,  // 155: syncr.v1.ControllerLinkService.Report:input_type -> syncr.v1.ReportRequest
+	20,  // 156: syncr.v1.ControllerLinkService.Poll:input_type -> syncr.v1.PollRequest
+	81,  // 157: syncr.v1.ControllerLinkService.CompleteProbe:input_type -> syncr.v1.CompleteProbeRequest
+	22,  // 158: syncr.v1.WorkerLinkService.Command:input_type -> syncr.v1.CommandRequest
+	24,  // 159: syncr.v1.WorkerLinkService.Pull:input_type -> syncr.v1.PullRequest
+	79,  // 160: syncr.v1.WorkerLinkService.Probe:input_type -> syncr.v1.ProbeRequest
+	26,  // 161: syncr.v1.EnrollmentService.Enroll:input_type -> syncr.v1.EnrollRequest
+	19,  // 162: syncr.v1.ControllerLinkService.Report:output_type -> syncr.v1.ReportResponse
+	21,  // 163: syncr.v1.ControllerLinkService.Poll:output_type -> syncr.v1.PollResponse
+	82,  // 164: syncr.v1.ControllerLinkService.CompleteProbe:output_type -> syncr.v1.CompleteProbeResponse
+	23,  // 165: syncr.v1.WorkerLinkService.Command:output_type -> syncr.v1.CommandResponse
+	25,  // 166: syncr.v1.WorkerLinkService.Pull:output_type -> syncr.v1.PullResponse
+	80,  // 167: syncr.v1.WorkerLinkService.Probe:output_type -> syncr.v1.ProbeResponse
+	27,  // 168: syncr.v1.EnrollmentService.Enroll:output_type -> syncr.v1.EnrollResponse
+	162, // [162:169] is the sub-list for method output_type
+	155, // [155:162] is the sub-list for method input_type
+	155, // [155:155] is the sub-list for extension type_name
+	155, // [155:155] is the sub-list for extension extendee
+	0,   // [0:155] is the sub-list for field type_name
 }
 
 func init() { file_syncr_v1_link_proto_init() }

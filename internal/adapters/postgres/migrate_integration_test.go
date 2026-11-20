@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -67,7 +69,7 @@ var milestone4Tables = []string{"contacts", "schedules", "schedule_remotes", "sc
 var milestone5Tables = []string{"restic_repositories", "restic_snapshots"}
 
 // allVersions are the versions of the embedded migrations.
-var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
 
 func columnExists(t *testing.T, s *Store, table, column string) bool {
 	t.Helper()
@@ -644,6 +646,133 @@ func TestMigrateEnrollmentTokenIDs(t *testing.T) {
 	if got, err := s.EnrollWorker(ctx, hashes[0], time.Now(), w); err != nil || got.UsedBy != w.ID || got.ID.IsZero() {
 		t.Errorf("EnrollWorker(old token) = (%+v, %v)", got, err)
 	}
+}
+
+// TestMigrateWrappedRemotes checks migration 00012: remotes get a wrapped
+// remote and path (unset for the remotes already there), a remote cannot
+// wrap itself or have a path without a remote, ListRemotesUsing finds both
+// the unions and the wrappers that use a remote, and down removes the
+// columns, the constraints and the index.
+func TestMigrateWrappedRemotes(t *testing.T) {
+	s := openStore(t, createDB(t, true))
+	ctx := t.Context()
+	owner := seedUser(t, s)
+	p, closeDB, err := s.migrationProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	if _, err := p.DownTo(ctx, 11); err != nil {
+		t.Fatalf("down to 11: %v", err)
+	}
+	const (
+		store  = "00000000-0000-7000-8000-000000000301" // the remote that is wrapped
+		other  = "00000000-0000-7000-8000-000000000302"
+		union  = "00000000-0000-7000-8000-000000000303"
+		vault  = "00000000-0000-7000-8000-000000000304" // created after the migration
+		unused = "00000000-0000-7000-8000-000000000305"
+	)
+	insert := func(id, name, typ string) {
+		t.Helper()
+		if _, err := s.pool.Exec(ctx, `INSERT INTO remotes (id, owner_id, name, backend_type, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, now(), now())`, id, owner.String(), name, typ); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert(store, "Store", "s3")
+	insert(other, "Other", "sftp")
+	insert(union, "All", "union")
+	if _, err := s.pool.Exec(ctx, `INSERT INTO union_members (union_remote_id, ord, member_remote_id, path, mode)
+		VALUES ($1, 0, $2, 'a', 'read_write'), ($1, 1, $3, 'b', 'read_write')`, union, store, other); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) {
+		t.Errorf("applied versions = %v, want %v", got, allVersions)
+	}
+	row, err := s.q.GetRemote(ctx, pgID(mustRemoteID(t, store)))
+	if err != nil || row.WrappedRemoteID.Valid || row.WrappedPath != "" {
+		t.Errorf("a remote from before the migration: wrapped (%v, %q), %v; want none", row.WrappedRemoteID, row.WrappedPath, err)
+	}
+
+	insert(vault, "Vault", "crypt")
+	insert(unused, "Unused", "s3")
+	if _, err := s.pool.Exec(ctx, `UPDATE remotes SET wrapped_remote_id = $2, wrapped_path = 'backup/vault' WHERE id = $1`, vault, store); err != nil {
+		t.Fatalf("a wrapper: %v", err)
+	}
+	for name, stmt := range map[string]string{
+		"wraps itself":       `UPDATE remotes SET wrapped_remote_id = id WHERE id = $1`,
+		"path without wraps": `UPDATE remotes SET wrapped_path = 'x' WHERE id = $1`,
+		"missing remote":     `UPDATE remotes SET wrapped_remote_id = '00000000-0000-7000-8000-0000000003ff' WHERE id = $1`,
+	} {
+		if _, err := s.pool.Exec(ctx, stmt, unused); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+
+	names := func(id string) []string {
+		t.Helper()
+		rows, err := s.q.ListRemotesUsing(ctx, pgID(mustRemoteID(t, id)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.Name)
+		}
+		return out
+	}
+	if got := names(store); !slices.Equal(got, []string{"All", "Vault"}) {
+		t.Errorf("ListRemotesUsing(store) = %v, want the union and the wrapper, by name", got)
+	}
+	if got := names(other); !slices.Equal(got, []string{"All"}) {
+		t.Errorf("ListRemotesUsing(other) = %v, want the union", got)
+	}
+	if got := names(unused); len(got) != 0 {
+		t.Errorf("ListRemotesUsing(unused) = %v, want none", got)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE remotes SET deleted_at = now() WHERE id IN ($1, $2)`, vault, union); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(store); len(got) != 0 {
+		t.Errorf("ListRemotesUsing(store) after deleting its users = %v, want none", got)
+	}
+	if _, err := s.q.ShareLiveRemote(ctx, pgID(mustRemoteID(t, store))); err != nil {
+		t.Errorf("ShareLiveRemote(live) = %v", err)
+	}
+	if _, err := s.q.ShareLiveRemote(ctx, pgID(mustRemoteID(t, vault))); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("ShareLiveRemote(deleted) = %v, want no rows", err)
+	}
+
+	if _, err := p.DownTo(ctx, 11); err != nil {
+		t.Fatalf("down to 11 again: %v", err)
+	}
+	if columnExists(t, s, "remotes", "wrapped_remote_id") || columnExists(t, s, "remotes", "wrapped_path") {
+		t.Error("the wrapped columns survived the down migration")
+	}
+	var leftovers int
+	if err := s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM pg_indexes WHERE indexname = 'remotes_wrapped_remote_idx')
+		+ (SELECT count(*) FROM pg_constraint WHERE conname LIKE 'remotes_wrapped_%')`).Scan(&leftovers); err != nil || leftovers != 0 {
+		t.Errorf("index and constraints after down = %d (%v), want 0", leftovers, err)
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) {
+		t.Errorf("applied versions = %v, want %v", got, allVersions)
+	}
+}
+
+func mustRemoteID(t *testing.T, s string) domain.RemoteID {
+	t.Helper()
+	id, err := domain.ParseRemoteID(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 func mustWorkerID(t *testing.T, s string) domain.WorkerID {

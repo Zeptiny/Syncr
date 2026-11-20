@@ -14,29 +14,35 @@ import (
 const createRemote = `-- name: CreateRemote :exec
 INSERT INTO remotes (
     id, owner_id, name, backend_type, options, secrets_enc, secret_keys,
-    created_at, updated_at, deleted_at, version
+    created_at, updated_at, deleted_at, version, wrapped_remote_id, wrapped_path
 ) VALUES (
     $1::uuid, $2::uuid, $3::text, $4::text,
     $5::jsonb, $6::bytea, $7::text[],
     $8::timestamptz, $9::timestamptz,
-    $10::timestamptz, $11::bigint
+    $10::timestamptz, $11::bigint,
+    $12::uuid, $13::text
 )
 `
 
 type CreateRemoteParams struct {
-	ID          pgtype.UUID
-	OwnerID     pgtype.UUID
-	Name        string
-	BackendType string
-	Options     []byte
-	SecretsEnc  []byte
-	SecretKeys  []string
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
-	DeletedAt   pgtype.Timestamptz
-	Version     int64
+	ID              pgtype.UUID
+	OwnerID         pgtype.UUID
+	Name            string
+	BackendType     string
+	Options         []byte
+	SecretsEnc      []byte
+	SecretKeys      []string
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	DeletedAt       pgtype.Timestamptz
+	Version         int64
+	WrappedRemoteID pgtype.UUID
+	WrappedPath     string
 }
 
+// wrapped_remote_id is NULL and wrapped_path empty for a remote that is not
+// a wrapper. Lock a wrapped remote with ShareLiveRemote first, in the same
+// transaction.
 func (q *Queries) CreateRemote(ctx context.Context, arg CreateRemoteParams) error {
 	_, err := q.db.Exec(ctx, createRemote,
 		arg.ID,
@@ -50,6 +56,8 @@ func (q *Queries) CreateRemote(ctx context.Context, arg CreateRemoteParams) erro
 		arg.UpdatedAt,
 		arg.DeletedAt,
 		arg.Version,
+		arg.WrappedRemoteID,
+		arg.WrappedPath,
 	)
 	return err
 }
@@ -64,7 +72,7 @@ func (q *Queries) DeleteUnionMembers(ctx context.Context, unionRemoteID pgtype.U
 }
 
 const getRemote = `-- name: GetRemote :one
-SELECT id, owner_id, name, backend_type, options, secrets_enc, secret_keys, created_at, updated_at, deleted_at, version FROM remotes WHERE id = $1::uuid
+SELECT id, owner_id, name, backend_type, options, secrets_enc, secret_keys, created_at, updated_at, deleted_at, version, wrapped_remote_id, wrapped_path FROM remotes WHERE id = $1::uuid
 `
 
 func (q *Queries) GetRemote(ctx context.Context, id pgtype.UUID) (Remote, error) {
@@ -82,12 +90,14 @@ func (q *Queries) GetRemote(ctx context.Context, id pgtype.UUID) (Remote, error)
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.Version,
+		&i.WrappedRemoteID,
+		&i.WrappedPath,
 	)
 	return i, err
 }
 
 const getRemotes = `-- name: GetRemotes :many
-SELECT id, owner_id, name, backend_type, options, secrets_enc, secret_keys, created_at, updated_at, deleted_at, version FROM remotes WHERE id = ANY($1::uuid[]) ORDER BY id
+SELECT id, owner_id, name, backend_type, options, secrets_enc, secret_keys, created_at, updated_at, deleted_at, version, wrapped_remote_id, wrapped_path FROM remotes WHERE id = ANY($1::uuid[]) ORDER BY id
 `
 
 func (q *Queries) GetRemotes(ctx context.Context, ids []pgtype.UUID) ([]Remote, error) {
@@ -111,6 +121,8 @@ func (q *Queries) GetRemotes(ctx context.Context, ids []pgtype.UUID) ([]Remote, 
 			&i.UpdatedAt,
 			&i.DeletedAt,
 			&i.Version,
+			&i.WrappedRemoteID,
+			&i.WrappedPath,
 		); err != nil {
 			return nil, err
 		}
@@ -159,7 +171,7 @@ func (q *Queries) InsertUnionMember(ctx context.Context, arg InsertUnionMemberPa
 }
 
 const listRemotes = `-- name: ListRemotes :many
-SELECT id, owner_id, name, backend_type, options, secrets_enc, secret_keys, created_at, updated_at, deleted_at, version FROM remotes
+SELECT id, owner_id, name, backend_type, options, secrets_enc, secret_keys, created_at, updated_at, deleted_at, version, wrapped_remote_id, wrapped_path FROM remotes
 WHERE deleted_at IS NULL
   AND ($1::uuid IS NULL OR owner_id = $1::uuid)
   AND ($2::text IS NULL OR backend_type = $2::text)
@@ -192,6 +204,58 @@ func (q *Queries) ListRemotes(ctx context.Context, arg ListRemotesParams) ([]Rem
 			&i.UpdatedAt,
 			&i.DeletedAt,
 			&i.Version,
+			&i.WrappedRemoteID,
+			&i.WrappedPath,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRemotesUsing = `-- name: ListRemotesUsing :many
+SELECT r.id, r.owner_id, r.name, r.backend_type, r.options, r.secrets_enc, r.secret_keys, r.created_at, r.updated_at, r.deleted_at, r.version, r.wrapped_remote_id, r.wrapped_path FROM remotes r
+WHERE r.deleted_at IS NULL
+  AND (
+      r.wrapped_remote_id = $1::uuid
+      OR EXISTS (
+          SELECT 1 FROM union_members m
+          WHERE m.union_remote_id = r.id AND m.member_remote_id = $1::uuid
+      )
+  )
+ORDER BY lower(r.name) COLLATE "C", r.id
+`
+
+// The live remotes that use a remote: unions that have it as a member and
+// wrappers that store their data in it. DeleteRemote runs it in its
+// transaction, after locking the remote (LockLiveRemote).
+func (q *Queries) ListRemotesUsing(ctx context.Context, remoteID pgtype.UUID) ([]Remote, error) {
+	rows, err := q.db.Query(ctx, listRemotesUsing, remoteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Remote{}
+	for rows.Next() {
+		var i Remote
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.Name,
+			&i.BackendType,
+			&i.Options,
+			&i.SecretsEnc,
+			&i.SecretKeys,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.Version,
+			&i.WrappedRemoteID,
+			&i.WrappedPath,
 		); err != nil {
 			return nil, err
 		}
@@ -236,7 +300,7 @@ func (q *Queries) ListUnionMembers(ctx context.Context, unionIds []pgtype.UUID) 
 }
 
 const listUnionsUsing = `-- name: ListUnionsUsing :many
-SELECT r.id, r.owner_id, r.name, r.backend_type, r.options, r.secrets_enc, r.secret_keys, r.created_at, r.updated_at, r.deleted_at, r.version FROM remotes r
+SELECT r.id, r.owner_id, r.name, r.backend_type, r.options, r.secrets_enc, r.secret_keys, r.created_at, r.updated_at, r.deleted_at, r.version, r.wrapped_remote_id, r.wrapped_path FROM remotes r
 WHERE r.deleted_at IS NULL
   AND EXISTS (
       SELECT 1 FROM union_members m
@@ -245,6 +309,7 @@ WHERE r.deleted_at IS NULL
 ORDER BY lower(r.name) COLLATE "C", r.id
 `
 
+// Superseded by ListRemotesUsing, which also lists wrappers.
 func (q *Queries) ListUnionsUsing(ctx context.Context, memberRemoteID pgtype.UUID) ([]Remote, error) {
 	rows, err := q.db.Query(ctx, listUnionsUsing, memberRemoteID)
 	if err != nil {
@@ -266,6 +331,8 @@ func (q *Queries) ListUnionsUsing(ctx context.Context, memberRemoteID pgtype.UUI
 			&i.UpdatedAt,
 			&i.DeletedAt,
 			&i.Version,
+			&i.WrappedRemoteID,
+			&i.WrappedPath,
 		); err != nil {
 			return nil, err
 		}
@@ -282,7 +349,8 @@ SELECT id FROM remotes WHERE id = $1::uuid AND deleted_at IS NULL FOR UPDATE
 `
 
 // Locks a live remote against concurrent member inserts (see
-// InsertUnionMember) before SoftDeleteRemote checks its unions.
+// InsertUnionMember) and wrappers (see ShareLiveRemote) before
+// SoftDeleteRemote checks the remotes that use it.
 func (q *Queries) LockLiveRemote(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, lockLiveRemote, id)
 	var id_2 pgtype.UUID
@@ -319,6 +387,22 @@ func (q *Queries) RepositoryUsingRemote(ctx context.Context, remoteID pgtype.UUI
 	return name, err
 }
 
+const shareLiveRemote = `-- name: ShareLiveRemote :one
+SELECT id FROM remotes WHERE id = $1::uuid AND deleted_at IS NULL FOR SHARE
+`
+
+// Locks a live remote FOR SHARE before a wrapper that stores its data in
+// it is created or updated (CreateRemote, UpdateRemote): a concurrent
+// DeleteRemote of it (which locks it FOR UPDATE and checks
+// ListRemotesUsing) waits until this transaction commits and then sees the
+// wrapper. No row: the remote is missing or deleted.
+func (q *Queries) ShareLiveRemote(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, shareLiveRemote, id)
+	var id_2 pgtype.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const softDeleteRemote = `-- name: SoftDeleteRemote :exec
 UPDATE remotes SET deleted_at = $1::timestamptz, secrets_enc = NULL, version = version + 1
 WHERE id = $2::uuid AND deleted_at IS NULL
@@ -340,10 +424,12 @@ UPDATE remotes SET
     options = $2::jsonb,
     secrets_enc = $3::bytea,
     secret_keys = $4::text[],
-    updated_at = $5::timestamptz,
+    wrapped_remote_id = $5::uuid,
+    wrapped_path = $6::text,
+    updated_at = $7::timestamptz,
     version = version + 1
-WHERE id = $6::uuid AND version = $7::bigint AND deleted_at IS NULL
-RETURNING id, owner_id, name, backend_type, options, secrets_enc, secret_keys, created_at, updated_at, deleted_at, version
+WHERE id = $8::uuid AND version = $9::bigint AND deleted_at IS NULL
+RETURNING id, owner_id, name, backend_type, options, secrets_enc, secret_keys, created_at, updated_at, deleted_at, version, wrapped_remote_id, wrapped_path
 `
 
 type UpdateRemoteParams struct {
@@ -351,6 +437,8 @@ type UpdateRemoteParams struct {
 	Options         []byte
 	SecretsEnc      []byte
 	SecretKeys      []string
+	WrappedRemoteID pgtype.UUID
+	WrappedPath     string
 	UpdatedAt       pgtype.Timestamptz
 	ID              pgtype.UUID
 	ExpectedVersion int64
@@ -362,6 +450,8 @@ func (q *Queries) UpdateRemote(ctx context.Context, arg UpdateRemoteParams) (Rem
 		arg.Options,
 		arg.SecretsEnc,
 		arg.SecretKeys,
+		arg.WrappedRemoteID,
+		arg.WrappedPath,
 		arg.UpdatedAt,
 		arg.ID,
 		arg.ExpectedVersion,
@@ -379,6 +469,8 @@ func (q *Queries) UpdateRemote(ctx context.Context, arg UpdateRemoteParams) (Rem
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.Version,
+		&i.WrappedRemoteID,
+		&i.WrappedPath,
 	)
 	return i, err
 }

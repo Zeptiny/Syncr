@@ -51,7 +51,8 @@ message Backend {
 // BackendField describes one configuration field of a backend type. It also
 // describes the configuration fields of notification channel types
 // (ChannelType.fields in notify.proto), where "RemoteInput" reads as
-// "ContactInput" and the MEMBERS kind never occurs.
+// "ContactInput", the MEMBERS and WRAPPED kinds never occur and fixed is
+// never set.
 message BackendField {
   // Key in RemoteInput.options (or secrets, for a secret field).
   string name = 1;
@@ -85,7 +86,14 @@ message BackendField {
   // The allowed values of an ENUM field.
   repeated FieldChoice choices = 10;
 
-  reserved 11 to 19;
+  // The value is set when the remote is created and never changes (e.g. the
+  // password of an encrypted remote: another value would make the stored
+  // data unreadable). UpdateRemote refuses another value of an option, a
+  // new value of a secret and a clear of it. Forms show the field read-only
+  // when editing. Never set on a MEMBERS or WRAPPED field.
+  bool fixed = 11;
+
+  reserved 12 to 19;
 }
 
 // FieldKind is the value type of a backend field.
@@ -103,6 +111,10 @@ enum FieldKind {
   FIELD_KIND_ENUM = 5;
   // The members of a union remote (RemoteInput.members, not an option).
   FIELD_KIND_MEMBERS = 6;
+  // Where a wrapper remote (an encrypted remote) stores its data
+  // (RemoteInput.wrapped, not an option). Only types with
+  // BackendCapabilities.wrapper have one, and they have exactly one.
+  FIELD_KIND_WRAPPED = 7;
 }
 
 // FieldChoice is one allowed value of an ENUM field.
@@ -128,7 +140,20 @@ message BackendCapabilities {
   // Remotes of the type may hold restic repositories.
   bool restic_repository = 4;
 
-  reserved 5 to 15;
+  // Remotes of the type store their data, transformed (e.g. encrypted), in
+  // a folder of one other remote of the same owner (Remote.wrapped). Such a
+  // type is never local, a union, a union member or a place for restic
+  // repositories, and the remote it wraps is none of local, a union or
+  // another wrapper.
+  bool wrapper = 5;
+
+  // rclone keeps no checksums on remotes of the type, so a transfer or a
+  // two-way sync with such a side cannot compare checksums: RunJob and the
+  // schedule RPCs refuse RcloneTransferOptions.checksum and
+  // BISYNC_COMPARE_CHECKSUM when a side is on such a remote.
+  bool no_checksum = 6;
+
+  reserved 7 to 15;
 }
 
 // RemoteService manages the caller's remotes: configured storage locations
@@ -138,7 +163,8 @@ message BackendCapabilities {
 // Secret values are write-only: they are stored encrypted and never
 // returned. Invalid input fails with INVALID_ARGUMENT carrying a
 // ValidationError detail (field names like "name", "options.endpoint",
-// "secrets.pass", "members[1].path").
+// "secrets.pass", "clear_secrets[0]", "members[1].path",
+// "wrapped.remote_id", "wrapped.path").
 service RemoteService {
   // ListRemotes lists the caller's remotes, by name.
   rpc ListRemotes(ListRemotesRequest) returns (ListRemotesResponse) {
@@ -156,12 +182,16 @@ service RemoteService {
 
   // UpdateRemote changes a remote. The backend type cannot change. Options
   // and members are replaced as a whole; secrets are merged (see
-  // RemoteInput). ABORTED if the remote changed since version was read.
+  // RemoteInput). Fields marked BackendField.fixed keep the value they were
+  // created with: another value, a new secret or a clear of one fails with
+  // INVALID_ARGUMENT. ABORTED if the remote changed since version was read.
   rpc UpdateRemote(UpdateRemoteRequest) returns (UpdateRemoteResponse) {}
 
   // DeleteRemote deletes a remote. Job history keeps referring to it by
-  // name. FAILED_PRECONDITION while it is a member of a union remote.
-  // Queued jobs that use it fail with REMOTE_UNAVAILABLE.
+  // name. FAILED_PRECONDITION while it is a member of a union remote, while
+  // another remote stores its data in it (Remote.wrapped_by) or while it
+  // holds a restic repository. Queued jobs that use it fail with
+  // REMOTE_UNAVAILABLE.
   rpc DeleteRemote(DeleteRemoteRequest) returns (DeleteRemoteResponse) {
     option idempotency_level = IDEMPOTENT;
   }
@@ -197,7 +227,15 @@ message Remote {
   // Optimistic concurrency token for UpdateRemote.
   int64 version = 10;
 
-  reserved 11 to 19;
+  // Where a remote whose type has BackendCapabilities.wrapper stores its
+  // data; unset for other types.
+  WrappedRemote wrapped = 11;
+
+  // IDs of the caller's remotes that store their data in this one (their
+  // wrapped.remote_id is this remote's ID).
+  repeated string wrapped_by = 12;
+
+  reserved 13 to 19;
 }
 
 // RemoteInput is the configuration of a remote to create or update.
@@ -223,7 +261,26 @@ message RemoteInput {
   // remotes whose type has union_member, none of them a union.
   repeated UnionMember members = 6;
 
-  reserved 7 to 15;
+  // Where the remote stores its data: required when the type has
+  // BackendCapabilities.wrapper, and must be unset otherwise. Unlike the
+  // fixed fields it may change on update (e.g. to follow data that was
+  // moved to another folder).
+  WrappedRemote wrapped = 7;
+
+  reserved 8 to 15;
+}
+
+// WrappedRemote is where a wrapper remote (an encrypted remote) stores its
+// data: a folder of one other remote.
+message WrappedRemote {
+  // The remote that holds the data: one of the caller's remotes, not the
+  // remote itself, and of a type that is not local, a union or a wrapper.
+  string remote_id = 1;
+
+  // Path on that remote, relative to its root; empty means its root.
+  string path = 2;
+
+  reserved 3 to 9;
 }
 
 // UnionMember is one member of a union remote.

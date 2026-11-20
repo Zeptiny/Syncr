@@ -95,6 +95,12 @@ func TestCheckDescriptor(t *testing.T) {
 	enum := backend.Field{Name: "e", Label: "E", Kind: backend.KindEnum, Choices: []backend.Choice{{Value: "a", Label: "A"}}}
 	members := backend.Field{Name: "members", Label: "Members", Kind: backend.KindMembers}
 	unionCaps := backend.Capabilities{Union: true}
+	wrapped := backend.Field{Name: "remote", Label: "Store in", Kind: backend.KindWrapped, Required: true}
+	wrapperCaps := backend.Capabilities{Wrapper: true, NoChecksum: true}
+	wrapper := func(caps backend.Capabilities, fields ...backend.Field) stubType {
+		return stubType{id: "crypt", label: "Crypt", caps: caps, fields: fields}
+	}
+	fixedPass := backend.Field{Name: "password", Label: "Password", Kind: backend.KindString, Secret: true, Obscure: true, Required: true, Fixed: true}
 
 	good := []stubType{
 		stub("s3", "S3", str("host"), backend.Field{Name: "port", Label: "Port", Kind: backend.KindInt, Default: "22"},
@@ -106,6 +112,10 @@ func TestCheckDescriptor(t *testing.T) {
 			backend.Field{Name: "user_name", Label: "User", Kind: backend.KindString, Rclone: "user"}),
 		{id: "union", label: "Union", caps: unionCaps, fields: []backend.Field{members}},
 		{id: "local", label: "Local", caps: backend.Capabilities{Local: true, UnionMember: true, ResticRepository: true}},
+		wrapper(wrapperCaps, wrapped, fixedPass,
+			backend.Field{Name: "suffix", Label: "Suffix", Kind: backend.KindString, Default: ".bin", Advanced: true, Fixed: true}),
+		// Fixed is allowed on a value field of any type.
+		stub("sftp", "SFTP", backend.Field{Name: "host", Label: "Host", Kind: backend.KindString, Fixed: true}),
 	}
 	for _, typ := range good {
 		if err := backend.CheckDescriptor(typ); err != nil {
@@ -145,6 +155,19 @@ func TestCheckDescriptor(t *testing.T) {
 		"bool default":        stub("s3", "S3", backend.Field{Name: "x", Label: "X", Kind: backend.KindBool, Default: "yes"}),
 		"multi-line default":  stub("s3", "S3", backend.Field{Name: "x", Label: "X", Kind: backend.KindString, Default: "a\nb"}),
 		"members has default": {id: "u", label: "U", caps: unionCaps, fields: []backend.Field{{Name: "members", Label: "M", Kind: backend.KindMembers, Default: "x"}}},
+		"fixed members":       {id: "u", label: "U", caps: unionCaps, fields: []backend.Field{{Name: "members", Label: "M", Kind: backend.KindMembers, Fixed: true}}},
+		"wrapper w/o wrapped": wrapper(wrapperCaps, fixedPass),
+		"wrapped, no wrapper": stub("s3", "S3", wrapped),
+		"two wrapped":         wrapper(wrapperCaps, wrapped, backend.Field{Name: "more", Label: "More", Kind: backend.KindWrapped}),
+		"secret wrapped":      wrapper(wrapperCaps, backend.Field{Name: "remote", Label: "R", Kind: backend.KindWrapped, Secret: true}),
+		"wrapped has default": wrapper(wrapperCaps, backend.Field{Name: "remote", Label: "R", Kind: backend.KindWrapped, Default: "x"}),
+		"wrapped choices":     wrapper(wrapperCaps, backend.Field{Name: "remote", Label: "R", Kind: backend.KindWrapped, Choices: enum.Choices}),
+		"fixed wrapped":       wrapper(wrapperCaps, backend.Field{Name: "remote", Label: "R", Kind: backend.KindWrapped, Fixed: true}),
+		"wrapper and local":   wrapper(backend.Capabilities{Wrapper: true, Local: true}, wrapped),
+		"wrapper and union":   wrapper(backend.Capabilities{Wrapper: true, Union: true}, wrapped, members),
+		"wrapper and member":  wrapper(backend.Capabilities{Wrapper: true, UnionMember: true}, wrapped),
+		"wrapper and restic":  wrapper(backend.Capabilities{Wrapper: true, ResticRepository: true}, wrapped),
+		"wrapper and object":  wrapper(backend.Capabilities{Wrapper: true, ObjectStore: true}, wrapped),
 	}
 	for name, typ := range bad {
 		if err := backend.CheckDescriptor(typ); err == nil {
