@@ -561,8 +561,9 @@ func cloneDef(d *syncrv1.RemoteDefinition) *syncrv1.RemoteDefinition {
 	}
 }
 
-func TestIntegrationMinIO(t *testing.T) {
-	it := newITest(t)
+// startMinIO starts MinIO and returns the remote "minio" for it.
+func startMinIO(t *testing.T) *syncrv1.RemoteDefinition {
+	t.Helper()
 	requireContainers(t)
 	// The secret contains characters that would break a connection string
 	// or an INI file; MinIO only accepts the request signatures if it
@@ -585,12 +586,17 @@ func TestIntegrationMinIO(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	def := &syncrv1.RemoteDefinition{
+	return &syncrv1.RemoteDefinition{
 		Alias:       "minio",
 		BackendType: "s3",
 		Options:     map[string]string{"provider": "Minio", "endpoint": endpoint, "region": "us-east-1", "force_path_style": "true"},
 		Secrets:     map[string]string{"access_key_id": user, "secret_access_key": secret},
 	}
+}
+
+func TestIntegrationMinIO(t *testing.T) {
+	it := newITest(t)
+	def := startMinIO(t)
 	roundTrip(t, it, def, "syncr-it/prefix")
 	// S3 cannot report usage, and only a bucket can be missing: a prefix
 	// without objects is an empty folder.
@@ -602,8 +608,10 @@ func TestIntegrationMinIO(t *testing.T) {
 	}
 }
 
-func TestIntegrationSFTP(t *testing.T) {
-	it := newITest(t)
+// startSFTP starts an SFTP server and returns its container and the
+// remote "box" for it, whose user may write in "upload".
+func startSFTP(t *testing.T) (testcontainers.Container, *syncrv1.RemoteDefinition) {
+	t.Helper()
 	requireContainers(t)
 	// atmoz/sftp splits its argument on ":", so the password avoids it.
 	const user, pass = "syncr", `p'a"s,s w$rd`
@@ -624,7 +632,7 @@ func TestIntegrationSFTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	def := &syncrv1.RemoteDefinition{
+	return ctr, &syncrv1.RemoteDefinition{
 		Alias:       "box",
 		BackendType: "sftp",
 		// shell_type none: the chrooted server has no shell for hash
@@ -633,6 +641,11 @@ func TestIntegrationSFTP(t *testing.T) {
 		Secrets:     map[string]string{"pass": pass},
 		ObscureKeys: []string{"pass"},
 	}
+}
+
+func TestIntegrationSFTP(t *testing.T) {
+	it := newITest(t)
+	ctr, def := startSFTP(t)
 	roundTrip(t, it, def, "upload/syncr-it")
 	probeRemote(t, it, def, "upload/syncr-it", "upload/syncr-it/nope", true)
 	sftpHostKeys(t, it, ctr, def)

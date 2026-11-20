@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -108,7 +109,8 @@ type remotePlan struct {
 // with a control character or a ".." segment; an unspecified method; a
 // malformed source key; invalid filters; the mirror's options with the
 // mount method; options out of range; and a folder that holds the
-// repository or lies inside it (same remote).
+// repository or lies inside it (on the same remote, also through a crypt
+// remote: storedAt).
 func planRemoteSource(spec *syncrv1.JobSpec) (remotePlan, error) {
 	op := spec.GetResticBackup()
 	src := op.GetRemoteSource()
@@ -185,8 +187,12 @@ func planRemoteSource(spec *syncrv1.JobSpec) (remotePlan, error) {
 		p.mountFlags = append(p.mountFlags, bwlimit)
 	}
 
-	if loc := op.GetRepository().GetLocation(); loc.GetRemote() == alias && remoteNested(loc.GetPath(), path) {
-		return p, invalid("the folder to back up is, holds or is inside the repository")
+	if loc := op.GetRepository().GetLocation(); loc.GetRemote() != "" {
+		repoAlias, repoPath := storedAt(spec.GetRemotes(), loc.GetRemote(), loc.GetPath())
+		srcAlias, srcPath := storedAt(spec.GetRemotes(), alias, path)
+		if repoAlias == srcAlias && remoteNested(repoPath, srcPath) {
+			return p, invalid("the folder to back up is, holds or is inside the repository")
+		}
 	}
 
 	args, err := remoteBackupFlags(op)
@@ -242,6 +248,22 @@ func checkSourcePath(path string) error {
 		}
 	}
 	return nil
+}
+
+// storedAt returns the remote and the path where the data at path on the
+// remote alias of remotes is stored, for checks of nested locations: for
+// a crypt remote (RemoteDefinition.wrapped), the remote it wraps and the
+// wrapped path joined with path; otherwise alias and path. It follows
+// rcloneenv.Env.Storage, before the remotes are validated: the
+// environment that rclone gets refuses a wrapped location that is not
+// another remote of the job.
+func storedAt(remotes []*syncrv1.RemoteDefinition, alias, path string) (string, string) {
+	for _, r := range remotes {
+		if w := r.GetWrapped(); r.GetAlias() == alias && w.GetRemote() != "" {
+			return w.GetRemote(), strings.TrimSuffix(w.GetPath(), "/") + "/" + strings.TrimPrefix(path, "/")
+		}
+	}
+	return alias, path
 }
 
 // remoteNested reports whether two paths on the same remote are the same
@@ -484,7 +506,8 @@ func (rs *remoteRun) precheckArgs() []string {
 // SOURCE_EMPTY unless allow_empty is set: backing it up would make an
 // empty snapshot that pushes real ones out of retention. Any other failure
 // is classified as for transfers. A path that names a file lists that
-// file, so it counts as a folder that holds it.
+// file, so it counts as a folder that holds it. A folder of a crypt remote
+// without such a file must also be in its parent (checkCryptFolder).
 func (rs *remoteRun) precheck(ctx context.Context) error {
 	lctx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
@@ -497,7 +520,7 @@ func (rs *remoteRun) precheck(ctx context.Context) error {
 			stop(errFileFound)
 		}
 	}
-	t := rclonetool.NewTracker(nil, rs.sc)
+	t := rs.listingTracker()
 	pres, err := rs.rclone(lctx, rs.precheckArgs(), stdout, t.Line)
 	if found && ctx.Err() == nil {
 		// Stopped on purpose, or it ended by itself after the file: a
@@ -515,6 +538,9 @@ func (rs *remoteRun) precheck(ctx context.Context) error {
 		}
 		return runner.Errorf(code, "cannot list the folder %s: %w", rs.where(), err)
 	}
+	if err := rs.checkCryptFolder(ctx); err != nil {
+		return err
+	}
 	rs.empty = true
 	if !rs.plan.src.GetAllowEmpty() {
 		what := "holds no file"
@@ -526,6 +552,64 @@ func (rs *remoteRun) precheck(ctx context.Context) error {
 				"allow an empty folder in the backup's options to back it up anyway", rs.where(), what)
 	}
 	return nil
+}
+
+// listingTracker returns a Tracker for an rclone listing that also keeps
+// rclone's final "Failed to <command>: ..." notice: a listing that fails
+// on names a crypt remote cannot decrypt reports nothing else.
+func (rs *remoteRun) listingTracker() *rclonetool.Tracker {
+	t := rclonetool.NewTracker(nil, rs.sc)
+	t.Observe = func(l rclonetool.LogLine) {
+		if strings.EqualFold(l.Level, "notice") && strings.HasPrefix(l.Msg, "Failed to ") {
+			t.Note(l.Msg)
+		}
+	}
+	return t
+}
+
+// checkCryptFolder fails (NOT_FOUND) when the folder to back up is below
+// the root of a crypt remote and its parent folder does not list it. On a
+// bucket-based remote (S3, B2) a prefix without objects lists as an empty
+// folder, and with the wrong password a crypt folder's name encrypts to
+// such a prefix: the folder would look empty instead of failing (with
+// allow_empty, the mirror would be emptied). The parent's listing fails on
+// names it cannot decrypt (the worker sets strict_names), or lacks the
+// folder. The root of a crypt remote, and other remotes, are not checked.
+func (rs *remoteRun) checkCryptFolder(ctx context.Context) error {
+	alias := rs.plan.src.GetRemote()
+	i := slices.IndexFunc(rs.job.Spec.GetRemotes(), func(r *syncrv1.RemoteDefinition) bool { return r.GetAlias() == alias })
+	if i < 0 || rs.job.Spec.GetRemotes()[i].GetBackendType() != "crypt" {
+		return nil
+	}
+	path := strings.Trim(pathpkg.Clean("/"+rs.plan.src.GetPath()), "/")
+	if path == "" {
+		return nil
+	}
+	parent, name := pathpkg.Split(path)
+	lctx, stop := context.WithCancel(ctx)
+	defer stop()
+	found := false
+	stdout := func(l proc.Line) {
+		if !found && strings.TrimSuffix(string(l.Data), "/") == name {
+			found = true
+			stop()
+		}
+	}
+	t := rs.listingTracker()
+	args := []string{"lsf", "--config=", "--use-json-log", "--log-level=NOTICE", "--max-depth=1", "--", alias + ":" + parent}
+	pres, err := rs.rclone(lctx, args, stdout, t.Line)
+	if found && ctx.Err() == nil {
+		return nil
+	}
+	if err := rs.rcloneOutcome("lsf", err, pres, t.Diagnostics()); err != nil {
+		if runner.Canceled(err) {
+			return err
+		}
+		return runner.Errorf(runner.CodeOf(err), "cannot list the folder that holds %s: %w", rs.where(), err)
+	}
+	return runner.Errorf(syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND,
+		"the folder %s does not exist; if it does, the crypt remote's password is wrong "+
+			"(with another password a folder's name encrypts to another one)", rs.where())
 }
 
 // viaMirror brings the mirror up to date, backs it up, and discards its

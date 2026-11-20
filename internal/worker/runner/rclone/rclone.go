@@ -197,6 +197,10 @@ func (r *Runner) Run(ctx context.Context, job runner.Job, emit runner.EmitFunc) 
 		return res, err
 	}
 	args = withRules(args, rules)
+	sc := scrub.New(env.Secrets())
+	if err := r.checkCryptSource(ctx, dir, env, sc, transfer.GetSource()); err != nil {
+		return res, err
+	}
 
 	// A move whose source is local can move whole folders with their
 	// links (rclone renames a folder when both sides are on one file
@@ -212,7 +216,6 @@ func (r *Runner) Run(ctx context.Context, job runner.Job, emit runner.EmitFunc) 
 		return res, err
 	}
 
-	sc := scrub.New(env.Secrets())
 	t := newTracker(emit, sc)
 	pres, err := r.cfg.Supervisor.Run(ctx, proc.Spec{
 		Path:   r.cfg.Binary,

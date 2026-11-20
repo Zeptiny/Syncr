@@ -519,6 +519,20 @@ func TestBisyncRejectsBeforeStarting(t *testing.T) {
 		{"nested folders", func(_ *bisyncFixture, op *syncrv1.RcloneBisync, _ *syncrv1.JobSpec) {
 			op.Path2 = &syncrv1.Location{Path: filepath.Join(op.GetPath1().GetPath(), "sub")}
 		}, syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, "inside the other"},
+		{"crypt side inside the other side", func(_ *bisyncFixture, op *syncrv1.RcloneBisync, spec *syncrv1.JobSpec) {
+			spec.Remotes = []*syncrv1.RemoteDefinition{sftpRemote("box", secret), cryptRemote("vault", "box", "data/vault", secret)}
+			op.Path1, op.Path2 = &syncrv1.Location{Remote: "box", Path: "data"}, &syncrv1.Location{Remote: "vault", Path: "photos"}
+		}, syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, "inside the other"},
+		{"crypt side holding the other side", func(_ *bisyncFixture, op *syncrv1.RcloneBisync, spec *syncrv1.JobSpec) {
+			spec.Remotes = []*syncrv1.RemoteDefinition{sftpRemote("box", secret), cryptRemote("vault", "box", "data", secret)}
+			op.Path1, op.Path2 = &syncrv1.Location{Remote: "vault", Path: ""}, &syncrv1.Location{Remote: "box", Path: "data/photos"}
+		}, syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, "inside the other"},
+		{"two crypt remotes over one folder", func(_ *bisyncFixture, op *syncrv1.RcloneBisync, spec *syncrv1.JobSpec) {
+			spec.Remotes = []*syncrv1.RemoteDefinition{
+				sftpRemote("box", secret), cryptRemote("c1", "box", "data", secret), cryptRemote("c2", "box", "data/", secret),
+			}
+			op.Path1, op.Path2 = &syncrv1.Location{Remote: "c1", Path: "x"}, &syncrv1.Location{Remote: "c2", Path: "x/y"}
+		}, syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, "inside the other"},
 		{"paths too long", func(_ *bisyncFixture, op *syncrv1.RcloneBisync, spec *syncrv1.JobSpec) {
 			spec.Remotes = []*syncrv1.RemoteDefinition{sftpRemote("box", secret)}
 			op.Path2 = &syncrv1.Location{Remote: "box", Path: long}

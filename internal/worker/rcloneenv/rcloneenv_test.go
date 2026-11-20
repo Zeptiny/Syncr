@@ -72,6 +72,10 @@ func withUpstreams(ups ...*syncrv1.UnionUpstream) func(*syncrv1.RemoteDefinition
 	return func(d *syncrv1.RemoteDefinition) { d.UnionUpstreams = ups }
 }
 
+func withWrapped(alias, path string) func(*syncrv1.RemoteDefinition) {
+	return func(d *syncrv1.RemoteDefinition) { d.Wrapped = &syncrv1.Location{Remote: alias, Path: path} }
+}
+
 func upstream(alias, path string, mode syncrv1.UnionUpstreamMode) *syncrv1.UnionUpstream {
 	return &syncrv1.UnionUpstream{Location: &syncrv1.Location{Remote: alias, Path: path}, Mode: mode}
 }
@@ -262,7 +266,7 @@ func TestRemotesRejects(t *testing.T) {
 		{"alias backend", []*syncrv1.RemoteDefinition{remote("src", "alias", withOptions("remote", "/etc"))}, false},
 		{"archive backend", []*syncrv1.RemoteDefinition{remote("src", "archive", withOptions("remote", "/"))}, false},
 		{"archive backend without remote", []*syncrv1.RemoteDefinition{remote("src", "archive")}, false},
-		{"crypt backend", []*syncrv1.RemoteDefinition{remote("src", "crypt")}, false},
+		{"crypt backend without wrapped", []*syncrv1.RemoteDefinition{ok("aa"), remote("src", "crypt", withOptions("remote", "/etc"))}, false},
 		{"combine backend", []*syncrv1.RemoteDefinition{remote("src", "combine")}, false},
 		{"azureblob backend", []*syncrv1.RemoteDefinition{remote("src", "azureblob", withOptions("account", "a"))}, false},
 		{"drive backend", []*syncrv1.RemoteDefinition{remote("src", "drive")}, false},
@@ -381,7 +385,7 @@ func TestCheckBackend(t *testing.T) {
 	// Wrappers of free-form remotes, and backends that can use the worker
 	// host's identity, among others.
 	for _, b := range []string{
-		"alias", "archive", "cache", "chunker", "combine", "compress", "crypt", "hasher",
+		"alias", "archive", "cache", "chunker", "combine", "compress", "hasher",
 		"azureblob", "azurefiles", "drive", "oracleobjectstorage", "smb", "swift", "http", "ftp", "hdfs",
 	} {
 		err := checkBackend(b)
@@ -439,6 +443,11 @@ func TestCheckOptionDenies(t *testing.T) {
 		{"cache", "chunk_path", "writes local files"},
 		{"cache", "tmp_upload_path", "writes local files"},
 		{"union", "upstreams", "union_upstreams"},
+		{"crypt", "remote", "set by the worker from wrapped"},
+		{"crypt", "Remote", "set by the worker from wrapped"},
+		{"crypt", "strict_names", "the worker always sets it"},
+		{"crypt", "Strict-Names", "the worker always sets it"},
+		{"crypt", "pass_bad_blocks", "wrong password"},
 	} {
 		err := checkOption(tt.backend, tt.key)
 		if err == nil || !strings.Contains(err.Error(), tt.reason) || !strings.Contains(err.Error(), strconv.Quote(tt.key)) {

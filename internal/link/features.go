@@ -80,7 +80,7 @@ const (
 func Features() []string {
 	return []string{
 		FeatureProbe, FeatureResticV2, FeatureResticDelete, FeatureJobTimeLimit, FeatureJobHooks,
-		FeatureRcloneBisync, FeatureResticRestoreSubfolderPaths, FeatureResticRemoteSource,
+		FeatureRcloneBisync, FeatureResticRestoreSubfolderPaths, FeatureResticRemoteSource, FeatureRcloneCrypt,
 	}
 }
 

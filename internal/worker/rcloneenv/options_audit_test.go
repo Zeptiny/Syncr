@@ -18,7 +18,9 @@ import (
 // because it runs a local command, touches local files or sockets, or uses
 // the worker host's identity (sftp ssh, key_use_agent and *_file; webdav
 // bearer_token_command and unix_socket; s3 env_auth and
-// shared_credentials_file; union upstreams).
+// shared_credentials_file; union upstreams), or because the worker sets it
+// itself (crypt remote and strict_names) or it would hide a wrong password
+// (crypt pass_bad_blocks).
 //
 // Judgment calls:
 //   - s3 profile only selects a profile of the host's AWS config, which
@@ -31,6 +33,20 @@ import (
 //     sftp remote needs a pass or key_pem anyway (checkCredentials).
 //   - sftp socks_proxy and http_proxy, like host and endpoint, only pick
 //     where the remote is.
+//   - crypt: none of the accepted options names a file, a command or a
+//     credential source; they only change how names and data are
+//     encrypted on the way to the wrapped remote, whose own options were
+//     reviewed with its type. password and password2 must arrive as
+//     obscured secrets (addRemote). show_mapping logs each decrypted name
+//     with its encrypted form (a NOTICE): names are not secrets, and the
+//     log is the job's own output. server_side_across_configs (deprecated)
+//     only lets rclone copy server-side between two remotes of the job.
+//     no_data_encryption leaves file contents unencrypted, which is the
+//     user's choice and hides nothing from a wrong password (names still
+//     fail with strict_names). The controller emits only the first six.
+//     Checked against rclone 1.75.2's "config providers" help and
+//     backend/crypt (Options, NewFs), which reads no file and starts no
+//     process: "remote" is opened with fs.NewFs like any other remote.
 //
 // TestSupportedBackendOptionsReviewed fails when the pinned rclone has an
 // option that is in neither group, so an rclone upgrade cannot add one
@@ -42,6 +58,9 @@ func reviewedOptions() map[string][]string {
 			download_auth_duration memory_pool_flush_time memory_pool_use_mmap lifecycle encoding
 			sse_customer_algorithm sse_customer_key sse_customer_key_base64 sse_customer_key_md5
 			description`),
+		"crypt": strings.Fields(`filename_encryption directory_name_encryption password password2
+			filename_encoding suffix description no_data_encryption show_mapping
+			server_side_across_configs`),
 		"memory": strings.Fields(`discard description`),
 		"s3": strings.Fields(`provider access_key_id secret_access_key region endpoint
 			location_constraint acl bucket_acl requester_pays server_side_encryption
