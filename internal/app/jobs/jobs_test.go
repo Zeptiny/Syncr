@@ -946,6 +946,92 @@ func TestWatch(t *testing.T) {
 	}
 }
 
+// latestHooked calls before ahead of every LatestJobSample.
+type latestHooked struct {
+	jobs.SampleRepository
+	before func()
+}
+
+func (h *latestHooked) LatestJobSample(ctx context.Context, id domain.JobID) (jobs.Sample, bool, error) {
+	if f := h.before; f != nil {
+		h.before = nil
+		f()
+	}
+	return h.SampleRepository.LatestJobSample(ctx, id)
+}
+
+// TestWatchSampleRecordedWhileSubscribing: a sample recorded after Watch
+// subscribed and before it read the latest stored sample reaches Watch
+// twice (the stored sample it sends first, and the published one in its
+// subscription). It is delivered once; later samples still are.
+func TestWatchSampleRecordedWhileSubscribing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	samples := &latestHooked{SampleRepository: e.store}
+	svc, err := jobs.New(jobs.Deps{
+		Jobs: e.store, Samples: samples, Clock: e.clock, IDs: &idgen.Sequential{},
+		Broker: e.rec, Notifier: e.rec, Waker: e.rec,
+	}, jobs.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.svc = svc
+	j := e.at(t, domain.JobRunning)
+	t0 := e.clock.Now()
+	record := func(at time.Time, bytes int64) {
+		t.Helper()
+		if ok, err := svc.RecordProgress(ctx, e.worker, j.ID, epoch, jobs.Sample{Time: at, Stats: jobs.Stats{Bytes: bytes}}); !ok || err != nil {
+			t.Errorf("RecordProgress(%d) = (%v, %v)", bytes, ok, err)
+		}
+	}
+	record(t0, 1)
+	// Recorded (published and stored, as more than SampleInterval passed)
+	// between Watch's subscription and its read of the latest sample.
+	samples.before = func() { record(t0.Add(time.Minute), 2) }
+
+	updates := make(chan jobs.Update, 32)
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.Watch(ctx, e.owner, j.ID, func(u jobs.Update) error { updates <- u; return nil })
+	}()
+	var got []string
+	add := func(u jobs.Update) {
+		if u.Job != nil {
+			got = append(got, string(u.Job.Status))
+		} else {
+			got = append(got, fmt.Sprintf("progress %d", u.Progress.Stats.Bytes))
+		}
+	}
+	for range 2 {
+		select {
+		case u := <-updates:
+			add(u)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no update after %v", got)
+		}
+	}
+	// The broker coalesces consecutive progress updates, so a job update
+	// (stale, filtered) keeps the duplicate in the subscription apart
+	// from the next sample.
+	stale := j
+	e.rec.Publish(jobs.Update{JobID: j.ID, Job: &stale})
+	record(t0.Add(time.Minute+time.Second), 3)
+	if _, _, err := svc.Finish(ctx, e.worker, j.ID, epoch, jobs.Outcome{Status: domain.JobSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Errorf("Watch = %v", err)
+	}
+	close(updates)
+	for u := range updates {
+		add(u)
+	}
+	if want := []string{"running", "progress 2", "progress 3", "succeeded"}; !slices.Equal(got, want) {
+		t.Errorf("updates = %v, want %v", got, want)
+	}
+}
+
 func TestList(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

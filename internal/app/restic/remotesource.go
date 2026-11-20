@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
@@ -27,6 +28,12 @@ const (
 	sourceIsRepository    = "is the folder of repository %q (at %s): a backup cannot read its own repository"
 	sourceHoldsRepository = "holds repository %q (at %s): a backup cannot read its own repository; choose a folder beside it"
 	sourceInRepository    = "is inside the folder of repository %q (at %s): a backup cannot read its own repository"
+	// storedIsRepository, storedHoldsRepository and storedInRepository are
+	// the same for a source on a wrapper remote (crypt) whose data is
+	// stored on the repository's remote, by the folder it is stored in.
+	storedIsRepository    = "stores its data in the folder of repository %q (at %s): a backup cannot read its own repository"
+	storedHoldsRepository = "stores its data in a folder that holds repository %q (at %s): a backup cannot read its own repository; choose a folder beside it"
+	storedInRepository    = "stores its data inside the folder of repository %q (at %s): a backup cannot read its own repository"
 )
 
 // CheckRemoteSource checks the folder that a backup of a remote reads, a
@@ -39,7 +46,9 @@ const (
 // "remote_id" (SourceLocalMessage) when the remote is of a type on the
 // worker's disk, or on "path" when the remote is the repository's and one
 // of the two folders is the other or holds it (which, the message says).
-// Callers prefix the field paths (the definition's
+// A source on a wrapper remote (crypt) is compared by the folder its data
+// is stored in, on the wrapped remote (as the dispatcher's spec builder
+// and the worker do). Callers prefix the field paths (the definition's
 // "definition.restic_backup.remote_source"). Overlaps through unions or two
 // remotes of the same storage are not detected.
 func (s *Service) CheckRemoteSource(ctx context.Context, owner domain.UserID, repoID domain.ResticRepoID, remoteID domain.RemoteID, path string) error {
@@ -59,7 +68,20 @@ func (s *Service) CheckRemoteSource(ctx context.Context, owner domain.UserID, re
 		return fieldError("remote_id", SourceLocalMessage)
 	}
 	if repo.RemoteID == remoteID {
-		if msg := sourceOverlap(path, repo); msg != "" {
+		if msg := sourceOverlap(path, repo, false); msg != "" {
+			return fieldError("path", msg)
+		}
+	}
+	storedOn, storedPath, err := s.remotes.Storage(ctx, owner, remoteID)
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		return fmt.Errorf("%s: %s: %w", op, remoteID, ErrUnknownSourceRemote)
+	case err != nil:
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	if !storedOn.IsZero() && storedOn == repo.RemoteID {
+		stored := strings.Join(append(segments(storedPath), segments(path)...), "/")
+		if msg := sourceOverlap(stored, repo, true); msg != "" {
 			return fieldError("path", msg)
 		}
 	}
@@ -68,16 +90,25 @@ func (s *Service) CheckRemoteSource(ctx context.Context, owner domain.UserID, re
 
 // sourceOverlap returns the message of a source folder path on the remote
 // of repo that is repo's folder, holds it or lies inside it; "" when
-// neither holds the other.
-func sourceOverlap(path string, repo Repo) string {
+// neither holds the other. stored says path is the folder a wrapper remote
+// stores the source's data in, not the source itself (the stored*
+// messages).
+func sourceOverlap(path string, repo Repo, stored bool) string {
+	is, holdsIt, inIt := sourceIsRepository, sourceHoldsRepository, sourceInRepository
+	if stored {
+		is, holdsIt, inIt = storedIsRepository, storedHoldsRepository, storedInRepository
+	}
 	in, holds := within(path, repo.Path), within(repo.Path, path)
+	var format string
 	switch {
 	case in && holds:
-		return fmt.Sprintf(sourceIsRepository, repo.Name, displayPath(repo.Path))
+		format = is
 	case holds:
-		return fmt.Sprintf(sourceHoldsRepository, repo.Name, displayPath(repo.Path))
+		format = holdsIt
 	case in:
-		return fmt.Sprintf(sourceInRepository, repo.Name, displayPath(repo.Path))
+		format = inIt
+	default:
+		return ""
 	}
-	return ""
+	return fmt.Sprintf(format, repo.Name, displayPath(repo.Path))
 }

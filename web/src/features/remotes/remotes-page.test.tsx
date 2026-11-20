@@ -55,7 +55,7 @@ describe("RemotesPage", () => {
     await user.click(await screen.findByRole("button", { name: "Delete remote" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent(
-      "It stores the data of Vault. Delete that remote first: a remote that holds another remote's data cannot be deleted.",
+      "Vault stores its data in this remote. Delete that remote first: a remote that holds another remote's data cannot be deleted.",
     );
     // Every reason is named, the repository it also holds too.
     expect(dialog).toHaveTextContent(/is a repository on this remote/);

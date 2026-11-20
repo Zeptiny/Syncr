@@ -134,6 +134,33 @@ curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/j
 - A remote on a worker's disk needs `workerId`; `GetRemoteUsage` then
   answers `usage.unsupported`, like a backend that cannot tell.
 
+An [encrypted remote](encrypted-remotes.md) is a remote of type `crypt`
+whose folder is a typed reference to another of your remotes, `wrapped`,
+not an option:
+
+```sh
+curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"input":{"name":"Vault","backendType":"crypt","wrapped":{"remoteId":"<remote id>","path":"vault"},
+       "secrets":{"password":"<password>","password2":"<salt>"}}}' \
+  http://127.0.0.1:8080/syncr.v1.RemoteService/CreateRemote
+```
+
+- `ListBackends` describes it: the field `remote` has the kind
+  `FIELD_KIND_WRAPPED` (it marks where `wrapped` goes in a form), fields
+  with `fixed` cannot change after creation, and the capabilities
+  `wrapper` and `noChecksum` are set. `UpdateRemote` refuses another value
+  of a fixed option, any value of a fixed secret (even the stored one) and
+  clearing one, with field errors on `options.<name>`, `secrets.<name>` and
+  `clear_secrets[i]`.
+- A remote lists the encrypted remotes stored in it in `wrappedBy`
+  (unions in `usedByUnions`); `DeleteRemote` fails with
+  `FAILED_PRECONDITION` while it has any.
+- `RunJob` and schedules refuse checksum comparison on a side whose type
+  has `noChecksum` (`definition.rclone_transfer.options.checksum`,
+  `definition.rclone_bisync.options.compare[i]`). A worker without the
+  `rclone.crypt` feature (older than 2.3.0) fails a job on an encrypted
+  remote with `JOB_ERROR_CODE_WORKER_OUTDATED`.
+
 Copy and move from the browser are ordinary `RunJob` calls with an
 `rcloneTransfer` definition whose `filters` select the items; restoring
 selected items back to their place is a `resticRestore` with both

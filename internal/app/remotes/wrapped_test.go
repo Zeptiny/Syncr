@@ -83,6 +83,15 @@ func TestWrappedCreateAndResolve(t *testing.T) {
 		_, err := e.svc.Infos(ctx, e.alice.UserID, ids)
 		wantErr(t, "Infos("+what+")", err, domain.ErrNotFound)
 	}
+	// Storage: where the data is stored, for the restic service's checks.
+	if on, path, err := e.svc.Storage(ctx, e.alice.UserID, vault.ID); err != nil || on != bucket.ID || path != "vault/data" {
+		t.Errorf("Storage(crypt) = (%v, %q, %v)", on, path, err)
+	}
+	if on, path, err := e.svc.Storage(ctx, e.alice.UserID, bucket.ID); err != nil || !on.IsZero() || path != "" {
+		t.Errorf("Storage(s3) = (%v, %q, %v)", on, path, err)
+	}
+	_, _, err = e.svc.Storage(ctx, e.bob.UserID, vault.ID)
+	wantErr(t, "Storage(foreign)", err, domain.ErrNotFound)
 	if strings.Contains(e.logs.String(), "crypt-password-value") {
 		t.Error("the log contains the crypt password")
 	}

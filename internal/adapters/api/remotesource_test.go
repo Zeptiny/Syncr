@@ -10,6 +10,7 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
 	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -97,6 +98,18 @@ func TestRunJobRemoteSource(t *testing.T) {
 	if _, err := e.runAs(testUser, remoteBackupDef(repo.GetId(), e.remote, "restic/vault2", apiMirror)); err != nil {
 		t.Errorf("beside the repository: %v", err)
 	}
+	// A folder of an encrypted remote is compared by the folder its data is
+	// stored in, so the editor gets the error the dispatcher would give.
+	crypt := e.addRemote(testUser, "Sealed", "crypt")
+	e.remotes.setInfo(crypt, remotes.Info{Wrapped: remotes.Wrapped{RemoteID: e.remote, Path: "restic"}})
+	_, err = e.runAs(testUser, remoteBackupDef(repo.GetId(), crypt, "vault", apiMirror))
+	if codeOf(t, err) != connect.CodeInvalidArgument || violation(err, srcField+"path") !=
+		`stores its data in the folder of repository "vault" (at "restic/vault"): a backup cannot read its own repository` {
+		t.Errorf("an encrypted folder stored in the repository = %v (%v)", err, violations(t, err))
+	}
+	if _, err := e.runAs(testUser, remoteBackupDef(repo.GetId(), crypt, "music", apiMirror)); err != nil {
+		t.Errorf("an encrypted folder stored beside the repository: %v", err)
+	}
 	// Another user's remote and repository are not found.
 	if _, err := e.runAs(testUser, remoteBackupDef(repo.GetId(), theirs, "x", apiMirror)); codeOf(t, err) != connect.CodeNotFound {
 		t.Errorf("another user's remote: %v", err)
@@ -176,6 +189,15 @@ func TestScheduleRemoteSource(t *testing.T) {
 	if codeOf(t, err) != connect.CodeInvalidArgument ||
 		violation(err, "definition.restic_backup.remote_source.path") != `holds repository "vault" (at "restic/vault"): a backup cannot read its own repository; choose a folder beside it` {
 		t.Errorf("an overlapping schedule = %v (%v)", err, violations(t, err))
+	}
+	crypt := re.addRemote(testUser, "Sealed", "crypt")
+	re.remotes.setInfo(crypt, remotes.Info{Wrapped: remotes.Wrapped{RemoteID: re.remote, Path: "restic/vault/data"}})
+	sealed := e.scheduleInput("Sealed")
+	sealed.Definition = remoteBackupDef(repo.GetId(), crypt, "", apiMirror)
+	err = create(sealed)
+	if codeOf(t, err) != connect.CodeInvalidArgument || violation(err, "definition.restic_backup.remote_source.path") !=
+		`stores its data inside the folder of repository "vault" (at "restic/vault"): a backup cannot read its own repository` {
+		t.Errorf("a schedule of an encrypted folder stored in the repository = %v (%v)", err, violations(t, err))
 	}
 	theirs := re.addRemote(testOther, "Theirs", "s3")
 	foreign := e.scheduleInput("Foreign")

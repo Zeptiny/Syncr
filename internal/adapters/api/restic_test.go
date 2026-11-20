@@ -221,6 +221,16 @@ func (r fakeRemoteTypes) RemoteType(_ context.Context, owner domain.UserID, id d
 	return ref.Type, nil
 }
 
+func (r fakeRemoteTypes) Storage(ctx context.Context, owner domain.UserID, id domain.RemoteID) (domain.RemoteID, string, error) {
+	if _, err := r.RemoteType(ctx, owner, id); err != nil {
+		return domain.RemoteID{}, "", err
+	}
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	w := r.f.infos[id].Wrapped
+	return w.RemoteID, w.Path, nil
+}
+
 // resticEnv is the API test env with the real restic service (over the
 // env's store and remotes) on a fake prober and deleter. Its jobs and
 // schedules check repositories with that service.

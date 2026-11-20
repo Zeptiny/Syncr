@@ -471,13 +471,16 @@ func (s *Service) Cancel(ctx context.Context, actor domain.Actor, id domain.JobI
 // with every update until the job reaches a terminal status (at once if it
 // already has), ctx ends, or fn returns an error, which Watch returns. Job
 // updates are delivered in version order without duplicates; Progress
-// updates only while the job runs.
+// updates only while the job runs, each newer (by sample time) than the
+// last one delivered.
 func (s *Service) Watch(ctx context.Context, actor domain.Actor, id domain.JobID, fn func(Update) error) error {
 	if id.IsZero() {
 		return fmt.Errorf("watch job: %w", domain.ErrInvalidID)
 	}
 	// Subscribe before reading, so no change between the read and the
-	// subscription is lost; duplicates are filtered by version.
+	// subscription is lost. Duplicates are filtered: job updates by
+	// version, progress by sample time (a sample recorded between the
+	// subscription and the read of the latest stored one arrives twice).
 	sub := s.broker.Subscribe(id)
 	defer sub.Close()
 	j, err := s.Get(ctx, actor, id)
@@ -490,6 +493,8 @@ func (s *Service) Watch(ctx context.Context, actor domain.Actor, id domain.JobID
 	if j.Status.Terminal() {
 		return nil
 	}
+	// sent is the time of the last sample sent (zero before the first).
+	var sent time.Time
 	if j.Status == domain.JobRunning {
 		if smp, ok, err := s.LatestSample(ctx, id); err != nil {
 			return err
@@ -497,6 +502,7 @@ func (s *Service) Watch(ctx context.Context, actor domain.Actor, id domain.JobID
 			if err := fn(Update{JobID: id, Progress: &smp}); err != nil {
 				return err
 			}
+			sent = smp.Time
 		}
 	}
 	version, status := j.Version, j.Status
@@ -512,9 +518,10 @@ func (s *Service) Watch(ctx context.Context, actor domain.Actor, id domain.JobID
 			}
 			version, status = u.Job.Version, u.Job.Status
 		case u.Progress != nil:
-			if status != domain.JobRunning {
+			if status != domain.JobRunning || !u.Progress.Time.After(sent) {
 				continue
 			}
+			sent = u.Progress.Time
 		default:
 			continue
 		}

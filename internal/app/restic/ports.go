@@ -115,6 +115,13 @@ type RemoteChecker interface {
 	// RemoteType returns the backend type ID of a live remote of owner;
 	// ErrNotFound otherwise (missing, deleted or another user's).
 	RemoteType(ctx context.Context, owner domain.UserID, id domain.RemoteID) (string, error)
+
+	// Storage returns where a live remote of owner stores its data when
+	// its type is a wrapper (backend.Capabilities.Wrapper, e.g. crypt):
+	// the wrapped remote and the folder on it, relative to that remote's
+	// root. The ID is zero for a remote of any other type. ErrNotFound as
+	// RemoteType.
+	Storage(ctx context.Context, owner domain.UserID, id domain.RemoteID) (domain.RemoteID, string, error)
 }
 
 // Target is where a probe finds a repository. It holds the password: never

@@ -341,6 +341,23 @@ func (s *Service) RemoteType(ctx context.Context, owner domain.UserID, id domain
 	return rs[id].Type, nil
 }
 
+// Storage returns where id, a live remote of owner, stores its data when
+// its type is a wrapper (crypt): the wrapped remote and the folder on it,
+// relative to that remote's root. The ID is zero for a remote of any other
+// type. Errors as RemoteType. It implements the restic service's
+// RemoteChecker.
+func (s *Service) Storage(ctx context.Context, owner domain.UserID, id domain.RemoteID) (domain.RemoteID, string, error) {
+	if id.IsZero() {
+		return domain.RemoteID{}, "", fmt.Errorf("remote storage: %w", domain.ErrInvalidID)
+	}
+	rs, err := s.usable(ctx, owner, []domain.RemoteID{id})
+	if err != nil {
+		return domain.RemoteID{}, "", fmt.Errorf("remote storage: %w", err)
+	}
+	w := rs[id].Wrapped
+	return w.RemoteID, w.Path, nil
+}
+
 // mergeSecrets returns the secrets of cur (a stored remote of type typ)
 // with in's merged over them, as Update stores them: a non-empty value
 // replaces the stored one, an absent or empty one keeps it, and

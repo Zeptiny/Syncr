@@ -57,13 +57,14 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
   const unionNames = remote.usedByUnions.map(nameOf);
   const wrapperNames = remote.wrappedBy.map(nameOf);
   // Every reason the controller refuses the delete, so all of them can be dealt with.
+  // Each names its own subject: several of them show together.
   const blockers = [
     repositories.length &&
       `${repositories.map((x) => x.name).join(", ")} ${repositories.length === 1 ? "is a repository" : "are repositories"} on this remote. Forget or delete ${repositories.length === 1 ? "it" : "them"} first: a remote that holds repositories cannot be deleted.`,
     wrapperNames.length &&
-      `It stores the data of ${wrapperNames.join(", ")}. Delete ${wrapperNames.length === 1 ? "that remote" : "those remotes"} first: a remote that holds another remote's data cannot be deleted.`,
+      `${wrapperNames.join(", ")} ${wrapperNames.length === 1 ? "stores its" : "store their"} data in this remote. Delete ${wrapperNames.length === 1 ? "that remote" : "those remotes"} first: a remote that holds another remote's data cannot be deleted.`,
     unionNames.length &&
-      `It is a member of ${unionNames.join(", ")}. Remove it from ${unionNames.length === 1 ? "that union" : "those unions"} first.`,
+      `This remote is a member of ${unionNames.join(", ")}. Remove it from ${unionNames.length === 1 ? "that union" : "those unions"} first.`,
   ].filter((b): b is string => !!b);
 
   return (
@@ -136,7 +137,12 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
         title={`Delete ${remote.name}?`}
         description={
           blockers.length
-            ? blockers.join(" ")
+            ? blockers.map((b, i) => (
+                // The description is a paragraph: one line per reason, without nesting blocks in it.
+                <span key={b} className={i > 0 ? "mt-2 block" : "block"}>
+                  {b}
+                </span>
+              ))
             : schedules.length
               ? `${schedules.map((x) => x.name).join(", ")} ${schedules.length === 1 ? "uses" : "use"} it, and will be paused at ${schedules.length === 1 ? "its" : "their"} next run. Its saved credentials are erased; past jobs keep its name.`
               : "Its saved credentials are erased. Past jobs keep its name; queued jobs that use it will fail."
