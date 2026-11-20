@@ -50,13 +50,21 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
       </div>
     );
   }
-  const inUse = remote.usedByUnions.length > 0;
   const schedules = usedBy.data?.schedules ?? [];
   const repositories = repos.data?.repositories ?? [];
-  // used_by_unions holds IDs; show the unions' names.
-  const unionNames = remote.usedByUnions.map(
-    (id) => remotes.data?.remotes.find((r) => r.id === id)?.name ?? id,
-  );
+  // used_by_unions and wrapped_by hold IDs; show the remotes' names.
+  const nameOf = (id: string) => remotes.data?.remotes.find((r) => r.id === id)?.name ?? id;
+  const unionNames = remote.usedByUnions.map(nameOf);
+  const wrapperNames = remote.wrappedBy.map(nameOf);
+  // Every reason the controller refuses the delete, so all of them can be dealt with.
+  const blockers = [
+    repositories.length &&
+      `${repositories.map((x) => x.name).join(", ")} ${repositories.length === 1 ? "is a repository" : "are repositories"} on this remote. Forget or delete ${repositories.length === 1 ? "it" : "them"} first: a remote that holds repositories cannot be deleted.`,
+    wrapperNames.length &&
+      `It stores the data of ${wrapperNames.join(", ")}. Delete ${wrapperNames.length === 1 ? "that remote" : "those remotes"} first: a remote that holds another remote's data cannot be deleted.`,
+    unionNames.length &&
+      `It is a member of ${unionNames.join(", ")}. Remove it from ${unionNames.length === 1 ? "that union" : "those unions"} first.`,
+  ].filter((b): b is string => !!b);
 
   return (
     <>
@@ -127,17 +135,15 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
         destructive
         title={`Delete ${remote.name}?`}
         description={
-          repositories.length
-            ? `${repositories.map((x) => x.name).join(", ")} ${repositories.length === 1 ? "is a repository" : "are repositories"} on this remote. Forget or delete ${repositories.length === 1 ? "it" : "them"} first: a remote that holds repositories cannot be deleted.`
-            : inUse
-              ? `It is a member of ${unionNames.join(", ")}. Remove it from ${unionNames.length === 1 ? "that union" : "those unions"} first.`
-              : schedules.length
-                ? `${schedules.map((x) => x.name).join(", ")} ${schedules.length === 1 ? "uses" : "use"} it, and will be paused at ${schedules.length === 1 ? "its" : "their"} next run. Its saved credentials are erased; past jobs keep its name.`
-                : "Its saved credentials are erased. Past jobs keep its name; queued jobs that use it will fail."
+          blockers.length
+            ? blockers.join(" ")
+            : schedules.length
+              ? `${schedules.map((x) => x.name).join(", ")} ${schedules.length === 1 ? "uses" : "use"} it, and will be paused at ${schedules.length === 1 ? "its" : "their"} next run. Its saved credentials are erased; past jobs keep its name.`
+              : "Its saved credentials are erased. Past jobs keep its name; queued jobs that use it will fail."
         }
         confirmLabel="Delete remote"
-        // The controller refuses while repositories or unions use the remote.
-        confirmDisabled={repos.isPending || repositories.length > 0 || inUse}
+        // The controller refuses while repositories, unions or wrapper remotes use the remote.
+        confirmDisabled={repos.isPending || blockers.length > 0}
         onConfirm={async () => {
           await del.mutateAsync({ remoteId: remote.id });
           await invalidateService(queryClient, RemoteService);

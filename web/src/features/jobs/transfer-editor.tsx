@@ -21,6 +21,7 @@ import type { Backend, Remote } from "@/gen/syncr/v1/remotes_pb";
 import { transferModes } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
+import { noChecksumError, noChecksumLookup, noChecksumNames, noChecksumNote } from "./checksums";
 import type { Compare, DefinitionErrors, TransferState } from "./definition";
 import { FilterRuleList } from "./pattern-list";
 import { byteUnits, durationUnits } from "./units";
@@ -186,7 +187,9 @@ export interface TransferEditorProps {
 
 /**
  * TransferEditor edits a transfer: its mode, source, destination, options
- * and filters. JobDefinitionEditor shows it for the Transfer kind.
+ * and filters. JobDefinitionEditor shows it for the Transfer kind. A side
+ * on a remote whose type keeps no checksums hides checksum comparison; a
+ * definition that already has it shows an error until another is chosen.
  */
 export function TransferEditor({
   value: s,
@@ -203,6 +206,13 @@ export function TransferEditor({
   const [more, setMore] = useState(false);
   const set = <K extends keyof TransferState>(k: K, v: TransferState[K]) =>
     onChange({ ...s, [k]: v });
+  const noChecksum = noChecksumNames(noChecksumLookup(remoteList, backends), [
+    s.source.remoteId,
+    s.destination.remoteId,
+  ]);
+  const compareError =
+    errors.compare ??
+    (noChecksum.length && s.compare === "checksum" ? noChecksumError(noChecksum) : undefined);
   return (
     <>
       <Panel title="How">
@@ -322,14 +332,33 @@ export function TransferEditor({
             />
           </div>
           <div className="grid gap-6 md:grid-cols-2">
-            <FieldShell id="opt-compare" label="Decide what changed by">
+            <FieldShell
+              id="opt-compare"
+              label="Decide what changed by"
+              error={compareError}
+              help={noChecksum.length ? noChecksumNote(noChecksum) : undefined}
+            >
               <Select value={s.compare} onValueChange={(v) => set("compare", v as Compare)}>
-                <SelectTrigger id="opt-compare" className="w-full bg-card">
+                <SelectTrigger
+                  id="opt-compare"
+                  className="w-full bg-card"
+                  aria-invalid={compareError ? true : undefined}
+                  aria-describedby={
+                    compareError
+                      ? "opt-compare-error"
+                      : noChecksum.length
+                        ? "opt-compare-help"
+                        : undefined
+                  }
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="default">Modification time and size</SelectItem>
-                  <SelectItem value="checksum">Checksum (slower, exact)</SelectItem>
+                  {/* Offered unless a side keeps no checksums; kept while chosen, to be changed. */}
+                  {(!noChecksum.length || s.compare === "checksum") && (
+                    <SelectItem value="checksum">Checksum (slower, exact)</SelectItem>
+                  )}
                   <SelectItem value="size">Size only</SelectItem>
                 </SelectContent>
               </Select>

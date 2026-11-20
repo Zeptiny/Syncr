@@ -102,6 +102,57 @@ export const backends: Backend[] = [
     ],
   }),
   create(BackendSchema, {
+    id: "crypt",
+    label: "Encrypted (crypt)",
+    description:
+      "Encrypts files on the worker and stores them in a folder of another of your remotes.",
+    capabilities: { wrapper: true, noChecksum: true },
+    fields: [
+      f("remote", "Store in", FieldKind.WRAPPED, {
+        required: true,
+        help: "One of your remotes and a folder on it. Only encrypted data is written there.",
+      }),
+      f("password", "Password", FieldKind.STRING, {
+        secret: true,
+        required: true,
+        fixed: true,
+        help: "Syncr never shows this password again. Without it, nobody can read the files in this remote, not Syncr and not you. Keep a copy somewhere safe, such as a password manager.",
+      }),
+      f("password2", "Salt (second password)", FieldKind.STRING, {
+        secret: true,
+        fixed: true,
+        help: "Optional salt. Also needed to read the files; keep it with the password.",
+      }),
+      f("filename_encryption", "File name encryption", FieldKind.ENUM, {
+        defaultValue: "standard",
+        fixed: true,
+        choices: [
+          { value: "standard", label: "Standard: encrypt the names" },
+          { value: "obfuscate", label: "Obfuscate: hide the names, keep their length" },
+          { value: "off", label: "Off: names stay readable" },
+        ],
+      }),
+      f("directory_name_encryption", "Encrypt folder names", FieldKind.BOOL, {
+        defaultValue: "true",
+        fixed: true,
+        help: "Only with file-name encryption.",
+      }),
+      f("filename_encoding", "Name encoding", FieldKind.ENUM, {
+        defaultValue: "base32",
+        advanced: true,
+        fixed: true,
+        choices: choices("base32", "base64", "base32768"),
+        help: "base64 needs a case-sensitive remote; base32768 suits remotes that limit name length in characters (OneDrive, Dropbox).",
+      }),
+      f("suffix", "Suffix", FieldKind.STRING, {
+        defaultValue: ".bin",
+        advanced: true,
+        fixed: true,
+        help: "Added to file names when names are not encrypted; none for no suffix.",
+      }),
+    ],
+  }),
+  create(BackendSchema, {
     id: "local",
     label: "Local folder",
     description: "A folder on the worker's own disks, inside its allowed folders.",
@@ -272,6 +323,7 @@ export const ids = {
   nextcloud: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d05",
   pooled: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d06",
   media: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d07",
+  vault: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d08",
   runningJob: "c3d2e1f0-7a6b-4c5d-8e9f-a0b1c2d3e401",
   removedLaptop: "5a1e2b7c-1d3f-4e8a-9b0c-2d4f6a8b0c09",
   nightly: "4b8f0d2a-6c1e-4f3a-9d5b-7e2c1a0f3b01",
@@ -411,6 +463,7 @@ export function remotes(now: number): Remote[] {
       backendType: "b2",
       options: { account: "0031f2e9a4b7c50000000003", bucket: "syncr-offsite" },
       secretsSet: ["key"],
+      wrappedBy: [ids.vault],
     }),
     create(RemoteSchema, {
       ...base,
@@ -473,6 +526,15 @@ export function remotes(now: number): Remote[] {
       options: { host: "u123456.your-storagebox.de", port: "23", user: "u123456", path: "backups" },
       secretsSet: ["pass"],
     }),
+    create(RemoteSchema, {
+      ...base,
+      id: ids.vault,
+      name: "Vault",
+      backendType: "crypt",
+      options: {},
+      secretsSet: ["password", "password2"],
+      wrapped: { remoteId: ids.b2, path: "vault" },
+    }),
   ];
 }
 
@@ -501,6 +563,7 @@ const remoteMeta: Record<string, [string, string]> = {
   [ids.nextcloud]: ["Nextcloud", "webdav"],
   [ids.pooled]: ["Pooled disks", "union"],
   [ids.media]: ["Media disk", "local"],
+  [ids.vault]: ["Vault", "crypt"],
 };
 
 function jobId(i: number): string {

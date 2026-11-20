@@ -5,6 +5,7 @@ import {
   Database,
   Globe,
   HardDrive,
+  LockKeyhole,
   Terminal,
   type LucideIcon,
 } from "lucide-react";
@@ -14,6 +15,7 @@ import { cn } from "@/lib/utils";
 const icons: Record<string, LucideIcon> = {
   s3: Database,
   b2: Cloud,
+  crypt: LockKeyhole,
   sftp: Terminal,
   local: HardDrive,
   union: Combine,
