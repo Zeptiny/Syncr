@@ -157,6 +157,36 @@ func TestSuiteCatchesBrokenTypes(t *testing.T) {
 		t.Errorf("an object store that is local passes: %q", objectLocal.errs)
 	}
 
+	for _, tt := range []struct {
+		name string
+		typ  backend.Type
+		want string
+	}{
+		{"wrapper without a wrapped field", capsType{goodType{}, backend.Capabilities{Wrapper: true}}, "0 wrapped fields with Capabilities.Wrapper = true"},
+		{"wrapped field without the capability", fieldsType{goodType{}, []backend.Field{wrappedField}}, "1 wrapped fields with Capabilities.Wrapper = false"},
+		{"wrapper that is a union member", capsType{fieldsType{goodType{}, []backend.Field{wrappedField}}, backend.Capabilities{Wrapper: true, UnionMember: true}},
+			"Capabilities.Wrapper with Local"},
+		{"wrapper that holds repositories", capsType{fieldsType{goodType{}, []backend.Field{wrappedField}}, backend.Capabilities{Wrapper: true, ResticRepository: true}},
+			"Capabilities.Wrapper with Local"},
+		{"fixed wrapped field", capsType{fieldsType{goodType{}, []backend.Field{{Name: "remote", Label: "Store in", Kind: backend.KindWrapped, Fixed: true}}}, backend.Capabilities{Wrapper: true}},
+			`field "remote": a wrapped field is Fixed`},
+		{"fixed members field", capsType{fieldsType{goodType{}, []backend.Field{{Name: "members", Label: "Members", Kind: backend.KindMembers, Fixed: true}}}, backend.Capabilities{Union: true}},
+			`field "members": a members field is Fixed`},
+	} {
+		var r recorder
+		backendtest.Check(&r, tt.typ)
+		if !slices.ContainsFunc(r.errs, func(e string) bool { return strings.Contains(e, tt.want) }) {
+			t.Errorf("%s: failures %q do not mention %q", tt.name, r.errs, tt.want)
+		}
+	}
+	// A valid wrapper passes: its wrapped field is not a configuration
+	// value, and Fixed is fine on a value field.
+	var wrapper recorder
+	backendtest.Check(&wrapper, capsType{fieldsType{goodType{}, []backend.Field{wrappedField}}, backend.Capabilities{Wrapper: true, NoChecksum: true}})
+	if len(wrapper.errs) != 0 {
+		t.Errorf("a valid wrapper fails: %q", wrapper.errs)
+	}
+
 	var r recorder
 	backendtest.Check(&r, goodType{}, backendtest.WithAccept(func(backend.Rclone) error { return errors.New("rejected") }))
 	if !slices.ContainsFunc(r.errs, func(e string) bool { return strings.Contains(e, "not accepted: rejected") }) {
@@ -189,4 +219,28 @@ func (o objectStoreType) Capabilities() backend.Capabilities {
 	c := o.goodType.Capabilities()
 	c.ObjectStore = true
 	return c
+}
+
+// wrappedField is the wrapped field of the wrapper variants.
+var wrappedField = backend.Field{Name: "remote", Label: "Store in", Kind: backend.KindWrapped, Required: true}
+
+// capsType is a type with other capabilities.
+type capsType struct {
+	backend.Type
+	caps backend.Capabilities
+}
+
+func (c capsType) Capabilities() backend.Capabilities { return c.caps }
+
+// fieldsType is goodType with more fields (which it ignores in Validate and
+// ToRclone, as members and wrapped fields are) and its host field Fixed.
+type fieldsType struct {
+	goodType
+	extra []backend.Field
+}
+
+func (f fieldsType) Fields() []backend.Field {
+	fields := f.goodType.Fields()
+	fields[0].Fixed = true
+	return append(fields, f.extra...)
 }

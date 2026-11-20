@@ -9,7 +9,7 @@
 //   SYNCR_UI_USER           sign-in user (default admin)
 //   SYNCR_UI_PASSWORD       sign-in password (default syncr-demo-admin)
 //   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3, hooks, bisync, browser,
-//                           remote-backup or readme: which shot list
+//                           remote-backup, crypt or readme: which shot list
 //   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/<set>)
 //   SYNCR_SCREENSHOT_ONLY   comma-separated shot names to take (default all)
 //   SYNCR_SCREENSHOT_MOBILE 1 to also take 390px-wide shots
@@ -33,9 +33,17 @@ const mock = process.env.SYNCR_UI_MOCK === "1";
 const setupUrl = (process.env.SYNCR_SETUP_URL ?? (mock ? base : "")).replace(/\/$/, "");
 const user = process.env.SYNCR_UI_USER ?? "admin";
 const password = process.env.SYNCR_UI_PASSWORD ?? "syncr-demo-admin";
-const set = ["m3", "m4", "m5", "hooks", "bisync", "browser", "remote-backup", "readme"].includes(
-  process.env.SYNCR_SCREENSHOT_SET,
-)
+const set = [
+  "m3",
+  "m4",
+  "m5",
+  "hooks",
+  "bisync",
+  "browser",
+  "remote-backup",
+  "crypt",
+  "readme",
+].includes(process.env.SYNCR_SCREENSHOT_SET)
   ? process.env.SYNCR_SCREENSHOT_SET
   : "m6";
 const outDir = resolve(
@@ -53,12 +61,15 @@ const executablePath =
 
 const wanted = (name) => !only || only.some((o) => name.includes(o));
 
-async function newPage(browser, { width, height, dark = false, init } = {}) {
+// newPage opens a page in a new context. storageState (from a signed-in
+// context) reuses its session instead of signing in again.
+async function newPage(browser, { width, height, dark = false, init, storageState } = {}) {
   const context = await browser.newContext({
     viewport: { width: width ?? 1440, height: height ?? 900 },
     deviceScaleFactor: 1,
     colorScheme: dark ? "dark" : "light",
     reducedMotion: "reduce",
+    storageState,
   });
   await context.addInitScript(
     ({ theme, init }) => {
@@ -79,9 +90,9 @@ async function settle(page, ms = 600) {
   await page.waitForTimeout(ms);
 }
 
-async function shot(page, name) {
+async function shot(page, name, { full = fullPage } = {}) {
   const file = join(outDir, `${name}.png`);
-  await page.screenshot({ path: file, fullPage });
+  await page.screenshot({ path: file, fullPage: full });
   // Relative, so the log carries no home directory.
   console.log(`saved ${relative(process.cwd(), file)}`);
 }
@@ -1376,6 +1387,129 @@ async function remoteBackupSet(browser) {
   }
 }
 
+// The encrypted remote shots. They expect the dev seed
+// (internal/devseed/crypt_data.go): the crypt remote "Vault" stores its
+// data in "B2 offsite" / vault, which also holds the repository "Photos
+// vault"; nas-01 can run encrypted remotes.
+
+// cryptForm opens the new-remote form of an encrypted remote, stored in
+// MinIO archive / encrypted, with a generated password (the acknowledgement
+// left unticked, so Create is still disabled).
+async function cryptForm(page) {
+  await open(page, "/remotes/new?type=crypt");
+  await page.getByLabel("Name").first().fill("Offsite vault");
+  await pick(page, "Remote", /^MinIO archive/);
+  await page.getByLabel("Folder", { exact: true }).fill("encrypted");
+  await page.getByRole("button", { name: "Generate" }).first().click();
+  // Move the pointer and focus off the button, so it shows at rest.
+  await page.mouse.move(0, 0);
+  await page.getByLabel("Name").first().focus();
+  await page.getByLabel("Name").first().blur();
+  await settle(page, 300);
+}
+
+// cryptEdit opens Vault's edit page with its advanced options open.
+async function cryptEdit(page) {
+  const { remotes } = await seedIds(page);
+  await open(page, `/remotes/${remotes["Vault"]}`, 900);
+  await page.getByRole("button", { name: /Advanced options/ }).click();
+  // Back to the top, so a whole-page shot has the phone's top bar there.
+  await page.evaluate(() => window.scrollTo({ top: 0 }));
+  await settle(page, 300);
+}
+
+// cryptTransfer opens Run a job on a copy from nas-01's /srv/docs into
+// Vault / documents. With checksum, Checksum is chosen first (towards
+// MinIO archive), so switching to Vault shows the error.
+async function cryptTransfer(page, { checksum = false } = {}) {
+  await open(page, "/jobs/new");
+  await pick(page, /^Worker/, /^nas-01/);
+  await page.locator("#run-src-path").fill("/srv/docs");
+  if (checksum) {
+    await page.locator("#run-dst-remote").click();
+    await page.getByRole("option", { name: /^MinIO archive/ }).click();
+    await pick(page, "Decide what changed by", /Checksum/);
+  }
+  await page.locator("#run-dst-remote").click();
+  await page.getByRole("option", { name: /^Vault/ }).click();
+  await page.locator("#run-dst-path").fill("documents");
+  await page.locator("#run-dst-path").blur();
+  await settle(page, 300);
+  await scrollTo(page, page.getByText("What", { exact: true }), 24);
+}
+
+// Each shot: [name, page options, go, whole page]. The forms at 1440 px
+// get a taller window instead of a whole-page shot, which would cut the
+// sidebar off at the window's height.
+const tall = { height: 1100 };
+const cryptShots = [
+  ["01-new-remote", tall, cryptForm],
+  ["02-new-remote-dark", { ...tall, dark: true }, cryptForm],
+  ["03-new-remote-mobile", { width: 390, height: 844 }, cryptForm, true],
+  ["04-edit-remote", tall, cryptEdit],
+  ["05-edit-remote-dark-mobile", { width: 390, height: 844, dark: true }, cryptEdit, true],
+  ["06-remotes", {}, async (p) => open(p, "/remotes", 900)],
+  [
+    "07-delete-refused",
+    {},
+    async (p) => {
+      const { remotes } = await seedIds(p);
+      await open(p, `/remotes/${remotes["B2 offsite"]}`, 900);
+      await p.getByRole("button", { name: "Delete remote" }).click();
+      await p.getByRole("alertdialog").waitFor();
+      await settle(p, 300);
+    },
+  ],
+  ["08-transfer-no-checksum", {}, async (p) => cryptTransfer(p)],
+  [
+    "09-transfer-checksum-error-dark",
+    { dark: true },
+    async (p) => cryptTransfer(p, { checksum: true }),
+  ],
+  [
+    "10-bisync-no-checksum",
+    {},
+    async (p) => {
+      await bisyncForm(p, false);
+      await p.locator("#run-a-path").fill("/srv/docs");
+      await p.locator("#run-b-remote").click();
+      await p.getByRole("option", { name: /^Vault/ }).click();
+      await p.locator("#run-b-path").fill("documents");
+      await p.locator("#run-b-path").blur();
+      await settle(p, 300);
+      await scrollTo(p, p.getByText("How a run tells that a file changed."), 120);
+    },
+  ],
+  [
+    "11-delete-encrypted",
+    {},
+    async (p) => {
+      const { remotes } = await seedIds(p);
+      await open(p, `/remotes/${remotes["Vault"]}`, 900);
+      await p.getByRole("button", { name: "Delete remote" }).click();
+      await p.getByRole("alertdialog").waitFor();
+      await settle(p, 300);
+    },
+  ],
+];
+
+// cryptSet takes the encrypted remote shots. It signs in once and reuses
+// the session for the dark and phone-width pages (repeated sign-ins hit
+// the login rate limit).
+async function cryptSet(browser) {
+  const first = await newPage(browser);
+  await signIn(first);
+  const storageState = await first.context().storageState();
+  await first.context().close();
+  for (const [name, opts, go, full] of cryptShots) {
+    if (!wanted(name)) continue;
+    const p = await newPage(browser, { ...opts, storageState });
+    await go(p);
+    await shot(p, name, full ? { full: true } : undefined);
+    await p.context().close();
+  }
+}
+
 // The README shots: one page per feature from the same seeded controller,
 // each in light and dark so the README can follow the reader's theme.
 const readmeShots = [
@@ -1444,6 +1578,10 @@ async function main() {
     }
     if (set === "remote-backup") {
       await remoteBackupSet(browser);
+      return;
+    }
+    if (set === "crypt") {
+      await cryptSet(browser);
       return;
     }
     if (set === "m5") {

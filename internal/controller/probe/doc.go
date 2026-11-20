@@ -39,11 +39,14 @@
 //     way. jobkind.Locate builds the spec's remotes and locations exactly
 //     as job specs are built; remote paths cannot contain "..", local
 //     paths are checked by the worker against its local_roots.
-//  3. The worker: an explicitly chosen one is validated (CheckExplicit); a
-//     remote on a worker's local filesystem needs one; otherwise Pick
-//     takes an online worker that can run the operation, preferring the
-//     worker of the repository's newest succeeded job, then the least busy
-//     one.
+//  3. The worker: an explicitly chosen one is validated
+//     (CheckExplicitFor); a remote on a worker's local filesystem needs
+//     one; otherwise PickFor takes an online worker that can run the
+//     operation and reports the link features the spec's remotes need
+//     (jobkind.RemoteFeatures: an encrypted remote needs
+//     link.FeatureRcloneCrypt), preferring the worker of the repository's
+//     newest succeeded job, then the least busy one. When only outdated
+//     workers could run it, the error says they must be upgraded.
 //  4. The probe is sent with a fresh ID and the configured timeout:
 //     Config.Timeout for listings and usage, ResticTimeout for the other
 //     restic operations, ScanTimeout for the heavy ones.

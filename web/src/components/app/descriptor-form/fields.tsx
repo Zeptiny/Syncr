@@ -1,4 +1,4 @@
-import { Eye, EyeOff, KeyRound, Plus, Trash2, Undo2, WandSparkles } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Lock, Plus, Trash2, Undo2, WandSparkles } from "lucide-react";
 import { useState } from "react";
 import {
   Controller,
@@ -25,9 +25,18 @@ import { UnionUpstreamMode } from "@/gen/syncr/v1/link_pb";
 import { FieldKind, type Backend, type BackendField, type Remote } from "@/gen/syncr/v1/remotes_pb";
 import { cn } from "@/lib/utils";
 
+import { CopyButton } from "../copy-button";
+import { PathBrowserDialog } from "../path-browser";
 import { PathInput } from "../path-input";
 import { RemotePicker } from "../remote-picker";
-import { emptyMember, type DescriptorValues, type FieldValues } from "./schema";
+import {
+  canBeWrapped,
+  emptyMember,
+  FIXED_NOTE,
+  fixedDisplay,
+  type DescriptorValues,
+  type FieldValues,
+} from "./schema";
 
 /** FieldProps is shared by the descriptor field components. */
 export interface FieldProps {
@@ -226,17 +235,37 @@ export function EnumField({ field, idPrefix }: FieldProps) {
 export interface SecretFieldProps extends FieldProps {
   /** isSet is true when editing a remote or contact that already stores this secret. */
   isSet?: boolean;
-  /** generate, when given, offers a "Generate" button that fills in a new value. */
+  /**
+   * generate, when given, offers a "Generate" button that fills in a new
+   * value and shows it, with a copy button.
+   */
   generate?: () => string;
+  /** hideHelp leaves out the field's help (shown elsewhere, e.g. as a warning above). */
+  hideHelp?: boolean;
+  /** describedBy names more elements that describe the input (e.g. that warning). */
+  describedBy?: string;
 }
 
 /**
  * SecretField edits a write-only secret. When the remote already stores it,
  * an empty input keeps it; optional secrets can be cleared.
  */
-export function SecretField({ field, idPrefix, isSet, generate }: SecretFieldProps) {
-  const { form, path, error, id, describedBy } = useFieldState(field, idPrefix);
+export function SecretField({
+  field,
+  idPrefix,
+  isSet,
+  generate,
+  hideHelp,
+  describedBy: more,
+}: SecretFieldProps) {
+  const state = useFieldState(field, idPrefix);
+  const { form, path, error, id } = state;
+  const describedBy = more ? `${more} ${state.describedBy}` : state.describedBy;
   const [reveal, setReveal] = useState(false);
+  // The generated value, while the input still holds it: shown with a copy button.
+  const [generated, setGenerated] = useState<string | undefined>();
+  const current = form.watch(path);
+  const showGenerated = generated !== undefined && current === generated;
   const clear = form.watch("clearSecrets");
   const cleared = clear.includes(field.name);
   const setClear = (on: boolean) => {
@@ -253,7 +282,9 @@ export function SecretField({ field, idPrefix, isSet, generate }: SecretFieldPro
       variant="ghost"
       size="xs"
       onClick={() => {
-        form.setValue(path, generate(), { shouldDirty: true, shouldValidate: true });
+        const value = generate();
+        form.setValue(path, value, { shouldDirty: true, shouldValidate: true });
+        setGenerated(value);
         setReveal(true);
       }}
     >
@@ -298,7 +329,7 @@ export function SecretField({ field, idPrefix, isSet, generate }: SecretFieldPro
       id={id}
       label={field.label}
       optional={isOptional(field)}
-      help={field.help}
+      help={hideHelp ? undefined : field.help}
       error={error}
       aside={aside}
     >
@@ -324,7 +355,8 @@ export function SecretField({ field, idPrefix, isSet, generate }: SecretFieldPro
             id={id}
             type={reveal ? "text" : "password"}
             placeholder={placeholder}
-            className="bg-card pr-10"
+            // A generated value is read and copied by hand: monospace tells I from l.
+            className={cn("bg-card pr-10", showGenerated && reveal && "font-mono text-[13px]")}
             autoComplete="new-password"
             spellCheck={false}
             aria-invalid={error ? true : undefined}
@@ -343,7 +375,188 @@ export function SecretField({ field, idPrefix, isSet, generate }: SecretFieldPro
           </Button>
         </div>
       )}
+      {showGenerated && !cleared && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <CopyButton value={generated} label={`Copy ${field.label.toLowerCase()}`} />
+          <span className="text-xs leading-5 text-muted-foreground">
+            {generated.length} random characters, made in your browser.
+          </span>
+        </div>
+      )}
     </FieldShell>
+  );
+}
+
+/** FixedFieldProps configures FixedField. */
+export interface FixedFieldProps extends FieldProps {
+  /** value is the stored option ("" or undefined: the descriptor default applies). */
+  value?: string;
+  /** isSet says whether a secret field is stored. */
+  isSet?: boolean;
+  /** noteId is the element that says why the field is locked (FixedNote). */
+  noteId?: string;
+}
+
+/** FixedNote says why the locked (fixed) fields below it cannot be edited. */
+export function FixedNote({ id }: { id: string }) {
+  return (
+    <p
+      id={id}
+      className="flex items-start gap-2 rounded-md bg-muted px-3 py-2 text-xs leading-5 text-muted-foreground"
+    >
+      <Lock className="mt-[3px] size-3.5 shrink-0" aria-hidden />
+      <span>{FIXED_NOTE}</span>
+    </p>
+  );
+}
+
+/**
+ * FixedField shows a field that was set when the remote was created and
+ * can never change (BackendField.fixed): its value, read-only, and why.
+ * A secret shows only whether it is set.
+ */
+export function FixedField({ field, idPrefix, value, isSet, noteId }: FixedFieldProps) {
+  const id = `${idPrefix}-${field.name}`;
+  const shown = fixedDisplay(field, value, isSet);
+  return (
+    <FieldShell id={id} label={field.label}>
+      <div className="relative">
+        <Lock
+          className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
+          aria-hidden
+        />
+        <Input
+          id={id}
+          readOnly
+          value={shown}
+          aria-describedby={noteId}
+          className={cn(
+            "cursor-default bg-muted pl-8 text-[13px] text-foreground focus-visible:ring-0 dark:bg-muted",
+            !field.secret &&
+              field.kind !== FieldKind.BOOL &&
+              field.kind !== FieldKind.ENUM &&
+              "font-mono",
+          )}
+        />
+      </div>
+    </FieldShell>
+  );
+}
+
+/** WrappedRemoteFieldProps configures WrappedRemoteField. */
+export interface WrappedRemoteFieldProps extends FieldProps {
+  remotes: Remote[];
+  backends: Map<string, Backend>;
+  /** selfId excludes the remote being edited. */
+  selfId?: string;
+}
+
+/**
+ * WrappedRemoteField edits where a wrapper remote (an encrypted one) stores
+ * its data: one of the user's other remotes and a folder on it, with a
+ * folder browser. Its form values are DescriptorValues.wrapped.
+ */
+export function WrappedRemoteField({
+  field,
+  idPrefix,
+  remotes,
+  backends,
+  selfId,
+}: WrappedRemoteFieldProps) {
+  const form = useFormContext<DescriptorValues>();
+  const errors = form.formState.errors;
+  const remoteErr = errorAt(errors, "wrapped.remoteId") ?? errorAt(errors, "wrapped");
+  const pathErr = errorAt(errors, "wrapped.path");
+  const [browsing, setBrowsing] = useState(false);
+  const id = `${idPrefix}-${field.name}`;
+  const remoteId = form.watch("wrapped.remoteId");
+  const chosen = remotes.find((r) => r.id === remoteId);
+  return (
+    <fieldset
+      className="flex min-w-0 flex-col gap-3"
+      data-field={id}
+      aria-describedby={`${id}-help`}
+    >
+      <legend className="mb-0.5 text-[13px] leading-5 font-medium">
+        {field.label || "Store in"}
+      </legend>
+      <p id={`${id}-help`} className="-mt-1 text-xs leading-5 text-muted-foreground">
+        {field.help || "One of your remotes and a folder on it."}
+      </p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:items-start">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Label htmlFor={`${id}-remote`} className="text-xs font-normal text-muted-foreground">
+            Remote
+          </Label>
+          <Controller
+            control={form.control}
+            name="wrapped.remoteId"
+            render={({ field: f }) => (
+              <RemotePicker
+                id={`${id}-remote`}
+                remotes={remotes}
+                backends={backends}
+                value={f.value}
+                onChange={f.onChange}
+                invalid={!!remoteErr}
+                className="w-full bg-card"
+                filter={(r, b) => r.id !== selfId && canBeWrapped(b)}
+              />
+            )}
+          />
+          {remoteErr && (
+            <p role="alert" className="text-xs leading-5 text-danger">
+              {remoteErr}
+            </p>
+          )}
+        </div>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Label htmlFor={`${id}-path`} className="text-xs font-normal text-muted-foreground">
+            Folder
+          </Label>
+          <Controller
+            control={form.control}
+            name="wrapped.path"
+            render={({ field: f }) => (
+              <PathInput
+                id={`${id}-path`}
+                value={f.value}
+                onChange={f.onChange}
+                prefix={chosen?.name}
+                placeholder="folder/on/the/remote"
+                invalid={!!pathErr}
+                onBrowse={chosen ? () => setBrowsing(true) : undefined}
+                aria-describedby={pathErr ? `${id}-path-error` : `${id}-path-help`}
+              />
+            )}
+          />
+          {pathErr ? (
+            <p id={`${id}-path-error`} role="alert" className="text-xs leading-5 text-danger">
+              {pathErr}
+            </p>
+          ) : (
+            <p id={`${id}-path-help`} className="text-xs leading-5 text-muted-foreground">
+              Relative to the remote&apos;s root. Leave empty for the root itself.
+            </p>
+          )}
+        </div>
+      </div>
+      {chosen && (
+        <PathBrowserDialog
+          open={browsing}
+          onOpenChange={setBrowsing}
+          source={{ kind: "remote", remoteId: chosen.id }}
+          title={`Browse ${chosen.name}`}
+          rootLabel={chosen.name}
+          mode="dir"
+          initialPath={form.getValues("wrapped.path")}
+          onSelect={([p]) =>
+            p !== undefined &&
+            form.setValue("wrapped.path", p, { shouldDirty: true, shouldValidate: true })
+          }
+        />
+      )}
+    </fieldset>
   );
 }
 

@@ -15,6 +15,7 @@ import { fieldViolations } from "@/lib/errors";
 import { durationFromSeconds, durationSeconds, formatDuration } from "@/lib/format";
 import { browserTimeZone } from "@/lib/timezones";
 
+import type { NoChecksumLookup } from "../jobs/checksums";
 import {
   definitionError,
   definitionState,
@@ -195,9 +196,15 @@ export function scheduleFromJob(job: Job, timezone = browserTimeZone()): Schedul
   };
 }
 
-/** validateSchedule checks what the browser can check before sending. */
-export function validateSchedule(s: ScheduleFormState): ScheduleErrors {
-  const e: ScheduleErrors = validateDefinition(s.definition);
+/**
+ * validateSchedule checks what the browser can check before sending.
+ * noChecksum tells the remotes that keep no checksums.
+ */
+export function validateSchedule(
+  s: ScheduleFormState,
+  noChecksum?: NoChecksumLookup,
+): ScheduleErrors {
+  const e: ScheduleErrors = validateDefinition(s.definition, noChecksum);
   if (!s.name.trim()) e.name = "Give the schedule a name.";
   else if (s.name.trim().length > 64) e.name = "Use at most 64 characters.";
   if (!s.cron.trim()) e.cron = "Enter when it runs, or pick a preset.";

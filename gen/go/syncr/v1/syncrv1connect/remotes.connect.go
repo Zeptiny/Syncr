@@ -139,11 +139,15 @@ type RemoteServiceClient interface {
 	CreateRemote(context.Context, *connect.Request[v1.CreateRemoteRequest]) (*connect.Response[v1.CreateRemoteResponse], error)
 	// UpdateRemote changes a remote. The backend type cannot change. Options
 	// and members are replaced as a whole; secrets are merged (see
-	// RemoteInput). ABORTED if the remote changed since version was read.
+	// RemoteInput). Fields marked BackendField.fixed keep the value they were
+	// created with: another value, a new secret or a clear of one fails with
+	// INVALID_ARGUMENT. ABORTED if the remote changed since version was read.
 	UpdateRemote(context.Context, *connect.Request[v1.UpdateRemoteRequest]) (*connect.Response[v1.UpdateRemoteResponse], error)
 	// DeleteRemote deletes a remote. Job history keeps referring to it by
-	// name. FAILED_PRECONDITION while it is a member of a union remote.
-	// Queued jobs that use it fail with REMOTE_UNAVAILABLE.
+	// name. FAILED_PRECONDITION while it is a member of a union remote, while
+	// another remote stores its data in it (Remote.wrapped_by) or while it
+	// holds a restic repository. Queued jobs that use it fail with
+	// REMOTE_UNAVAILABLE.
 	DeleteRemote(context.Context, *connect.Request[v1.DeleteRemoteRequest]) (*connect.Response[v1.DeleteRemoteResponse], error)
 }
 
@@ -239,11 +243,15 @@ type RemoteServiceHandler interface {
 	CreateRemote(context.Context, *connect.Request[v1.CreateRemoteRequest]) (*connect.Response[v1.CreateRemoteResponse], error)
 	// UpdateRemote changes a remote. The backend type cannot change. Options
 	// and members are replaced as a whole; secrets are merged (see
-	// RemoteInput). ABORTED if the remote changed since version was read.
+	// RemoteInput). Fields marked BackendField.fixed keep the value they were
+	// created with: another value, a new secret or a clear of one fails with
+	// INVALID_ARGUMENT. ABORTED if the remote changed since version was read.
 	UpdateRemote(context.Context, *connect.Request[v1.UpdateRemoteRequest]) (*connect.Response[v1.UpdateRemoteResponse], error)
 	// DeleteRemote deletes a remote. Job history keeps referring to it by
-	// name. FAILED_PRECONDITION while it is a member of a union remote.
-	// Queued jobs that use it fail with REMOTE_UNAVAILABLE.
+	// name. FAILED_PRECONDITION while it is a member of a union remote, while
+	// another remote stores its data in it (Remote.wrapped_by) or while it
+	// holds a restic repository. Queued jobs that use it fail with
+	// REMOTE_UNAVAILABLE.
 	DeleteRemote(context.Context, *connect.Request[v1.DeleteRemoteRequest]) (*connect.Response[v1.DeleteRemoteResponse], error)
 }
 

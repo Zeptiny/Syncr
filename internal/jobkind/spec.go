@@ -24,13 +24,15 @@ type specRemotes struct {
 }
 
 // newSpecRemotes prepares the remotes of refs, which must all be in
-// remotes along with the members of the unions among them. Aliases are
-// "r1", "r2", ... in reference order, then the members of the unions (in
-// union, then member order); a remote has one alias however often it is
-// used. Local remotes get none: their locations are local paths.
+// remotes along with the members of the unions among them and the remotes
+// the wrappers among them store their data in. Aliases are "r1", "r2", ...
+// in reference order, then the members of the unions (in union, then
+// member order), then the wrapped remotes (in wrapper order); a remote has
+// one alias however often it is used. Local remotes get none: their
+// locations are local paths.
 func newSpecRemotes(refs []domain.RemoteID, remotes map[domain.RemoteID]Remote) (*specRemotes, error) {
 	s := &specRemotes{remotes: remotes, aliases: make(map[domain.RemoteID]string)}
-	var unions []Remote
+	var unions, wrappers []Remote
 	for _, id := range refs {
 		r, err := s.remote(id)
 		if err != nil {
@@ -39,8 +41,11 @@ func newSpecRemotes(refs []domain.RemoteID, remotes map[domain.RemoteID]Remote) 
 		if err := checkShape(r); err != nil {
 			return nil, err
 		}
-		if isUnion(r) && !slices.ContainsFunc(unions, func(u Remote) bool { return u.ID == r.ID }) {
+		switch {
+		case isUnion(r) && !slices.ContainsFunc(unions, func(u Remote) bool { return u.ID == r.ID }):
 			unions = append(unions, r)
+		case isWrapper(r) && !slices.ContainsFunc(wrappers, func(w Remote) bool { return w.ID == r.ID }):
+			wrappers = append(wrappers, r)
 		}
 		s.alias(r)
 	}
@@ -53,11 +58,30 @@ func newSpecRemotes(refs []domain.RemoteID, remotes map[domain.RemoteID]Remote) 
 			if err := checkShape(r); err != nil {
 				return nil, err
 			}
-			if isUnion(r) {
+			switch {
+			case isUnion(r):
 				return nil, fmt.Errorf("member %d of union remote %s: %w: unions cannot contain unions", i, u.ID, domain.ErrInvalidArgument)
+			case isWrapper(r):
+				return nil, fmt.Errorf("member %d of union remote %s: %w: unions cannot contain wrapper remotes", i, u.ID, domain.ErrInvalidArgument)
 			}
 			s.alias(r)
 		}
+	}
+	for _, w := range wrappers {
+		r, err := s.remote(w.Wrapped.RemoteID)
+		if err != nil {
+			return nil, fmt.Errorf("the wrapped remote of remote %s: %w", w.ID, err)
+		}
+		if err := checkShape(r); err != nil {
+			return nil, err
+		}
+		switch {
+		case isLocal(r):
+			return nil, fmt.Errorf("the wrapped remote of remote %s: %w: a wrapper cannot store its data in a local remote", w.ID, domain.ErrInvalidArgument)
+		case isUnion(r) || isWrapper(r):
+			return nil, fmt.Errorf("the wrapped remote of remote %s: %w: wrappers cannot be nested or wrap a union", w.ID, domain.ErrInvalidArgument)
+		}
+		s.alias(r)
 	}
 	return s, nil
 }
@@ -86,17 +110,23 @@ func (s *specRemotes) alias(r Remote) {
 	s.aliases[r.ID] = "r" + strconv.Itoa(len(s.order))
 }
 
-func isLocal(r Remote) bool { return r.Rclone.Backend == "" }
-func isUnion(r Remote) bool { return r.Rclone.Backend == unionBackend }
+func isLocal(r Remote) bool   { return r.Rclone.Backend == "" }
+func isUnion(r Remote) bool   { return r.Rclone.Backend == unionBackend }
+func isWrapper(r Remote) bool { return !r.Wrapped.IsZero() }
 
 // checkShape rejects remotes the worker would reject for their structure:
-// a union without members, members on anything but a union.
+// a union without members, members on anything but a union, a local remote
+// or a union that wraps a remote, a wrapper of itself.
 func checkShape(r Remote) error {
 	switch {
 	case isUnion(r) && len(r.Members) == 0:
 		return fmt.Errorf("union remote %s: %w: it has no members", r.ID, domain.ErrInvalidArgument)
 	case !isUnion(r) && len(r.Members) > 0:
 		return fmt.Errorf("remote %s: %w: only unions have members", r.ID, domain.ErrInvalidArgument)
+	case isWrapper(r) && (isLocal(r) || isUnion(r)):
+		return fmt.Errorf("remote %s: %w: a local remote or a union cannot wrap a remote", r.ID, domain.ErrInvalidArgument)
+	case isWrapper(r) && r.Wrapped.RemoteID == r.ID:
+		return fmt.Errorf("remote %s: %w: a remote cannot store its data in itself", r.ID, domain.ErrInvalidArgument)
 	}
 	return nil
 }
@@ -123,9 +153,51 @@ func (s *specRemotes) definitions() ([]*syncrv1.RemoteDefinition, error) {
 				def.UnionUpstreams = append(def.UnionUpstreams, up)
 			}
 		}
+		if isWrapper(r) {
+			loc, err := s.wrapped(r)
+			if err != nil {
+				return nil, err
+			}
+			def.Wrapped = loc
+		}
 		out = append(out, def)
 	}
 	return out, nil
+}
+
+// wrapped returns where the wrapper remote r stores its data: the folder
+// on its wrapped remote, through that remote's alias, below its root.
+func (s *specRemotes) wrapped(r Remote) (*syncrv1.Location, error) {
+	w, err := s.remote(r.Wrapped.RemoteID)
+	if err != nil {
+		return nil, fmt.Errorf("the wrapped remote of remote %s: %w", r.ID, err)
+	}
+	loc, err := s.on(w, r.Wrapped.Path)
+	if err != nil {
+		return nil, fmt.Errorf("the wrapped folder of remote %s: %w", r.ID, err)
+	}
+	return loc, nil
+}
+
+// storage returns where the data at spec location loc, on remote id (zero
+// for a worker path), is stored: for a wrapper remote, the location of the
+// same path inside its wrapped folder (the plain path standing in for the
+// encrypted one, as the worker's Env.Storage does); otherwise loc itself.
+// Checks of nested locations compare these.
+func (s *specRemotes) storage(id domain.RemoteID, loc *syncrv1.Location) (*syncrv1.Location, error) {
+	r, ok := s.remotes[id]
+	if id.IsZero() || !ok || !isWrapper(r) {
+		return loc, nil
+	}
+	w, err := s.wrapped(r)
+	if err != nil {
+		return nil, err
+	}
+	p, err := backend.JoinRemote(w.GetPath(), loc.GetPath())
+	if err != nil {
+		return nil, fmt.Errorf("path on remote %s: %w", r.ID, err)
+	}
+	return &syncrv1.Location{Remote: w.GetRemote(), Path: p}, nil
 }
 
 // upstream builds a union upstream: a path on an aliased member, or a

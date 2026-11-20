@@ -546,11 +546,15 @@ func invalidSpecMessage(err error) string {
 }
 
 // outdatedMessage names the job's worker in the worker_outdated failure
-// cause, and what it cannot run: the job's kind, or only its time limit or
-// its hooks (a job of its kind without them would run).
+// cause, and what it cannot run: the job's kind, or only its time limit,
+// its hooks or one of its remotes (a job of its kind without them would
+// run).
 func (s *Service) outdatedMessage(ctx context.Context, j jobs.Job, cause error) string {
 	what := j.Kind + " jobs"
+	var remote *RemoteFeatureError
 	switch {
+	case errors.As(cause, &remote):
+		what = fmt.Sprintf("jobs on remotes of type %q", remote.Backend)
 	case errors.Is(cause, ErrTimeLimitUnsupported):
 		what = "jobs with a time limit"
 	case errors.Is(cause, ErrHooksUnsupported):

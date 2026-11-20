@@ -38,6 +38,7 @@ import {
   type EditableKind,
   type JobDefinitionState,
 } from "./definition";
+import { noChecksumLookup, type NoChecksumLookup } from "./checksums";
 import { JobDefinitionEditor } from "./job-definition-editor";
 
 /** RunJobState is the run-job form: a worker and the job definition. */
@@ -58,9 +59,12 @@ export function fromJob(job: Job): RunJobState {
   return { workerId: job.workerId, definition: definitionState(job.definition) };
 }
 
-/** validateRunJob checks what the browser can check before sending. */
-export function validateRunJob(s: RunJobState): Errors {
-  const e: Errors = validateDefinition(s.definition);
+/**
+ * validateRunJob checks what the browser can check before sending.
+ * noChecksum tells the remotes that keep no checksums.
+ */
+export function validateRunJob(s: RunJobState, noChecksum?: NoChecksumLookup): Errors {
+  const e: Errors = validateDefinition(s.definition, noChecksum);
   if (!s.workerId) e.worker = "Choose the worker that runs the job.";
   return e;
 }
@@ -121,7 +125,7 @@ export function RunJobPage({ from, draft, kind, repository }: RunJobPageProps) {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(undefined);
-    const local = validateRunJob(s);
+    const local = validateRunJob(s, noChecksumLookup(remotes.data?.remotes ?? [], backends));
     setErrors(local);
     if (Object.keys(local).length) return;
     try {

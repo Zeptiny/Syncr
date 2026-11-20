@@ -29,6 +29,7 @@ import { labelledWorkers } from "@/lib/labels";
 import { sortWorkers } from "@/lib/workers";
 
 import { filtersNeedResync } from "../jobs/bisync-definition";
+import { noChecksumLookup } from "../jobs/checksums";
 import {
   definitionWorkerProblem,
   scheduleKinds,
@@ -125,7 +126,7 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(undefined);
-    const local = validateSchedule(s);
+    const local = validateSchedule(s, noChecksumLookup(remotes.data?.remotes ?? [], backends));
     setErrors(local);
     if (Object.keys(local).length) {
       setFormError("Check the highlighted fields.");

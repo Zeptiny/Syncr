@@ -38,7 +38,10 @@ repository that already exists where you asked for a new one.
   be changed; a new password must open the repository.
 - A repository on a **local folder of a worker** exists on that worker
   only: choose the worker when you create it, and run its jobs there.
-- Any remote type can hold a repository except a union.
+- Any remote type can hold a repository except a union and an
+  [encrypted remote](encrypted-remotes.md#limits): restic encrypts the
+  repository already. Put it on the remote the encrypted remote stores its
+  data in instead.
 - A remote that holds a repository cannot be deleted. Delete or forget the
   repository first.
 - Repositories on one remote cannot be nested: a new repository's folder
@@ -100,6 +103,14 @@ of the worker: your Nextcloud photos, a bucket, an SFTP share. Under
 and the **Folder** (empty: the remote's root). In the
 [file browser](browsing.md) of a remote, **New job, Back up this folder…**
 opens the same form with the folder filled in.
+
+An [encrypted remote](encrypted-remotes.md) works like any other: the
+worker decrypts its files as it mirrors or mounts them, so the snapshot
+holds the files as they are (encrypted by restic). Before anything else,
+the worker checks the remote's password by reading one of its files: when
+the remote holds a file with data, a wrong password fails
+`execution_failed`, so the mirror is untouched and no snapshot is made. A folder of it that is missing fails `not_found`, also on
+S3 and B2.
 
 restic reads only local folders, so the worker brings the remote's folder
 to it first, in one of two ways (**How the worker reads it**):
@@ -255,9 +266,10 @@ straight to a remote is planned.
 - A **Local directory** remote: it is a folder of a worker, so back up that
   folder instead.
 - A folder that **is, holds or is inside the repository** on the same
-  remote: a backup cannot read its own repository. (A repository reached
-  through another remote, a union or an alias of the same storage is not
-  detected.)
+  remote: a backup cannot read its own repository. A folder of an
+  [encrypted remote](encrypted-remotes.md) counts as the folder its data is
+  stored in. (A repository reached through another remote, a union or an
+  alias of the same storage is not detected.)
 - Folders of a worker together with a remote folder, or several remote
   folders in one backup.
 

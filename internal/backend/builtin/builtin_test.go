@@ -14,7 +14,7 @@ func TestTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"s3", "sftp", "local", "union", "b2", "webdav"} {
+	for _, id := range []string{"s3", "sftp", "local", "union", "b2", "webdav", "crypt"} {
 		typ, ok := reg.Get(id)
 		if !ok {
 			t.Errorf("type %q is not built in", id)

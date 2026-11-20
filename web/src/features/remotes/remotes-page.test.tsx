@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -29,5 +29,67 @@ describe("RemotesPage", () => {
         dirsOnly: false,
       }),
     );
+  });
+
+  it("shows where an encrypted remote stores its data, and who uses a remote", async () => {
+    const api = m5Api(Date.now());
+    renderApp("/remotes", api.transport);
+
+    const vault = await screen.findByRole("row", { name: /Vault/ });
+    expect(within(vault).getByText("in")).toBeInTheDocument();
+    expect(within(vault).getByText("B2 offsite")).toBeInTheDocument();
+    expect(within(vault).getByText("/ vault")).toBeInTheDocument();
+
+    // B2 offsite holds Vault's data; unions still list as before.
+    const b2 = screen.getByRole("row", { name: /B2 offsite/ });
+    expect(within(b2).getByText("Vault")).toBeInTheDocument();
+    const photos = screen.getByRole("row", { name: /^Photos/ });
+    expect(within(photos).getByText("Pooled disks")).toBeInTheDocument();
+  });
+
+  it("refuses to delete a remote that stores another remote's data, naming it", async () => {
+    const user = userEvent.setup();
+    const api = m5Api(Date.now());
+    renderApp(`/remotes/${fx.ids.b2}`, api.transport);
+
+    await user.click(await screen.findByRole("button", { name: "Delete remote" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(
+      "Vault stores its data in this remote. Delete that remote first: a remote that holds another remote's data cannot be deleted.",
+    );
+    // Every reason is named, the repository it also holds too.
+    expect(dialog).toHaveTextContent(/is a repository on this remote/);
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: "Delete remote" })).toBeDisabled(),
+    );
+    expect(api.of("DeleteRemote")).toHaveLength(0);
+  });
+
+  it("warns that deleting an encrypted remote erases the only copy of its password", async () => {
+    const user = userEvent.setup();
+    const api = m5Api(Date.now());
+    renderApp(`/remotes/${fx.ids.vault}`, api.transport);
+
+    await user.click(await screen.findByRole("button", { name: "Delete remote" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(
+      "Its password and salt (second password) are erased too, and Syncr keeps no other copy. The files it stores in B2 offsite / vault are not deleted, but without them nobody can read them.",
+    );
+    // The usual note stays; the delete is allowed.
+    expect(dialog).toHaveTextContent(/Its saved credentials are erased/);
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: "Delete remote" })).toBeEnabled(),
+    );
+  });
+
+  it("adds no such warning for a remote without fixed secrets", async () => {
+    const user = userEvent.setup();
+    const api = m5Api(Date.now());
+    renderApp(`/remotes/${fx.ids.nextcloud}`, api.transport);
+
+    await user.click(await screen.findByRole("button", { name: "Delete remote" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(/Its saved credentials are erased/);
+    expect(dialog).not.toHaveTextContent(/Syncr keeps no other copy/);
   });
 });

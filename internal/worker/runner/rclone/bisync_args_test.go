@@ -227,7 +227,8 @@ func TestCheckPair(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := checkPair(fromSlash(tt.path1), fromSlash(tt.path2))
+			p1, p2 := fromSlash(tt.path1), fromSlash(tt.path2)
+			err := checkPair(p1, p2, p1, p2)
 			switch {
 			case tt.want == "" && err != nil:
 				t.Errorf("checkPair() = %v, want nil", err)

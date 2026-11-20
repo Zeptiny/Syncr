@@ -199,6 +199,17 @@ func (r storeRemotes) RemoteType(ctx context.Context, owner domain.UserID, id do
 	return rem.Type, nil
 }
 
+func (r storeRemotes) Storage(ctx context.Context, owner domain.UserID, id domain.RemoteID) (domain.RemoteID, string, error) {
+	rem, err := r.store.GetRemote(ctx, id)
+	if err != nil {
+		return domain.RemoteID{}, "", err
+	}
+	if rem.Deleted() || rem.OwnerID != owner {
+		return domain.RemoteID{}, "", fmt.Errorf("remote %s: %w", id, domain.ErrNotFound)
+	}
+	return rem.Wrapped.RemoteID, rem.Wrapped.Path, nil
+}
+
 // flakyCipher is the real keyring, which can be made to fail decrypting.
 type flakyCipher struct {
 	*secrets.Keyring

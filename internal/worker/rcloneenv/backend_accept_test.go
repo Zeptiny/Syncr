@@ -22,7 +22,7 @@ import (
 // rclone remotes and turned into RemoteDefinitions the way the job builder
 // does it, must be accepted by rcloneenv.
 //
-// toDefinition and upstream mirror the alias and Root mapping of
+// toDefinition, upstream and wrapped mirror the alias and Root mapping of
 // internal/jobkind (aliases "r1", "r2", ... ; backend.JoinRemote for remote
 // paths and backend.JoinLocal for local ones), so this test does not depend
 // on a job kind.
@@ -54,6 +54,17 @@ func upstream(t *testing.T, alias string, r backend.Rclone, path string, mode sy
 		t.Fatalf("join %q and %q: %v", r.Root, path, err)
 	}
 	return &syncrv1.UnionUpstream{Location: &syncrv1.Location{Remote: alias, Path: p}, Mode: mode}
+}
+
+// wrapped is the wrapped location of a wrapper remote that stores its data
+// at path on the remote r (alias).
+func wrapped(t *testing.T, alias string, r backend.Rclone, path string) *syncrv1.Location {
+	t.Helper()
+	p, err := backend.JoinRemote(r.Root, path)
+	if err != nil {
+		t.Fatalf("join %q and %q: %v", r.Root, path, err)
+	}
+	return &syncrv1.Location{Remote: alias, Path: p}
 }
 
 type example struct {
@@ -130,6 +141,19 @@ func TestBuiltinBackendsAccepted(t *testing.T) {
 					t.Errorf("%s with member %s: rejected by the worker: %v", ex.name, m.name, err)
 				}
 			}
+		case caps.Wrapper:
+			// A wrapper over every kind of remote it may wrap: not local,
+			// not a union and not a wrapper.
+			for _, m := range exs {
+				if mc := m.typ.Capabilities(); mc.Local || mc.Union || mc.Wrapper {
+					continue
+				}
+				w := toDefinition("r1", ex.rclone)
+				w.Wrapped = wrapped(t, "r2", m.rclone, "vault")
+				if _, err := builder.Remotes([]*syncrv1.RemoteDefinition{w, toDefinition("r2", m.rclone)}); err != nil {
+					t.Errorf("%s over %s: rejected by the worker: %v", ex.name, m.name, err)
+				}
+			}
 		default:
 			if _, err := builder.Remotes([]*syncrv1.RemoteDefinition{toDefinition("r1", ex.rclone)}); err != nil {
 				t.Errorf("%s: rejected by the worker: %v", ex.name, err)
@@ -140,6 +164,12 @@ func TestBuiltinBackendsAccepted(t *testing.T) {
 
 // testOnlyBackends are supported by the worker without a built-in type.
 func testOnlyBackends() []string { return []string{"memory"} }
+
+// awaitingBuiltinType are supported by the worker before the built-in type
+// that uses them exists (a worker step built before the controller's
+// type). Remove a backend from here once its type is registered; the test
+// below says when.
+func awaitingBuiltinType() []string { return nil }
 
 // TestSupportedBackendsMatchBuiltinTypes checks that the worker's allowlist
 // of backend types holds the rclone backend of every built-in type, and
@@ -163,7 +193,10 @@ func TestSupportedBackendsMatchBuiltinTypes(t *testing.T) {
 		}
 	}
 	for _, b := range supported {
-		if !want[b] {
+		switch awaiting := slices.Contains(awaitingBuiltinType(), b); {
+		case awaiting && want[b]:
+			t.Errorf("rclone backend %q has a built-in type now; remove it from awaitingBuiltinType", b)
+		case !awaiting && !want[b]:
 			t.Errorf("rcloneenv.SupportedBackends has %q, which no built-in type uses", b)
 		}
 	}

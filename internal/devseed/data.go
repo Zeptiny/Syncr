@@ -58,7 +58,8 @@ func tools() []workers.Tool {
 // old-nas reported none before it was removed; attic-nas is online but
 // runs a build from before Milestone 6 (no link.FeatureJobTimeLimit, no
 // link.FeatureJobHooks, no sftp_host_keys probe, no two-way sync: neither
-// link.FeatureRcloneBisync nor the rclone_bisync kind), so the UI shows it
+// link.FeatureRcloneBisync nor the rclone_bisync kind, no
+// link.FeatureRcloneCrypt), so the UI shows it
 // outdated with the command that upgrades it. nas-01's operator defined
 // hooks (demoHooks), which the backups of its documents run.
 //
@@ -122,12 +123,12 @@ func demoWorkers() []demoWorker {
 				MaxConcurrentJobs: 1, LocalRoots: []string{"/volume1"},
 				// Built before Milestone 6: no time limits, no hooks, no
 				// host-key probe, no two-way sync, none of Milestone 7's
-				// scans or restores of items of a subfolder, and no
-				// backups of a remote.
+				// scans or restores of items of a subfolder, no backups of
+				// a remote and no encrypted remotes.
 				JobKinds: slices.DeleteFunc(link.Kinds(), func(k string) bool { return k == "rclone_bisync" }),
 				Features: slices.DeleteFunc(slices.Clone(features), func(f string) bool {
 					return f == link.FeatureJobTimeLimit || f == link.FeatureJobHooks || f == link.FeatureRcloneBisync ||
-						f == link.FeatureResticRestoreSubfolderPaths || f == link.FeatureResticRemoteSource
+						f == link.FeatureResticRestoreSubfolderPaths || f == link.FeatureResticRemoteSource || f == link.FeatureRcloneCrypt
 				}),
 				ProbeOps: slices.DeleteFunc(slices.Clone(ops), func(op string) bool { return op == "sftp_host_keys" || link.IsHeavyProbeOp(op) }),
 			},
@@ -145,11 +146,14 @@ const wAtticNAS = "attic-nas"
 // oldNASRemoved is how long before the seed old-nas was removed.
 const oldNASRemoved = 6*24*time.Hour + 9*time.Hour
 
-// demoRemote is a seeded remote; members name earlier remotes of a union.
+// demoRemote is a seeded remote; members name earlier remotes of a union,
+// wrapped the earlier remote and folder an encrypted remote stores its
+// data in.
 type demoRemote struct {
 	owner   int
 	input   remotes.Input
 	members []string
+	wrapped loc
 }
 
 // Demo remote names used by the jobs.
@@ -166,6 +170,7 @@ const (
 	rAliceB2   = "Alice's B2"
 	rOffsite   = "Offsite SSH"
 	rR2        = "Cloudflare R2"
+	rVault     = "Vault"
 )
 
 // demoHostKeys are the SSH host keys of the demo SSH servers: an Ed25519
@@ -222,6 +227,12 @@ func demoRemotes() []demoRemote {
 			Options: map[string]string{"provider": "Cloudflare", "endpoint": "https://4f0c1e2d3b4a59687766554433221100.r2.cloudflarestorage.com",
 				"region": "auto", "access_key_id": "syncr-demo-r2", "bucket": sharedBucket},
 			Secrets: map[string]string{"secret_access_key": "syncr-demo-r2-secret"}}},
+		// The encrypted remote whose files the worker encrypts into a
+		// folder of B2 offsite (crypt_data.go).
+		{owner: ownerAdmin, input: remotes.Input{Name: rVault, Type: "crypt",
+			Options: map[string]string{"filename_encryption": "standard", "directory_name_encryption": "true"},
+			Secrets: map[string]string{"password": "syncr-demo-vault-password", "password2": "syncr-demo-vault-salt"}},
+			wrapped: loc{rB2, vaultFolder}},
 	}
 }
 

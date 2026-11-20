@@ -30,6 +30,8 @@ import {
   RemoteSchema,
   RemoteService,
   type Remote,
+  type RemoteInput,
+  type WrappedRemote,
 } from "@/gen/syncr/v1/remotes_pb";
 import { UserRole, UserSchema, UserService } from "@/gen/syncr/v1/users_pb";
 import * as fx from "@/test/fixtures";
@@ -166,6 +168,61 @@ export function createMockTransport(): Transport {
     const r = remotes.find((x) => x.id === id);
     if (!r || me().id !== fx.ids.admin) throw new ConnectError("remote not found", Code.NotFound);
     return r;
+  };
+  const backendOf = (type: string) => fx.backends.find((b) => b.id === type);
+  // Where a wrapper (encrypted) remote stores its data, checked like the
+  // controller does (internal/app/remotes checkWrapped), with its messages.
+  const checkWrapped = (type: string, w: WrappedRemote | undefined, self?: string) => {
+    if (!backendOf(type)?.capabilities?.wrapper) {
+      if (w && (w.remoteId || w.path))
+        throw invalid([
+          {
+            field: "wrapped",
+            message: "only encrypted remotes store their data in another remote",
+          },
+        ]);
+      return;
+    }
+    const target = remotes.find((x) => x.id === w?.remoteId);
+    const caps = target && backendOf(target.backendType)?.capabilities;
+    const message = !w?.remoteId
+      ? "is required"
+      : !target
+        ? "is not one of your remotes"
+        : target.id === self
+          ? "an encrypted remote cannot store its data in itself"
+          : caps?.local
+            ? "cannot be a folder of a worker"
+            : caps?.union || caps?.wrapper
+              ? "cannot be a union or another encrypted remote"
+              : undefined;
+    if (message) throw invalid([{ field: "wrapped.remote_id", message }]);
+    if (w?.path.split("/").includes(".."))
+      throw invalid([{ field: "wrapped.path", message: 'path must not contain ".." segments' }]);
+  };
+  // Fixed fields keep their value: any secret sent for one is refused.
+  const checkFixed = (r: Remote, input: RemoteInput) => {
+    const fixed = backendOf(r.backendType)?.fields.filter((f) => f.fixed) ?? [];
+    const violations = fixed.flatMap((f) => {
+      const field = f.secret
+        ? input.secrets[f.name]
+          ? `secrets.${f.name}`
+          : input.clearSecrets.includes(f.name)
+            ? `clear_secrets[${input.clearSecrets.indexOf(f.name)}]`
+            : undefined
+        : (input.options[f.name] || f.defaultValue) !== (r.options[f.name] || f.defaultValue)
+          ? `options.${f.name}`
+          : undefined;
+      return field ? [{ field, message: "cannot be changed after the remote is created" }] : [];
+    });
+    if (violations.length) throw invalid(violations);
+  };
+  const linkWrapped = (r: Remote) => {
+    const target = remotes.find((x) => x.id === r.wrapped?.remoteId);
+    if (target && !target.wrappedBy.includes(r.id)) target.wrappedBy = [...target.wrappedBy, r.id];
+  };
+  const unlinkWrapped = (r: Remote) => {
+    for (const x of remotes) x.wrappedBy = x.wrappedBy.filter((id) => id !== r.id);
   };
 
   const m5 = m5mock.createM5({
@@ -463,6 +520,7 @@ export function createMockTransport(): Transport {
             { field: "options.endpoint", message: "Required unless the provider is AWS." },
           ]);
         }
+        checkWrapped(input.backendType, input.wrapped);
         const r: Remote = create(RemoteSchema, {
           id: uuid(),
           name: input.name,
@@ -470,11 +528,13 @@ export function createMockTransport(): Transport {
           options: input.options,
           secretsSet: Object.keys(input.secrets),
           members: input.members,
+          wrapped: input.wrapped,
           createdAt: timestampFromMs(Date.now()),
           updatedAt: timestampFromMs(Date.now()),
           version: 1n,
         });
         remotes = [...remotes, r].sort((a, b) => a.name.localeCompare(b.name));
+        linkWrapped(r);
         return { remote: r };
       },
       updateRemote: async (req) => {
@@ -482,6 +542,8 @@ export function createMockTransport(): Transport {
         await sleep(300);
         const input = req.input;
         if (!input) throw invalid([{ field: "input", message: "missing" }]);
+        checkWrapped(input.backendType, input.wrapped, r.id);
+        checkFixed(r, input);
         r.name = input.name;
         r.options = input.options;
         r.secretsSet = [
@@ -491,12 +553,22 @@ export function createMockTransport(): Transport {
           ]),
         ];
         r.members = input.members;
+        unlinkWrapped(r);
+        r.wrapped = input.wrapped;
+        linkWrapped(r);
         r.version++;
         r.updatedAt = timestampFromMs(Date.now());
         return { remote: r };
       },
       deleteRemote: (req) => {
         const r = remote(req.remoteId);
+        if (r.wrappedBy.length) {
+          const name = remotes.find((x) => x.id === r.wrappedBy[0])?.name ?? r.wrappedBy[0];
+          throw new ConnectError(
+            `the remote stores the data of encrypted remote "${name}"; delete that remote first`,
+            Code.FailedPrecondition,
+          );
+        }
         if (r.usedByUnions.length) {
           throw new ConnectError(
             `remote is a member of ${r.usedByUnions.map((id) => remotes.find((x) => x.id === id)?.name ?? id).join(", ")}`,
@@ -510,6 +582,7 @@ export function createMockTransport(): Transport {
             Code.FailedPrecondition,
           );
         }
+        unlinkWrapped(r);
         remotes = remotes.filter((x) => x.id !== r.id);
         return {};
       },

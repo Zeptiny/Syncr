@@ -116,6 +116,18 @@ func sftpRemote(alias, pass string) *syncrv1.RemoteDefinition {
 	}
 }
 
+// cryptRemote is a crypt remote (alias) that stores its data at path on the
+// remote wrapped, with the password pass.
+func cryptRemote(alias, wrapped, path, pass string) *syncrv1.RemoteDefinition {
+	return &syncrv1.RemoteDefinition{
+		Alias:       alias,
+		BackendType: "crypt",
+		Wrapped:     &syncrv1.Location{Remote: wrapped, Path: path},
+		Secrets:     map[string]string{"password": pass},
+		ObscureKeys: []string{"password"},
+	}
+}
+
 func TestKind(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, &fakeSupervisor{})
@@ -252,6 +264,21 @@ func TestRunRejectsBeforeStarting(t *testing.T) {
 			t.Options = &syncrv1.RcloneTransferOptions{Checksum: true, SizeOnly: true}
 		}, syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC},
 		{"no mode", inside, remote("box"), nil, func(t *syncrv1.RcloneTransfer) { t.Mode = 0 }, syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC},
+		{"crypt over a local folder", inside, remote("vault"), func(f *fixture) []*syncrv1.RemoteDefinition {
+			v := cryptRemote("vault", "box", "", secret)
+			v.Wrapped = &syncrv1.Location{Path: f.data}
+			return []*syncrv1.RemoteDefinition{box, v}
+		}, nil, syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC},
+		{"crypt over a union", inside, remote("vault"), func(f *fixture) []*syncrv1.RemoteDefinition {
+			u := union(f)
+			u.UnionUpstreams[1] = &syncrv1.UnionUpstream{Location: &syncrv1.Location{Remote: "box"}}
+			return []*syncrv1.RemoteDefinition{box, u, cryptRemote("vault", "un", "x", secret)}
+		}, nil, syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC},
+		{"crypt turning strict_names off", inside, remote("vault"), func(*fixture) []*syncrv1.RemoteDefinition {
+			v := cryptRemote("vault", "box", "", secret)
+			v.Options = map[string]string{"strict_names": "false"}
+			return []*syncrv1.RemoteDefinition{box, v}
+		}, nil, syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

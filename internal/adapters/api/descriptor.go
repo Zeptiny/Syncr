@@ -20,6 +20,7 @@ func fieldToProto(f descriptor.Field) *syncrv1.BackendField {
 		Secret:       f.Secret,
 		Advanced:     f.Advanced,
 		DefaultValue: f.Default,
+		Fixed:        f.Fixed,
 		Choices:      make([]*syncrv1.FieldChoice, 0, len(f.Choices)),
 	}
 	for _, c := range f.Choices {
@@ -28,8 +29,8 @@ func fieldToProto(f descriptor.Field) *syncrv1.BackendField {
 	return out
 }
 
-// fieldKindToProto converts a field kind; the backend-only members kind is
-// FIELD_KIND_MEMBERS.
+// fieldKindToProto converts a field kind; the backend-only members and
+// wrapped kinds are FIELD_KIND_MEMBERS and FIELD_KIND_WRAPPED.
 func fieldKindToProto(k descriptor.Kind) syncrv1.FieldKind {
 	switch k {
 	case descriptor.KindString:
@@ -44,6 +45,8 @@ func fieldKindToProto(k descriptor.Kind) syncrv1.FieldKind {
 		return syncrv1.FieldKind_FIELD_KIND_ENUM
 	case descriptor.Kind(backend.KindMembers):
 		return syncrv1.FieldKind_FIELD_KIND_MEMBERS
+	case descriptor.Kind(backend.KindWrapped):
+		return syncrv1.FieldKind_FIELD_KIND_WRAPPED
 	}
 	return syncrv1.FieldKind_FIELD_KIND_UNSPECIFIED
 }

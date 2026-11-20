@@ -292,7 +292,9 @@ worker, not to one schedule or job: see [the limits](#limits-and-known-gaps).
 
 - **Compare files by:** size and modification time by default. Adding the
   checksum also detects changes by content where both sides have a hash
-  in common; it is slower.
+  in common; it is slower. It is not offered when a side is an
+  [encrypted remote](encrypted-remotes.md#checksums), which keeps no
+  checksums, and the API refuses it there.
 - **Resync mode:** what a resync keeps of a file that differs: the newer
   (default), the older, the larger, the smaller, Folder A's or Folder B's.
 - **Advanced:** parallel transfers and checkers, a bandwidth limit,
@@ -325,6 +327,13 @@ the path. **A pair is new**, and its next run a resync, when:
   run of every pair on that remote is a resync. A new secret alone does not;
 - its state was removed: the worker deletes the state of pairs that have
   not run for **180 days**, at startup and then daily.
+
+A side on an [encrypted remote](encrypted-remotes.md) counts as the
+folder its data is stored in: the key includes the remote it stores its
+data in (its settings and folder), pairs on the encrypted remote wait for
+pairs on that folder, and a side may not be inside, around or on the other
+side's storage folder ("neither may be inside the other"). Keys of pairs
+without an encrypted side are unchanged.
 
 Such a resync is a union and deletes nothing, but deletions since the
 pair's last run come back; an empty worker folder makes it stop and ask

@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -277,11 +278,16 @@ func osMayRun(req jobkind.OSRequirement, w workers.Worker) bool {
 }
 
 // create creates a launching run's job with the reserved ID and closes the
-// run.
+// run. The definition is checked with what its remotes are (checkWith).
 func (s *Scheduler) create(ctx context.Context, p *pass, sc schedules.Schedule, r schedules.Run) error {
-	kind, refs, err := s.check(sc)
-	if err != nil {
+	kind, refs, err := s.checkWith(ctx, sc)
+	var verr *domain.ValidationError
+	switch {
+	case errors.As(err, &verr), errors.Is(err, domain.ErrInvalidArgument):
 		return s.end(ctx, r, schedules.RunFailed, schedules.ReasonInvalidDefinition, clip(err.Error()), true)
+	case err != nil:
+		// Retried on the next pass (the remotes could not be read).
+		return fmt.Errorf("check the definition of schedule %s: %w", sc.ID, err)
 	}
 	_, err = s.jobs.Create(ctx, domain.Actor{UserID: sc.OwnerID, Role: domain.RoleUser}, jobs.CreateParams{
 		ID: r.JobID, ScheduleID: sc.ID, WorkerID: r.WorkerID, Kind: kind, Definition: sc.Definition,
@@ -393,6 +399,42 @@ func (s *Scheduler) check(sc schedules.Schedule) (string, jobkind.Refs, error) {
 		return "", jobkind.Refs{}, err
 	}
 	return s.kinds.Check(def)
+}
+
+// checkWith is check with what the schedule's remotes are
+// (Remotes.Infos, jobkind's Registry.CheckWith): its refusals (a checksum
+// comparison with a remote that keeps none, two-way sync sides nested
+// through an encrypted remote) and the concurrency keys through them. A
+// remote that is not the owner's any more leaves the definition as check
+// returns it: creating the job reports it (remote_unavailable). Errors of
+// the definition match domain.ErrInvalidArgument; others (reading the
+// remotes) are worth a retry.
+func (s *Scheduler) checkWith(ctx context.Context, sc schedules.Schedule) (string, jobkind.Refs, error) {
+	kind, refs, err := s.check(sc)
+	if err != nil || s.remotes == nil {
+		return kind, refs, err
+	}
+	infos, err := s.remotes.Infos(ctx, sc.OwnerID, refs.RemoteIDs)
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		return kind, refs, nil
+	case err != nil:
+		return "", jobkind.Refs{}, fmt.Errorf("read the remotes: %w", err)
+	}
+	def, err := jobkind.Unmarshal(sc.Definition)
+	if err != nil {
+		return "", jobkind.Refs{}, err
+	}
+	return s.kinds.CheckWith(def, kindInfos(infos))
+}
+
+// kindInfos converts the remotes service's infos for jobkind.
+func kindInfos(in map[domain.RemoteID]remotes.Info) map[domain.RemoteID]jobkind.RemoteInfo {
+	out := make(map[domain.RemoteID]jobkind.RemoteInfo, len(in))
+	for id, info := range in {
+		out[id] = jobkind.NewRemoteInfo(info.Wrapped.RemoteID, info.Wrapped.Path, info.Capabilities)
+	}
+	return out
 }
 
 // end moves an open run to status; a lost race (another pass or

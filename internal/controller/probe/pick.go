@@ -40,9 +40,12 @@ func (c Candidate) canProbe(op string) bool {
 // canRun reports whether c's worker runs jobs of kind, with every feature
 // of required.
 func (c Candidate) canRun(kind string, required []string) bool {
-	if !slices.Contains(c.JobKinds, kind) {
-		return false
-	}
+	return slices.Contains(c.JobKinds, kind) && c.hasFeatures(required)
+}
+
+// hasFeatures reports whether c's worker reported every feature of
+// required.
+func (c Candidate) hasFeatures(required []string) bool {
 	return !slices.ContainsFunc(required, func(f string) bool { return !slices.Contains(c.Features, f) })
 }
 
@@ -53,6 +56,32 @@ func (c Candidate) canRun(kind string, required []string) bool {
 // returns an error wrapping ErrNoWorker that says why.
 func Pick(cands []Candidate, op string) (Candidate, error) {
 	return pick(cands, func(c Candidate) bool { return c.canProbe(op) }, "can run this request")
+}
+
+// PickFor is Pick for a probe whose remotes need link features of the
+// worker (jobkind.RemoteFeatures, e.g. an encrypted remote's): eligible
+// workers also report every feature of required. When workers could run
+// op but none reports them, the error wraps ErrNoWorker and says that the
+// workers must be upgraded. Without required it is Pick.
+func PickFor(cands []Candidate, op string, required []string) (Candidate, error) {
+	if len(required) == 0 {
+		return Pick(cands, op)
+	}
+	probing := slices.ContainsFunc(cands, func(c Candidate) bool { return c.canProbe(op) })
+	if probing && !slices.ContainsFunc(cands, func(c Candidate) bool { return c.canProbe(op) && c.hasFeatures(required) }) {
+		return Candidate{}, fmt.Errorf("%w: no worker can use these remotes yet (they need the feature %s); the workers must be upgraded",
+			ErrNoWorker, quoted(required))
+	}
+	return pick(cands, func(c Candidate) bool { return c.canProbe(op) && c.hasFeatures(required) }, "can use these remotes")
+}
+
+// quoted lists names as `"a"` or `"a", "b"`.
+func quoted(names []string) string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = fmt.Sprintf("%q", n)
+	}
+	return strings.Join(out, ", ")
 }
 
 // PickForJob is Pick for a job kind instead of a probe operation: eligible
@@ -112,6 +141,13 @@ func preferredRank(c Candidate) int {
 // feature or the operation domain.ErrFailedPrecondition (it is outdated).
 func CheckExplicit(c Candidate, found bool, op string) error {
 	return checkExplicit(c, found, c.canProbe(op), "this request")
+}
+
+// CheckExplicitFor is CheckExplicit for a probe whose remotes need the
+// link features required (see PickFor): a worker without them is
+// outdated too.
+func CheckExplicitFor(c Candidate, found bool, op string, required []string) error {
+	return checkExplicit(c, found, c.canProbe(op) && c.hasFeatures(required), "this request")
 }
 
 // CheckExplicitForJob is CheckExplicit for a job kind and the link

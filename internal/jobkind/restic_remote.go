@@ -281,7 +281,8 @@ func (s *specRemotes) sourceKey(r Remote, path string) (string, error) {
 // by link.RemoteSourceTag. It refuses (field errors, wrapping
 // domain.ErrInvalidArgument) a source remote of the Local directory type
 // and a source that is, holds or lies inside the repository's folder on
-// the same remote.
+// the same remote (for a source on a wrapper remote: the folder its data is
+// stored in).
 func (k ResticBackup) buildRemoteSource(d *syncrv1.ResticBackupDefinition, refs Refs, in Resolved) (*syncrv1.JobSpec, error) {
 	repo, err := resolveRepository(k.Name(), d.GetRepositoryId(), in)
 	if err != nil {
@@ -314,8 +315,14 @@ func (k ResticBackup) buildRemoteSource(d *syncrv1.ResticBackupDefinition, refs 
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", k.Name(), err)
 	}
-	if repoLoc.GetRemote() == srcLoc.GetRemote() {
-		if msg := RemoteSourceOverlap(srcLoc.GetPath(), repoLoc.GetPath()); msg != "" {
+	// A source on a wrapper remote is compared by the folder its data is
+	// stored in: it may be the repository's remote.
+	srcStored, err := rs.storage(srcID, srcLoc)
+	if err != nil {
+		return nil, fmt.Errorf("build %s: %w", k.Name(), err)
+	}
+	if repoLoc.GetRemote() == srcStored.GetRemote() {
+		if msg := RemoteSourceOverlap(srcStored.GetPath(), repoLoc.GetPath()); msg != "" {
 			return nil, fmt.Errorf("build %s: %w", k.Name(), invalid(remoteSourceField+".path", msg))
 		}
 	}

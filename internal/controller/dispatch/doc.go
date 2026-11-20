@@ -162,6 +162,9 @@
 //	  report link.FeatureJobTimeLimit                      worker_outdated, saying so
 //	the job names hooks and the worker does not report
 //	  link.FeatureJobHooks                                 worker_outdated, saying so
+//	the spec defines a remote whose backend needs a
+//	  feature the worker lacks (jobkind.BackendFeature:
+//	  crypt needs link.FeatureRcloneCrypt)                 worker_outdated, naming the type
 //	the worker does not define a hook the job names
 //	  (what its current process reported in its Hello)     invalid_spec, naming the hooks
 //	the definition cannot be decoded, checked or built     invalid_spec

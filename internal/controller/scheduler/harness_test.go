@@ -116,7 +116,7 @@ func (e *env) newScheduler(jobsPort scheduler.Jobs, scheds scheduler.Schedules) 
 		scheds = e.svc
 	}
 	s, err := scheduler.New(scheduler.Deps{
-		Schedules: scheds, Jobs: jobsPort, Workers: e.workers, Kinds: e.kinds, Owners: e.owners,
+		Schedules: scheds, Jobs: jobsPort, Workers: e.workers, Kinds: e.kinds, Remotes: e.remotes, Owners: e.owners,
 		IDs: idgen.UUIDv7{}, Clock: e.clock, Signal: e.signal,
 	}, scheduler.Config{})
 	if err != nil {
@@ -282,11 +282,49 @@ func (e *env) addRemote(name string) domain.RemoteID {
 }
 
 // fakeRemotes is the remotes checker of both the jobs and the schedules
-// services.
+// services, and the scheduler's Remotes.
 type fakeRemotes struct {
 	mu    sync.Mutex
 	owner map[domain.RemoteID]domain.UserID
 	gone  []domain.RemoteID
+	// infos are what Infos tells of a remote (zero: an ordinary remote);
+	// infosErr, if set, fails Infos.
+	infos    map[domain.RemoteID]remotes.Info
+	infosErr error
+}
+
+// setInfo sets what Infos tells of remote id.
+func (f *fakeRemotes) setInfo(id domain.RemoteID, info remotes.Info) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.infos == nil {
+		f.infos = map[domain.RemoteID]remotes.Info{}
+	}
+	f.infos[id] = info
+}
+
+// failInfos makes Infos fail with err (nil: succeed again).
+func (f *fakeRemotes) failInfos(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.infosErr = err
+}
+
+// Infos implements scheduler.Remotes: live remotes of owner only.
+func (f *fakeRemotes) Infos(_ context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Info, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.infosErr != nil {
+		return nil, f.infosErr
+	}
+	out := map[domain.RemoteID]remotes.Info{}
+	for _, id := range ids {
+		if o, ok := f.owner[id]; !ok || o != owner || slices.Contains(f.gone, id) {
+			return nil, fmt.Errorf("remote %s: %w", id, domain.ErrNotFound)
+		}
+		out[id] = f.infos[id]
+	}
+	return out, nil
 }
 
 func (f *fakeRemotes) add(id domain.RemoteID, owner domain.UserID) {

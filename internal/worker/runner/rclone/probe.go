@@ -100,12 +100,23 @@ func probeStderr(t *tracker) func(proc.Line) {
 // directories first, then by name, at most op.max_entries. A folder that
 // does not exist fails with NOT_FOUND where the backend has folders; in a
 // bucket, a prefix without objects is an empty folder.
+//
+// A folder of an encrypted remote is listed only after its password is
+// checked (checkCryptPassword): a wrong one fails with EXECUTION_FAILED
+// in every file-name mode, as long as the remote holds a file with data.
+// This is what "Test remote" does with an encrypted remote, and the file
+// browser never shows garbled names or folders that only look empty.
 func (p *Prober) List(ctx context.Context, probeID string, remotes []*syncrv1.RemoteDefinition, op *syncrv1.ProbeListRemote) (*syncrv1.ProbeListing, error) {
 	run, err := p.prepare(probeID, remotes, op.GetLocation())
 	if err != nil {
 		return nil, err
 	}
 	defer run.done()
+	if alias := op.GetLocation().GetRemote(); isCrypt(run.env, alias) {
+		if err := p.r.checkCryptPassword(ctx, run.dir, run.env, run.sc, "", alias); err != nil {
+			return nil, err
+		}
+	}
 	limit := int(op.GetMaxEntries())
 	if limit <= 0 {
 		limit = defaultListEntries

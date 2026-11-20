@@ -3,15 +3,18 @@ import { useId, useMemo, useState } from "react";
 import { FormProvider, useForm, type FieldPath, type Resolver } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { FieldKind, type Backend, type BackendField, type Remote } from "@/gen/syncr/v1/remotes_pb";
 import { errorMessage, fieldViolations } from "@/lib/errors";
 
 import { DescriptorFields } from "./descriptor-fields";
-import { FieldShell, MembersField } from "./fields";
+import { FieldShell, MembersField, WrappedRemoteField } from "./fields";
 import {
   buildSchema,
   defaultValues,
+  fixedSecretFields,
   mapViolations,
   membersField,
   toRemoteInput,
@@ -24,7 +27,7 @@ export interface RemoteFormProps {
   backend: Backend;
   /** remote is the stored remote when editing. */
   remote?: Remote;
-  /** remotes and backends feed the union member picker. */
+  /** remotes and backends feed the union member and wrapped remote pickers. */
   remotes?: Remote[];
   backends?: Map<string, Backend>;
   /**
@@ -50,8 +53,13 @@ export interface RemoteFormProps {
 
 /**
  * RemoteForm renders a remote's form: its name, the backend descriptor's
- * fields (DescriptorFields) and, for unions, the members. Server field
- * violations land on their fields.
+ * fields (DescriptorFields), for unions the members and for wrapper types
+ * where the data is stored. Server field violations land on their fields.
+ *
+ * Fixed fields (BackendField.fixed) are read-only when editing, and are
+ * never sent changed: fixed secrets are not sent at all. A new remote with
+ * a fixed secret asks the user to confirm that they kept a copy before it
+ * can be created.
  */
 export function RemoteForm({
   backend,
@@ -67,8 +75,8 @@ export function RemoteForm({
 }: RemoteFormProps) {
   const idPrefix = useId().replaceAll(":", "");
   const schema = useMemo(
-    () => buildSchema(backend, { secretsSet: remote?.secretsSet }),
-    [backend, remote?.secretsSet],
+    () => buildSchema(backend, { secretsSet: remote?.secretsSet, editing: !!remote }),
+    [backend, remote],
   );
   const form = useForm<DescriptorValues>({
     resolver: zodResolver(schema) as unknown as Resolver<DescriptorValues>,
@@ -77,6 +85,18 @@ export function RemoteForm({
   });
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [formError, setFormError] = useState<string | undefined>();
+  // A new remote with secrets that are never shown again waits until the
+  // user says they kept a copy, of the values typed now: a changed value
+  // (e.g. generated again) needs the box ticked again.
+  const kept = remote ? [] : fixedSecretFields(backend);
+  const keptValues = JSON.stringify(
+    kept.length
+      ? form.watch(kept.map((f) => `values.${f.name}` as FieldPath<DescriptorValues>))
+      : [],
+  );
+  const [savedFor, setSavedFor] = useState<string | undefined>();
+  const saved = savedFor === keptValues;
+  const needsAck = kept.length > 0 && !saved;
 
   const advanced = backend.fields.filter((f) => f.advanced);
   const errors = form.formState.errors;
@@ -84,7 +104,7 @@ export function RemoteForm({
   const submit = form.handleSubmit(async (values) => {
     setFormError(undefined);
     try {
-      await onSubmit(toRemoteInput(backend, values));
+      await onSubmit(toRemoteInput(backend, values, remote));
     } catch (err) {
       const { fields, other } = mapViolations(backend, fieldViolations(err));
       for (const f of fields) {
@@ -132,12 +152,21 @@ export function RemoteForm({
           <DescriptorFields
             descriptor={backend}
             secretsSet={remote?.secretsSet}
+            storedOptions={remote?.options}
             idPrefix={idPrefix}
             openAdvanced={advancedOpen}
             onOpenAdvancedChange={setAdvancedOpen}
             renderField={(f) =>
               f.kind === FieldKind.MEMBERS ? (
                 <MembersField
+                  field={f}
+                  idPrefix={idPrefix}
+                  remotes={remotes}
+                  backends={backends}
+                  selfId={remote?.id}
+                />
+              ) : f.kind === FieldKind.WRAPPED ? (
+                <WrappedRemoteField
                   field={f}
                   idPrefix={idPrefix}
                   remotes={remotes}
@@ -157,7 +186,21 @@ export function RemoteForm({
           </p>
         )}
 
-        {extra?.(() => toRemoteInput(backend, form.getValues()))}
+        {extra?.(() => toRemoteInput(backend, form.getValues(), remote))}
+
+        {kept.length > 0 && (
+          <div className="flex items-start gap-2.5 rounded-lg border bg-muted/50 px-3.5 py-3">
+            <Checkbox
+              id={`${idPrefix}-kept`}
+              checked={saved}
+              onCheckedChange={(v) => setSavedFor(v === true ? keptValues : undefined)}
+              className="mt-0.5 bg-card"
+            />
+            <Label htmlFor={`${idPrefix}-kept`} className="text-[13px] leading-5 font-medium">
+              I have saved the {kept[0].label.toLowerCase()} somewhere else
+            </Label>
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-5">
           <div>{footer}</div>
@@ -167,7 +210,7 @@ export function RemoteForm({
                 Cancel
               </Button>
             )}
-            <Button type="submit" disabled={form.formState.isSubmitting}>
+            <Button type="submit" disabled={form.formState.isSubmitting || needsAck}>
               {form.formState.isSubmitting
                 ? "Saving…"
                 : (submitLabel ?? (remote ? "Save changes" : "Create remote"))}

@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file syncr/v1/remotes.proto.
  */
 export const file_syncr_v1_remotes: GenFile = /*@__PURE__*/
-  fileDesc("ChZzeW5jci92MS9yZW1vdGVzLnByb3RvEghzeW5jci52MSIVChNMaXN0QmFja2VuZHNSZXF1ZXN0IjsKFExpc3RCYWNrZW5kc1Jlc3BvbnNlEiMKCGJhY2tlbmRzGAEgAygLMhEuc3luY3IudjEuQmFja2VuZCKcAQoHQmFja2VuZBIKCgJpZBgBIAEoCRINCgVsYWJlbBgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRImCgZmaWVsZHMYBCADKAsyFi5zeW5jci52MS5CYWNrZW5kRmllbGQSMwoMY2FwYWJpbGl0aWVzGAUgASgLMh0uc3luY3IudjEuQmFja2VuZENhcGFiaWxpdGllc0oECAYQECLqAQoMQmFja2VuZEZpZWxkEgwKBG5hbWUYASABKAkSDQoFbGFiZWwYAiABKAkSDAoEaGVscBgDIAEoCRITCgtwbGFjZWhvbGRlchgEIAEoCRIhCgRraW5kGAUgASgOMhMuc3luY3IudjEuRmllbGRLaW5kEhAKCHJlcXVpcmVkGAYgASgIEg4KBnNlY3JldBgHIAEoCBIQCghhZHZhbmNlZBgIIAEoCBIVCg1kZWZhdWx0X3ZhbHVlGAkgASgJEiYKB2Nob2ljZXMYCiADKAsyFS5zeW5jci52MS5GaWVsZENob2ljZUoECAsQFCIrCgtGaWVsZENob2ljZRINCgV2YWx1ZRgBIAEoCRINCgVsYWJlbBgCIAEoCSJqChNCYWNrZW5kQ2FwYWJpbGl0aWVzEg0KBWxvY2FsGAEgASgIEg0KBXVuaW9uGAIgASgIEhQKDHVuaW9uX21lbWJlchgDIAEoCBIZChFyZXN0aWNfcmVwb3NpdG9yeRgEIAEoCEoECAUQECLkAgoGUmVtb3RlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSFAoMYmFja2VuZF90eXBlGAMgASgJEi4KB29wdGlvbnMYBCADKAsyHS5zeW5jci52MS5SZW1vdGUuT3B0aW9uc0VudHJ5EhMKC3NlY3JldHNfc2V0GAUgAygJEiYKB21lbWJlcnMYBiADKAsyFS5zeW5jci52MS5Vbmlvbk1lbWJlchIWCg51c2VkX2J5X3VuaW9ucxgHIAMoCRIuCgpjcmVhdGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAkgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIPCgd2ZXJzaW9uGAogASgDGi4KDE9wdGlvbnNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBSgQICxAUIsACCgtSZW1vdGVJbnB1dBIMCgRuYW1lGAEgASgJEhQKDGJhY2tlbmRfdHlwZRgCIAEoCRIzCgdvcHRpb25zGAMgAygLMiIuc3luY3IudjEuUmVtb3RlSW5wdXQuT3B0aW9uc0VudHJ5EjMKB3NlY3JldHMYBCADKAsyIi5zeW5jci52MS5SZW1vdGVJbnB1dC5TZWNyZXRzRW50cnkSFQoNY2xlYXJfc2VjcmV0cxgFIAMoCRImCgdtZW1iZXJzGAYgAygLMhUuc3luY3IudjEuVW5pb25NZW1iZXIaLgoMT3B0aW9uc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEaLgoMU2VjcmV0c0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAFKBAgHEBAiXwoLVW5pb25NZW1iZXISEQoJcmVtb3RlX2lkGAEgASgJEgwKBHBhdGgYAiABKAkSKQoEbW9kZRgDIAEoDjIbLnN5bmNyLnYxLlVuaW9uVXBzdHJlYW1Nb2RlSgQIBBAKIioKEkxpc3RSZW1vdGVzUmVxdWVzdBIUCgxiYWNrZW5kX3R5cGUYASABKAkiOAoTTGlzdFJlbW90ZXNSZXNwb25zZRIhCgdyZW1vdGVzGAEgAygLMhAuc3luY3IudjEuUmVtb3RlIiUKEEdldFJlbW90ZVJlcXVlc3QSEQoJcmVtb3RlX2lkGAEgASgJIjUKEUdldFJlbW90ZVJlc3BvbnNlEiAKBnJlbW90ZRgBIAEoCzIQLnN5bmNyLnYxLlJlbW90ZSI7ChNDcmVhdGVSZW1vdGVSZXF1ZXN0EiQKBWlucHV0GAEgASgLMhUuc3luY3IudjEuUmVtb3RlSW5wdXQiOAoUQ3JlYXRlUmVtb3RlUmVzcG9uc2USIAoGcmVtb3RlGAEgASgLMhAuc3luY3IudjEuUmVtb3RlIl8KE1VwZGF0ZVJlbW90ZVJlcXVlc3QSEQoJcmVtb3RlX2lkGAEgASgJEg8KB3ZlcnNpb24YAiABKAMSJAoFaW5wdXQYAyABKAsyFS5zeW5jci52MS5SZW1vdGVJbnB1dCI4ChRVcGRhdGVSZW1vdGVSZXNwb25zZRIgCgZyZW1vdGUYASABKAsyEC5zeW5jci52MS5SZW1vdGUiKAoTRGVsZXRlUmVtb3RlUmVxdWVzdBIRCglyZW1vdGVfaWQYASABKAkiFgoURGVsZXRlUmVtb3RlUmVzcG9uc2UqqQEKCUZpZWxkS2luZBIaChZGSUVMRF9LSU5EX1VOU1BFQ0lGSUVEEAASFQoRRklFTERfS0lORF9TVFJJTkcQARITCg9GSUVMRF9LSU5EX1RFWFQQAhISCg5GSUVMRF9LSU5EX0lOVBADEhMKD0ZJRUxEX0tJTkRfQk9PTBAEEhMKD0ZJRUxEX0tJTkRfRU5VTRAFEhYKEkZJRUxEX0tJTkRfTUVNQkVSUxAGMmQKDkJhY2tlbmRTZXJ2aWNlElIKDExpc3RCYWNrZW5kcxIdLnN5bmNyLnYxLkxpc3RCYWNrZW5kc1JlcXVlc3QaHi5zeW5jci52MS5MaXN0QmFja2VuZHNSZXNwb25zZSIDkAIBMqEDCg1SZW1vdGVTZXJ2aWNlEk8KC0xpc3RSZW1vdGVzEhwuc3luY3IudjEuTGlzdFJlbW90ZXNSZXF1ZXN0Gh0uc3luY3IudjEuTGlzdFJlbW90ZXNSZXNwb25zZSIDkAIBEkkKCUdldFJlbW90ZRIaLnN5bmNyLnYxLkdldFJlbW90ZVJlcXVlc3QaGy5zeW5jci52MS5HZXRSZW1vdGVSZXNwb25zZSIDkAIBEk8KDENyZWF0ZVJlbW90ZRIdLnN5bmNyLnYxLkNyZWF0ZVJlbW90ZVJlcXVlc3QaHi5zeW5jci52MS5DcmVhdGVSZW1vdGVSZXNwb25zZSIAEk8KDFVwZGF0ZVJlbW90ZRIdLnN5bmNyLnYxLlVwZGF0ZVJlbW90ZVJlcXVlc3QaHi5zeW5jci52MS5VcGRhdGVSZW1vdGVSZXNwb25zZSIAElIKDERlbGV0ZVJlbW90ZRIdLnN5bmNyLnYxLkRlbGV0ZVJlbW90ZVJlcXVlc3QaHi5zeW5jci52MS5EZWxldGVSZW1vdGVSZXNwb25zZSIDkAICQo8BCgxjb20uc3luY3IudjFCDFJlbW90ZXNQcm90b1ABWjBnaXRodWIuY29tL1plcHRpbnkvU3luY3IvZ2VuL2dvL3N5bmNyL3YxO3N5bmNydjGiAgNTWFiqAghTeW5jci5WMcoCCFN5bmNyXFYx4gIUU3luY3JcVjFcR1BCTWV0YWRhdGHqAglTeW5jcjo6VjFiBnByb3RvMw", [file_google_protobuf_timestamp, file_syncr_v1_link]);
+  fileDesc("ChZzeW5jci92MS9yZW1vdGVzLnByb3RvEghzeW5jci52MSIVChNMaXN0QmFja2VuZHNSZXF1ZXN0IjsKFExpc3RCYWNrZW5kc1Jlc3BvbnNlEiMKCGJhY2tlbmRzGAEgAygLMhEuc3luY3IudjEuQmFja2VuZCKcAQoHQmFja2VuZBIKCgJpZBgBIAEoCRINCgVsYWJlbBgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRImCgZmaWVsZHMYBCADKAsyFi5zeW5jci52MS5CYWNrZW5kRmllbGQSMwoMY2FwYWJpbGl0aWVzGAUgASgLMh0uc3luY3IudjEuQmFja2VuZENhcGFiaWxpdGllc0oECAYQECL5AQoMQmFja2VuZEZpZWxkEgwKBG5hbWUYASABKAkSDQoFbGFiZWwYAiABKAkSDAoEaGVscBgDIAEoCRITCgtwbGFjZWhvbGRlchgEIAEoCRIhCgRraW5kGAUgASgOMhMuc3luY3IudjEuRmllbGRLaW5kEhAKCHJlcXVpcmVkGAYgASgIEg4KBnNlY3JldBgHIAEoCBIQCghhZHZhbmNlZBgIIAEoCBIVCg1kZWZhdWx0X3ZhbHVlGAkgASgJEiYKB2Nob2ljZXMYCiADKAsyFS5zeW5jci52MS5GaWVsZENob2ljZRINCgVmaXhlZBgLIAEoCEoECAwQFCIrCgtGaWVsZENob2ljZRINCgV2YWx1ZRgBIAEoCRINCgVsYWJlbBgCIAEoCSKQAQoTQmFja2VuZENhcGFiaWxpdGllcxINCgVsb2NhbBgBIAEoCBINCgV1bmlvbhgCIAEoCBIUCgx1bmlvbl9tZW1iZXIYAyABKAgSGQoRcmVzdGljX3JlcG9zaXRvcnkYBCABKAgSDwoHd3JhcHBlchgFIAEoCBITCgtub19jaGVja3N1bRgGIAEoCEoECAcQECKiAwoGUmVtb3RlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSFAoMYmFja2VuZF90eXBlGAMgASgJEi4KB29wdGlvbnMYBCADKAsyHS5zeW5jci52MS5SZW1vdGUuT3B0aW9uc0VudHJ5EhMKC3NlY3JldHNfc2V0GAUgAygJEiYKB21lbWJlcnMYBiADKAsyFS5zeW5jci52MS5Vbmlvbk1lbWJlchIWCg51c2VkX2J5X3VuaW9ucxgHIAMoCRIuCgpjcmVhdGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAkgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIPCgd2ZXJzaW9uGAogASgDEigKB3dyYXBwZWQYCyABKAsyFy5zeW5jci52MS5XcmFwcGVkUmVtb3RlEhIKCndyYXBwZWRfYnkYDCADKAkaLgoMT3B0aW9uc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAFKBAgNEBQi6gIKC1JlbW90ZUlucHV0EgwKBG5hbWUYASABKAkSFAoMYmFja2VuZF90eXBlGAIgASgJEjMKB29wdGlvbnMYAyADKAsyIi5zeW5jci52MS5SZW1vdGVJbnB1dC5PcHRpb25zRW50cnkSMwoHc2VjcmV0cxgEIAMoCzIiLnN5bmNyLnYxLlJlbW90ZUlucHV0LlNlY3JldHNFbnRyeRIVCg1jbGVhcl9zZWNyZXRzGAUgAygJEiYKB21lbWJlcnMYBiADKAsyFS5zeW5jci52MS5Vbmlvbk1lbWJlchIoCgd3cmFwcGVkGAcgASgLMhcuc3luY3IudjEuV3JhcHBlZFJlbW90ZRouCgxPcHRpb25zRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ARouCgxTZWNyZXRzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4AUoECAgQECI2Cg1XcmFwcGVkUmVtb3RlEhEKCXJlbW90ZV9pZBgBIAEoCRIMCgRwYXRoGAIgASgJSgQIAxAKIl8KC1VuaW9uTWVtYmVyEhEKCXJlbW90ZV9pZBgBIAEoCRIMCgRwYXRoGAIgASgJEikKBG1vZGUYAyABKA4yGy5zeW5jci52MS5VbmlvblVwc3RyZWFtTW9kZUoECAQQCiIqChJMaXN0UmVtb3Rlc1JlcXVlc3QSFAoMYmFja2VuZF90eXBlGAEgASgJIjgKE0xpc3RSZW1vdGVzUmVzcG9uc2USIQoHcmVtb3RlcxgBIAMoCzIQLnN5bmNyLnYxLlJlbW90ZSIlChBHZXRSZW1vdGVSZXF1ZXN0EhEKCXJlbW90ZV9pZBgBIAEoCSI1ChFHZXRSZW1vdGVSZXNwb25zZRIgCgZyZW1vdGUYASABKAsyEC5zeW5jci52MS5SZW1vdGUiOwoTQ3JlYXRlUmVtb3RlUmVxdWVzdBIkCgVpbnB1dBgBIAEoCzIVLnN5bmNyLnYxLlJlbW90ZUlucHV0IjgKFENyZWF0ZVJlbW90ZVJlc3BvbnNlEiAKBnJlbW90ZRgBIAEoCzIQLnN5bmNyLnYxLlJlbW90ZSJfChNVcGRhdGVSZW1vdGVSZXF1ZXN0EhEKCXJlbW90ZV9pZBgBIAEoCRIPCgd2ZXJzaW9uGAIgASgDEiQKBWlucHV0GAMgASgLMhUuc3luY3IudjEuUmVtb3RlSW5wdXQiOAoUVXBkYXRlUmVtb3RlUmVzcG9uc2USIAoGcmVtb3RlGAEgASgLMhAuc3luY3IudjEuUmVtb3RlIigKE0RlbGV0ZVJlbW90ZVJlcXVlc3QSEQoJcmVtb3RlX2lkGAEgASgJIhYKFERlbGV0ZVJlbW90ZVJlc3BvbnNlKsEBCglGaWVsZEtpbmQSGgoWRklFTERfS0lORF9VTlNQRUNJRklFRBAAEhUKEUZJRUxEX0tJTkRfU1RSSU5HEAESEwoPRklFTERfS0lORF9URVhUEAISEgoORklFTERfS0lORF9JTlQQAxITCg9GSUVMRF9LSU5EX0JPT0wQBBITCg9GSUVMRF9LSU5EX0VOVU0QBRIWChJGSUVMRF9LSU5EX01FTUJFUlMQBhIWChJGSUVMRF9LSU5EX1dSQVBQRUQQBzJkCg5CYWNrZW5kU2VydmljZRJSCgxMaXN0QmFja2VuZHMSHS5zeW5jci52MS5MaXN0QmFja2VuZHNSZXF1ZXN0Gh4uc3luY3IudjEuTGlzdEJhY2tlbmRzUmVzcG9uc2UiA5ACATKhAwoNUmVtb3RlU2VydmljZRJPCgtMaXN0UmVtb3RlcxIcLnN5bmNyLnYxLkxpc3RSZW1vdGVzUmVxdWVzdBodLnN5bmNyLnYxLkxpc3RSZW1vdGVzUmVzcG9uc2UiA5ACARJJCglHZXRSZW1vdGUSGi5zeW5jci52MS5HZXRSZW1vdGVSZXF1ZXN0Ghsuc3luY3IudjEuR2V0UmVtb3RlUmVzcG9uc2UiA5ACARJPCgxDcmVhdGVSZW1vdGUSHS5zeW5jci52MS5DcmVhdGVSZW1vdGVSZXF1ZXN0Gh4uc3luY3IudjEuQ3JlYXRlUmVtb3RlUmVzcG9uc2UiABJPCgxVcGRhdGVSZW1vdGUSHS5zeW5jci52MS5VcGRhdGVSZW1vdGVSZXF1ZXN0Gh4uc3luY3IudjEuVXBkYXRlUmVtb3RlUmVzcG9uc2UiABJSCgxEZWxldGVSZW1vdGUSHS5zeW5jci52MS5EZWxldGVSZW1vdGVSZXF1ZXN0Gh4uc3luY3IudjEuRGVsZXRlUmVtb3RlUmVzcG9uc2UiA5ACAkKPAQoMY29tLnN5bmNyLnYxQgxSZW1vdGVzUHJvdG9QAVowZ2l0aHViLmNvbS9aZXB0aW55L1N5bmNyL2dlbi9nby9zeW5jci92MTtzeW5jcnYxogIDU1hYqgIIU3luY3IuVjHKAghTeW5jclxWMeICFFN5bmNyXFYxXEdQQk1ldGFkYXRh6gIJU3luY3I6OlYxYgZwcm90bzM", [file_google_protobuf_timestamp, file_syncr_v1_link]);
 
 /**
  * ListBackendsRequest is empty.
@@ -103,7 +103,8 @@ export const BackendSchema: GenMessage<Backend> = /*@__PURE__*/
  * BackendField describes one configuration field of a backend type. It also
  * describes the configuration fields of notification channel types
  * (ChannelType.fields in notify.proto), where "RemoteInput" reads as
- * "ContactInput" and the MEMBERS kind never occurs.
+ * "ContactInput", the MEMBERS and WRAPPED kinds never occur and fixed is
+ * never set.
  *
  * @generated from message syncr.v1.BackendField
  */
@@ -179,6 +180,17 @@ export type BackendField = Message<"syncr.v1.BackendField"> & {
    * @generated from field: repeated syncr.v1.FieldChoice choices = 10;
    */
   choices: FieldChoice[];
+
+  /**
+   * The value is set when the remote is created and never changes (e.g. the
+   * password of an encrypted remote: another value would make the stored
+   * data unreadable). UpdateRemote refuses another value of an option, a
+   * new value of a secret and a clear of it. Forms show the field read-only
+   * when editing. Never set on a MEMBERS or WRAPPED field.
+   *
+   * @generated from field: bool fixed = 11;
+   */
+  fixed: boolean;
 };
 
 /**
@@ -249,6 +261,27 @@ export type BackendCapabilities = Message<"syncr.v1.BackendCapabilities"> & {
    * @generated from field: bool restic_repository = 4;
    */
   resticRepository: boolean;
+
+  /**
+   * Remotes of the type store their data, transformed (e.g. encrypted), in
+   * a folder of one other remote of the same owner (Remote.wrapped). Such a
+   * type is never local, a union, a union member or a place for restic
+   * repositories, and the remote it wraps is none of local, a union or
+   * another wrapper.
+   *
+   * @generated from field: bool wrapper = 5;
+   */
+  wrapper: boolean;
+
+  /**
+   * rclone keeps no checksums on remotes of the type, so a transfer or a
+   * two-way sync with such a side cannot compare checksums: RunJob and the
+   * schedule RPCs refuse RcloneTransferOptions.checksum and
+   * BISYNC_COMPARE_CHECKSUM when a side is on such a remote.
+   *
+   * @generated from field: bool no_checksum = 6;
+   */
+  noChecksum: boolean;
 };
 
 /**
@@ -331,6 +364,22 @@ export type Remote = Message<"syncr.v1.Remote"> & {
    * @generated from field: int64 version = 10;
    */
   version: bigint;
+
+  /**
+   * Where a remote whose type has BackendCapabilities.wrapper stores its
+   * data; unset for other types.
+   *
+   * @generated from field: syncr.v1.WrappedRemote wrapped = 11;
+   */
+  wrapped?: WrappedRemote | undefined;
+
+  /**
+   * IDs of the caller's remotes that store their data in this one (their
+   * wrapped.remote_id is this remote's ID).
+   *
+   * @generated from field: repeated string wrapped_by = 12;
+   */
+  wrappedBy: string[];
 };
 
 /**
@@ -390,6 +439,16 @@ export type RemoteInput = Message<"syncr.v1.RemoteInput"> & {
    * @generated from field: repeated syncr.v1.UnionMember members = 6;
    */
   members: UnionMember[];
+
+  /**
+   * Where the remote stores its data: required when the type has
+   * BackendCapabilities.wrapper, and must be unset otherwise. Unlike the
+   * fixed fields it may change on update (e.g. to follow data that was
+   * moved to another folder).
+   *
+   * @generated from field: syncr.v1.WrappedRemote wrapped = 7;
+   */
+  wrapped?: WrappedRemote | undefined;
 };
 
 /**
@@ -398,6 +457,36 @@ export type RemoteInput = Message<"syncr.v1.RemoteInput"> & {
  */
 export const RemoteInputSchema: GenMessage<RemoteInput> = /*@__PURE__*/
   messageDesc(file_syncr_v1_remotes, 7);
+
+/**
+ * WrappedRemote is where a wrapper remote (an encrypted remote) stores its
+ * data: a folder of one other remote.
+ *
+ * @generated from message syncr.v1.WrappedRemote
+ */
+export type WrappedRemote = Message<"syncr.v1.WrappedRemote"> & {
+  /**
+   * The remote that holds the data: one of the caller's remotes, not the
+   * remote itself, and of a type that is not local, a union or a wrapper.
+   *
+   * @generated from field: string remote_id = 1;
+   */
+  remoteId: string;
+
+  /**
+   * Path on that remote, relative to its root; empty means its root.
+   *
+   * @generated from field: string path = 2;
+   */
+  path: string;
+};
+
+/**
+ * Describes the message syncr.v1.WrappedRemote.
+ * Use `create(WrappedRemoteSchema)` to create a new message.
+ */
+export const WrappedRemoteSchema: GenMessage<WrappedRemote> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_remotes, 8);
 
 /**
  * UnionMember is one member of a union remote.
@@ -432,7 +521,7 @@ export type UnionMember = Message<"syncr.v1.UnionMember"> & {
  * Use `create(UnionMemberSchema)` to create a new message.
  */
 export const UnionMemberSchema: GenMessage<UnionMember> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_remotes, 8);
+  messageDesc(file_syncr_v1_remotes, 9);
 
 /**
  * ListRemotesRequest filters the remote list.
@@ -453,7 +542,7 @@ export type ListRemotesRequest = Message<"syncr.v1.ListRemotesRequest"> & {
  * Use `create(ListRemotesRequestSchema)` to create a new message.
  */
 export const ListRemotesRequestSchema: GenMessage<ListRemotesRequest> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_remotes, 9);
+  messageDesc(file_syncr_v1_remotes, 10);
 
 /**
  * ListRemotesResponse lists remotes by name.
@@ -472,7 +561,7 @@ export type ListRemotesResponse = Message<"syncr.v1.ListRemotesResponse"> & {
  * Use `create(ListRemotesResponseSchema)` to create a new message.
  */
 export const ListRemotesResponseSchema: GenMessage<ListRemotesResponse> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_remotes, 10);
+  messageDesc(file_syncr_v1_remotes, 11);
 
 /**
  * GetRemoteRequest names a remote.
@@ -491,7 +580,7 @@ export type GetRemoteRequest = Message<"syncr.v1.GetRemoteRequest"> & {
  * Use `create(GetRemoteRequestSchema)` to create a new message.
  */
 export const GetRemoteRequestSchema: GenMessage<GetRemoteRequest> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_remotes, 11);
+  messageDesc(file_syncr_v1_remotes, 12);
 
 /**
  * GetRemoteResponse returns the remote.
@@ -510,7 +599,7 @@ export type GetRemoteResponse = Message<"syncr.v1.GetRemoteResponse"> & {
  * Use `create(GetRemoteResponseSchema)` to create a new message.
  */
 export const GetRemoteResponseSchema: GenMessage<GetRemoteResponse> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_remotes, 12);
+  messageDesc(file_syncr_v1_remotes, 13);
 
 /**
  * CreateRemoteRequest describes the new remote.
@@ -529,7 +618,7 @@ export type CreateRemoteRequest = Message<"syncr.v1.CreateRemoteRequest"> & {
  * Use `create(CreateRemoteRequestSchema)` to create a new message.
  */
 export const CreateRemoteRequestSchema: GenMessage<CreateRemoteRequest> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_remotes, 13);
+  messageDesc(file_syncr_v1_remotes, 14);
 
 /**
  * CreateRemoteResponse returns the new remote.
@@ -548,7 +637,7 @@ export type CreateRemoteResponse = Message<"syncr.v1.CreateRemoteResponse"> & {
  * Use `create(CreateRemoteResponseSchema)` to create a new message.
  */
 export const CreateRemoteResponseSchema: GenMessage<CreateRemoteResponse> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_remotes, 14);
+  messageDesc(file_syncr_v1_remotes, 15);
 
 /**
  * UpdateRemoteRequest changes a remote.
@@ -581,7 +670,7 @@ export type UpdateRemoteRequest = Message<"syncr.v1.UpdateRemoteRequest"> & {
  * Use `create(UpdateRemoteRequestSchema)` to create a new message.
  */
 export const UpdateRemoteRequestSchema: GenMessage<UpdateRemoteRequest> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_remotes, 15);
+  messageDesc(file_syncr_v1_remotes, 16);
 
 /**
  * UpdateRemoteResponse returns the updated remote.
@@ -600,7 +689,7 @@ export type UpdateRemoteResponse = Message<"syncr.v1.UpdateRemoteResponse"> & {
  * Use `create(UpdateRemoteResponseSchema)` to create a new message.
  */
 export const UpdateRemoteResponseSchema: GenMessage<UpdateRemoteResponse> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_remotes, 16);
+  messageDesc(file_syncr_v1_remotes, 17);
 
 /**
  * DeleteRemoteRequest names the remote to delete.
@@ -619,7 +708,7 @@ export type DeleteRemoteRequest = Message<"syncr.v1.DeleteRemoteRequest"> & {
  * Use `create(DeleteRemoteRequestSchema)` to create a new message.
  */
 export const DeleteRemoteRequestSchema: GenMessage<DeleteRemoteRequest> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_remotes, 17);
+  messageDesc(file_syncr_v1_remotes, 18);
 
 /**
  * DeleteRemoteResponse is empty.
@@ -634,7 +723,7 @@ export type DeleteRemoteResponse = Message<"syncr.v1.DeleteRemoteResponse"> & {
  * Use `create(DeleteRemoteResponseSchema)` to create a new message.
  */
 export const DeleteRemoteResponseSchema: GenMessage<DeleteRemoteResponse> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_remotes, 18);
+  messageDesc(file_syncr_v1_remotes, 19);
 
 /**
  * FieldKind is the value type of a backend field.
@@ -688,6 +777,15 @@ export enum FieldKind {
    * @generated from enum value: FIELD_KIND_MEMBERS = 6;
    */
   MEMBERS = 6,
+
+  /**
+   * Where a wrapper remote (an encrypted remote) stores its data
+   * (RemoteInput.wrapped, not an option). Only types with
+   * BackendCapabilities.wrapper have one, and they have exactly one.
+   *
+   * @generated from enum value: FIELD_KIND_WRAPPED = 7;
+   */
+  WRAPPED = 7,
 }
 
 /**
@@ -724,7 +822,8 @@ export const BackendService: GenService<{
  * Secret values are write-only: they are stored encrypted and never
  * returned. Invalid input fails with INVALID_ARGUMENT carrying a
  * ValidationError detail (field names like "name", "options.endpoint",
- * "secrets.pass", "members[1].path").
+ * "secrets.pass", "clear_secrets[0]", "members[1].path",
+ * "wrapped.remote_id", "wrapped.path").
  *
  * @generated from service syncr.v1.RemoteService
  */
@@ -763,7 +862,9 @@ export const RemoteService: GenService<{
   /**
    * UpdateRemote changes a remote. The backend type cannot change. Options
    * and members are replaced as a whole; secrets are merged (see
-   * RemoteInput). ABORTED if the remote changed since version was read.
+   * RemoteInput). Fields marked BackendField.fixed keep the value they were
+   * created with: another value, a new secret or a clear of one fails with
+   * INVALID_ARGUMENT. ABORTED if the remote changed since version was read.
    *
    * @generated from rpc syncr.v1.RemoteService.UpdateRemote
    */
@@ -774,8 +875,10 @@ export const RemoteService: GenService<{
   },
   /**
    * DeleteRemote deletes a remote. Job history keeps referring to it by
-   * name. FAILED_PRECONDITION while it is a member of a union remote.
-   * Queued jobs that use it fail with REMOTE_UNAVAILABLE.
+   * name. FAILED_PRECONDITION while it is a member of a union remote, while
+   * another remote stores its data in it (Remote.wrapped_by) or while it
+   * holds a restic repository. Queued jobs that use it fail with
+   * REMOTE_UNAVAILABLE.
    *
    * @generated from rpc syncr.v1.RemoteService.DeleteRemote
    */

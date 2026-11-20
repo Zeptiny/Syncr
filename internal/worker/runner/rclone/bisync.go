@@ -125,13 +125,20 @@ func (b *BisyncRunner) Run(ctx context.Context, job runner.Job, emit runner.Emit
 	if err != nil {
 		return res, err
 	}
-	if err := checkPair(path1, path2); err != nil {
+	if err := checkPair(path1, path2, stored(spec.GetPath1(), path1, env), stored(spec.GetPath2(), path2, env)); err != nil {
 		return res, runner.Fail(syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, err)
 	}
 	for _, side := range [...][2]string{{"path1", path1}, {"path2", path2}} {
 		if err := b.outsideState(side[0], side[1]); err != nil {
 			return res, err
 		}
+	}
+	// A side on an encrypted remote whose password is wrong would list
+	// garbled names, or none, and receive files it cannot read back.
+	sc := scrub.New(env.Secrets())
+	if err := b.r.checkCryptPasswords(ctx, dir, env, sc, []string{"path1", "path2"},
+		[]*syncrv1.Location{spec.GetPath1(), spec.GetPath2()}); err != nil {
+		return res, err
 	}
 	// rclone writes into both sides.
 	claim := b.r.cfg.Claims.Take(BisyncKind)
@@ -175,7 +182,6 @@ func (b *BisyncRunner) Run(ctx context.Context, job runner.Job, emit runner.Emit
 		return res, runner.Fail(syncrv1.JobErrorCode_JOB_ERROR_CODE_INVALID_SPEC, err)
 	}
 
-	sc := scrub.New(env.Secrets())
 	t := newTracker(emit, sc)
 	log := &bisyncLog{sc: sc, stateDir: pair.Dir()}
 	t.observe = log.line
@@ -390,17 +396,30 @@ func emptyDir(path string) (bool, error) {
 }
 
 // checkPair refuses two rclone paths that are too long together for
-// rclone's state file names, equal, or nested (a two-way sync of a folder
-// with a folder inside it would sync it into itself). The controller
-// checks the same; this guards against a spec it did not build.
-func checkPair(path1, path2 string) error {
+// rclone's state file names, or whose data is stored in the same location
+// or one inside the other (a two-way sync of a folder with a folder inside
+// it would sync it into itself). stored1 and stored2 are where the sides'
+// data is stored (stored): a side on a crypt remote is inside the folder
+// of the remote it wraps. The controller checks the same; this guards
+// against a spec it did not build.
+func checkPair(path1, path2, stored1, stored2 string) error {
 	if n := len(path1) + len(path2); n > maxBisyncPathBytes {
 		return fmt.Errorf("the two paths together are too long for a two-way sync (rclone keeps its state in files named after them): %d bytes, at most %d", n, maxBisyncPathBytes)
 	}
-	if nested(path1, path2) || nested(path2, path1) {
+	if nested(stored1, stored2) || nested(stored2, stored1) {
 		return errors.New("path1 and path2 are the same location or one is inside the other")
 	}
 	return nil
+}
+
+// stored returns the rclone path where the data of a validated location
+// whose rclone path is path is stored: path itself, or for a location on
+// a crypt remote, the folder of the remote it wraps (rcloneenv.Env.Storage).
+func stored(loc *syncrv1.Location, path string, env *rcloneenv.Env) string {
+	if loc.GetRemote() == "" {
+		return path
+	}
+	return rcloneenv.RemotePath(env.Storage(loc.GetRemote(), loc.GetPath()))
 }
 
 // nested reports whether rclone path inner is outer or inside it: two

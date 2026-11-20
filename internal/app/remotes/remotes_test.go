@@ -413,12 +413,12 @@ func TestUnions(t *testing.T) {
 	_, err = e.svc.Create(ctx, e.alice, pool(many...))
 	wantField(t, "too many members", err, "members")
 
-	using, err := e.svc.UnionsUsing(ctx, e.alice, disk1.ID)
+	using, err := e.svc.RemotesUsing(ctx, e.alice, disk1.ID)
 	if err != nil || len(using) != 1 || using[0].ID != union.ID {
-		t.Errorf("UnionsUsing(disk1) = (%v, %v)", using, err)
+		t.Errorf("RemotesUsing(disk1) = (%v, %v)", using, err)
 	}
-	_, err = e.svc.UnionsUsing(ctx, e.bob, disk1.ID)
-	wantErr(t, "UnionsUsing(not the owner)", err, domain.ErrNotFound)
+	_, err = e.svc.RemotesUsing(ctx, e.bob, disk1.ID)
+	wantErr(t, "RemotesUsing(not the owner)", err, domain.ErrNotFound)
 
 	err = e.svc.Delete(ctx, e.alice, disk1.ID)
 	wantErr(t, "Delete(member of a live union)", err, domain.ErrFailedPrecondition)

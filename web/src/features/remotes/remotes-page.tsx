@@ -24,14 +24,38 @@ import { isUnverified, UnverifiedBadge } from "./host-keys";
 
 const col = createColumnHelper<Remote>();
 
-/** remoteSummary picks the option that best identifies where a remote points. */
+/**
+ * remoteSummary picks what best identifies where a remote points: a
+ * union's members, where a wrapper (encrypted) remote stores its data, or
+ * an option.
+ */
 export function remoteSummary(r: Remote, names: Map<string, string>): string {
   if (r.members.length) return r.members.map((m) => names.get(m.remoteId) ?? "?").join(" + ");
+  if (r.wrapped?.remoteId) {
+    const name = names.get(r.wrapped.remoteId) ?? "?";
+    return r.wrapped.path ? `in ${name} / ${r.wrapped.path}` : `in ${name}`;
+  }
   for (const k of ["endpoint", "url", "host", "path", "bucket", "account"]) {
     const v = r.options[k];
     if (v) return k === "host" && r.options.port ? `${v}:${r.options.port}` : v;
   }
   return "";
+}
+
+/** usedBy lists the remotes that use r: the unions it is a member of, then the remotes that store their data in it. */
+export function usedBy(r: Remote, names: Map<string, string>): string[] {
+  return [...r.usedByUnions, ...r.wrappedBy].map((id) => names.get(id) ?? id);
+}
+
+/** WrappedLocation shows where a wrapper remote stores its data: "in B2 offsite / vault". */
+function WrappedLocation({ name, path }: { name: string; path: string }) {
+  return (
+    <span className="flex max-w-[22rem] min-w-0 items-baseline gap-1 text-[13px] text-muted-foreground">
+      <span className="shrink-0">in</span>
+      <span className="truncate font-medium text-foreground">{name}</span>
+      {path && <span className="truncate font-mono text-[12.5px]">/ {path}</span>}
+    </span>
+  );
 }
 
 /** RemotesPage lists the user's remotes. */
@@ -65,11 +89,14 @@ export function RemotesPage() {
       col.display({
         id: "where",
         header: "Points to",
-        cell: ({ row }) => (
-          <span className="block max-w-[22rem] truncate font-mono text-[12.5px] text-muted-foreground">
-            {remoteSummary(row.original, names) || "–"}
-          </span>
-        ),
+        cell: ({ row: { original: r } }) =>
+          r.wrapped?.remoteId ? (
+            <WrappedLocation name={names.get(r.wrapped.remoteId) ?? "?"} path={r.wrapped.path} />
+          ) : (
+            <span className="block max-w-[22rem] truncate font-mono text-[12.5px] text-muted-foreground">
+              {remoteSummary(r, names) || "–"}
+            </span>
+          ),
       }),
       col.display({
         id: "secrets",
@@ -87,11 +114,11 @@ export function RemotesPage() {
           ),
       }),
       col.display({
-        id: "unions",
-        header: "In unions",
+        id: "used-by",
+        header: "Used by",
         cell: ({ row }) => (
           <span className="text-[13px]">
-            {row.original.usedByUnions.map((id) => names.get(id) ?? id).join(", ") || (
+            {usedBy(row.original, names).join(", ") || (
               <span className="text-muted-foreground">–</span>
             )}
           </span>

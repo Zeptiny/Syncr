@@ -26,6 +26,7 @@ import {
   type BisyncState,
   type CompareState,
 } from "./bisync-definition";
+import { noChecksumError, noChecksumLookup, noChecksumNames, noChecksumNote } from "./checksums";
 import { FilterRuleList } from "./pattern-list";
 import { NumberInput, QuantityInput, Toggle } from "./transfer-editor";
 import { byteUnits } from "./units";
@@ -67,7 +68,9 @@ const compareOptions: { key: keyof CompareState; label: string }[] = [
 /**
  * BisyncEditor edits a two-way sync (rclone bisync): its two folders, the
  * safety checks, how conflicts are kept, how changes are found, what a
- * resync keeps, the filters and the tuning options. resync and force are
+ * resync keeps, the filters and the tuning options. A side on a remote
+ * whose type keeps no checksums hides the checksum comparison (a
+ * definition that already has it shows an error). resync and force are
  * never edited here: they belong to a single run, started from a failed
  * job (BisyncRecovery). JobDefinitionEditor shows it for the Two-way sync
  * kind.
@@ -86,6 +89,17 @@ export function BisyncEditor({
 }: BisyncEditorProps) {
   const set = <K extends keyof BisyncState>(k: K, v: BisyncState[K]) => onChange({ ...s, [k]: v });
   const id = (name: string) => `${idPrefix}-bisync-${name}`;
+  const noChecksum = noChecksumNames(noChecksumLookup(remotes, backends), [
+    s.path1.remoteId,
+    s.path2.remoteId,
+  ]);
+  const compareError =
+    errors.compare ??
+    (noChecksum.length && s.compare.checksum ? noChecksumError(noChecksum) : undefined);
+  // Checksum is offered unless a side keeps none; kept while ticked, to be unticked.
+  const compares = compareOptions.filter(
+    (c) => c.key !== "checksum" || !noChecksum.length || s.compare.checksum,
+  );
   return (
     <>
       <Panel
@@ -233,24 +247,31 @@ export function BisyncEditor({
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Panel title="Compare" description="How a run tells that a file changed.">
-          <fieldset className="flex flex-col gap-2.5" aria-describedby={id("compare-help")}>
+          <fieldset
+            className="flex flex-col gap-2.5"
+            aria-describedby={compareError ? id("compare-error") : id("compare-help")}
+          >
             <legend className="sr-only">Compare files by</legend>
-            {compareOptions.map((c) => (
+            {compares.map((c) => (
               <div key={c.key} className="flex items-center gap-2.5">
                 <Checkbox
                   id={id(`compare-${c.key}`)}
                   checked={s.compare[c.key]}
                   onCheckedChange={(v) => set("compare", { ...s.compare, [c.key]: v === true })}
-                  aria-invalid={errors.compare ? true : undefined}
+                  aria-invalid={compareError ? true : undefined}
                 />
                 <Label htmlFor={id(`compare-${c.key}`)} className="text-[13px] font-normal">
                   {c.label}
                 </Label>
               </div>
             ))}
-            {errors.compare ? (
-              <p role="alert" className="text-xs leading-5 text-danger">
-                {errors.compare}
+            {compareError ? (
+              <p id={id("compare-error")} role="alert" className="text-xs leading-5 text-danger">
+                {compareError}
+              </p>
+            ) : noChecksum.length ? (
+              <p id={id("compare-help")} className="text-xs leading-5 text-muted-foreground">
+                Size and modification time is the default. {noChecksumNote(noChecksum)}
               </p>
             ) : (
               <p id={id("compare-help")} className="text-xs leading-5 text-muted-foreground">

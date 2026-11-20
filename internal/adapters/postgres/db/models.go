@@ -123,17 +123,19 @@ type JobSample struct {
 }
 
 type Remote struct {
-	ID          pgtype.UUID
-	OwnerID     pgtype.UUID
-	Name        string
-	BackendType string
-	Options     []byte
-	SecretsEnc  []byte
-	SecretKeys  []string
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
-	DeletedAt   pgtype.Timestamptz
-	Version     int64
+	ID              pgtype.UUID
+	OwnerID         pgtype.UUID
+	Name            string
+	BackendType     string
+	Options         []byte
+	SecretsEnc      []byte
+	SecretKeys      []string
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	DeletedAt       pgtype.Timestamptz
+	Version         int64
+	WrappedRemoteID pgtype.UUID
+	WrappedPath     string
 }
 
 type ResticRepository struct {

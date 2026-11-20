@@ -99,7 +99,7 @@ func (s *Service) MeasureRemoteFolder(ctx context.Context, actor domain.Actor, r
 		spec = &syncrv1.ProbeSpec{Remotes: t.defs, Op: &syncrv1.ProbeSpec_MeasureRemote{MeasureRemote: &syncrv1.ProbeMeasureRemote{Location: t.loc}}}
 		op = opMeasureRemote
 	}
-	w, err := s.r.worker(ctx, selection{owner: actor.UserID, op: op, workerID: workerID, explicit: cond(t.local(), localRemoteHint)})
+	w, err := s.r.worker(ctx, selection{owner: actor.UserID, op: op, workerID: workerID, explicit: cond(t.local(), localRemoteHint), features: t.features()})
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", what, err)
 	}
@@ -141,7 +141,7 @@ func (s *Service) RemoteUsage(ctx context.Context, actor domain.Actor, remoteID 
 		}
 		return &syncrv1.GetRemoteUsageResponse{Usage: &syncrv1.ProbeUsage{Unsupported: true}, Worker: workerRef(w)}, nil
 	}
-	w, err := s.r.worker(ctx, selection{owner: actor.UserID, op: opAbout, workerID: workerID})
+	w, err := s.r.worker(ctx, selection{owner: actor.UserID, op: opAbout, workerID: workerID, features: t.features()})
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", what, err)
 	}

@@ -33,29 +33,43 @@ func (h *remoteHandler) fail(ctx context.Context, procedure string, err error) e
 	return h.errs.toConnect(ctx, procedure, "remote", err)
 }
 
-// ListRemotes lists the caller's remotes, by name. used_by_unions comes
-// from the same list: a union and its members always have the same owner.
+// ListRemotes lists the caller's remotes, by name. used_by_unions and
+// wrapped_by come from the same list: a union and its members, and a
+// wrapper and its wrapped remote, always have the same owner.
 func (h *remoteHandler) ListRemotes(ctx context.Context, req *connect.Request[syncrv1.ListRemotesRequest]) (*connect.Response[syncrv1.ListRemotesResponse], error) {
 	actor, _ := ActorFrom(ctx)
 	all, err := h.remotes.List(ctx, actor, remotes.ListFilter{})
 	if err != nil {
 		return nil, h.fail(ctx, syncrv1connect.RemoteServiceListRemotesProcedure, err)
 	}
-	usedBy := map[domain.RemoteID][]domain.RemoteID{}
+	using := map[domain.RemoteID][]remotes.Remote{}
 	for _, r := range all {
-		for _, m := range r.Members {
-			if !slices.Contains(usedBy[m.RemoteID], r.ID) {
-				usedBy[m.RemoteID] = append(usedBy[m.RemoteID], r.ID)
-			}
+		for _, id := range usedRemotes(r) {
+			using[id] = append(using[id], r)
 		}
 	}
 	out := &syncrv1.ListRemotesResponse{Remotes: []*syncrv1.Remote{}}
 	for _, r := range all {
 		if t := req.Msg.GetBackendType(); t == "" || r.Type == t {
-			out.Remotes = append(out.Remotes, remoteToProto(r, usedBy[r.ID]))
+			out.Remotes = append(out.Remotes, remoteToProto(r, using[r.ID]))
 		}
 	}
 	return connect.NewResponse(out), nil
+}
+
+// usedRemotes returns the remotes r uses, each once: its members and its
+// wrapped remote.
+func usedRemotes(r remotes.Remote) []domain.RemoteID {
+	var out []domain.RemoteID
+	for _, m := range r.Members {
+		if !slices.Contains(out, m.RemoteID) {
+			out = append(out, m.RemoteID)
+		}
+	}
+	if w := r.Wrapped.RemoteID; !w.IsZero() && !slices.Contains(out, w) {
+		out = append(out, w)
+	}
+	return out
 }
 
 // GetRemote returns one of the caller's remotes.
@@ -130,17 +144,13 @@ func (h *remoteHandler) DeleteRemote(ctx context.Context, req *connect.Request[s
 	return connect.NewResponse(&syncrv1.DeleteRemoteResponse{}), nil
 }
 
-// remote converts r with the unions of actor that use it.
+// remote converts r with the remotes of actor that use it.
 func (h *remoteHandler) remote(ctx context.Context, actor domain.Actor, r remotes.Remote) (*syncrv1.Remote, error) {
-	unions, err := h.remotes.UnionsUsing(ctx, actor, r.ID)
+	using, err := h.remotes.RemotesUsing(ctx, actor, r.ID)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]domain.RemoteID, len(unions))
-	for i, u := range unions {
-		ids[i] = u.ID
-	}
-	return remoteToProto(r, ids), nil
+	return remoteToProto(r, using), nil
 }
 
 // parseRemoteID parses a request's remote ID into an InvalidArgument error
@@ -156,9 +166,11 @@ func parseRemoteID(field, s string) (domain.RemoteID, error) {
 	return id, nil
 }
 
-// remoteToProto converts r. It carries the names of the secrets that are
-// set, never their values (Remote has none: they stay encrypted).
-func remoteToProto(r remotes.Remote, usedBy []domain.RemoteID) *syncrv1.Remote {
+// remoteToProto converts r with the remotes that use it, in their order:
+// those that wrap it (wrapped_by) and the others, its unions
+// (used_by_unions). It carries the names of the secrets that are set,
+// never their values (Remote has none: they stay encrypted).
+func remoteToProto(r remotes.Remote, using []remotes.Remote) *syncrv1.Remote {
 	out := &syncrv1.Remote{
 		Id:           r.ID.String(),
 		Name:         r.Name,
@@ -169,19 +181,28 @@ func remoteToProto(r remotes.Remote, usedBy []domain.RemoteID) *syncrv1.Remote {
 		UpdatedAt:    ts(r.UpdatedAt),
 		Version:      r.Version,
 		Members:      make([]*syncrv1.UnionMember, 0, len(r.Members)),
-		UsedByUnions: make([]string, 0, len(usedBy)),
+		UsedByUnions: []string{},
+		WrappedBy:    []string{},
 	}
 	for _, m := range r.Members {
 		out.Members = append(out.Members, &syncrv1.UnionMember{RemoteId: m.RemoteID.String(), Path: m.Path, Mode: unionModeToProto(m.Mode)})
 	}
-	for _, id := range usedBy {
-		out.UsedByUnions = append(out.UsedByUnions, id.String())
+	if !r.Wrapped.IsZero() {
+		out.Wrapped = &syncrv1.WrappedRemote{RemoteId: r.Wrapped.RemoteID.String(), Path: r.Wrapped.Path}
+	}
+	for _, u := range using {
+		if u.Wrapped.RemoteID == r.ID {
+			out.WrappedBy = append(out.WrappedBy, u.ID.String())
+		} else {
+			out.UsedByUnions = append(out.UsedByUnions, u.ID.String())
+		}
 	}
 	return out
 }
 
 // remoteInputFromProto converts a RemoteInput (nil is empty). Malformed
-// members are reported as a *domain.ValidationError.
+// members and a malformed wrapped remote ID are reported as a
+// *domain.ValidationError.
 func remoteInputFromProto(in *syncrv1.RemoteInput) (remotes.Input, error) {
 	out := remotes.Input{
 		Name:         in.GetName(),
@@ -206,6 +227,16 @@ func remoteInputFromProto(in *syncrv1.RemoteInput) (remotes.Input, error) {
 		}
 		member.Mode = mode
 		out.Members = append(out.Members, member)
+	}
+	if w := in.GetWrapped(); w != nil {
+		out.Wrapped.Path = w.GetPath()
+		if w.GetRemoteId() != "" {
+			id, err := domain.ParseRemoteID(w.GetRemoteId())
+			if err != nil {
+				v.Add("wrapped.remote_id", "is not a valid ID")
+			}
+			out.Wrapped.RemoteID = id
+		}
 	}
 	return out, v.Err()
 }

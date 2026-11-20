@@ -39,6 +39,10 @@ const (
 	FieldKind_FIELD_KIND_ENUM FieldKind = 5
 	// The members of a union remote (RemoteInput.members, not an option).
 	FieldKind_FIELD_KIND_MEMBERS FieldKind = 6
+	// Where a wrapper remote (an encrypted remote) stores its data
+	// (RemoteInput.wrapped, not an option). Only types with
+	// BackendCapabilities.wrapper have one, and they have exactly one.
+	FieldKind_FIELD_KIND_WRAPPED FieldKind = 7
 )
 
 // Enum value maps for FieldKind.
@@ -51,6 +55,7 @@ var (
 		4: "FIELD_KIND_BOOL",
 		5: "FIELD_KIND_ENUM",
 		6: "FIELD_KIND_MEMBERS",
+		7: "FIELD_KIND_WRAPPED",
 	}
 	FieldKind_value = map[string]int32{
 		"FIELD_KIND_UNSPECIFIED": 0,
@@ -60,6 +65,7 @@ var (
 		"FIELD_KIND_BOOL":        4,
 		"FIELD_KIND_ENUM":        5,
 		"FIELD_KIND_MEMBERS":     6,
+		"FIELD_KIND_WRAPPED":     7,
 	}
 )
 
@@ -257,7 +263,8 @@ func (x *Backend) GetCapabilities() *BackendCapabilities {
 // BackendField describes one configuration field of a backend type. It also
 // describes the configuration fields of notification channel types
 // (ChannelType.fields in notify.proto), where "RemoteInput" reads as
-// "ContactInput" and the MEMBERS kind never occurs.
+// "ContactInput", the MEMBERS and WRAPPED kinds never occur and fixed is
+// never set.
 type BackendField struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Key in RemoteInput.options (or secrets, for a secret field).
@@ -281,7 +288,13 @@ type BackendField struct {
 	// secret fields.
 	DefaultValue string `protobuf:"bytes,9,opt,name=default_value,json=defaultValue,proto3" json:"default_value,omitempty"`
 	// The allowed values of an ENUM field.
-	Choices       []*FieldChoice `protobuf:"bytes,10,rep,name=choices,proto3" json:"choices,omitempty"`
+	Choices []*FieldChoice `protobuf:"bytes,10,rep,name=choices,proto3" json:"choices,omitempty"`
+	// The value is set when the remote is created and never changes (e.g. the
+	// password of an encrypted remote: another value would make the stored
+	// data unreadable). UpdateRemote refuses another value of an option, a
+	// new value of a secret and a clear of it. Forms show the field read-only
+	// when editing. Never set on a MEMBERS or WRAPPED field.
+	Fixed         bool `protobuf:"varint,11,opt,name=fixed,proto3" json:"fixed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -386,6 +399,13 @@ func (x *BackendField) GetChoices() []*FieldChoice {
 	return nil
 }
 
+func (x *BackendField) GetFixed() bool {
+	if x != nil {
+		return x.Fixed
+	}
+	return false
+}
+
 // FieldChoice is one allowed value of an ENUM field.
 type FieldChoice struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -452,8 +472,19 @@ type BackendCapabilities struct {
 	UnionMember bool `protobuf:"varint,3,opt,name=union_member,json=unionMember,proto3" json:"union_member,omitempty"`
 	// Remotes of the type may hold restic repositories.
 	ResticRepository bool `protobuf:"varint,4,opt,name=restic_repository,json=resticRepository,proto3" json:"restic_repository,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Remotes of the type store their data, transformed (e.g. encrypted), in
+	// a folder of one other remote of the same owner (Remote.wrapped). Such a
+	// type is never local, a union, a union member or a place for restic
+	// repositories, and the remote it wraps is none of local, a union or
+	// another wrapper.
+	Wrapper bool `protobuf:"varint,5,opt,name=wrapper,proto3" json:"wrapper,omitempty"`
+	// rclone keeps no checksums on remotes of the type, so a transfer or a
+	// two-way sync with such a side cannot compare checksums: RunJob and the
+	// schedule RPCs refuse RcloneTransferOptions.checksum and
+	// BISYNC_COMPARE_CHECKSUM when a side is on such a remote.
+	NoChecksum    bool `protobuf:"varint,6,opt,name=no_checksum,json=noChecksum,proto3" json:"no_checksum,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *BackendCapabilities) Reset() {
@@ -514,6 +545,20 @@ func (x *BackendCapabilities) GetResticRepository() bool {
 	return false
 }
 
+func (x *BackendCapabilities) GetWrapper() bool {
+	if x != nil {
+		return x.Wrapper
+	}
+	return false
+}
+
+func (x *BackendCapabilities) GetNoChecksum() bool {
+	if x != nil {
+		return x.NoChecksum
+	}
+	return false
+}
+
 // Remote is a configured remote. Secret values are never returned.
 type Remote struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -535,7 +580,13 @@ type Remote struct {
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	// Optimistic concurrency token for UpdateRemote.
-	Version       int64 `protobuf:"varint,10,opt,name=version,proto3" json:"version,omitempty"`
+	Version int64 `protobuf:"varint,10,opt,name=version,proto3" json:"version,omitempty"`
+	// Where a remote whose type has BackendCapabilities.wrapper stores its
+	// data; unset for other types.
+	Wrapped *WrappedRemote `protobuf:"bytes,11,opt,name=wrapped,proto3" json:"wrapped,omitempty"`
+	// IDs of the caller's remotes that store their data in this one (their
+	// wrapped.remote_id is this remote's ID).
+	WrappedBy     []string `protobuf:"bytes,12,rep,name=wrapped_by,json=wrappedBy,proto3" json:"wrapped_by,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -640,6 +691,20 @@ func (x *Remote) GetVersion() int64 {
 	return 0
 }
 
+func (x *Remote) GetWrapped() *WrappedRemote {
+	if x != nil {
+		return x.Wrapped
+	}
+	return nil
+}
+
+func (x *Remote) GetWrappedBy() []string {
+	if x != nil {
+		return x.WrappedBy
+	}
+	return nil
+}
+
 // RemoteInput is the configuration of a remote to create or update.
 type RemoteInput struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -657,7 +722,12 @@ type RemoteInput struct {
 	ClearSecrets []string `protobuf:"bytes,5,rep,name=clear_secrets,json=clearSecrets,proto3" json:"clear_secrets,omitempty"`
 	// Members of a union remote, in order: at least two of the caller's
 	// remotes whose type has union_member, none of them a union.
-	Members       []*UnionMember `protobuf:"bytes,6,rep,name=members,proto3" json:"members,omitempty"`
+	Members []*UnionMember `protobuf:"bytes,6,rep,name=members,proto3" json:"members,omitempty"`
+	// Where the remote stores its data: required when the type has
+	// BackendCapabilities.wrapper, and must be unset otherwise. Unlike the
+	// fixed fields it may change on update (e.g. to follow data that was
+	// moved to another folder).
+	Wrapped       *WrappedRemote `protobuf:"bytes,7,opt,name=wrapped,proto3" json:"wrapped,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -734,6 +804,70 @@ func (x *RemoteInput) GetMembers() []*UnionMember {
 	return nil
 }
 
+func (x *RemoteInput) GetWrapped() *WrappedRemote {
+	if x != nil {
+		return x.Wrapped
+	}
+	return nil
+}
+
+// WrappedRemote is where a wrapper remote (an encrypted remote) stores its
+// data: a folder of one other remote.
+type WrappedRemote struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The remote that holds the data: one of the caller's remotes, not the
+	// remote itself, and of a type that is not local, a union or a wrapper.
+	RemoteId string `protobuf:"bytes,1,opt,name=remote_id,json=remoteId,proto3" json:"remote_id,omitempty"`
+	// Path on that remote, relative to its root; empty means its root.
+	Path          string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WrappedRemote) Reset() {
+	*x = WrappedRemote{}
+	mi := &file_syncr_v1_remotes_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WrappedRemote) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WrappedRemote) ProtoMessage() {}
+
+func (x *WrappedRemote) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_remotes_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WrappedRemote.ProtoReflect.Descriptor instead.
+func (*WrappedRemote) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *WrappedRemote) GetRemoteId() string {
+	if x != nil {
+		return x.RemoteId
+	}
+	return ""
+}
+
+func (x *WrappedRemote) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
 // UnionMember is one member of a union remote.
 type UnionMember struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -749,7 +883,7 @@ type UnionMember struct {
 
 func (x *UnionMember) Reset() {
 	*x = UnionMember{}
-	mi := &file_syncr_v1_remotes_proto_msgTypes[8]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -761,7 +895,7 @@ func (x *UnionMember) String() string {
 func (*UnionMember) ProtoMessage() {}
 
 func (x *UnionMember) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_remotes_proto_msgTypes[8]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -774,7 +908,7 @@ func (x *UnionMember) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnionMember.ProtoReflect.Descriptor instead.
 func (*UnionMember) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{8}
+	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *UnionMember) GetRemoteId() string {
@@ -809,7 +943,7 @@ type ListRemotesRequest struct {
 
 func (x *ListRemotesRequest) Reset() {
 	*x = ListRemotesRequest{}
-	mi := &file_syncr_v1_remotes_proto_msgTypes[9]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -821,7 +955,7 @@ func (x *ListRemotesRequest) String() string {
 func (*ListRemotesRequest) ProtoMessage() {}
 
 func (x *ListRemotesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_remotes_proto_msgTypes[9]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -834,7 +968,7 @@ func (x *ListRemotesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRemotesRequest.ProtoReflect.Descriptor instead.
 func (*ListRemotesRequest) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{9}
+	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListRemotesRequest) GetBackendType() string {
@@ -854,7 +988,7 @@ type ListRemotesResponse struct {
 
 func (x *ListRemotesResponse) Reset() {
 	*x = ListRemotesResponse{}
-	mi := &file_syncr_v1_remotes_proto_msgTypes[10]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -866,7 +1000,7 @@ func (x *ListRemotesResponse) String() string {
 func (*ListRemotesResponse) ProtoMessage() {}
 
 func (x *ListRemotesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_remotes_proto_msgTypes[10]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -879,7 +1013,7 @@ func (x *ListRemotesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRemotesResponse.ProtoReflect.Descriptor instead.
 func (*ListRemotesResponse) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{10}
+	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListRemotesResponse) GetRemotes() []*Remote {
@@ -899,7 +1033,7 @@ type GetRemoteRequest struct {
 
 func (x *GetRemoteRequest) Reset() {
 	*x = GetRemoteRequest{}
-	mi := &file_syncr_v1_remotes_proto_msgTypes[11]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -911,7 +1045,7 @@ func (x *GetRemoteRequest) String() string {
 func (*GetRemoteRequest) ProtoMessage() {}
 
 func (x *GetRemoteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_remotes_proto_msgTypes[11]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -924,7 +1058,7 @@ func (x *GetRemoteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRemoteRequest.ProtoReflect.Descriptor instead.
 func (*GetRemoteRequest) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{11}
+	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetRemoteRequest) GetRemoteId() string {
@@ -944,7 +1078,7 @@ type GetRemoteResponse struct {
 
 func (x *GetRemoteResponse) Reset() {
 	*x = GetRemoteResponse{}
-	mi := &file_syncr_v1_remotes_proto_msgTypes[12]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -956,7 +1090,7 @@ func (x *GetRemoteResponse) String() string {
 func (*GetRemoteResponse) ProtoMessage() {}
 
 func (x *GetRemoteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_remotes_proto_msgTypes[12]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -969,7 +1103,7 @@ func (x *GetRemoteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRemoteResponse.ProtoReflect.Descriptor instead.
 func (*GetRemoteResponse) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{12}
+	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetRemoteResponse) GetRemote() *Remote {
@@ -989,7 +1123,7 @@ type CreateRemoteRequest struct {
 
 func (x *CreateRemoteRequest) Reset() {
 	*x = CreateRemoteRequest{}
-	mi := &file_syncr_v1_remotes_proto_msgTypes[13]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1001,7 +1135,7 @@ func (x *CreateRemoteRequest) String() string {
 func (*CreateRemoteRequest) ProtoMessage() {}
 
 func (x *CreateRemoteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_remotes_proto_msgTypes[13]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1014,7 +1148,7 @@ func (x *CreateRemoteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRemoteRequest.ProtoReflect.Descriptor instead.
 func (*CreateRemoteRequest) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{13}
+	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *CreateRemoteRequest) GetInput() *RemoteInput {
@@ -1034,7 +1168,7 @@ type CreateRemoteResponse struct {
 
 func (x *CreateRemoteResponse) Reset() {
 	*x = CreateRemoteResponse{}
-	mi := &file_syncr_v1_remotes_proto_msgTypes[14]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1046,7 +1180,7 @@ func (x *CreateRemoteResponse) String() string {
 func (*CreateRemoteResponse) ProtoMessage() {}
 
 func (x *CreateRemoteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_remotes_proto_msgTypes[14]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1059,7 +1193,7 @@ func (x *CreateRemoteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRemoteResponse.ProtoReflect.Descriptor instead.
 func (*CreateRemoteResponse) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{14}
+	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *CreateRemoteResponse) GetRemote() *Remote {
@@ -1083,7 +1217,7 @@ type UpdateRemoteRequest struct {
 
 func (x *UpdateRemoteRequest) Reset() {
 	*x = UpdateRemoteRequest{}
-	mi := &file_syncr_v1_remotes_proto_msgTypes[15]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1095,7 +1229,7 @@ func (x *UpdateRemoteRequest) String() string {
 func (*UpdateRemoteRequest) ProtoMessage() {}
 
 func (x *UpdateRemoteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_remotes_proto_msgTypes[15]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1108,7 +1242,7 @@ func (x *UpdateRemoteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateRemoteRequest.ProtoReflect.Descriptor instead.
 func (*UpdateRemoteRequest) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{15}
+	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *UpdateRemoteRequest) GetRemoteId() string {
@@ -1142,7 +1276,7 @@ type UpdateRemoteResponse struct {
 
 func (x *UpdateRemoteResponse) Reset() {
 	*x = UpdateRemoteResponse{}
-	mi := &file_syncr_v1_remotes_proto_msgTypes[16]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1154,7 +1288,7 @@ func (x *UpdateRemoteResponse) String() string {
 func (*UpdateRemoteResponse) ProtoMessage() {}
 
 func (x *UpdateRemoteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_remotes_proto_msgTypes[16]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1167,7 +1301,7 @@ func (x *UpdateRemoteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateRemoteResponse.ProtoReflect.Descriptor instead.
 func (*UpdateRemoteResponse) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{16}
+	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *UpdateRemoteResponse) GetRemote() *Remote {
@@ -1187,7 +1321,7 @@ type DeleteRemoteRequest struct {
 
 func (x *DeleteRemoteRequest) Reset() {
 	*x = DeleteRemoteRequest{}
-	mi := &file_syncr_v1_remotes_proto_msgTypes[17]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1199,7 +1333,7 @@ func (x *DeleteRemoteRequest) String() string {
 func (*DeleteRemoteRequest) ProtoMessage() {}
 
 func (x *DeleteRemoteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_remotes_proto_msgTypes[17]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1212,7 +1346,7 @@ func (x *DeleteRemoteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRemoteRequest.ProtoReflect.Descriptor instead.
 func (*DeleteRemoteRequest) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{17}
+	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *DeleteRemoteRequest) GetRemoteId() string {
@@ -1231,7 +1365,7 @@ type DeleteRemoteResponse struct {
 
 func (x *DeleteRemoteResponse) Reset() {
 	*x = DeleteRemoteResponse{}
-	mi := &file_syncr_v1_remotes_proto_msgTypes[18]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1243,7 +1377,7 @@ func (x *DeleteRemoteResponse) String() string {
 func (*DeleteRemoteResponse) ProtoMessage() {}
 
 func (x *DeleteRemoteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_remotes_proto_msgTypes[18]
+	mi := &file_syncr_v1_remotes_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1256,7 +1390,7 @@ func (x *DeleteRemoteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRemoteResponse.ProtoReflect.Descriptor instead.
 func (*DeleteRemoteResponse) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{18}
+	return file_syncr_v1_remotes_proto_rawDescGZIP(), []int{19}
 }
 
 var File_syncr_v1_remotes_proto protoreflect.FileDescriptor
@@ -1272,7 +1406,7 @@ const file_syncr_v1_remotes_proto_rawDesc = "" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12.\n" +
 	"\x06fields\x18\x04 \x03(\v2\x16.syncr.v1.BackendFieldR\x06fields\x12A\n" +
-	"\fcapabilities\x18\x05 \x01(\v2\x1d.syncr.v1.BackendCapabilitiesR\fcapabilitiesJ\x04\b\x06\x10\x10\"\xc3\x02\n" +
+	"\fcapabilities\x18\x05 \x01(\v2\x1d.syncr.v1.BackendCapabilitiesR\fcapabilitiesJ\x04\b\x06\x10\x10\"\xd9\x02\n" +
 	"\fBackendField\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x12\n" +
@@ -1284,15 +1418,19 @@ const file_syncr_v1_remotes_proto_rawDesc = "" +
 	"\badvanced\x18\b \x01(\bR\badvanced\x12#\n" +
 	"\rdefault_value\x18\t \x01(\tR\fdefaultValue\x12/\n" +
 	"\achoices\x18\n" +
-	" \x03(\v2\x15.syncr.v1.FieldChoiceR\achoicesJ\x04\b\v\x10\x14\"9\n" +
+	" \x03(\v2\x15.syncr.v1.FieldChoiceR\achoices\x12\x14\n" +
+	"\x05fixed\x18\v \x01(\bR\x05fixedJ\x04\b\f\x10\x14\"9\n" +
 	"\vFieldChoice\x12\x14\n" +
 	"\x05value\x18\x01 \x01(\tR\x05value\x12\x14\n" +
-	"\x05label\x18\x02 \x01(\tR\x05label\"\x97\x01\n" +
+	"\x05label\x18\x02 \x01(\tR\x05label\"\xd2\x01\n" +
 	"\x13BackendCapabilities\x12\x14\n" +
 	"\x05local\x18\x01 \x01(\bR\x05local\x12\x14\n" +
 	"\x05union\x18\x02 \x01(\bR\x05union\x12!\n" +
 	"\funion_member\x18\x03 \x01(\bR\vunionMember\x12+\n" +
-	"\x11restic_repository\x18\x04 \x01(\bR\x10resticRepositoryJ\x04\b\x05\x10\x10\"\xd2\x03\n" +
+	"\x11restic_repository\x18\x04 \x01(\bR\x10resticRepository\x12\x18\n" +
+	"\awrapper\x18\x05 \x01(\bR\awrapper\x12\x1f\n" +
+	"\vno_checksum\x18\x06 \x01(\bR\n" +
+	"noChecksumJ\x04\b\a\x10\x10\"\xa4\x04\n" +
 	"\x06Remote\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12!\n" +
@@ -1307,23 +1445,31 @@ const file_syncr_v1_remotes_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x18\n" +
 	"\aversion\x18\n" +
-	" \x01(\x03R\aversion\x1a:\n" +
+	" \x01(\x03R\aversion\x121\n" +
+	"\awrapped\x18\v \x01(\v2\x17.syncr.v1.WrappedRemoteR\awrapped\x12\x1d\n" +
+	"\n" +
+	"wrapped_by\x18\f \x03(\tR\twrappedBy\x1a:\n" +
 	"\fOptionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\v\x10\x14\"\x94\x03\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\r\x10\x14\"\xc7\x03\n" +
 	"\vRemoteInput\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\fbackend_type\x18\x02 \x01(\tR\vbackendType\x12<\n" +
 	"\aoptions\x18\x03 \x03(\v2\".syncr.v1.RemoteInput.OptionsEntryR\aoptions\x12<\n" +
 	"\asecrets\x18\x04 \x03(\v2\".syncr.v1.RemoteInput.SecretsEntryR\asecrets\x12#\n" +
 	"\rclear_secrets\x18\x05 \x03(\tR\fclearSecrets\x12/\n" +
-	"\amembers\x18\x06 \x03(\v2\x15.syncr.v1.UnionMemberR\amembers\x1a:\n" +
+	"\amembers\x18\x06 \x03(\v2\x15.syncr.v1.UnionMemberR\amembers\x121\n" +
+	"\awrapped\x18\a \x01(\v2\x17.syncr.v1.WrappedRemoteR\awrapped\x1a:\n" +
 	"\fOptionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a:\n" +
 	"\fSecretsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\a\x10\x10\"u\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\b\x10\x10\"F\n" +
+	"\rWrappedRemote\x12\x1b\n" +
+	"\tremote_id\x18\x01 \x01(\tR\bremoteId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04pathJ\x04\b\x03\x10\n" +
+	"\"u\n" +
 	"\vUnionMember\x12\x1b\n" +
 	"\tremote_id\x18\x01 \x01(\tR\bremoteId\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12/\n" +
@@ -1349,7 +1495,7 @@ const file_syncr_v1_remotes_proto_rawDesc = "" +
 	"\x06remote\x18\x01 \x01(\v2\x10.syncr.v1.RemoteR\x06remote\"2\n" +
 	"\x13DeleteRemoteRequest\x12\x1b\n" +
 	"\tremote_id\x18\x01 \x01(\tR\bremoteId\"\x16\n" +
-	"\x14DeleteRemoteResponse*\xa9\x01\n" +
+	"\x14DeleteRemoteResponse*\xc1\x01\n" +
 	"\tFieldKind\x12\x1a\n" +
 	"\x16FIELD_KIND_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11FIELD_KIND_STRING\x10\x01\x12\x13\n" +
@@ -1357,7 +1503,8 @@ const file_syncr_v1_remotes_proto_rawDesc = "" +
 	"\x0eFIELD_KIND_INT\x10\x03\x12\x13\n" +
 	"\x0fFIELD_KIND_BOOL\x10\x04\x12\x13\n" +
 	"\x0fFIELD_KIND_ENUM\x10\x05\x12\x16\n" +
-	"\x12FIELD_KIND_MEMBERS\x10\x062d\n" +
+	"\x12FIELD_KIND_MEMBERS\x10\x06\x12\x16\n" +
+	"\x12FIELD_KIND_WRAPPED\x10\a2d\n" +
 	"\x0eBackendService\x12R\n" +
 	"\fListBackends\x12\x1d.syncr.v1.ListBackendsRequest\x1a\x1e.syncr.v1.ListBackendsResponse\"\x03\x90\x02\x012\xa1\x03\n" +
 	"\rRemoteService\x12O\n" +
@@ -1381,7 +1528,7 @@ func file_syncr_v1_remotes_proto_rawDescGZIP() []byte {
 }
 
 var file_syncr_v1_remotes_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_syncr_v1_remotes_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_syncr_v1_remotes_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_syncr_v1_remotes_proto_goTypes = []any{
 	(FieldKind)(0),                // 0: syncr.v1.FieldKind
 	(*ListBackendsRequest)(nil),   // 1: syncr.v1.ListBackendsRequest
@@ -1392,22 +1539,23 @@ var file_syncr_v1_remotes_proto_goTypes = []any{
 	(*BackendCapabilities)(nil),   // 6: syncr.v1.BackendCapabilities
 	(*Remote)(nil),                // 7: syncr.v1.Remote
 	(*RemoteInput)(nil),           // 8: syncr.v1.RemoteInput
-	(*UnionMember)(nil),           // 9: syncr.v1.UnionMember
-	(*ListRemotesRequest)(nil),    // 10: syncr.v1.ListRemotesRequest
-	(*ListRemotesResponse)(nil),   // 11: syncr.v1.ListRemotesResponse
-	(*GetRemoteRequest)(nil),      // 12: syncr.v1.GetRemoteRequest
-	(*GetRemoteResponse)(nil),     // 13: syncr.v1.GetRemoteResponse
-	(*CreateRemoteRequest)(nil),   // 14: syncr.v1.CreateRemoteRequest
-	(*CreateRemoteResponse)(nil),  // 15: syncr.v1.CreateRemoteResponse
-	(*UpdateRemoteRequest)(nil),   // 16: syncr.v1.UpdateRemoteRequest
-	(*UpdateRemoteResponse)(nil),  // 17: syncr.v1.UpdateRemoteResponse
-	(*DeleteRemoteRequest)(nil),   // 18: syncr.v1.DeleteRemoteRequest
-	(*DeleteRemoteResponse)(nil),  // 19: syncr.v1.DeleteRemoteResponse
-	nil,                           // 20: syncr.v1.Remote.OptionsEntry
-	nil,                           // 21: syncr.v1.RemoteInput.OptionsEntry
-	nil,                           // 22: syncr.v1.RemoteInput.SecretsEntry
-	(*timestamppb.Timestamp)(nil), // 23: google.protobuf.Timestamp
-	(UnionUpstreamMode)(0),        // 24: syncr.v1.UnionUpstreamMode
+	(*WrappedRemote)(nil),         // 9: syncr.v1.WrappedRemote
+	(*UnionMember)(nil),           // 10: syncr.v1.UnionMember
+	(*ListRemotesRequest)(nil),    // 11: syncr.v1.ListRemotesRequest
+	(*ListRemotesResponse)(nil),   // 12: syncr.v1.ListRemotesResponse
+	(*GetRemoteRequest)(nil),      // 13: syncr.v1.GetRemoteRequest
+	(*GetRemoteResponse)(nil),     // 14: syncr.v1.GetRemoteResponse
+	(*CreateRemoteRequest)(nil),   // 15: syncr.v1.CreateRemoteRequest
+	(*CreateRemoteResponse)(nil),  // 16: syncr.v1.CreateRemoteResponse
+	(*UpdateRemoteRequest)(nil),   // 17: syncr.v1.UpdateRemoteRequest
+	(*UpdateRemoteResponse)(nil),  // 18: syncr.v1.UpdateRemoteResponse
+	(*DeleteRemoteRequest)(nil),   // 19: syncr.v1.DeleteRemoteRequest
+	(*DeleteRemoteResponse)(nil),  // 20: syncr.v1.DeleteRemoteResponse
+	nil,                           // 21: syncr.v1.Remote.OptionsEntry
+	nil,                           // 22: syncr.v1.RemoteInput.OptionsEntry
+	nil,                           // 23: syncr.v1.RemoteInput.SecretsEntry
+	(*timestamppb.Timestamp)(nil), // 24: google.protobuf.Timestamp
+	(UnionUpstreamMode)(0),        // 25: syncr.v1.UnionUpstreamMode
 }
 var file_syncr_v1_remotes_proto_depIdxs = []int32{
 	3,  // 0: syncr.v1.ListBackendsResponse.backends:type_name -> syncr.v1.Backend
@@ -1415,37 +1563,39 @@ var file_syncr_v1_remotes_proto_depIdxs = []int32{
 	6,  // 2: syncr.v1.Backend.capabilities:type_name -> syncr.v1.BackendCapabilities
 	0,  // 3: syncr.v1.BackendField.kind:type_name -> syncr.v1.FieldKind
 	5,  // 4: syncr.v1.BackendField.choices:type_name -> syncr.v1.FieldChoice
-	20, // 5: syncr.v1.Remote.options:type_name -> syncr.v1.Remote.OptionsEntry
-	9,  // 6: syncr.v1.Remote.members:type_name -> syncr.v1.UnionMember
-	23, // 7: syncr.v1.Remote.created_at:type_name -> google.protobuf.Timestamp
-	23, // 8: syncr.v1.Remote.updated_at:type_name -> google.protobuf.Timestamp
-	21, // 9: syncr.v1.RemoteInput.options:type_name -> syncr.v1.RemoteInput.OptionsEntry
-	22, // 10: syncr.v1.RemoteInput.secrets:type_name -> syncr.v1.RemoteInput.SecretsEntry
-	9,  // 11: syncr.v1.RemoteInput.members:type_name -> syncr.v1.UnionMember
-	24, // 12: syncr.v1.UnionMember.mode:type_name -> syncr.v1.UnionUpstreamMode
-	7,  // 13: syncr.v1.ListRemotesResponse.remotes:type_name -> syncr.v1.Remote
-	7,  // 14: syncr.v1.GetRemoteResponse.remote:type_name -> syncr.v1.Remote
-	8,  // 15: syncr.v1.CreateRemoteRequest.input:type_name -> syncr.v1.RemoteInput
-	7,  // 16: syncr.v1.CreateRemoteResponse.remote:type_name -> syncr.v1.Remote
-	8,  // 17: syncr.v1.UpdateRemoteRequest.input:type_name -> syncr.v1.RemoteInput
-	7,  // 18: syncr.v1.UpdateRemoteResponse.remote:type_name -> syncr.v1.Remote
-	1,  // 19: syncr.v1.BackendService.ListBackends:input_type -> syncr.v1.ListBackendsRequest
-	10, // 20: syncr.v1.RemoteService.ListRemotes:input_type -> syncr.v1.ListRemotesRequest
-	12, // 21: syncr.v1.RemoteService.GetRemote:input_type -> syncr.v1.GetRemoteRequest
-	14, // 22: syncr.v1.RemoteService.CreateRemote:input_type -> syncr.v1.CreateRemoteRequest
-	16, // 23: syncr.v1.RemoteService.UpdateRemote:input_type -> syncr.v1.UpdateRemoteRequest
-	18, // 24: syncr.v1.RemoteService.DeleteRemote:input_type -> syncr.v1.DeleteRemoteRequest
-	2,  // 25: syncr.v1.BackendService.ListBackends:output_type -> syncr.v1.ListBackendsResponse
-	11, // 26: syncr.v1.RemoteService.ListRemotes:output_type -> syncr.v1.ListRemotesResponse
-	13, // 27: syncr.v1.RemoteService.GetRemote:output_type -> syncr.v1.GetRemoteResponse
-	15, // 28: syncr.v1.RemoteService.CreateRemote:output_type -> syncr.v1.CreateRemoteResponse
-	17, // 29: syncr.v1.RemoteService.UpdateRemote:output_type -> syncr.v1.UpdateRemoteResponse
-	19, // 30: syncr.v1.RemoteService.DeleteRemote:output_type -> syncr.v1.DeleteRemoteResponse
-	25, // [25:31] is the sub-list for method output_type
-	19, // [19:25] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	21, // 5: syncr.v1.Remote.options:type_name -> syncr.v1.Remote.OptionsEntry
+	10, // 6: syncr.v1.Remote.members:type_name -> syncr.v1.UnionMember
+	24, // 7: syncr.v1.Remote.created_at:type_name -> google.protobuf.Timestamp
+	24, // 8: syncr.v1.Remote.updated_at:type_name -> google.protobuf.Timestamp
+	9,  // 9: syncr.v1.Remote.wrapped:type_name -> syncr.v1.WrappedRemote
+	22, // 10: syncr.v1.RemoteInput.options:type_name -> syncr.v1.RemoteInput.OptionsEntry
+	23, // 11: syncr.v1.RemoteInput.secrets:type_name -> syncr.v1.RemoteInput.SecretsEntry
+	10, // 12: syncr.v1.RemoteInput.members:type_name -> syncr.v1.UnionMember
+	9,  // 13: syncr.v1.RemoteInput.wrapped:type_name -> syncr.v1.WrappedRemote
+	25, // 14: syncr.v1.UnionMember.mode:type_name -> syncr.v1.UnionUpstreamMode
+	7,  // 15: syncr.v1.ListRemotesResponse.remotes:type_name -> syncr.v1.Remote
+	7,  // 16: syncr.v1.GetRemoteResponse.remote:type_name -> syncr.v1.Remote
+	8,  // 17: syncr.v1.CreateRemoteRequest.input:type_name -> syncr.v1.RemoteInput
+	7,  // 18: syncr.v1.CreateRemoteResponse.remote:type_name -> syncr.v1.Remote
+	8,  // 19: syncr.v1.UpdateRemoteRequest.input:type_name -> syncr.v1.RemoteInput
+	7,  // 20: syncr.v1.UpdateRemoteResponse.remote:type_name -> syncr.v1.Remote
+	1,  // 21: syncr.v1.BackendService.ListBackends:input_type -> syncr.v1.ListBackendsRequest
+	11, // 22: syncr.v1.RemoteService.ListRemotes:input_type -> syncr.v1.ListRemotesRequest
+	13, // 23: syncr.v1.RemoteService.GetRemote:input_type -> syncr.v1.GetRemoteRequest
+	15, // 24: syncr.v1.RemoteService.CreateRemote:input_type -> syncr.v1.CreateRemoteRequest
+	17, // 25: syncr.v1.RemoteService.UpdateRemote:input_type -> syncr.v1.UpdateRemoteRequest
+	19, // 26: syncr.v1.RemoteService.DeleteRemote:input_type -> syncr.v1.DeleteRemoteRequest
+	2,  // 27: syncr.v1.BackendService.ListBackends:output_type -> syncr.v1.ListBackendsResponse
+	12, // 28: syncr.v1.RemoteService.ListRemotes:output_type -> syncr.v1.ListRemotesResponse
+	14, // 29: syncr.v1.RemoteService.GetRemote:output_type -> syncr.v1.GetRemoteResponse
+	16, // 30: syncr.v1.RemoteService.CreateRemote:output_type -> syncr.v1.CreateRemoteResponse
+	18, // 31: syncr.v1.RemoteService.UpdateRemote:output_type -> syncr.v1.UpdateRemoteResponse
+	20, // 32: syncr.v1.RemoteService.DeleteRemote:output_type -> syncr.v1.DeleteRemoteResponse
+	27, // [27:33] is the sub-list for method output_type
+	21, // [21:27] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_syncr_v1_remotes_proto_init() }
@@ -1460,7 +1610,7 @@ func file_syncr_v1_remotes_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_syncr_v1_remotes_proto_rawDesc), len(file_syncr_v1_remotes_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   22,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

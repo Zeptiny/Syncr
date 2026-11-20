@@ -29,6 +29,7 @@ import { JobService, JobStatus, WorkerAdminService, type Job } from "@/gen/syncr
 import { JobErrorCode, ResticRemoteSourceMethod } from "@/gen/syncr/v1/link_pb";
 import { ResticService } from "@/gen/syncr/v1/restic_pb";
 import { UserService } from "@/gen/syncr/v1/users_pb";
+import { useBackendMap } from "@/hooks/use-backends";
 import { useNow } from "@/hooks/use-now";
 import { useSession } from "@/hooks/use-session";
 import { phaseTail, useWatchJob, type JobSample, type WatchResult } from "@/hooks/use-watch-job";
@@ -259,6 +260,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
   const q = useQuery(JobService.method.getJob, { jobId });
   const watch = useWatchJob(jobId);
   const workers = useQuery(WorkerAdminService.method.listWorkers, {});
+  const backends = useBackendMap();
   const job = q.data?.job ?? watch.job;
   const foreign = !!job && !!user && job.ownerId !== user.id;
   const users = useQuery(UserService.method.listUsers, {}, { enabled: isAdmin && foreign });
@@ -306,7 +308,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
           }
         : stored;
   const elapsed = jobElapsed(job, now);
-  const hint = errorHint(job);
+  const hint = errorHint(job, backends);
   const started = tsDate(job.startedAt);
   const startedAt = started ? started.getTime() / 1000 : undefined;
   // A mirror is brought up to date, then backed up (a mount has one

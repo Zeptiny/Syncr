@@ -23,7 +23,13 @@
 // The Prober (probe.go, probe_measure.go) answers the probe operations
 // list_remote, about and measure_remote with the same validation,
 // environment and isolation: one "rclone lsjson" or "rclone about" process
-// per probe, read as it prints.
+// per probe, read as it prints (a listing of a crypt remote first checks
+// its password, as jobs do: crypt.go).
+//
+// Jobs and listings on a crypt remote check its password before rclone
+// touches anything, by decrypting the first block of one of its files
+// (checkCryptPassword); a transfer from a folder of one also looks for the
+// folder in its parent's listing (checkCryptSource).
 //
 // Progress comes from rclone's JSON log (--use-json-log, stats every
 // second); unknown keys are ignored. Exit codes map to job error codes, and
@@ -197,6 +203,16 @@ func (r *Runner) Run(ctx context.Context, job runner.Job, emit runner.EmitFunc) 
 		return res, err
 	}
 	args = withRules(args, rules)
+	sc := scrub.New(env.Secrets())
+	// Encrypted sides: the password first (a wrong one fails whatever the
+	// path), then a source folder must be in its parent's listing.
+	if err := r.checkCryptPasswords(ctx, dir, env, sc, []string{"source", "destination"},
+		[]*syncrv1.Location{transfer.GetSource(), transfer.GetDestination()}); err != nil {
+		return res, err
+	}
+	if err := r.checkCryptSource(ctx, dir, env, sc, transfer.GetSource()); err != nil {
+		return res, err
+	}
 
 	// A move whose source is local can move whole folders with their
 	// links (rclone renames a folder when both sides are on one file
@@ -212,7 +228,6 @@ func (r *Runner) Run(ctx context.Context, job runner.Job, emit runner.EmitFunc) 
 		return res, err
 	}
 
-	sc := scrub.New(env.Secrets())
 	t := newTracker(emit, sc)
 	pres, err := r.cfg.Supervisor.Run(ctx, proc.Spec{
 		Path:   r.cfg.Binary,

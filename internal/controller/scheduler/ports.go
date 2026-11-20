@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
 	"github.com/Zeptiny/Syncr/internal/app/schedules"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -50,6 +51,14 @@ type Workers interface {
 	// worker just went quiet waits instead of creating a job that would
 	// time out in the queue.
 	Reachable(w workers.Worker) bool
+}
+
+// Remotes tells what a schedule's remotes are, for the definition checks
+// that depend on them (jobkind's Registry.CheckWith) and the concurrency
+// keys computed through them (*remotes.Service). ErrNotFound if a remote
+// is not a live remote of owner.
+type Remotes interface {
+	Infos(ctx context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Info, error)
 }
 
 // Owners tells whether a schedule's owner may still run jobs

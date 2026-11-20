@@ -20,6 +20,7 @@ import {
   JobErrorCode,
 } from "@/gen/syncr/v1/link_pb";
 
+import { noChecksumError, noChecksumNames, type NoChecksumLookup } from "./checksums";
 import { bytesToQuantity, isDecimal, quantityToBytes, type ByteUnit } from "./units";
 
 // This module must not import definition.ts (which imports it); the shared
@@ -225,9 +226,10 @@ const intIn = (v: string, lo: number, hi: number) =>
  * validateBisync checks what the browser can check before sending, like
  * the kind's Check: absolute worker paths, sides that differ and do not
  * nest, their length together, the ranges, the conflict suffix, at least
- * one property to compare and the filter patterns.
+ * one property to compare, no checksums with a remote that keeps none
+ * (noChecksum, when known) and the filter patterns.
  */
-export function validateBisync(s: BisyncState): BisyncErrors {
+export function validateBisync(s: BisyncState, noChecksum?: NoChecksumLookup): BisyncErrors {
   const e: BisyncErrors = {};
   for (const [loc, key, name] of [
     [s.path1, "path1Path", "Folder A"],
@@ -251,6 +253,10 @@ export function validateBisync(s: BisyncState): BisyncErrors {
       'Use one suffix, or two separated by a comma, each 1 to 32 letters, digits, ".", "_" or "-".';
   if (!s.compare.size && !s.compare.modtime && !s.compare.checksum)
     e.compare = "Choose at least one way to tell that a file changed.";
+  else if (s.compare.checksum) {
+    const names = noChecksumNames(noChecksum, [s.path1.remoteId, s.path2.remoteId]);
+    if (names.length) e.compare = noChecksumError(names);
+  }
   if (s.transfers !== "" && !intIn(s.transfers, 1, 64))
     e.transfers = "Enter a whole number from 1 to 64.";
   if (s.checkers !== "" && !intIn(s.checkers, 1, 256))

@@ -20,6 +20,12 @@ import {
   type BisyncErrorKey,
   type BisyncState,
 } from "./bisync-definition";
+import {
+  checksumServerMessage,
+  noChecksumError,
+  noChecksumNames,
+  type NoChecksumLookup,
+} from "./checksums";
 import { emptyHooks, hooksError, hooksState, toHooks, type HooksState } from "./hooks";
 import { remoteSourceError, type RemoteSourceErrorKey } from "./remote-source";
 import {
@@ -94,7 +100,7 @@ export interface TransferState {
 
 /**
  * DefinitionErrors are the definition's problems, by form section. The
- * first four belong to transfers; repository, paths, excludes, policy and
+ * first four belong to transfers (and compare, shared with two-way syncs); repository, paths, excludes, policy and
  * readData to the restic kinds, and tags and the RemoteSourceErrorKey ones
  * to backups (of a remote); the BisyncErrorKey ones to two-way syncs;
  * options, timeLimit and hooks to every kind.
@@ -192,8 +198,15 @@ export function isAbsolute(p: string): boolean {
   return p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\");
 }
 
-/** validateTransfer checks what the browser can check before sending. */
-export function validateTransfer(s: TransferState): DefinitionErrors {
+/**
+ * validateTransfer checks what the browser can check before sending, and,
+ * when noChecksum is given, that no side that keeps no checksums is
+ * compared by checksum.
+ */
+export function validateTransfer(
+  s: TransferState,
+  noChecksum?: NoChecksumLookup,
+): DefinitionErrors {
   const e: DefinitionErrors = {};
   for (const [loc, path] of [
     [s.source, "sourcePath"],
@@ -216,6 +229,10 @@ export function validateTransfer(s: TransferState): DefinitionErrors {
     decimals.some((v) => v !== "" && !isDecimal(v))
   ) {
     e.options = "Numbers must be zero or more.";
+  }
+  if (s.compare === "checksum") {
+    const names = noChecksumNames(noChecksum, [s.source.remoteId, s.destination.remoteId]);
+    if (names.length) e.compare = noChecksumError(names);
   }
   return e;
 }
@@ -282,7 +299,11 @@ export function definitionError(v: FieldViolation, errors: DefinitionErrors): bo
   }
   const bisync = bisyncError(v);
   if (bisync !== undefined) {
-    errors[bisync] = v.message;
+    errors[bisync] = bisync === "compare" ? checksumServerMessage(v.message) : v.message;
+    return true;
+  }
+  if (/(?:^|\.)rclone_transfer\.options\.checksum$/.test(f)) {
+    errors.compare = checksumServerMessage(v.message);
     return true;
   }
   const remote = remoteSourceError(v);
@@ -464,17 +485,23 @@ export function definitionState(def: JobDefinition | undefined): JobDefinitionSt
   }
 }
 
-/** validateDefinition checks what the browser can check before sending. */
-export function validateDefinition(s: JobDefinitionState): DefinitionErrors {
-  const e = validateKind(s);
+/**
+ * validateDefinition checks what the browser can check before sending.
+ * noChecksum, when given, tells the remotes that keep no checksums.
+ */
+export function validateDefinition(
+  s: JobDefinitionState,
+  noChecksum?: NoChecksumLookup,
+): DefinitionErrors {
+  const e = validateKind(s, noChecksum);
   const limit = validateTimeLimit(s.timeLimit);
   return limit ? { ...e, timeLimit: limit } : e;
 }
 
-function validateKind(s: JobDefinitionState): DefinitionErrors {
+function validateKind(s: JobDefinitionState, noChecksum?: NoChecksumLookup): DefinitionErrors {
   switch (s.kind) {
     case "rclone_bisync":
-      return validateBisync(s.bisync);
+      return validateBisync(s.bisync, noChecksum);
     case "restic_backup":
       return validateBackup(s.backup);
     case "restic_forget":
@@ -484,7 +511,7 @@ function validateKind(s: JobDefinitionState): DefinitionErrors {
     case "restic_prune":
       return validatePrune(s.prune);
     default:
-      return validateTransfer(s.transfer);
+      return validateTransfer(s.transfer, noChecksum);
   }
 }
 

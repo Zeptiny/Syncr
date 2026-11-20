@@ -11,6 +11,8 @@ import {
   ResticRemoteSourceMethod,
   ResticRestoreOverwrite,
 } from "@/gen/syncr/v1/link_pb";
+import type { Backend } from "@/gen/syncr/v1/remotes_pb";
+import { fixedSecretFields } from "@/components/app/descriptor-form/schema";
 import { durationSeconds, toNumber, tsDate } from "@/lib/format";
 import { describeRetention } from "@/lib/retention";
 import { errorCodeLabel, isTerminal, transferModeLabel } from "@/lib/status";
@@ -260,24 +262,69 @@ export function jobProgress(job: Job): {
   };
 }
 
+/** jobRemoteIds lists the remotes of a job's locations: its sides, or the folder a backup reads. */
+function jobRemoteIds(def: JobDefinition | undefined): string[] {
+  const op = def?.operation;
+  switch (op?.case) {
+    case "rcloneTransfer":
+      return [op.value.source?.remoteId ?? "", op.value.destination?.remoteId ?? ""];
+    case "rcloneBisync":
+      return [op.value.path1?.remoteId ?? "", op.value.path2?.remoteId ?? ""];
+    case "resticBackup":
+      return [op.value.remoteSource?.remoteId ?? ""];
+    default:
+      return [];
+  }
+}
+
 /**
- * errorHint says what to do about a backup of a remote that failed for a
- * reason of its own: an empty folder (SOURCE_EMPTY), or a way of reading
- * the remote its worker cannot use (TOOL_UNAVAILABLE). Undefined otherwise.
+ * secretHint explains the errors of a job on a remote whose data depends
+ * on a secret set when it was created (a fixed secret, e.g. the password
+ * of an encrypted remote), in the words the worker uses (rclone 1.75.2):
+ * a folder that is not found may only look missing, since with another
+ * password its name encrypts to another one; names or blocks that cannot
+ * be decrypted mean the password is wrong. Undefined for other errors, or
+ * when the worker's message already names the password.
  */
-export function errorHint(job: Job): string | undefined {
+function secretHint(job: Job, backends: Map<string, Backend>): string | undefined {
+  const code = job.error?.code;
+  const message = job.error?.message ?? "";
+  if (code !== JobErrorCode.NOT_FOUND && code !== JobErrorCode.EXECUTION_FAILED) return undefined;
+  if (/password is wrong/.test(message)) return undefined;
+  for (const id of jobRemoteIds(job.definition)) {
+    const ref = job.remotes.find((r) => r.id === id);
+    const backend = ref && backends.get(ref.backendType);
+    const secrets = backend ? fixedSecretFields(backend) : [];
+    if (!ref || !secrets.length) continue;
+    const what = secrets.map((f) => f.label.toLowerCase()).join(" or ");
+    if (code === JobErrorCode.NOT_FOUND)
+      return `If the folder exists on ${ref.name}, the remote's ${what} may be wrong: with another one, the folder's stored name differs, so it is not found.`;
+    if (/undecryptable|bad password/.test(message))
+      return `${ref.name} could not be read: its ${what} is probably wrong, or its folder holds files it did not write.`;
+    return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * errorHint says what to do about a job that failed for a reason of its
+ * own: a backup of a remote with an empty folder (SOURCE_EMPTY) or a way
+ * of reading the remote its worker cannot use (TOOL_UNAVAILABLE); with the
+ * backends, a job on a remote whose data needs the password it was made
+ * with (secretHint). Undefined otherwise.
+ */
+export function errorHint(job: Job, backends?: Map<string, Backend>): string | undefined {
   const op = job.definition?.operation;
   const src = op?.case === "resticBackup" ? op.value.remoteSource : undefined;
-  if (!src) return undefined;
-  switch (job.error?.code) {
+  switch (src && job.error?.code) {
     case JobErrorCode.SOURCE_EMPTY:
       return "The folder holds no file that the backup's filters keep, at any depth (empty sub-folders don't count). Nothing was backed up, so an emptied or wrong folder cannot push real snapshots out of retention. Check the folder and the filters; if it may be empty, turn on “Back up an empty folder” under Advanced.";
     case JobErrorCode.TOOL_UNAVAILABLE:
-      return src.method === ResticRemoteSourceMethod.MOUNT
+      return src?.method === ResticRemoteSourceMethod.MOUNT
         ? "Its worker cannot mount remotes, so the job never started. Choose the mirror, or a worker that can mount: the Workers page shows what each one can do."
         : "Its worker does not keep mirrors, so the job never started. Choose the mount, or another worker: the Workers page shows what each one can do.";
     default:
-      return undefined;
+      return backends ? secretHint(job, backends) : undefined;
   }
 }
 

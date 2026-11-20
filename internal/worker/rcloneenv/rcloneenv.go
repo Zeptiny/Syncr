@@ -11,7 +11,10 @@
 //   - secrets listed in obscure_keys, which are obscured in-process the way
 //     "rclone obscure" does (see Obscure);
 //   - union upstreams, which are generated from typed UnionUpstream entries
-//     and quoted the way rclone parses its space-separated lists.
+//     and quoted the way rclone parses its space-separated lists;
+//   - the "remote" option of a crypt remote, which is generated from the
+//     typed wrapped location (another remote of the same job, never a
+//     local path), and its "strict_names", which is always "true".
 //
 // Validation is strict, because the definitions come from the network:
 // aliases and option keys have a fixed charset, environment names must not
@@ -122,6 +125,9 @@ type Env struct {
 	// local are the local folders of each union (alias -> resolved
 	// upstream paths, without their mode suffix).
 	local map[string][]string
+	// wrapped are the locations where wrapper remotes (crypt) store their
+	// data (alias -> another remote's alias and a path on it).
+	wrapped map[string]*syncrv1.Location
 }
 
 // Vars returns the variables to add to the child's environment (proc.Spec.Env).
@@ -145,7 +151,8 @@ func (e *Env) BackendType(alias string) (string, bool) {
 // writes: the resolved paths of a union's local upstreams, joined with
 // path, a location on the remote. rclone gives each upstream the same
 // location and keeps it inside the upstream. Remotes without local
-// upstreams return nil.
+// upstreams return nil, crypt remotes included: the remote a crypt remote
+// stores its data in is never local, and never a union.
 func (e *Env) LocalPaths(alias, path string) []string {
 	ups := e.local[alias]
 	if len(ups) == 0 {
@@ -159,6 +166,34 @@ func (e *Env) LocalPaths(alias, path string) []string {
 		out[i] = filepath.Join(up, filepath.FromSlash(rel))
 	}
 	return out
+}
+
+// Storage returns where the data at path on the remote alias is stored,
+// for checks of nested locations: for a crypt remote, the remote it wraps
+// and the wrapped path joined with path; for any other remote, alias and
+// path unchanged. The wrapped remote is never a crypt remote itself, so
+// one step is enough. With encrypted names the folder on the wrapped
+// remote has another name than path, but it is inside the wrapped path all
+// the same; this approximates it by path, as the controller does.
+func (e *Env) Storage(alias, path string) (string, string) {
+	w, ok := e.wrapped[alias]
+	if !ok {
+		return alias, path
+	}
+	return w.GetRemote(), joinPath(w.GetPath(), path)
+}
+
+// joinPath joins two paths on a remote with "/", the only separator of
+// rclone remote paths, with one slash where they meet; an empty part adds
+// nothing. Nothing is cleaned.
+func joinPath(base, path string) string {
+	switch {
+	case path == "":
+		return base
+	case base == "":
+		return path
+	}
+	return strings.TrimSuffix(base, "/") + "/" + strings.TrimPrefix(path, "/")
 }
 
 // Secrets returns the secret values of all remotes, in the forms they could
@@ -188,7 +223,10 @@ func (b *Builder) Build(dir string, remotes []*syncrv1.RemoteDefinition) (*Env, 
 // Remotes validates remotes and returns only their RCLONE_CONFIG_* variables,
 // without isolation variables. Most callers want Build.
 func (b *Builder) Remotes(remotes []*syncrv1.RemoteDefinition) (*Env, error) {
-	env := &Env{vars: make(map[string]string), types: make(map[string]string, len(remotes)), local: make(map[string][]string)}
+	env := &Env{
+		vars: make(map[string]string), types: make(map[string]string, len(remotes)),
+		local: make(map[string][]string), wrapped: make(map[string]*syncrv1.Location),
+	}
 	if err := checkAliases(remotes); err != nil {
 		return nil, err
 	}
@@ -346,9 +384,12 @@ func (b *Builder) addRemote(env *Env, def *syncrv1.RemoteDefinition) ([]string, 
 	if err := checkBackend(backend); err != nil {
 		return nil, err
 	}
-	isUnion := backend == "union"
+	isUnion, isCrypt := backend == "union", backend == "crypt"
 	if !isUnion && len(def.GetUnionUpstreams()) > 0 {
 		return nil, errors.New("union_upstreams is only valid for backend type \"union\"")
+	}
+	if !isCrypt && def.GetWrapped() != nil {
+		return nil, errors.New("wrapped is only valid for backend type \"crypt\"")
 	}
 
 	names := map[string]string{"TYPE": "backend_type"} // normalized key -> original
@@ -370,6 +411,9 @@ func (b *Builder) addRemote(env *Env, def *syncrv1.RemoteDefinition) ([]string, 
 	}
 
 	for _, key := range sortedKeys(def.GetOptions()) {
+		if isCrypt && cryptPassword(key) {
+			return nil, fmt.Errorf("option %q must be a secret listed in obscure_keys", key)
+		}
 		if err := add(key, def.GetOptions()[key], "option"); err != nil {
 			return nil, err
 		}
@@ -390,6 +434,11 @@ func (b *Builder) addRemote(env *Env, def *syncrv1.RemoteDefinition) ([]string, 
 		value := def.GetSecrets()[key]
 		if strings.ContainsRune(value, 0) {
 			return nil, fmt.Errorf("secret %q: value contains a NUL byte", key)
+		}
+		if isCrypt && cryptPassword(key) && !obscure[key] {
+			// rclone reveals the value as it comes: a plain password would
+			// fail, or (when it happens to decode) silently become another.
+			return nil, fmt.Errorf("secret %q must be listed in obscure_keys", key)
 		}
 		secrets = append(secrets, value)
 		if obscure[key] {
@@ -415,6 +464,17 @@ func (b *Builder) addRemote(env *Env, def *syncrv1.RemoteDefinition) ([]string, 
 		}
 		vars[EnvName(alias, "upstreams")] = upstreams
 	}
+	if isCrypt {
+		wrapped, err := wrappedLocation(env, alias, def.GetWrapped())
+		if err != nil {
+			return nil, err
+		}
+		// checkOption refuses both keys from the definition, so neither
+		// collides with an option or a secret.
+		vars[EnvName(alias, "remote")] = RemotePath(wrapped.GetRemote(), wrapped.GetPath())
+		vars[EnvName(alias, "strict_names")] = "true"
+		env.wrapped[alias] = wrapped
+	}
 
 	for k, v := range vars {
 		env.vars[k] = v
@@ -428,15 +488,17 @@ func (b *Builder) addRemote(env *Env, def *syncrv1.RemoteDefinition) ([]string, 
 //
 // It is an allowlist because most rclone backends must not be driven by
 // the controller: "local" and the backends that wrap free-form remote
-// strings ("alias", "archive", "crypt", "combine"...) reach the worker's
+// strings ("alias", "archive", "combine", "chunker"...) reach the worker's
 // files without the local_roots check, and many cloud backends can sign in
 // as the worker host (Azure CLI and managed identities, cloud metadata
 // servers). "union" is supported because its upstreams are generated from
-// typed union_upstreams. A type is added here only after every one of its
-// options in the pinned rclone has been reviewed: see deniedOptions and
-// TestSupportedBackendOptionsReviewed.
+// typed union_upstreams, and "crypt" because its "remote" is generated from
+// the typed wrapped location (another remote of the job, never a local
+// path, a union or another crypt remote). A type is added here only after
+// every one of its options in the pinned rclone has been reviewed: see
+// deniedOptions and TestSupportedBackendOptionsReviewed.
 func SupportedBackends() []string {
-	return []string{"b2", "memory", "s3", "sftp", "union", "webdav"}
+	return []string{"b2", "crypt", "memory", "s3", "sftp", "union", "webdav"}
 }
 
 // checkBackend rejects backend types that are malformed or not supported.
@@ -509,7 +571,55 @@ func checkOption(backend, key string) error {
 	if backend == "union" && (name == "upstreams" || name == "remotes") {
 		return fmt.Errorf("option %q is not allowed; use union_upstreams", key)
 	}
+	if backend == "crypt" {
+		switch name {
+		case "remote":
+			return fmt.Errorf("option %q is not allowed; it is set by the worker from wrapped", key)
+		case "strict_names":
+			return fmt.Errorf("option %q is not allowed; the worker always sets it, so a wrong password fails instead of hiding every file", key)
+		case "pass_bad_blocks":
+			return fmt.Errorf("option %q is not allowed; with a wrong password it would read every file as zeros", key)
+		case "no_data_encryption":
+			return fmt.Errorf("option %q is not allowed; with a wrong password files would read without an error, so it could not be found", key)
+		}
+	}
 	return nil
+}
+
+// cryptPassword reports whether key (an option or secret key) is one of
+// crypt's passwords, which rclone reads only in their obscured form.
+func cryptPassword(key string) bool {
+	name := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+	return name == "password" || name == "password2"
+}
+
+// wrappedLocation validates where the crypt remote self stores its data:
+// another remote of the job, which is not a union or another crypt remote,
+// plus a path on it. It returns the location to use.
+func wrappedLocation(env *Env, self string, loc *syncrv1.Location) (*syncrv1.Location, error) {
+	if loc == nil {
+		return nil, errors.New("wrapped is required for backend type \"crypt\": the remote that stores its data")
+	}
+	// The same check as a union upstream's path: no value with a line
+	// break or NUL byte reaches rclone's remote option.
+	if strings.ContainsAny(loc.GetPath(), "\x00\r\n") {
+		return nil, errors.New("wrapped path contains a line break or NUL byte")
+	}
+	alias := loc.GetRemote()
+	backend, ok := env.types[alias]
+	switch {
+	case alias == "":
+		return nil, errors.New("wrapped names no remote; a crypt remote cannot store its data in a local folder")
+	case alias == self:
+		return nil, errors.New("a crypt remote cannot store its data in itself")
+	case !ok:
+		return nil, fmt.Errorf("wrapped remote %q is not defined in this job", alias)
+	case backend == "union":
+		return nil, fmt.Errorf("wrapped remote %q is a union; nested wrappers are not supported", alias)
+	case backend == "crypt":
+		return nil, fmt.Errorf("wrapped remote %q is a crypt remote; nested wrappers are not supported", alias)
+	}
+	return &syncrv1.Location{Remote: alias, Path: loc.GetPath()}, nil
 }
 
 // unionSuffixes are the mode suffixes rclone strips from an upstream.
@@ -613,6 +723,8 @@ func (b *Builder) upstreamPath(env *Env, self, alias, path string) (string, erro
 		return "", fmt.Errorf("remote %q is not defined in this job", alias)
 	case backend == "union":
 		return "", fmt.Errorf("remote %q is a union; nested unions are not supported", alias)
+	case backend == "crypt":
+		return "", fmt.Errorf("remote %q is a crypt remote; nested wrappers are not supported", alias)
 	}
 	return RemotePath(alias, path), nil
 }

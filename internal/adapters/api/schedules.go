@@ -40,7 +40,10 @@ type scheduleHandler struct {
 	// workers tells the input check a target worker's operating system
 	// (the VSS check); nil skips it.
 	workers WorkerNames
-	errs    errorMapper
+	// infos tells the definition checks what its remotes are (jobkind's
+	// Registry.CheckWith); nil checks without them.
+	infos RemoteInfos
+	errs  errorMapper
 }
 
 var _ syncrv1connect.ScheduleServiceHandler = (*scheduleHandler)(nil)
@@ -325,6 +328,16 @@ func (h *scheduleHandler) input(ctx context.Context, procedure string, m *syncrv
 			} else if err != nil {
 				return schedules.Input{}, h.fail(ctx, procedure, err)
 			}
+			// What the remotes are (a remote that keeps no checksums, an
+			// encrypted remote's folder); the scheduler checks again when a
+			// run launches.
+			actor, _ := ActorFrom(ctx)
+			var remErr *domain.ValidationError
+			if _, err := checkWithRemotes(ctx, h.kinds, h.infos, actor.UserID, def, refs); errors.As(err, &remErr) {
+				v.AddAll("", remErr.Fields)
+			} else if err != nil {
+				return schedules.Input{}, h.fail(ctx, procedure, err)
+			}
 			// Definitions whose state stays on the worker that ran them
 			// (two-way sync, a backup of a remote) target one worker,
 			// never a label.
@@ -342,7 +355,6 @@ func (h *scheduleHandler) input(ctx context.Context, procedure string, m *syncrv
 			// worker that cannot use the method is not refused here (it may
 			// be offline or set up later): its runs fail with
 			// tool_unavailable and the worker's reason.
-			actor, _ := ActorFrom(ctx)
 			var srcErr *domain.ValidationError
 			if err := checkRemoteSource(ctx, h.sources, actor.UserID, def, refs); errors.As(err, &srcErr) {
 				v.AddAll("", srcErr.Fields)
