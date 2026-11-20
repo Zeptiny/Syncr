@@ -44,24 +44,31 @@ class, server-side encryption, path-style URLs, and not checking or
 creating the bucket.
 
 The providers are Amazon Web Services, MinIO, Cloudflare R2, Wasabi,
-DigitalOcean Spaces, Ceph, and from 2.3.0 also (each endpoint is one of
-those rclone knows for the provider; pick the one of your region):
+DigitalOcean Spaces, Ceph, and from 2.3.0 also the ones below. Each
+endpoint is one of those rclone knows for the provider (pick the one of
+your region), and each region is the one rclone gives for that endpoint:
 
-| Provider | Endpoint, for example |
-|---|---|
-| Akamai / Linode | `https://nl-ams-1.linodeobjects.com` |
-| Alibaba Cloud OSS | `https://oss-eu-central-1.aliyuncs.com` |
-| Hetzner Object Storage | `https://fsn1.your-objectstorage.com` |
-| IBM Cloud Object Storage | `https://s3.eu-de.cloud-object-storage.appdomain.cloud` |
-| IDrive e2 | the endpoint shown with your access key |
-| IONOS Cloud | `https://s3.eu-central-1.ionoscloud.com` |
-| MEGA S4 | `https://s3.eu-amsterdam-1.megas4.com` |
-| OVHcloud | `https://s3.gra.io.cloud.ovh.net` |
-| Scaleway | `https://s3.fr-par.scw.cloud` |
-| SeaweedFS | your server's S3 address, e.g. `http://seaweedfs.lan:8333` |
-| Storj S3 gateway | `https://gateway.storjshare.io` |
-| Synology C2 | `https://eu-001.s3.synologyc2.net` |
-| Other S3-compatible | the service's S3 address |
+| Provider | Endpoint, for example | Region with it |
+|---|---|---|
+| Akamai / Linode | `https://nl-ams-1.linodeobjects.com` | empty |
+| Alibaba Cloud OSS | `https://oss-eu-central-1.aliyuncs.com` | empty |
+| Hetzner Object Storage | `https://fsn1.your-objectstorage.com` | `fsn1` (`hel1`, `nbg1` for the other two) |
+| IBM Cloud Object Storage | `https://s3.eu-de.cloud-object-storage.appdomain.cloud` | empty |
+| IDrive e2 | the endpoint shown with your access key | empty |
+| IONOS Cloud | `https://s3.eu-central-1.ionoscloud.com` | `de`, rclone's name for Frankfurt (for the other endpoints, the name in them: `eu-central-2`, `eu-central-3`, `eu-central-4`, `eu-south-2`, `us-central-1`) |
+| MEGA S4 | `https://s3.eu-amsterdam-1.megas4.com` | empty |
+| OVHcloud | `https://s3.gra.io.cloud.ovh.net` | `gra` (the name in the endpoint: `rbx`, `sbg`, `de`, `uk`, `waw`, …) |
+| Scaleway | `https://s3.fr-par.scw.cloud` | `fr-par` (`nl-ams`, `pl-waw`) |
+| SeaweedFS | your server's S3 address, e.g. `http://seaweedfs.lan:8333` | empty |
+| Storj S3 gateway | `https://gateway.storjshare.io` | empty |
+| Synology C2 | `https://eu-001.s3.synologyc2.net` | `eu-001` (the name in the endpoint: `eu-002`, `us-001`, `us-002`, `tw-001`) |
+| Other S3-compatible | the service's S3 address | as the service documents it |
+
+"Empty" means rclone's own setup asks for no region for that provider,
+or suggests none: leave **Region** empty. rclone then signs requests for
+`us-east-1`, as it does for its own users of those providers. A provider
+that checks the region refuses requests signed for another one, so set it
+wherever the table names one.
 
 ![The S3 form with the provider list open](screenshots/remote-types/05-s3-providers.png)
 
@@ -113,15 +120,15 @@ change, a new file or a read goes to. A union cannot hold a restic
 repository or be another union's member. It keeps checksums only when all
 of its members do ([checksums](#checksums)).
 
+## New in 2.3.0
+
+These types need a **2.3.0 or later worker**
+([older workers](#older-workers)).
+
 ### Encrypted (crypt)
 
 A remote that encrypts files on the worker and stores them in a folder of
 another of your remotes. See [encrypted remotes](encrypted-remotes.md).
-
-## New in 2.3.0
-
-These four types need a **2.3.0 or later worker**
-([older workers](#older-workers)).
 
 ### SMB (Windows share)
 
@@ -178,19 +185,41 @@ can read them. Prefer explicit FTPS when the server offers it, or
 an empty one when you set none. Servers that want an e-mail address as the
 anonymous password refuse an empty one: enter any address then.
 
-**Modification times.** Many FTP servers report no modification times
-rclone can use, and rclone cannot set them on most servers (**Set times
-with MDTM** is for those that can). On such a server:
+**Modification times.** rclone compares FTP files by modification time
+only when the server can both report times (MLSD or MDTM) and set them
+(MFMT). vsftpd sets them with MDTM instead of MFMT: turn on **Set times
+with MDTM** for it. A server that cannot set times keeps none rclone can
+use, even when it lists them (rclone's own `rclone serve ftp` is one). On
+such a server:
 
 - copies, syncs and two-way syncs compare **by size only**, so a file
   changed on the server without changing its size is **not** seen as
   changed, and is not copied or synced;
+- a [backup of a folder of the remote](restic.md#back-up-a-folder-of-a-remote)
+  with the **mirror** method misses the same changes: the mirror keeps
+  the old file, so every later snapshot keeps the old content, and the
+  job still succeeds;
 - a two-way sync with an FTP side warns on every run that "Modtime compare
   was requested but at least one remote does not support it". The run
   still works: new files, size changes and deletions spread both ways.
 
-FTP keeps **no checksums** either ([checksums](#checksums)). For data
-that changes in place, prefer SFTP or WebDAV when the server offers them.
+What to do on such a server:
+
+- Use SFTP or WebDAV instead when the server offers them. On vsftpd, turn
+  on **Set times with MDTM**: rclone then compares times as usual.
+- Back the folder up with the **mount** method. The mount shows restic
+  the times the server lists, and restic reads a file again when its
+  time or size changed. That catches a change to the second on servers
+  that list exact times (MLSD or MDTM), but only to the minute (to the
+  day for files older than about six months) on servers that list times
+  only in their plain listing (LIST).
+- Or keep the mirror method and turn on **Delete the mirror after each
+  run**. The next run still backs up the mirror it has, then deletes it;
+  every run after that downloads the whole folder, and the fresh copy has
+  the times the server lists, so restic sees the same changes as with the
+  mount, at the cost of a full download each time.
+
+FTP keeps **no checksums** either ([checksums](#checksums)).
 
 ### Azure Blob Storage
 
@@ -214,7 +243,7 @@ The other fields:
 | Field | What to enter |
 |---|---|
 | **Container** | The container, optionally with a path prefix: `backups` or `backups/office`. Leave it empty to name the container in each job's path. |
-| **Access tier** (Advanced) | Hot, Cool, Cold or Archive for uploaded blobs; empty keeps the account's default. Blobs in Archive must be rehydrated in Azure before anything can read them, restic included. |
+| **Access tier** (Advanced) | Hot, Cool, Cold or Archive for uploaded blobs; empty keeps the account's default. Blobs in Archive must be rehydrated in Azure before anything can read them, restic included. **Do not choose Archive for a remote that holds a restic repository:** restic reads the repository's own files (its config and keys) on every run, so a repository created there cannot be used until they are rehydrated. |
 | **Endpoint** (Advanced) | Only for other Azure clouds: the **full blob service URL**, such as `https://mystorageaccount.blob.core.chinacloudapi.cn`, not a host name or a suffix. |
 | **Don't check or create the container** (Advanced) | For keys or SAS URLs that may not list or create containers. |
 
@@ -232,8 +261,8 @@ Google Cloud Storage buckets, signed in with a **service account key**.
 | **Bucket** | The bucket, optionally with a path prefix: `syncr-backups` or `syncr-backups/office`. Leave it empty to name the bucket in each job's path. |
 | **Project number** (Advanced) | Needed only to list buckets (an empty **Bucket**) or create them. |
 | **Location**, **Storage class** (Advanced) | Where new buckets are created and the class of new objects; empty for Google's defaults. |
-| **Uniform bucket-level access** (Advanced) | Set it when the bucket uses uniform access; ACLs are then not sent. |
-| **Object ACL**, **Bucket ACL** (Advanced) | Access lists for new objects and buckets; empty for private. |
+| **Uniform bucket-level access** (Advanced) | **On by default.** rclone then sends no access lists (ACLs), so uploads work on buckets with uniform bucket-level access, which the Google Cloud console creates by default and which refuse ACLs, and on buckets with fine-grained access too (new objects then get the bucket's default object ACL). Buckets rclone creates get uniform access. Turn it off only to set the ACLs below on a bucket with fine-grained access. |
+| **Object ACL**, **Bucket ACL** (Advanced) | Access lists for new objects and buckets, only with uniform bucket-level access off; empty for private. |
 | **Endpoint** (Advanced) | Another storage API endpoint, e.g. a private one. Leave it empty normally. |
 
 ![The Google Cloud Storage form](screenshots/remote-types/04-gcs-form.png)
@@ -277,7 +306,8 @@ These keep none:
 
 - **SMB** and **FTP / FTPS** remotes;
 - **encrypted (crypt)** remotes;
-- a **union** with at least one member of those types.
+- a **union** with an SMB or FTP member (an encrypted remote is never a
+  union member).
 
 With such a side, the editors do not offer checksum comparison and say
 "This remote keeps no checksums", naming it; the API refuses it with

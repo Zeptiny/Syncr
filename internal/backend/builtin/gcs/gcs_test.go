@@ -2,6 +2,7 @@ package gcs_test
 
 import (
 	"encoding/json"
+	"maps"
 	"strings"
 	"testing"
 
@@ -77,6 +78,16 @@ func TestValidateKey(t *testing.T) {
 		{"token_uri in other case", key(t, map[string]any{"token_uri": strings.ToUpper(gcs.TokenURI)}), "token_uri must be"},
 		{"token_uri not a string", key(t, map[string]any{"token_uri": 7}), "is not a JSON key file"},
 		{"a second token_uri", strings.Replace(valid, "{", `{"TOKEN_URI": "http://evil.example/token",`, 1), "names a field twice"},
+		// encoding/json matches names as strings.EqualFold does: the Kelvin
+		// sign is a "k", the long s an "s".
+		{"token_uri spelled with the Kelvin sign", key(t, map[string]any{"token_uri": nil, "to\u212aen_uri": "http://evil.example/token"}),
+			"token_uri must be " + gcs.TokenURI},
+		{"a second token_uri with the Kelvin sign", key(t, map[string]any{"to\u212aen_uri": "http://evil.example/token"}), "names a field twice"},
+		{"a second universe_domain with a long s", key(t, map[string]any{"universe_domain": "googleapis.com", "univer\u017fe_domain": "evil.example"}),
+			"names a field twice"},
+		// Names encoding/json never takes for a field's are not duplicates.
+		{"a name with a dotted capital I", key(t, map[string]any{"token_ur\u0130": "http://evil.example/token"}), ""},
+		{"a name with a dash", key(t, map[string]any{"token-uri": "http://evil.example/token"}), ""},
 	} {
 		err := gcs.Type{}.Validate(backend.Config{Secrets: map[string]string{"service_account_credentials": tt.key}})
 		if tt.wantErr == "" {
@@ -148,5 +159,33 @@ func TestSentinelSecret(t *testing.T) {
 	}
 	if _, ok := (gcs.Type{}).SentinelSecret("other", "x"); ok {
 		t.Error("SentinelSecret answers for another field")
+	}
+}
+
+// TestUniformAccessByDefault: without a choice, the remote asks rclone for
+// uniform bucket-level access (bucket_policy_only), so rclone sends no ACL
+// that a bucket with uniform access would refuse; turned off, it is sent
+// as "false" with the ACLs.
+func TestUniformAccessByDefault(t *testing.T) {
+	t.Parallel()
+	k := key(t, nil)
+	for _, tt := range []struct {
+		opts map[string]string
+		want map[string]string
+	}{
+		{map[string]string{"bucket": "b"}, map[string]string{"bucket_policy_only": "true"}},
+		{map[string]string{"bucket": "b", "bucket_policy_only": "true"}, map[string]string{"bucket_policy_only": "true"}},
+		{map[string]string{"bucket": "b", "bucket_policy_only": "false", "object_acl": "publicRead"},
+			map[string]string{"bucket_policy_only": "false", "object_acl": "publicRead"}},
+	} {
+		r, err := gcs.Type{}.ToRclone(backend.Config{Options: tt.opts, Secrets: map[string]string{"service_account_credentials": k}})
+		if err != nil || !maps.Equal(r.Options, tt.want) {
+			t.Errorf("ToRclone(%v) options = %v (%v), want %v", tt.opts, r.Options, err, tt.want)
+		}
+	}
+	for _, f := range (gcs.Type{}).Fields() {
+		if f.Name == "bucket_policy_only" && f.Default != "true" {
+			t.Errorf("bucket_policy_only defaults to %q, want true", f.Default)
+		}
 	}
 }

@@ -110,6 +110,16 @@ describe("forms of the remote types", () => {
       options: { bucket: "backups" },
       secrets: { service_account_credentials: '{\n  "type": "service_account"\n}' },
     });
+    expect(onSubmit.mock.calls[0][0].options).not.toHaveProperty("bucket_policy_only");
+
+    // Uniform bucket-level access is on unless turned off.
+    await user.click(screen.getByRole("button", { name: /Advanced options/ }));
+    const uniform = screen.getByRole("switch", { name: /Uniform bucket-level access/ });
+    expect(uniform).toBeChecked();
+    await user.click(uniform);
+    await user.click(screen.getByRole("button", { name: "Create remote" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    expect(onSubmit.mock.calls[1][0].options).toMatchObject({ bucket_policy_only: "false" });
   });
 
   it("lists the S3 providers, Other last", async () => {

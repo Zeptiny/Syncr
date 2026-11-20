@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
 	"github.com/Zeptiny/Syncr/internal/app/remotes"
+	"github.com/Zeptiny/Syncr/internal/app/restic"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/backend"
 	"github.com/Zeptiny/Syncr/internal/backend/builtin"
@@ -195,6 +197,65 @@ func TestRemoteTypesNeedTheFeature(t *testing.T) {
 		}
 		if d := nas.specs[fine.ID.String()].GetRemotes(); len(d) != 1 || d[0].GetBackendType() != id {
 			t.Errorf("%s: sent remotes = %v", id, d)
+		}
+	}
+}
+
+// TestSpecsResticOnRemoteTypesNeedTheirFeature: the restic kinds follow
+// the same rule as transfers. A backup into a repository on Google Cloud
+// Storage, and a backup of a folder of an SMB remote (into a repository
+// on S3), go to a worker that reports the type's link feature, and are a
+// *RemoteFeatureError (worker_outdated) for one that does not.
+func TestSpecsResticOnRemoteTypesNeedTheirFeature(t *testing.T) {
+	t.Parallel()
+	rs := newFakeRemotes()
+	gcsRemote, smbRemote := rs.addTyped(t, "gcs"), rs.addTyped(t, "smb")
+	onGCS, onS3 := domain.NewResticRepoID(), domain.NewResticRepoID()
+	repos := map[domain.ResticRepoID]domain.RemoteID{onGCS: gcsRemote, onS3: testRemote()}
+	resolve := func(id domain.ResticRepoID) dispatch.Repos {
+		return &fakeRepos{repo: restic.Resolved{
+			ID: id, OwnerID: testOwner, Name: "Photos", RemoteID: repos[id], Path: "restic/photos",
+			Password: testRepoPassword, ResticID: strings.Repeat("ab", 32),
+		}}
+	}
+	mirror := syncrv1.ResticRemoteSourceMethod_RESTIC_REMOTE_SOURCE_METHOD_MIRROR
+	for _, tt := range []struct {
+		name    string
+		repo    domain.ResticRepoID
+		def     *syncrv1.JobDefinition
+		backend string // the backend whose feature is missing
+	}{
+		{"a backup into a repository on GCS", onGCS, &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticBackup{
+			ResticBackup: &syncrv1.ResticBackupDefinition{RepositoryId: onGCS.String(), Paths: []string{"/data/photos"}},
+		}}, "gcs"},
+		{"a backup of a folder of an SMB remote", onS3, &syncrv1.JobDefinition{Operation: &syncrv1.JobDefinition_ResticBackup{
+			ResticBackup: &syncrv1.ResticBackupDefinition{
+				RepositoryId: onS3.String(),
+				RemoteSource: &syncrv1.ResticRemoteSourceDefinition{RemoteId: smbRemote.String(), Path: "photos", Method: mirror},
+			},
+		}}, "smb"},
+	} {
+		specs, err := dispatch.NewSpecs(rs, resolve(tt.repo), kinds(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		j := storedJob(t, tt.def)
+		feature := remoteTypeFeatures()[tt.backend]
+		info := func(features []string) workers.Info {
+			return workers.Info{Features: features, RemoteSources: workers.RemoteSources{Mirror: true}}
+		}
+		spec, err := specs.Build(context.Background(), j, info(link.Features()))
+		if err != nil {
+			t.Errorf("%s: Build on a current worker = %v", tt.name, err)
+			continue
+		}
+		if !slices.ContainsFunc(spec.GetRemotes(), func(d *syncrv1.RemoteDefinition) bool { return d.GetBackendType() == tt.backend }) {
+			t.Errorf("%s: the spec defines no %s remote: %v", tt.name, tt.backend, spec.GetRemotes())
+		}
+		_, err = specs.Build(context.Background(), j, info(without(feature)))
+		var rf *dispatch.RemoteFeatureError
+		if !errors.As(err, &rf) || rf.Backend != tt.backend || rf.Feature != feature || !errors.Is(err, dispatch.ErrWorkerOutdated) {
+			t.Errorf("%s: Build on a worker without %s = %v, want a RemoteFeatureError", tt.name, feature, err)
 		}
 	}
 }

@@ -413,7 +413,7 @@ func (b *Builder) addRemote(env *Env, def *syncrv1.RemoteDefinition) ([]string, 
 	}
 
 	for _, key := range sortedKeys(def.GetOptions()) {
-		if isCrypt && cryptPassword(key) {
+		if revealedSecret(backend, key) {
 			return nil, fmt.Errorf("option %q must be a secret listed in obscure_keys", key)
 		}
 		if err := checkLine(backend, key, def.GetOptions()[key], "option"); err != nil {
@@ -443,9 +443,10 @@ func (b *Builder) addRemote(env *Env, def *syncrv1.RemoteDefinition) ([]string, 
 		if err := checkLine(backend, key, value, "secret"); err != nil {
 			return nil, err
 		}
-		if isCrypt && cryptPassword(key) && !obscure[key] {
+		if revealedSecret(backend, key) && !obscure[key] {
 			// rclone reveals the value as it comes: a plain password would
-			// fail, or (when it happens to decode) silently become another.
+			// fail, or (when it happens to decode) silently become another,
+			// one that checkLine never saw.
 			return nil, fmt.Errorf("secret %q must be listed in obscure_keys", key)
 		}
 		secrets = append(secrets, value)
@@ -657,11 +658,27 @@ func checkOption(backend, key string) error {
 	return nil
 }
 
-// cryptPassword reports whether key (an option or secret key) is one of
-// crypt's passwords, which rclone reads only in their obscured form.
-func cryptPassword(key string) bool {
+// revealedSecrets are the keys of backend that rclone reads only in their
+// obscured form (it reveals them as they come): crypt's passwords, and
+// the ftp and smb passwords. Such a key must be a secret listed in
+// obscure_keys, so the worker obscures it itself and its checks
+// (checkLine) see the plain value rclone will use. Earlier types keep
+// their behavior: their plain secrets are not refused here.
+func revealedSecrets(backend string) []string {
+	switch backend {
+	case "crypt":
+		return []string{"password", "password2"}
+	case "ftp", "smb":
+		return []string{"pass"}
+	}
+	return nil
+}
+
+// revealedSecret reports whether key (an option or secret key, in any case
+// or dash spelling) is one of backend's revealedSecrets.
+func revealedSecret(backend, key string) bool {
 	name := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
-	return name == "password" || name == "password2"
+	return slices.Contains(revealedSecrets(backend), name)
 }
 
 // wrappedLocation validates where the crypt remote self stores its data:

@@ -51,7 +51,9 @@ func (Type) Fields() []backend.Field {
 		}},
 		{Name: "access_key_id", Label: "Access key ID", Kind: backend.KindString, Required: true},
 		{Name: "secret_access_key", Label: "Secret access key", Kind: backend.KindString, Required: true, Secret: true},
-		{Name: "region", Label: "Region", Kind: backend.KindString, Placeholder: "us-east-1"},
+		{Name: "region", Label: "Region", Kind: backend.KindString, Placeholder: "us-east-1",
+			Help: "The region of your endpoint, as your provider names it (Hetzner fsn1, Scaleway fr-par, OVHcloud gra). " +
+				"Empty signs requests for us-east-1."},
 		{Name: "endpoint", Label: "Endpoint", Kind: backend.KindString, Placeholder: "https://s3.example.com",
 			Help: "Required unless the provider is AWS: without one, rclone sends every request to AWS. " +
 				"Your provider's documentation lists its endpoints (they often depend on the region)."},

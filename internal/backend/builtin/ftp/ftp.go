@@ -14,8 +14,10 @@
 //     ToRclone therefore always sends "pass" as an obscured secret, empty
 //     for anonymous FTP.
 //
-// rclone keeps no checksums on FTP (and most servers keep no modification
-// times), so the type is NoChecksum.
+// rclone keeps no checksums on FTP, so the type is NoChecksum. It compares
+// modification times only on servers that can both report them (MLSD or
+// MDTM) and set them (MFMT, or MDTM with writing_mdtm, as vsftpd does);
+// on any other server it compares sizes only.
 package ftp
 
 import (
@@ -54,7 +56,7 @@ func (Type) Fields() []backend.Field {
 		{Name: "pass", Label: "Password", Kind: backend.KindString, Secret: true, Obscure: true,
 			Help: "Without TLS the password crosses the network in clear."},
 		{Name: "tls", Label: "Implicit FTPS", Kind: backend.KindBool,
-			Help: "Implicit FTPS (usually port 990: set the port under advanced settings)."},
+			Help: "Implicit FTPS (usually port 990: set the port under Advanced options)."},
 		{Name: "explicit_tls", Label: "Explicit FTPS", Kind: backend.KindBool,
 			Help: "Explicit FTPS (STARTTLS on port 21)."},
 		{Name: "path", Label: "Base path", Kind: backend.KindString, Rclone: backend.NotRclone,
@@ -69,7 +71,7 @@ func (Type) Fields() []backend.Field {
 		{Name: "disable_mlsd", Label: "Disable MLSD", Kind: backend.KindBool, Advanced: true,
 			Help: "For servers whose MLSD listings are broken."},
 		{Name: "writing_mdtm", Label: "Set times with MDTM", Kind: backend.KindBool, Advanced: true,
-			Help: "For servers that set modification times with MDTM."},
+			Help: "For servers such as vsftpd that set modification times with MDTM instead of MFMT."},
 	}
 }
 

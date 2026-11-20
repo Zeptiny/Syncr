@@ -1574,7 +1574,7 @@ const remoteTypesShots = [
   ["02-smb-form", tall, smbForm],
   [
     "03-azure-form",
-    tall,
+    { height: 1160 },
     (p) =>
       typeForm(p, "azureblob", {
         name: "Azure cold storage",

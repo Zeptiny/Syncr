@@ -6,6 +6,13 @@
 // refuses such a remote too). rclone posts the signed sign-in request to
 // the key's token_uri, whatever it names, so Validate accepts only
 // Google's token endpoint there.
+//
+// Uniform bucket-level access (rclone's bucket_policy_only) is on by
+// default. Without it rclone sends an ACL ("predefinedAcl=private") with
+// every upload and new bucket, which buckets with uniform access (what the
+// Google Cloud console creates by default) refuse; with it, rclone sends
+// none, which buckets with fine-grained access accept too (checked with
+// rclone 1.75.2 against a local listener).
 package gcs
 
 import (
@@ -14,6 +21,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"unicode"
 
 	"github.com/Zeptiny/Syncr/internal/backend"
 	"github.com/Zeptiny/Syncr/internal/domain"
@@ -69,10 +77,12 @@ func (Type) Fields() []backend.Field {
 				{Value: "NEARLINE", Label: "Nearline"}, {Value: "COLDLINE", Label: "Coldline"},
 				{Value: "ARCHIVE", Label: "Archive"}, {Value: "DURABLE_REDUCED_AVAILABILITY", Label: "Durable reduced availability"},
 			}},
-		{Name: "bucket_policy_only", Label: "Uniform bucket-level access", Kind: backend.KindBool, Advanced: true,
-			Help: "Set it when the bucket uses uniform bucket-level access; object and bucket ACLs are then not sent."},
+		{Name: "bucket_policy_only", Label: "Uniform bucket-level access", Kind: backend.KindBool, Default: "true", Advanced: true,
+			Help: "On: no ACLs are sent, so uploads work on buckets with uniform bucket-level access (the Google Cloud console's " +
+				"default) and on others, and new buckets get uniform access. Turn it off only to set the ACLs below on a bucket " +
+				"with fine-grained access."},
 		{Name: "object_acl", Label: "Object ACL", Kind: backend.KindEnum, Advanced: true,
-			Help: "The access control list of new objects; empty for private.",
+			Help: "The access control list of new objects, only with uniform bucket-level access off; empty for private.",
 			Choices: []backend.Choice{
 				{Value: "authenticatedRead", Label: "Authenticated users can read"},
 				{Value: "bucketOwnerFullControl", Label: "Bucket owner has full control"},
@@ -82,7 +92,7 @@ func (Type) Fields() []backend.Field {
 				{Value: "publicRead", Label: "Anyone can read"},
 			}},
 		{Name: "bucket_acl", Label: "Bucket ACL", Kind: backend.KindEnum, Advanced: true,
-			Help: "The access control list of new buckets; empty for private.",
+			Help: "The access control list of new buckets, only with uniform bucket-level access off; empty for private.",
 			Choices: []backend.Choice{
 				{Value: "authenticatedRead", Label: "Authenticated users can read"},
 				{Value: "private", Label: "Private"},
@@ -161,11 +171,11 @@ type serviceAccountKey struct {
 }
 
 // checkKey returns why key is not a usable service account key, or "": it
-// must be one JSON object without repeated names (compared regardless of
-// case, as encoding/json matches them, so that no second "token_uri" can
-// hide behind the first), of type "service_account", with a client_email
-// and a private_key, and with a token_uri that is absent or TokenURI. The
-// message never contains any part of the key.
+// must be one JSON object without repeated names (compared as
+// encoding/json matches them, see foldName, so that no second "token_uri"
+// can hide behind the first), of type "service_account", with a
+// client_email and a private_key, and with a token_uri that is absent or
+// TokenURI. The message never contains any part of the key.
 func checkKey(key string) string {
 	const notJSON = "is not a JSON key file: paste the whole file as it is"
 	names, ok := objectNames(key)
@@ -174,11 +184,11 @@ func checkKey(key string) string {
 	}
 	seen := map[string]bool{}
 	for _, n := range names {
-		l := strings.ToLower(n)
-		if seen[l] {
+		f := foldName(n)
+		if seen[f] {
 			return "names a field twice"
 		}
-		seen[l] = true
+		seen[f] = true
 	}
 	var k serviceAccountKey
 	if err := json.Unmarshal([]byte(key), &k); err != nil {
@@ -195,6 +205,30 @@ func checkKey(key string) string {
 		return "token_uri must be " + TokenURI
 	}
 	return ""
+}
+
+// foldName returns a key such that foldName(a) == foldName(b) exactly when
+// strings.EqualFold(a, b): every rune becomes the smallest rune of its
+// Unicode simple case folding orbit ("K", "k" and the Kelvin sign all
+// become "K"). encoding/json sets a field from a member whose name is
+// EqualFold to the field's (the last such member wins), and from no other,
+// so two names with the same key could set the same field, in Syncr as in
+// rclone.
+func foldName(name string) string {
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				r = next
+				break
+			}
+			r = next
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // objectNames returns the member names of the JSON object s, which must be
@@ -292,7 +326,7 @@ func (Type) Examples() []backend.Config {
 		{
 			Options: map[string]string{
 				"bucket": "example-archive/syncr", "project_number": "123456789012", "location": "europe-west3",
-				"storage_class": "NEARLINE", "bucket_policy_only": "true", "object_acl": "private", "bucket_acl": "private",
+				"storage_class": "NEARLINE", "bucket_policy_only": "false", "object_acl": "private", "bucket_acl": "private",
 				"endpoint": "https://storage.googleapis.com",
 			},
 			Secrets: map[string]string{keyField: exampleKey("", false)},

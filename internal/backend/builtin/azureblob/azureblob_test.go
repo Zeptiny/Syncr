@@ -110,3 +110,50 @@ func TestToRclone(t *testing.T) {
 		t.Errorf("ToRclone = %+v, %v; want %+v", got, err, want)
 	}
 }
+
+// TestValidateAccount: the account name follows Azure's rule (3 to 24
+// lowercase letters and digits), since rclone puts it into the service's
+// host name (https://<account>.blob.core.windows.net). The message never
+// repeats the name.
+func TestValidateAccount(t *testing.T) {
+	t.Parallel()
+	key := map[string]string{"key": "account-key-value"}
+	sas := map[string]string{"sas_url": "https://acct.blob.core.windows.net/c?sig=x"}
+	for _, tt := range []struct {
+		account string
+		secrets map[string]string
+		ok      bool
+	}{
+		{"abc", key, true},
+		{"mystorageaccount", key, true},
+		{"0123456789abcdefghijklmn", key, true}, // 24
+		{"backups2026", sas, true},
+		{"ab", key, false},
+		{"0123456789abcdefghijklmno", key, false}, // 25
+		{"MyStorage", key, false},
+		{"my-storage", key, false},
+		{"my_storage", key, false},
+		{"acct.evil.example", key, false},
+		{"127.0.0.1:8080/x?", key, false},
+		{"acct@host", sas, false},
+		{"acct ", key, false},
+		{"ácct", key, false},
+	} {
+		err := azureblob.Type{}.Validate(backend.Config{Options: map[string]string{"account": tt.account}, Secrets: tt.secrets})
+		if tt.ok {
+			if err != nil {
+				t.Errorf("%q: Validate = %v, want it accepted", tt.account, err)
+			}
+			continue
+		}
+		var verr *domain.ValidationError
+		if !errors.As(err, &verr) || len(verr.Fields) != 1 || verr.Fields[0].Field != "options.account" ||
+			!strings.Contains(err.Error(), "3 to 24 lowercase letters and digits") {
+			t.Errorf("%q: Validate = %v, want an error on options.account", tt.account, err)
+			continue
+		}
+		if strings.Contains(err.Error(), tt.account) {
+			t.Errorf("%q: the error repeats the account name: %v", tt.account, err)
+		}
+	}
+}

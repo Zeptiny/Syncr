@@ -87,7 +87,7 @@ export const backends: Backend[] = [
     fields: [
       f("account", "Storage account", FieldKind.STRING, {
         placeholder: "mystorageaccount",
-        help: "The storage account name. Required unless you sign in with a SAS URL.",
+        help: "The storage account name: 3 to 24 lowercase letters and digits. Required unless you sign in with a SAS URL.",
       }),
       f("key", "Account key", FieldKind.STRING, {
         secret: true,
@@ -108,7 +108,7 @@ export const backends: Backend[] = [
       f("client_secret", "Client secret", FieldKind.STRING, { secret: true, advanced: true }),
       f("access_tier", "Access tier", FieldKind.ENUM, {
         advanced: true,
-        help: "The tier of uploaded blobs; empty keeps the account's default.",
+        help: "The tier of uploaded blobs; empty keeps the account's default. Archive blobs cannot be read until they are rehydrated in Azure: not for a remote that holds a restic repository.",
         choices: [
           { value: "hot", label: "Hot" },
           { value: "cool", label: "Cool" },
@@ -217,7 +217,7 @@ export const backends: Backend[] = [
         help: "Without TLS the password crosses the network in clear.",
       }),
       f("tls", "Implicit FTPS", FieldKind.BOOL, {
-        help: "Implicit FTPS (usually port 990: set the port under advanced settings).",
+        help: "Implicit FTPS (usually port 990: set the port under Advanced options).",
       }),
       f("explicit_tls", "Explicit FTPS", FieldKind.BOOL, {
         help: "Explicit FTPS (STARTTLS on port 21).",
@@ -244,7 +244,7 @@ export const backends: Backend[] = [
       }),
       f("writing_mdtm", "Set times with MDTM", FieldKind.BOOL, {
         advanced: true,
-        help: "For servers that set modification times with MDTM.",
+        help: "For servers such as vsftpd that set modification times with MDTM instead of MFMT.",
       }),
     ],
   }),
@@ -323,11 +323,12 @@ export const backends: Backend[] = [
       }),
       f("bucket_policy_only", "Uniform bucket-level access", FieldKind.BOOL, {
         advanced: true,
-        help: "Set it when the bucket uses uniform bucket-level access; object and bucket ACLs are then not sent.",
+        defaultValue: "true",
+        help: "On: no ACLs are sent, so uploads work on buckets with uniform bucket-level access (the Google Cloud console's default) and on others, and new buckets get uniform access. Turn it off only to set the ACLs below on a bucket with fine-grained access.",
       }),
       f("object_acl", "Object ACL", FieldKind.ENUM, {
         advanced: true,
-        help: "The access control list of new objects; empty for private.",
+        help: "The access control list of new objects, only with uniform bucket-level access off; empty for private.",
         choices: [
           { value: "authenticatedRead", label: "Authenticated users can read" },
           { value: "bucketOwnerFullControl", label: "Bucket owner has full control" },
@@ -339,7 +340,7 @@ export const backends: Backend[] = [
       }),
       f("bucket_acl", "Bucket ACL", FieldKind.ENUM, {
         advanced: true,
-        help: "The access control list of new buckets; empty for private.",
+        help: "The access control list of new buckets, only with uniform bucket-level access off; empty for private.",
         choices: [
           { value: "authenticatedRead", label: "Authenticated users can read" },
           { value: "private", label: "Private" },
@@ -403,7 +404,10 @@ export const backends: Backend[] = [
         required: true,
         secret: true,
       }),
-      f("region", "Region", FieldKind.STRING, { placeholder: "us-east-1" }),
+      f("region", "Region", FieldKind.STRING, {
+        placeholder: "us-east-1",
+        help: "The region of your endpoint, as your provider names it (Hetzner fsn1, Scaleway fr-par, OVHcloud gra). Empty signs requests for us-east-1.",
+      }),
       f("endpoint", "Endpoint", FieldKind.STRING, {
         placeholder: "https://minio.example.com",
         help: "Required unless the provider is AWS: without one, rclone sends every request to AWS. Your provider's documentation lists its endpoints (they often depend on the region).",

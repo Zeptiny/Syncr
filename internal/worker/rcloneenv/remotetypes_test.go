@@ -2,6 +2,8 @@ package rcloneenv
 
 import (
 	"errors"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -235,9 +237,9 @@ func TestNewTypeOptionsDenied(t *testing.T) {
 		{az("service_principal_file", "/etc/sp.json"), "service_principal_file", "reads a local file"},
 		{az("tenant", "t", "client_id", "c", "client_certificate_path", "/etc/cert.pem"), "client_certificate_path", "reads a local file"},
 		{gcs("env_auth", "true"), "env_auth", "host's credentials"},
-		{gcs("service_account_file", "/root/.config/gcloud/key.json"), "service_account_file", "reads a local file"},
+		{gcs("service_account_file", "gcloud-key.json"), "service_account_file", "reads a local file"},
 		{smb("use_kerberos", "true"), "use_kerberos", "Kerberos"},
-		{smb("kerberos_ccache", "FILE:/tmp/krb5cc_0"), "kerberos_ccache", "reads a local file"},
+		{smb("kerberos_ccache", "FILE:krb5cc"), "kerberos_ccache", "reads a local file"},
 		{ftp("config_file", "/etc/x"), "config_file", "reads a local file"},
 	}
 	for _, tt := range tests {
@@ -247,7 +249,7 @@ func TestNewTypeOptionsDenied(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.because) || !strings.Contains(err.Error(), strconv.Quote(tt.key)) {
 				t.Fatalf("Remotes = %v, want an error naming %q and %q", err, tt.key, tt.because)
 			}
-			if strings.Contains(err.Error(), "/etc/") || strings.Contains(err.Error(), "FILE:") {
+			if strings.Contains(err.Error(), "/etc/") || strings.Contains(err.Error(), "FILE:") || strings.Contains(err.Error(), "gcloud-key") {
 				t.Errorf("error message leaks a value: %v", err)
 			}
 		})
@@ -292,6 +294,72 @@ func TestFTPLineBreaksRefused(t *testing.T) {
 	} {
 		if _, err := NewBuilder(nil).Remotes([]*syncrv1.RemoteDefinition{def}); err != nil {
 			t.Errorf("%s: %v, want it accepted", name, err)
+		}
+	}
+}
+
+// TestRevealedPasswordsMustBeObscured checks the ftp and smb passwords,
+// which rclone reveals as they come: the worker accepts them only as
+// secrets listed in obscure_keys, so it obscures them itself and
+// checkLine sees the value rclone uses. Sent already obscured, as an
+// option or as a secret not listed in obscure_keys, an ftp password with a
+// line break would pass checkLine and reach the server as extra commands
+// ("PASS pw", then "DELE important.txt").
+func TestRevealedPasswordsMustBeObscured(t *testing.T) {
+	t.Parallel()
+	hidden, err := Obscure("pw\r\nDELE important.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := Obscure("TOP-SECRET-VALUE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ftp := func(opts ...func(*syncrv1.RemoteDefinition)) *syncrv1.RemoteDefinition {
+		return remote("ff", "ftp", append([]func(*syncrv1.RemoteDefinition){withOptions("host", "h", "user", "u")}, opts...)...)
+	}
+	smb := func(opts ...func(*syncrv1.RemoteDefinition)) *syncrv1.RemoteDefinition {
+		return remote("ss", "smb", append([]func(*syncrv1.RemoteDefinition){withOptions("host", "h", "user", "u")}, opts...)...)
+	}
+	tests := []struct {
+		name string
+		def  *syncrv1.RemoteDefinition
+		want string
+	}{
+		{"ftp pass as an option", ftp(withOptions("host", "h", "user", "u", "pass", hidden)), `option "pass" must be a secret listed in obscure_keys`},
+		{"ftp PASS as an option", ftp(withOptions("host", "h", "user", "u", "PASS", hidden)), `option "PASS" must be a secret listed in obscure_keys`},
+		{"ftp pass, a secret not in obscure_keys", ftp(withSecrets("pass", hidden)), `secret "pass" must be listed in obscure_keys`},
+		{"ftp Pass, a secret not in obscure_keys", ftp(withSecrets("Pass", hidden)), `secret "Pass" must be listed in obscure_keys`},
+		{"ftp pass, another key obscured", ftp(withSecrets("pass", plain, "description", "x"), withObscure("description")), `secret "pass" must be listed in obscure_keys`},
+		{"smb pass as an option", smb(withOptions("host", "h", "user", "u", "pass", plain)), `option "pass" must be a secret listed in obscure_keys`},
+		{"smb pass, a secret not in obscure_keys", smb(withSecrets("pass", plain)), `secret "pass" must be listed in obscure_keys`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := NewBuilder(nil).Remotes([]*syncrv1.RemoteDefinition{tt.def})
+			if err == nil || !strings.Contains(err.Error(), tt.want) || !errors.Is(err, ErrInvalidRemote) {
+				t.Fatalf("Remotes = %v, want an invalid remote error with %q", err, tt.want)
+			}
+			if strings.Contains(err.Error(), hidden) || strings.Contains(err.Error(), plain) {
+				t.Errorf("error message leaks a value: %v", err)
+			}
+		})
+	}
+
+	// Other backends' passwords keep their behavior: a plain secret or an
+	// option is passed on unchanged.
+	for name, def := range map[string]*syncrv1.RemoteDefinition{
+		"sftp pass, not obscured":  remote("box", "sftp", withSecrets("pass", plain)),
+		"webdav pass as an option": remote("dd", "webdav", withOptions("url", "https://dav.example.com", "pass", plain)),
+	} {
+		env, err := NewBuilder(nil).Remotes([]*syncrv1.RemoteDefinition{def})
+		if err != nil {
+			t.Errorf("%s: %v, want it accepted", name, err)
+			continue
+		}
+		if !slices.Contains(slices.Collect(maps.Values(env.Vars())), plain) {
+			t.Errorf("%s: the password did not reach rclone unchanged", name)
 		}
 	}
 }
