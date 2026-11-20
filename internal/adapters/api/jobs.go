@@ -54,6 +54,9 @@ type jobHandler struct {
 	// remotes names the jobs' remotes (Job.remotes); nil leaves the
 	// references without names.
 	remotes RemoteNames
+	// infos tells RunJob's definition checks what its remotes are
+	// (jobkind's Registry.CheckWith); nil checks without them.
+	infos RemoteInfos
 	// schedules names the jobs' schedules (Job.schedule); nil leaves it
 	// unset (schedule_id is still set).
 	schedules ScheduleNames
@@ -365,6 +368,11 @@ func (h *jobHandler) RunJob(ctx context.Context, req *connect.Request[syncrv1.Ru
 	}
 	if fe, wrong := unusableSourceMethod(ctx, h.workers, workerID, def, "worker_id"); wrong {
 		return nil, h.fail(ctx, procedure, &domain.ValidationError{Fields: []domain.FieldError{fe}})
+	}
+	// What the remotes are (a remote that keeps no checksums, an encrypted
+	// remote's folder): its checks, and the concurrency keys through it.
+	if refs, err = checkWithRemotes(ctx, h.kinds, h.infos, actor.UserID, def, refs); err != nil {
+		return nil, h.fail(ctx, procedure, err)
 	}
 	encoded, err := jobkind.Marshal(def)
 	if err != nil {

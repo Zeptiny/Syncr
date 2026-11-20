@@ -83,16 +83,6 @@ SELECT id FROM remotes WHERE id = sqlc.arg(id)::uuid AND deleted_at IS NULL FOR 
 UPDATE remotes SET deleted_at = sqlc.arg(deleted_at)::timestamptz, secrets_enc = NULL, version = version + 1
 WHERE id = sqlc.arg(id)::uuid AND deleted_at IS NULL;
 
--- name: ListUnionsUsing :many
--- Superseded by ListRemotesUsing, which also lists wrappers.
-SELECT r.* FROM remotes r
-WHERE r.deleted_at IS NULL
-  AND EXISTS (
-      SELECT 1 FROM union_members m
-      WHERE m.union_remote_id = r.id AND m.member_remote_id = sqlc.arg(member_remote_id)::uuid
-  )
-ORDER BY lower(r.name) COLLATE "C", r.id;
-
 -- name: ListRemotesUsing :many
 -- The live remotes that use a remote: unions that have it as a member and
 -- wrappers that store their data in it. DeleteRemote runs it in its

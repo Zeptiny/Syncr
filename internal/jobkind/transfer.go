@@ -31,14 +31,21 @@ const (
 // transferField is the field path of the transfer in a definition.
 const transferField = "definition.rclone_transfer"
 
+// NoChecksumMessage is the field error of a checksum comparison (a
+// transfer's options.checksum, a two-way sync's compare) with a side on a
+// remote that keeps no checksums (Remote.NoChecksum, RemoteInfo.NoChecksum).
+// It names no remote type: any type may keep no checksums.
+const NoChecksumMessage = "is not available: a remote that keeps no checksums"
+
 // Transfer is the "rclone_transfer" kind: an rclone copy, sync or move
 // between two locations, each on one of the owner's remotes or on the
 // worker's filesystem.
 type Transfer struct{}
 
 var (
-	_ Kind    = Transfer{}
-	_ Labeled = Transfer{}
+	_ Kind          = Transfer{}
+	_ Labeled       = Transfer{}
+	_ RemoteChecker = Transfer{}
 )
 
 // Name implements Kind.
@@ -89,9 +96,42 @@ func (Transfer) Check(def *syncrv1.JobDefinition) (Refs, error) {
 	return refs, nil
 }
 
+// CheckRemotes implements RemoteChecker: options.checksum is refused
+// (NoChecksumMessage) when the source or the destination is on a remote
+// that keeps no checksums: rclone would fall back to comparing sizes only,
+// which the user did not ask for.
+func (Transfer) CheckRemotes(def *syncrv1.JobDefinition, infos map[domain.RemoteID]RemoteInfo) error {
+	tr := def.GetRcloneTransfer()
+	if tr.GetOptions().GetChecksum() && slices.ContainsFunc(sideRemotes(tr.GetSource(), tr.GetDestination()), func(id domain.RemoteID) bool {
+		return infos[id].NoChecksum
+	}) {
+		return invalid(transferField+".options.checksum", NoChecksumMessage)
+	}
+	return nil
+}
+
+// sideRemotes returns the remotes the locations are on, as checked
+// (worker paths and invalid IDs are left out).
+func sideRemotes(locs ...*syncrv1.JobLocation) []domain.RemoteID {
+	var out []domain.RemoteID
+	for _, l := range locs {
+		if id, err := domain.ParseRemoteID(l.GetRemoteId()); err == nil && !id.IsZero() {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// noChecksum reports whether any of the locations is on a resolved remote
+// that keeps no checksums.
+func (s *specRemotes) noChecksum(locs ...*syncrv1.JobLocation) bool {
+	return slices.ContainsFunc(sideRemotes(locs...), func(id domain.RemoteID) bool { return s.remotes[id].NoChecksum })
+}
+
 // Build implements Kind: the transfer with its two locations on the
-// aliased remotes (see the package documentation). It uses in.Remotes
-// only.
+// aliased remotes (see the package documentation). It repeats
+// CheckRemotes's refusal of a checksum comparison with the resolved
+// remotes (Remote.NoChecksum). It uses in.Remotes only.
 func (k Transfer) Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.JobSpec, error) {
 	// Stored definitions are checked again: a spec is never built from a
 	// definition the current rules reject.
@@ -103,6 +143,9 @@ func (k Transfer) Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.JobSp
 	rs, err := newSpecRemotes(refs.RemoteIDs, in.Remotes)
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", k.Name(), err)
+	}
+	if tr.GetOptions().GetChecksum() && rs.noChecksum(tr.GetSource(), tr.GetDestination()) {
+		return nil, fmt.Errorf("build %s: %w", k.Name(), invalid(transferField+".options.checksum", NoChecksumMessage))
 	}
 	src, err := rs.location(transferField+".source", tr.GetSource())
 	if err != nil {

@@ -19,12 +19,16 @@ import (
 // Compile-time check that Store implements the remotes port.
 var _ remotes.Repository = (*Store)(nil)
 
-// Remotes live in two tables: remotes, and union_members (a union's members
-// in order). Every change of a remote and its member rows runs in one
-// transaction (inTx). A member row is only inserted while its member remote
-// is live, under a FOR SHARE lock, and DeleteRemote locks the remote FOR
-// UPDATE before it checks the unions using it, so a remote can never be
-// deleted while it is, or is becoming, a member of a live union.
+// Remotes live in two tables: remotes (with a wrapper's wrapped remote and
+// path in wrapped_remote_id and wrapped_path), and union_members (a
+// union's members in order). Every change of a remote and its member rows
+// runs in one transaction (inTx). A member row is only inserted, and a
+// wrapper only created or updated, while the remote it uses is live, under
+// a FOR SHARE lock (InsertUnionMember, ShareLiveRemote), and DeleteRemote
+// locks the remote FOR UPDATE before it checks the remotes using it
+// (ListRemotesUsing), so a remote can never be deleted while it is, or is
+// becoming, a member of a live union or the wrapped remote of a live
+// wrapper.
 
 // inTx runs fn in a transaction, committing if it returns nil. fn returns
 // mapped errors; errors of the transaction itself are mapped with op.
@@ -48,23 +52,45 @@ func (s *Store) CreateRemote(ctx context.Context, r remotes.Remote) error {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 	return s.inTx(ctx, op, func(q *db.Queries) error {
+		if err := shareWrapped(ctx, q, op, r); err != nil {
+			return err
+		}
 		if err := q.CreateRemote(ctx, db.CreateRemoteParams{
-			ID:          pgID(r.ID),
-			OwnerID:     pgID(r.OwnerID),
-			Name:        r.Name,
-			BackendType: r.Type,
-			Options:     options,
-			SecretsEnc:  r.SecretsEnc,
-			SecretKeys:  textArray(r.SecretKeys),
-			CreatedAt:   pgTime(r.CreatedAt),
-			UpdatedAt:   pgTime(r.UpdatedAt),
-			DeletedAt:   pgOptTime(r.DeletedAt),
-			Version:     r.Version,
+			ID:              pgID(r.ID),
+			OwnerID:         pgID(r.OwnerID),
+			Name:            r.Name,
+			BackendType:     r.Type,
+			Options:         options,
+			SecretsEnc:      r.SecretsEnc,
+			SecretKeys:      textArray(r.SecretKeys),
+			CreatedAt:       pgTime(r.CreatedAt),
+			UpdatedAt:       pgTime(r.UpdatedAt),
+			DeletedAt:       pgOptTime(r.DeletedAt),
+			Version:         r.Version,
+			WrappedRemoteID: pgOptID(r.Wrapped.RemoteID),
+			WrappedPath:     r.Wrapped.Path,
 		}); err != nil {
 			return mapErr(op, err)
 		}
 		return insertMembers(ctx, q, op, r.ID, r.Members)
 	})
+}
+
+// shareWrapped locks r's wrapped remote, if it has one, FOR SHARE while it
+// is live (ShareLiveRemote), before r is written: a concurrent
+// DeleteRemote of it then waits for this transaction and sees r. A remote
+// that wraps itself is left to the table's check constraint (it is not
+// stored yet when it is created). No row: the wrapped remote is missing or
+// deleted (ErrNotFound).
+func shareWrapped(ctx context.Context, q *db.Queries, op string, r remotes.Remote) error {
+	w := r.Wrapped.RemoteID
+	if w.IsZero() || w == r.ID {
+		return nil
+	}
+	if _, err := q.ShareLiveRemote(ctx, pgID(w)); err != nil {
+		return mapErr(fmt.Sprintf("%s: wrapped remote %s", op, w), err)
+	}
+	return nil
 }
 
 // insertMembers inserts the member rows of union id, in order.
@@ -145,6 +171,9 @@ func (s *Store) UpdateRemote(ctx context.Context, r remotes.Remote) (remotes.Rem
 	}
 	var out remotes.Remote
 	err = s.inTx(ctx, op, func(q *db.Queries) error {
+		if err := shareWrapped(ctx, q, op, r); err != nil {
+			return err
+		}
 		row, err := q.UpdateRemote(ctx, db.UpdateRemoteParams{
 			ID:              pgID(r.ID),
 			ExpectedVersion: r.Version,
@@ -153,6 +182,8 @@ func (s *Store) UpdateRemote(ctx context.Context, r remotes.Remote) (remotes.Rem
 			SecretsEnc:      r.SecretsEnc,
 			SecretKeys:      textArray(r.SecretKeys),
 			UpdatedAt:       pgTime(r.UpdatedAt),
+			WrappedRemoteID: pgOptID(r.Wrapped.RemoteID),
+			WrappedPath:     r.Wrapped.Path,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			live, qerr := q.RemoteIsLive(ctx, pgID(r.ID))
@@ -186,20 +217,25 @@ func (s *Store) UpdateRemote(ctx context.Context, r remotes.Remote) (remotes.Rem
 }
 
 // DeleteRemote implements remotes.Repository. The remote is locked first,
-// so a member row being inserted concurrently either commits before the
-// check (which then sees it) or waits and then finds the remote deleted.
+// so a member row or a wrapper being written concurrently either commits
+// before the check (which then sees it) or waits and then finds the remote
+// deleted.
 func (s *Store) DeleteRemote(ctx context.Context, id domain.RemoteID, at time.Time) error {
 	op := fmt.Sprintf("delete remote %s", id)
 	return s.inTx(ctx, op, func(q *db.Queries) error {
 		if _, err := q.LockLiveRemote(ctx, pgID(id)); err != nil {
 			return mapErr(op, err) // no row: missing or deleted
 		}
-		unions, err := q.ListUnionsUsing(ctx, pgID(id))
+		using, err := q.ListRemotesUsing(ctx, pgID(id))
 		if err != nil {
 			return mapErr(op, err)
 		}
-		if len(unions) > 0 {
-			return fmt.Errorf("%s: it is a member of union %q: %w", op, unions[0].Name, domain.ErrFailedPrecondition)
+		if len(using) > 0 {
+			user, err := remoteFrom(using[0], nil)
+			if err != nil {
+				return fmt.Errorf("%s: %w", op, err)
+			}
+			return fmt.Errorf("%s: %w: %s", op, domain.ErrFailedPrecondition, remotes.InUseMessage(id, user))
 		}
 		// A repository is only created while its remote is live, under a
 		// FOR SHARE lock on the remote (CreateRepository), so the lock
@@ -214,10 +250,10 @@ func (s *Store) DeleteRemote(ctx context.Context, id domain.RemoteID, at time.Ti
 	})
 }
 
-// ListUnionsUsing implements remotes.Repository.
-func (s *Store) ListUnionsUsing(ctx context.Context, member domain.RemoteID) ([]remotes.Remote, error) {
-	op := fmt.Sprintf("list unions using remote %s", member)
-	rows, err := s.q.ListUnionsUsing(ctx, pgID(member))
+// ListRemotesUsing implements remotes.Repository.
+func (s *Store) ListRemotesUsing(ctx context.Context, id domain.RemoteID) ([]remotes.Remote, error) {
+	op := fmt.Sprintf("list remotes using remote %s", id)
+	rows, err := s.q.ListRemotesUsing(ctx, pgID(id))
 	if err != nil {
 		return nil, mapErr(op, err)
 	}
@@ -260,6 +296,7 @@ func remoteFrom(row db.Remote, members []db.UnionMember) (remotes.Remote, error)
 		Type:       row.BackendType,
 		SecretsEnc: row.SecretsEnc,
 		SecretKeys: row.SecretKeys,
+		Wrapped:    remotes.Wrapped{Path: row.WrappedPath},
 		CreatedAt:  timeFrom(row.CreatedAt),
 		UpdatedAt:  timeFrom(row.UpdatedAt),
 		DeletedAt:  timeFrom(row.DeletedAt),
@@ -272,6 +309,9 @@ func remoteFrom(row db.Remote, members []db.UnionMember) (remotes.Remote, error)
 		return remotes.Remote{}, err
 	}
 	if err := decodeID(&r.OwnerID, row.OwnerID); err != nil {
+		return remotes.Remote{}, err
+	}
+	if err := decodeID(&r.Wrapped.RemoteID, row.WrappedRemoteID); err != nil {
 		return remotes.Remote{}, err
 	}
 	if err := json.Unmarshal(row.Options, &r.Options); err != nil {

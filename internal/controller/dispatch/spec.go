@@ -12,6 +12,7 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
+	"github.com/Zeptiny/Syncr/internal/app/remotes"
 	"github.com/Zeptiny/Syncr/internal/app/workers"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/jobkind"
@@ -34,6 +35,24 @@ var ErrTimeLimitUnsupported = fmt.Errorf("it cannot enforce a time limit: %w", E
 // job fails with "worker_outdated" instead. It matches ErrWorkerOutdated
 // (and so domain.ErrFailedPrecondition).
 var ErrHooksUnsupported = fmt.Errorf("it cannot run hooks: %w", ErrWorkerOutdated)
+
+// RemoteFeatureError reports a job whose spec defines a remote that the
+// worker cannot accept: its rclone backend needs a link feature the worker
+// lacks (jobkind.BackendFeature, e.g. link.FeatureRcloneCrypt for an
+// encrypted remote). The job fails with "worker_outdated". It matches
+// ErrWorkerOutdated (and so domain.ErrFailedPrecondition).
+type RemoteFeatureError struct {
+	// Backend is the rclone backend type (e.g. "crypt"); Feature the link
+	// feature it needs.
+	Backend, Feature string
+}
+
+func (e *RemoteFeatureError) Error() string {
+	return fmt.Sprintf("it lacks the feature %q that remotes of type %q need", e.Feature, e.Backend)
+}
+
+// Unwrap makes the error match ErrWorkerOutdated.
+func (e *RemoteFeatureError) Unwrap() error { return ErrWorkerOutdated }
 
 // ErrRemoteSourceUnsupported reports a backup of a remote for a worker
 // that does not report link.FeatureResticRemoteSource, which would back up
@@ -126,6 +145,22 @@ func (e *SourceMethodError) Message(worker string) string {
 
 // Unwrap makes the error match domain.ErrFailedPrecondition.
 func (e *SourceMethodError) Unwrap() error { return domain.ErrFailedPrecondition }
+
+// kindRemote converts a resolved remote, with the ID id, for the job
+// builder (jobkind): its rclone remote, union members, wrapped remote and
+// whether it keeps checksums. The probes convert theirs the same way
+// (probe.kindRemotes).
+func kindRemote(id domain.RemoteID, r remotes.Resolved) jobkind.Remote {
+	members := make([]jobkind.Member, len(r.Members))
+	for i, m := range r.Members {
+		members[i] = jobkind.Member{RemoteID: m.RemoteID, Path: m.Path, Mode: m.Mode}
+	}
+	return jobkind.Remote{
+		ID: id, Rclone: r.Rclone, Members: members,
+		Wrapped:    jobkind.Wrap{RemoteID: r.Wrapped.RemoteID, Path: r.Wrapped.Path},
+		NoChecksum: r.Capabilities.NoChecksum,
+	}
+}
 
 // errRepositoryUnavailable reports a job whose restic repository was
 // deleted or is not its owner's any more: the job fails with
@@ -222,8 +257,10 @@ func (s *Specs) TimeLimitOf(j jobs.Job) time.Duration {
 // definition needs (jobkind Registry.RequiredOS); ErrWorkerOutdated when w
 // lacks a link feature the kind requires, ErrTimeLimitUnsupported (which
 // matches it) when the job has a time limit and w does not report
-// link.FeatureJobTimeLimit, and ErrHooksUnsupported (which matches it too)
-// when the job names hooks and w does not report link.FeatureJobHooks; a
+// link.FeatureJobTimeLimit, ErrHooksUnsupported (which matches it too)
+// when the job names hooks and w does not report link.FeatureJobHooks, and
+// a *RemoteFeatureError (which matches it too) when the spec defines a
+// remote whose backend needs a feature w lacks (jobkind.BackendFeature); a
 // *MissingHooksError when w does not define a hook the job names; a
 // *SourceMethodError when the job is a backup of a remote and w reported
 // that it cannot use its method; errRepositoryUnavailable when its repository is gone; domain.ErrNotFound
@@ -323,17 +360,19 @@ func (s *Specs) Build(ctx context.Context, j jobs.Job, w workers.Info) (*syncrv1
 			return nil, fmt.Errorf("job %s: resolve its remotes: %w", j.ID, err)
 		}
 		for id, r := range rs {
-			members := make([]jobkind.Member, len(r.Members))
-			for i, m := range r.Members {
-				members[i] = jobkind.Member{RemoteID: m.RemoteID, Path: m.Path, Mode: m.Mode}
-			}
 			// The map key is authoritative for the ID.
-			in.Remotes[id] = jobkind.Remote{ID: id, Rclone: r.Rclone, Members: members}
+			in.Remotes[id] = kindRemote(id, r)
 		}
 	}
 	spec, err := s.kinds.Build(def, in)
 	if err != nil {
 		return nil, fmt.Errorf("job %s: %w", j.ID, err)
+	}
+	// A remote backend an older worker refuses (an encrypted remote).
+	for _, d := range spec.GetRemotes() {
+		if f := jobkind.BackendFeature(d.GetBackendType()); f != "" && !w.HasFeatures(f) {
+			return nil, fmt.Errorf("job %s: %w", j.ID, &RemoteFeatureError{Backend: d.GetBackendType(), Feature: f})
+		}
 	}
 	spec.MaxRuntime = nil
 	if limit > 0 {

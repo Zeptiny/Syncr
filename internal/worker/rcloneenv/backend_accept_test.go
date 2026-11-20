@@ -166,10 +166,10 @@ func TestBuiltinBackendsAccepted(t *testing.T) {
 func testOnlyBackends() []string { return []string{"memory"} }
 
 // awaitingBuiltinType are supported by the worker before the built-in type
-// that uses them exists: the worker of encrypted remotes is built before
-// the controller's type (internal/backend/builtin/crypt). Remove a backend
-// from here once its type is registered; the test below says when.
-func awaitingBuiltinType() []string { return []string{"crypt"} }
+// that uses them exists (a worker step built before the controller's
+// type). Remove a backend from here once its type is registered; the test
+// below says when.
+func awaitingBuiltinType() []string { return nil }
 
 // TestSupportedBackendsMatchBuiltinTypes checks that the worker's allowlist
 // of backend types holds the rclone backend of every built-in type, and

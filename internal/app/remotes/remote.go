@@ -30,6 +30,9 @@ type Remote struct {
 
 	// Members of a union remote, in order; nil for other types.
 	Members []Member
+	// Wrapped is where a wrapper remote (backend.Capabilities.Wrapper, an
+	// encrypted remote) stores its data; zero for other types.
+	Wrapped Wrapped
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -53,6 +56,18 @@ type Member struct {
 	Mode backend.UnionMode
 }
 
+// Wrapped is where a wrapper remote stores its data: a folder of another
+// live remote of the same owner, which is never local, a union or a
+// wrapper itself.
+type Wrapped struct {
+	RemoteID domain.RemoteID
+	// Path on the wrapped remote, relative to its root; "" is its root.
+	Path string
+}
+
+// IsZero reports whether w is unset: no remote and no path.
+func (w Wrapped) IsZero() bool { return w.RemoteID.IsZero() && w.Path == "" }
+
 // Input is the configuration of a remote to create or update, as the caller
 // sent it. It contains secret values: never log it.
 type Input struct {
@@ -67,6 +82,9 @@ type Input struct {
 	// that are not required).
 	ClearSecrets []string
 	Members      []Member
+	// Wrapped is where a wrapper remote stores its data (required for a
+	// wrapper type, refused for any other); it may change on update.
+	Wrapped Wrapped
 }
 
 // Resolved is a remote ready for a job: its rclone remote with decrypted
@@ -79,6 +97,25 @@ type Resolved struct {
 	// Members of a union, in order (each member is also in Resolve's
 	// result).
 	Members []Member
+	// Wrapped is where a wrapper remote stores its data (the wrapped
+	// remote is also in Resolve's result); zero for other types.
+	Wrapped Wrapped
+	// Capabilities are those of the remote's backend type (e.g.
+	// NoChecksum, for the job builder).
+	Capabilities backend.Capabilities
+}
+
+// Info is what the checks of a job definition need to know about one of
+// its remotes (Infos), without credentials or options.
+type Info struct {
+	// Type is the backend type ID.
+	Type string
+	// Wrapped is where a wrapper remote stores its data; zero for other
+	// types.
+	Wrapped Wrapped
+	// Capabilities are those of the backend type; zero when the type is no
+	// longer available.
+	Capabilities backend.Capabilities
 }
 
 // Ref names a remote for display, e.g. in a job's details. It may be

@@ -57,7 +57,11 @@
 // and pauses the schedule; a restic repository that is gone the same with
 // repository_unavailable, one whose data is being deleted with
 // repository_deleting; an invalid definition the same with
-// invalid_definition; a worker that disappeared puts the run back to
+// invalid_definition (the launch checks it with what its remotes are,
+// Deps.Remotes and jobkind's Registry.CheckWith: e.g. a checksum
+// comparison with a remote that keeps none; the concurrency keys of a
+// two-way sync side on an encrypted remote are those of the folder its
+// data is in); a worker that disappeared puts the run back to
 // pending (the next tick decides again), or fails it (worker_removed, no
 // pause) if a later occurrence opened a pending run meanwhile; any other
 // error leaves the run launching, retried on the next tick with the same

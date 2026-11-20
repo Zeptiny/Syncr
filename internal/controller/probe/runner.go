@@ -248,6 +248,7 @@ func (r *Runner) onRepository(ctx context.Context, owner domain.UserID, t restic
 	w, err := r.worker(ctx, selection{
 		owner: owner, op: op, workerID: t.WorkerID, repositoryID: t.RepositoryID,
 		explicit: cond(rs.local, "choose the worker whose disk holds this repository"),
+		features: jobkind.RemoteFeatures(rs.defs),
 	})
 	if err != nil {
 		return workers.Worker{}, nil, err
@@ -290,6 +291,11 @@ type selection struct {
 	explicit string
 	// repositoryID prefers the worker of its newest succeeded job.
 	repositoryID domain.ResticRepoID
+	// features are the link features the probe's remotes need of a worker
+	// (jobkind.RemoteFeatures of its spec's remote definitions, e.g. an
+	// encrypted remote's); only workers that report them are picked, and
+	// a chosen worker without them is refused.
+	features []string
 }
 
 // worker returns the worker of a probe (§6.5 of the M5 design).
@@ -300,7 +306,7 @@ func (r *Runner) worker(ctx context.Context, s selection) (workers.Worker, error
 		if err != nil && !errors.Is(err, domain.ErrNotFound) {
 			return workers.Worker{}, fmt.Errorf("load worker %s: %w", s.workerID, err)
 		}
-		if err := CheckExplicit(r.candidate(w), found, s.op); err != nil {
+		if err := CheckExplicitFor(r.candidate(w), found, s.op, s.features); err != nil {
 			return workers.Worker{}, err
 		}
 		return w, nil
@@ -324,7 +330,7 @@ func (r *Runner) worker(ctx context.Context, s selection) (workers.Worker, error
 		}
 		c := r.candidate(w)
 		c.Preferred = !preferred.IsZero() && w.ID == preferred
-		if c.Status == domain.WorkerOnline && c.canProbe(s.op) {
+		if c.Status == domain.WorkerOnline && c.canProbe(s.op) && c.hasFeatures(s.features) {
 			js, err := r.jobs.Unfinished(ctx, w.ID)
 			if err != nil {
 				return workers.Worker{}, fmt.Errorf("count the jobs of worker %s: %w", w.ID, err)
@@ -334,7 +340,7 @@ func (r *Runner) worker(ctx context.Context, s selection) (workers.Worker, error
 		byID[w.ID] = w
 		cands = append(cands, c)
 	}
-	c, err := Pick(cands, s.op)
+	c, err := PickFor(cands, s.op, s.features)
 	if err != nil {
 		return workers.Worker{}, err
 	}
@@ -499,7 +505,9 @@ func clip(s string) string {
 // Conversions
 // ---------------------------------------------------------------------------
 
-// kindRemotes converts resolved remotes for jobkind.Locate.
+// kindRemotes converts resolved remotes for jobkind.Locate, as the
+// dispatcher converts a job's: rclone remote, union members, wrapped
+// remote and whether it keeps checksums.
 func kindRemotes(rs map[domain.RemoteID]remotes.Resolved) map[domain.RemoteID]jobkind.Remote {
 	out := make(map[domain.RemoteID]jobkind.Remote, len(rs))
 	for id, r := range rs {
@@ -507,7 +515,11 @@ func kindRemotes(rs map[domain.RemoteID]remotes.Resolved) map[domain.RemoteID]jo
 		for i, m := range r.Members {
 			members[i] = jobkind.Member{RemoteID: m.RemoteID, Path: m.Path, Mode: m.Mode}
 		}
-		out[id] = jobkind.Remote{ID: id, Rclone: r.Rclone, Members: members}
+		out[id] = jobkind.Remote{
+			ID: id, Rclone: r.Rclone, Members: members,
+			Wrapped:    jobkind.Wrap{RemoteID: r.Wrapped.RemoteID, Path: r.Wrapped.Path},
+			NoChecksum: r.Capabilities.NoChecksum,
+		}
 	}
 	return out
 }

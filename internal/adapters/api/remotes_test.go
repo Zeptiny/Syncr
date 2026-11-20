@@ -138,7 +138,7 @@ func TestListBackends(t *testing.T) {
 		ids = append(ids, b.GetId())
 		byID[b.GetId()] = b
 	}
-	if want := []string{"s3", "b2", "local", "sftp", "union", "webdav"}; !slices.Equal(ids, want) {
+	if want := []string{"s3", "b2", "crypt", "local", "sftp", "union", "webdav"}; !slices.Equal(ids, want) {
 		t.Errorf("backends = %v, want %v (by label)", ids, want)
 	}
 	field := func(b, name string) *syncrv1.BackendField {
@@ -161,6 +161,23 @@ func TestListBackends(t *testing.T) {
 	}
 	if c := byID["local"].GetCapabilities(); !c.GetLocal() || !c.GetUnionMember() || c.GetUnion() {
 		t.Errorf("local capabilities = %v", c)
+	}
+	// The encrypted remote: a wrapper without checksums, its wrapped field
+	// and its fixed fields.
+	if c := byID["crypt"].GetCapabilities(); !c.GetWrapper() || !c.GetNoChecksum() || c.GetUnionMember() || c.GetResticRepository() || c.GetLocal() {
+		t.Errorf("crypt capabilities = %v", c)
+	}
+	if f := field("crypt", "remote"); f.GetKind() != syncrv1.FieldKind_FIELD_KIND_WRAPPED || !f.GetRequired() || f.GetFixed() || f.GetSecret() {
+		t.Errorf("crypt remote = %v", f)
+	}
+	if f := field("crypt", "password"); !f.GetSecret() || !f.GetFixed() || !f.GetRequired() {
+		t.Errorf("crypt password = %v", f)
+	}
+	if f := field("crypt", "filename_encryption"); !f.GetFixed() || f.GetDefaultValue() != "standard" || f.GetKind() != syncrv1.FieldKind_FIELD_KIND_ENUM {
+		t.Errorf("crypt filename_encryption = %v", f)
+	}
+	if f := field("s3", "endpoint"); f.GetFixed() {
+		t.Errorf("s3 endpoint is fixed: %v", f)
 	}
 
 	// Unauthenticated callers get nothing.
@@ -350,6 +367,8 @@ func checkSecretsNeverEcho(t *testing.T, e *remotesEnv) {
 	}
 	m1 := e.create(testUser, localRemoteInput("member 1", "/srv/m1"))
 	m2 := e.create(testUser, localRemoteInput("member 2", "/srv/m2"))
+	// What a wrapper type stores its data in.
+	store := e.create(testUser, s3RemoteInput("wrapped store"))
 
 	for _, typ := range e.reg.Types() {
 		cfg := exampleConfig(typ)
@@ -361,6 +380,13 @@ func checkSecretsNeverEcho(t *testing.T, e *remotesEnv) {
 		}
 		if typ.Capabilities().Union {
 			in.Members = []*syncrv1.UnionMember{{RemoteId: m1.GetId()}, {RemoteId: m2.GetId()}}
+		}
+		if typ.Capabilities().Wrapper {
+			in.Wrapped = &syncrv1.WrappedRemote{RemoteId: store.GetId(), Path: "vault"}
+		}
+		fixed := map[string]bool{}
+		for _, f := range typ.Fields() {
+			fixed[f.Name] = f.Fixed
 		}
 		for _, v := range in.GetSecrets() {
 			seen = append(seen, v)
@@ -383,9 +409,14 @@ func checkSecretsNeverEcho(t *testing.T, e *remotesEnv) {
 		}
 		record(got.Msg)
 
-		// Update with new sentinels, then with none (kept).
+		// Update with new sentinels (fixed secrets keep theirs), then with
+		// none (kept).
 		upd, _ := proto.Clone(in).(*syncrv1.RemoteInput)
 		for k := range upd.Secrets {
+			if fixed[k] {
+				delete(upd.Secrets, k)
+				continue
+			}
 			upd.Secrets[k] = sentinel(typ.ID(), k, 2)
 			seen = append(seen, upd.Secrets[k])
 		}
@@ -406,9 +437,12 @@ func checkSecretsNeverEcho(t *testing.T, e *remotesEnv) {
 		for _, f := range typ.Fields() {
 			bad, _ := proto.Clone(upd).(*syncrv1.RemoteInput)
 			bad.Secrets = map[string]string{"zz_unknown": sentinel(typ.ID(), "zz_unknown", 3)}
+			if bad.Options == nil {
+				bad.Options = map[string]string{} // a clone of an empty map is nil
+			}
 			if f.Secret {
 				bad.Options[f.Name] = sentinel(typ.ID(), f.Name, 3)
-			} else if f.Kind != backend.KindMembers {
+			} else if f.Kind != backend.KindMembers && f.Kind != backend.KindWrapped {
 				bad.Secrets[f.Name] = sentinel(typ.ID(), f.Name, 3)
 			}
 			for _, v := range bad.GetOptions() {
@@ -425,6 +459,18 @@ func checkSecretsNeverEcho(t *testing.T, e *remotesEnv) {
 			_, err = c.CreateRemote(ctx, connect.NewRequest(&syncrv1.CreateRemoteRequest{Input: bad}))
 			wantCode(t, err, connect.CodeInvalidArgument)
 			recordErr(err)
+			// A new value of a fixed secret is refused without echo.
+			if f.Secret && f.Fixed {
+				fx, _ := proto.Clone(upd).(*syncrv1.RemoteInput)
+				fx.Secrets = map[string]string{f.Name: sentinel(typ.ID(), f.Name, 4)}
+				seen = append(seen, fx.Secrets[f.Name])
+				_, err := c.UpdateRemote(ctx, connect.NewRequest(&syncrv1.UpdateRemoteRequest{RemoteId: r.GetId(), Version: kept.Msg.GetRemote().GetVersion(), Input: fx}))
+				wantCode(t, err, connect.CodeInvalidArgument)
+				if v := fieldViolations(t, err); v["secrets."+f.Name] != "cannot be changed after the remote is created" {
+					t.Errorf("%s: a new %s: violations %v", typ.ID(), f.Name, v)
+				}
+				recordErr(err)
+			}
 		}
 
 		// The secrets are stored: the dispatcher's view has the latest ones.
@@ -434,7 +480,11 @@ func checkSecretsNeverEcho(t *testing.T, e *remotesEnv) {
 			t.Fatalf("%s: Resolve: %v", typ.ID(), err)
 		}
 		for k := range in.GetSecrets() {
-			if !slices.Contains(slices.Collect(maps.Values(res[mustRemoteID(t, r.GetId())].Rclone.Secrets)), sentinel(typ.ID(), k, 2)) {
+			round := 2
+			if fixed[k] {
+				round = 1
+			}
+			if !slices.Contains(slices.Collect(maps.Values(res[mustRemoteID(t, r.GetId())].Rclone.Secrets)), sentinel(typ.ID(), k, round)) {
 				t.Errorf("%s: secret %s was not stored", typ.ID(), k)
 			}
 		}
@@ -469,7 +519,7 @@ func exampleConfig(typ backend.Type) backend.Config {
 	}
 	cfg := backend.Config{Options: map[string]string{}}
 	for _, f := range typ.Fields() {
-		if f.Secret || f.Kind == backend.KindMembers {
+		if f.Secret || f.Kind == backend.KindMembers || f.Kind == backend.KindWrapped {
 			continue
 		}
 		switch f.Kind {

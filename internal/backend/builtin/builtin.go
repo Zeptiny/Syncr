@@ -8,6 +8,7 @@ package builtin
 import (
 	"github.com/Zeptiny/Syncr/internal/backend"
 	"github.com/Zeptiny/Syncr/internal/backend/builtin/b2"
+	"github.com/Zeptiny/Syncr/internal/backend/builtin/crypt"
 	"github.com/Zeptiny/Syncr/internal/backend/builtin/local"
 	"github.com/Zeptiny/Syncr/internal/backend/builtin/s3"
 	"github.com/Zeptiny/Syncr/internal/backend/builtin/sftp"
@@ -20,6 +21,7 @@ import (
 func Types() []backend.Type {
 	return []backend.Type{
 		b2.Type{},
+		crypt.Type{},
 		local.Type{},
 		s3.Type{},
 		sftp.Type{},

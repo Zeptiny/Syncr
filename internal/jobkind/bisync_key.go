@@ -126,7 +126,11 @@ func (s *specRemotes) bisyncStateInput(sides [2]bisyncSide) ([]byte, error) {
 // stateRemote encodes remote r for the state key: its ID, backend type and
 // non-secret options sorted by name, then its union members in order, each
 // with its mode and its location (local, or the member remote the same
-// way and the joined path on it).
+// way and the joined path on it), and, only for a wrapper remote (so the
+// encoding of every other remote is what it was before wrappers existed),
+// "wrapped", the wrapped remote the same way and the joined path on it.
+// Moving a wrapper to another folder therefore gives its pairs and
+// mirrors new keys.
 func (s *specRemotes) stateRemote(e *keyEncoder, r Remote) error {
 	e.field(r.ID.String())
 	e.field(r.Rclone.Backend)
@@ -154,6 +158,21 @@ func (s *specRemotes) stateRemote(e *keyEncoder, r Remote) error {
 			if err := s.stateRemote(e, mr); err != nil {
 				return err
 			}
+		}
+		e.field(loc.GetPath())
+	}
+	if isWrapper(r) {
+		wr, err := s.remote(r.Wrapped.RemoteID)
+		if err != nil {
+			return fmt.Errorf("the wrapped remote of remote %s: %w", r.ID, err)
+		}
+		loc, err := s.wrapped(r)
+		if err != nil {
+			return err
+		}
+		e.field("wrapped")
+		if err := s.stateRemote(e, wr); err != nil {
+			return err
 		}
 		e.field(loc.GetPath())
 	}

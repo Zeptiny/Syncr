@@ -405,7 +405,8 @@ func remoteRel(loc *syncrv1.Location) string {
 
 // backendOf is the rclone backend of the remote a probe addresses ("" if
 // it names none), or "r2" for an S3 remote on Cloudflare R2 (the shared
-// folder's bucket), which has content of its own.
+// folder's bucket), which has content of its own. An encrypted remote is
+// "crypt" (its wrapped remote is defined after it).
 func backendOf(remotes []*syncrv1.RemoteDefinition) string {
 	if len(remotes) == 0 {
 		return ""
@@ -414,6 +415,18 @@ func backendOf(remotes []*syncrv1.RemoteDefinition) string {
 		return "r2"
 	}
 	return remotes[0].GetBackendType()
+}
+
+// wrappedOf returns remotes from the definition of the remote that the
+// first one (an encrypted remote) stores its data in; nil if there is none.
+func wrappedOf(remotes []*syncrv1.RemoteDefinition) []*syncrv1.RemoteDefinition {
+	alias := remotes[0].GetWrapped().GetRemote()
+	for i, r := range remotes {
+		if alias != "" && r.GetAlias() == alias {
+			return remotes[i:]
+		}
+	}
+	return nil
 }
 
 // remoteTree is the content of the demo remote on backend; ok is false for
@@ -433,7 +446,10 @@ func remoteTree(backend string, start time.Time) (tree, error) {
 			{"photos/2024/IMG_0001.jpg", 4 * mib},
 			{"photos/2026/11/IMG_1100.jpg", 3 * mib},
 			{"pool/nextcloud/data.tar", 9 * gib},
-		})), nil
+		}, cryptStoredFiles())), nil
+	case "crypt":
+		// Vault, as the worker lists it through its password.
+		return newTree(start, vaultFiles()), nil
 	case "sftp":
 		return newTree(start, slices.Concat(resticLayout("backups/office"), resticLayout("backups/old-laptop"), []demoFile{
 			{"nextcloud/2026-11-01.tar", 14 * gib},
@@ -478,8 +494,13 @@ func (p *Probes) listRemote(remotes []*syncrv1.RemoteDefinition, op *syncrv1.Pro
 	return l, nil
 }
 
-// about is the usage of the demo remote on the probe's backend.
+// about is the usage of the demo remote on the probe's backend; an
+// encrypted remote tells that of the remote it stores its data in, as
+// rclone's crypt does.
 func about(remotes []*syncrv1.RemoteDefinition) (*syncrv1.ProbeUsage, error) {
+	if backendOf(remotes) == "crypt" {
+		remotes = wrappedOf(remotes)
+	}
 	switch backendOf(remotes) {
 	case "b2":
 		return &syncrv1.ProbeUsage{Used: ptr(412*gib + 300*mib), Objects: ptr[int64](58214)}, nil

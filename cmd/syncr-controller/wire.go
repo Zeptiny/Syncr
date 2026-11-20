@@ -435,7 +435,7 @@ func newServices(cfg controllerconfig.Config, st store, cipher *secrets.Keyring,
 		return nil, fmt.Errorf("schedules service: %w", err)
 	}
 	sched, err := scheduler.New(scheduler.Deps{
-		Schedules: notifyingSchedules{Service: ss, outbox: ns}, Jobs: js, Workers: ws, Kinds: kinds, Owners: us,
+		Schedules: notifyingSchedules{Service: ss, outbox: ns}, Jobs: js, Workers: ws, Kinds: kinds, Remotes: rs, Owners: us,
 		IDs: ids, Clock: clk, Signal: sig, Logger: log.With("component", "scheduler"),
 	}, scheduler.Config{Tick: cfg.Schedules.Tick})
 	if err != nil {

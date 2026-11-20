@@ -2,10 +2,12 @@
 // development and screenshots: two users (admin and alice, with public
 // passwords), workers in every connection state with labels (one that was
 // removed, and one too old for probes and restic), the admin's remotes of
-// every built-in backend type (a union among them), restic repositories
-// with their snapshots (one whose data is being deleted, one already
-// deleted), a contact of every built-in channel, schedules of every target
-// type and policy with about a month of runs (among them a two-way sync of
+// every built-in backend type (a union among them, and an encrypted remote
+// "Vault" in a folder of B2 offsite with its jobs, crypt_data.go), restic
+// repositories with their snapshots (one whose data is being deleted, one
+// already deleted), a contact of every built-in channel, schedules of
+// every target type and policy with about a month of runs (among them a
+// two-way sync of
 // a folder on nas-01 with Cloudflare R2 whose runs show each of its
 // states, bisync_data.go), and about 270 jobs of every kind over those 30
 // days in every status with statistics, results,
@@ -308,6 +310,13 @@ func (s *Seed) seedRemotes(ctx context.Context, _ time.Time) error {
 				return fmt.Errorf("remote %q: member %q is not seeded before it", in.Name, m)
 			}
 			in.Members = append(in.Members, remotes.Member{RemoteID: id, Mode: backend.UnionReadWrite})
+		}
+		if w := r.wrapped; w.remote != "" {
+			id, ok := s.Remotes[w.remote]
+			if !ok {
+				return fmt.Errorf("remote %q: the remote %q it wraps is not seeded before it", in.Name, w.remote)
+			}
+			in.Wrapped = remotes.Wrapped{RemoteID: id, Path: w.path}
 		}
 		created, err := s.d.Remotes.Create(ctx, s.actor(r.owner), in)
 		if err != nil {

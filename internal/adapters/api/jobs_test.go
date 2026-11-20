@@ -498,12 +498,43 @@ type fakeJobRemotes struct {
 	mu    sync.Mutex
 	refs  map[domain.RemoteID]remotes.Ref
 	owner map[domain.RemoteID]domain.UserID
-	// namesErr, if set, fails Names.
-	namesErr error
+	// infos are what Infos tells beyond the type (wrapped remotes,
+	// capabilities), by remote.
+	infos map[domain.RemoteID]remotes.Info
+	// namesErr, if set, fails Names; infosErr, if set, fails Infos.
+	namesErr, infosErr error
 }
 
 func newFakeJobRemotes() *fakeJobRemotes {
-	return &fakeJobRemotes{refs: map[domain.RemoteID]remotes.Ref{}, owner: map[domain.RemoteID]domain.UserID{}}
+	return &fakeJobRemotes{refs: map[domain.RemoteID]remotes.Ref{}, owner: map[domain.RemoteID]domain.UserID{}, infos: map[domain.RemoteID]remotes.Info{}}
+}
+
+// setInfo sets what Infos tells of remote id beyond its type.
+func (f *fakeJobRemotes) setInfo(id domain.RemoteID, info remotes.Info) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.infos[id] = info
+}
+
+// Infos implements RemoteInfos like the remotes service: live remotes of
+// owner only.
+func (f *fakeJobRemotes) Infos(_ context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Info, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.infosErr != nil {
+		return nil, f.infosErr
+	}
+	out := map[domain.RemoteID]remotes.Info{}
+	for _, id := range ids {
+		r, ok := f.refs[id]
+		if !ok || r.Deleted || f.owner[id] != owner {
+			return nil, fmt.Errorf("remote %s: %w", id, domain.ErrNotFound)
+		}
+		info := f.infos[id]
+		info.Type = r.Type
+		out[id] = info
+	}
+	return out, nil
 }
 
 // add creates a live remote of owner and returns its ID.

@@ -12,12 +12,20 @@
 // # Building specs
 //
 // Build assigns remote aliases "r1", "r2", ... in reference order, then the
-// members of unions, so aliases are valid rclone aliases that never
-// overlap. A remote whose Rclone.Backend is "" (a local remote) becomes a
-// local Location with backend.JoinLocal(Root, path); others become a
+// members of unions, then the remotes that wrapper remotes store their
+// data in, so aliases are valid rclone aliases that never overlap. A
+// remote whose Rclone.Backend is "" (a local remote) becomes a local
+// Location with backend.JoinLocal(Root, path); others become a
 // RemoteDefinition with backend.JoinRemote(Root, path); a union becomes a
 // RemoteDefinition whose union_upstreams are its members' aliases or local
-// paths.
+// paths; a wrapper remote (Remote.Wrapped, e.g. crypt) becomes a
+// RemoteDefinition whose wrapped location is its wrapped remote's alias
+// and the joined folder on it. Nothing nests: a union's members and a
+// wrapper's wrapped remote are never unions or wrappers.
+//
+// The link features a worker needs for a spec's remote definitions
+// (RemoteFeatures, e.g. link.FeatureRcloneCrypt for crypt) are checked by
+// the dispatcher and the probes' worker pick.
 //
 // Locate and LocateRepository (locate.go) build the same remote
 // definitions and locations for a single path or repository; the
@@ -45,6 +53,11 @@
 //     (a backup with Windows VSS).
 //   - Labeled: a short label for people ("Backup").
 //   - Summarizer: display details of a finished job's output.
+//   - RemoteChecker and RemoteKeyed: checks and concurrency keys that
+//     depend on what the definition's remotes are (RemoteInfo: a wrapper
+//     remote's wrapped folder, a remote that keeps no checksums), which
+//     Registry.CheckWith runs for the callers that create jobs and
+//     schedules (the API, the scheduler).
 //
 // The Registry answers these per kind name (Schedulable, UserStartable,
 // RequiredFeatures, Label, Summarize) or definition (CheckSchedulable,
@@ -107,6 +120,39 @@ type Remote struct {
 	// Members of a union, in order. Every member is also an entry of the
 	// map passed to Build.
 	Members []Member
+	// Wrapped is, for a wrapper remote (an encrypted remote,
+	// backend.Capabilities.Wrapper), the remote and folder it stores its
+	// data in; zero for other remotes. The wrapped remote is also an entry
+	// of the map passed to Build. It is never local, a union or a wrapper
+	// itself (no nesting).
+	Wrapped Wrap
+	// NoChecksum: rclone keeps no checksums on the remote
+	// (backend.Capabilities.NoChecksum), so a transfer or a two-way sync
+	// with it as a side cannot compare checksums.
+	NoChecksum bool
+}
+
+// Wrap is where a wrapper remote stores its data: a folder of another of
+// the owner's remotes.
+type Wrap struct {
+	RemoteID domain.RemoteID
+	// Path is the folder on the wrapped remote, relative to its root (""
+	// is its root).
+	Path string
+}
+
+// IsZero reports whether w names no remote: the remote wraps nothing.
+func (w Wrap) IsZero() bool { return w.RemoteID.IsZero() }
+
+// RemoteInfo is what checking a definition may need to know about one of
+// its remotes (Registry.CheckWith), without resolving it: no credentials,
+// no options.
+type RemoteInfo struct {
+	// Wraps is, for a wrapper remote, where it stores its data; zero for
+	// other remotes.
+	Wraps Wrap
+	// NoChecksum: rclone keeps no checksums on the remote.
+	NoChecksum bool
 }
 
 // Member is one member of a union remote.
@@ -139,7 +185,8 @@ type Repository struct {
 // restic repositories of the definition's Refs.
 type Resolved struct {
 	// Remotes holds every remote of Refs.RemoteIDs, the remote of the
-	// repository, and the members of the unions among them.
+	// repository, the members of the unions among them and the remotes
+	// the wrappers among them store their data in.
 	Remotes map[domain.RemoteID]Remote
 	// Repositories holds the repository of Refs.RepositoryID, if any.
 	Repositories map[domain.ResticRepoID]Repository
@@ -185,8 +232,9 @@ type Kind interface {
 	// "definition.rclone_transfer.source.path".
 	Check(def *syncrv1.JobDefinition) (Refs, error)
 	// Build returns the worker spec of a checked definition. in.Remotes
-	// holds every remote of Check's Refs, the remote of its repository
-	// and the members of the unions among them; in.Repositories holds the
+	// holds every remote of Check's Refs, the remote of its repository,
+	// the members of the unions among them and the remotes the wrappers
+	// among them store their data in; in.Repositories holds the
 	// repository of Refs.RepositoryID. Errors wrap
 	// domain.ErrInvalidArgument (a definition or remote that cannot be
 	// built, e.g. a path that a remote's root makes invalid, or a nested
@@ -210,6 +258,30 @@ type Keyed interface {
 	// ConcurrencyKeys returns the keys of a checked definition, each
 	// matching ^[a-z0-9][a-z0-9:._-]{0,199}$; at most 8.
 	ConcurrencyKeys(def *syncrv1.JobDefinition) []string
+}
+
+// RemoteChecker is implemented by kinds with checks that depend on their
+// remotes (what Check cannot know from IDs alone): a checksum comparison
+// with a remote that keeps no checksums, two sides that are nested through
+// a wrapper remote. Registry.CheckWith runs it after Check.
+type RemoteChecker interface {
+	// CheckRemotes checks a checked definition against infos, which holds
+	// what the remotes of its Refs.RemoteIDs are; a remote missing from
+	// infos counts as one that wraps nothing and keeps checksums. Errors
+	// are *domain.ValidationError with field paths below "definition".
+	CheckRemotes(def *syncrv1.JobDefinition, infos map[domain.RemoteID]RemoteInfo) error
+}
+
+// RemoteKeyed is implemented by Keyed kinds whose concurrency keys depend
+// on their remotes: a two-way sync side on a wrapper remote holds the key
+// of the folder its data is stored in. Registry.CheckWith uses it instead
+// of Keyed.ConcurrencyKeys.
+type RemoteKeyed interface {
+	// ConcurrencyKeysWith returns the keys of a checked definition, as
+	// Keyed.ConcurrencyKeys does, with infos as in
+	// RemoteChecker.CheckRemotes. For remotes that wrap nothing they are
+	// exactly ConcurrencyKeys's.
+	ConcurrencyKeysWith(def *syncrv1.JobDefinition, infos map[domain.RemoteID]RemoteInfo) []string
 }
 
 // Unschedulable is implemented by kinds whose definitions cannot be
@@ -436,6 +508,35 @@ func (r *Registry) Check(def *syncrv1.JobDefinition) (kind string, refs Refs, er
 		}
 	}
 	return k.Name(), refs, nil
+}
+
+// CheckWith is Check followed by the checks of def's kind that depend on
+// its remotes (RemoteChecker), with the concurrency keys computed with
+// infos (RemoteKeyed). infos holds what the remotes of def's
+// Refs.RemoteIDs are (remotes.Service.Infos); with nil infos CheckWith is
+// Check. Callers that create a job or a schedule use it; the dispatcher's
+// Build repeats what it can check with the resolved remotes. Errors are
+// Check's, else the kind's *domain.ValidationError.
+func (r *Registry) CheckWith(def *syncrv1.JobDefinition, infos map[domain.RemoteID]RemoteInfo) (kind string, refs Refs, err error) {
+	kind, refs, err = r.Check(def)
+	if err != nil || infos == nil {
+		return kind, refs, err
+	}
+	k := r.kinds[kind]
+	if c, ok := k.(RemoteChecker); ok {
+		if err := c.CheckRemotes(def, infos); err != nil {
+			return "", Refs{}, err
+		}
+	}
+	if kk, ok := k.(RemoteKeyed); ok {
+		refs.ConcurrencyKeys = nil
+		if keys := kk.ConcurrencyKeysWith(def, infos); len(keys) > 0 {
+			keys = slices.Clone(keys)
+			slices.Sort(keys)
+			refs.ConcurrencyKeys = slices.Compact(keys)
+		}
+	}
+	return kind, refs, nil
 }
 
 // Build builds the worker spec of def with its kind (see Kind.Build) and

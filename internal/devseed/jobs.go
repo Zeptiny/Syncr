@@ -27,6 +27,28 @@ type jobPreset struct {
 	schedule domain.ScheduleID
 }
 
+// check checks a demo job's definition as RunJob does: with what its
+// remotes are (remotes.Service.Infos, jobkind's Registry.CheckWith), so
+// its concurrency keys are those of a job made through the API.
+func (s *Seed) check(ctx context.Context, owner domain.UserID, def *syncrv1.JobDefinition) (string, jobkind.Refs, error) {
+	_, refs, err := s.d.Kinds.Check(def)
+	if err != nil {
+		return "", jobkind.Refs{}, err
+	}
+	got, err := s.d.Remotes.Infos(ctx, owner, refs.RemoteIDs)
+	if err != nil {
+		return "", jobkind.Refs{}, err
+	}
+	infos := make(map[domain.RemoteID]jobkind.RemoteInfo, len(got))
+	for id, info := range got {
+		infos[id] = jobkind.RemoteInfo{
+			Wraps:      jobkind.Wrap{RemoteID: info.Wrapped.RemoteID, Path: info.Wrapped.Path},
+			NoChecksum: info.Capabilities.NoChecksum,
+		}
+	}
+	return s.d.Kinds.CheckWith(def, infos)
+}
+
 // seedJob runs one demo job, created at created, through its history (the
 // past jobs service svc, whose clock clk it moves) and returns its ID. now
 // is the seed's start.
@@ -35,7 +57,7 @@ func (s *Seed) seedJob(ctx context.Context, svc *jobs.Service, clk *stepClock, n
 	if err != nil {
 		return domain.JobID{}, err
 	}
-	kind, refs, err := s.d.Kinds.Check(def)
+	kind, refs, err := s.check(ctx, s.actor(dj.owner).UserID, def)
 	if err != nil {
 		return domain.JobID{}, fmt.Errorf("check the definition: %w", err)
 	}

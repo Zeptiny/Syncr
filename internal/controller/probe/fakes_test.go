@@ -274,17 +274,26 @@ func (f *fakeRemotes) put(r remotes.Resolved) domain.RemoteID {
 	return r.ID
 }
 
-// Resolve returns alice's remotes; anyone else's lookup is not found.
+// Resolve returns alice's remotes, with the remotes the wrappers among
+// them store their data in (as the remotes service does); anyone else's
+// lookup is not found.
 func (f *fakeRemotes) Resolve(_ context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]remotes.Resolved, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := map[domain.RemoteID]remotes.Resolved{}
-	for _, id := range ids {
-		r, ok := f.byID[id]
-		if !ok || owner != alice.UserID {
-			return nil, fmt.Errorf("remote %s: %w", id, domain.ErrNotFound)
+	for len(ids) > 0 {
+		var next []domain.RemoteID
+		for _, id := range ids {
+			r, ok := f.byID[id]
+			if !ok || owner != alice.UserID {
+				return nil, fmt.Errorf("remote %s: %w", id, domain.ErrNotFound)
+			}
+			out[id] = r
+			if w := r.Wrapped.RemoteID; !w.IsZero() {
+				next = append(next, w)
+			}
 		}
-		out[id] = r
+		ids = next
 	}
 	return out, nil
 }

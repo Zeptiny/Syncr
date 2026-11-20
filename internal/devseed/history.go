@@ -192,7 +192,7 @@ func (h *history) events() ([]event, error) {
 			return h.s.d.Workers.Remove(ctx, id)
 		}})
 	}
-	for i, dj := range slices.Concat(demoJobs(), demoResticJobs(), demoBisyncJobs(h.now), demoRemoteBackupJobs()) {
+	for i, dj := range slices.Concat(demoJobs(), demoResticJobs(), demoBisyncJobs(h.now), demoRemoteBackupJobs(), demoCryptJobs()) {
 		at := h.now.Add(-dj.created)
 		out = append(out, event{at: at, order: orderJob, do: func(ctx context.Context) error {
 			if err := h.manualJob(ctx, dj, at); err != nil {

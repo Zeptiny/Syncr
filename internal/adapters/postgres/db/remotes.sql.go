@@ -299,51 +299,6 @@ func (q *Queries) ListUnionMembers(ctx context.Context, unionIds []pgtype.UUID) 
 	return items, nil
 }
 
-const listUnionsUsing = `-- name: ListUnionsUsing :many
-SELECT r.id, r.owner_id, r.name, r.backend_type, r.options, r.secrets_enc, r.secret_keys, r.created_at, r.updated_at, r.deleted_at, r.version, r.wrapped_remote_id, r.wrapped_path FROM remotes r
-WHERE r.deleted_at IS NULL
-  AND EXISTS (
-      SELECT 1 FROM union_members m
-      WHERE m.union_remote_id = r.id AND m.member_remote_id = $1::uuid
-  )
-ORDER BY lower(r.name) COLLATE "C", r.id
-`
-
-// Superseded by ListRemotesUsing, which also lists wrappers.
-func (q *Queries) ListUnionsUsing(ctx context.Context, memberRemoteID pgtype.UUID) ([]Remote, error) {
-	rows, err := q.db.Query(ctx, listUnionsUsing, memberRemoteID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Remote{}
-	for rows.Next() {
-		var i Remote
-		if err := rows.Scan(
-			&i.ID,
-			&i.OwnerID,
-			&i.Name,
-			&i.BackendType,
-			&i.Options,
-			&i.SecretsEnc,
-			&i.SecretKeys,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.DeletedAt,
-			&i.Version,
-			&i.WrappedRemoteID,
-			&i.WrappedPath,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const lockLiveRemote = `-- name: LockLiveRemote :one
 SELECT id FROM remotes WHERE id = $1::uuid AND deleted_at IS NULL FOR UPDATE
 `

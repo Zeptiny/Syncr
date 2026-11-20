@@ -98,6 +98,13 @@ func remoteNames(deps Deps) RemoteNames {
 	return deps.Remotes
 }
 
+func remoteInfos(deps Deps) RemoteInfos {
+	if deps.Remotes == nil {
+		return nil
+	}
+	return deps.Remotes
+}
+
 func workerNames(deps Deps) WorkerNames {
 	if deps.Workers == nil {
 		return nil

@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
+	"github.com/Zeptiny/Syncr/internal/backend"
 	"github.com/Zeptiny/Syncr/internal/domain"
 	"github.com/Zeptiny/Syncr/internal/link"
 )
@@ -62,13 +63,15 @@ const (
 type Bisync struct{}
 
 var (
-	_ Kind         = Bisync{}
-	_ Keyed        = Bisync{}
-	_ OneShot      = Bisync{}
-	_ SingleWorker = Bisync{}
-	_ Requirer     = Bisync{}
-	_ Labeled      = Bisync{}
-	_ Summarizer   = Bisync{}
+	_ Kind          = Bisync{}
+	_ Keyed         = Bisync{}
+	_ RemoteKeyed   = Bisync{}
+	_ RemoteChecker = Bisync{}
+	_ OneShot       = Bisync{}
+	_ SingleWorker  = Bisync{}
+	_ Requirer      = Bisync{}
+	_ Labeled       = Bisync{}
+	_ Summarizer    = Bisync{}
 )
 
 // Name implements Kind.
@@ -139,6 +142,48 @@ func (Bisync) Check(def *syncrv1.JobDefinition) (Refs, error) {
 		}
 	}
 	return refs, nil
+}
+
+// CheckRemotes implements RemoteChecker: a checksum comparison (compare
+// with checksum, on that entry) is refused (NoChecksumMessage) when either
+// side is on a remote that keeps no checksums, and two sides are refused
+// (on path2, as Check refuses them) when they are the same folder or one
+// is inside the other once each side on a wrapper remote stands for the
+// folder its data is stored in (storedLocation).
+func (Bisync) CheckRemotes(def *syncrv1.JobDefinition, infos map[domain.RemoteID]RemoteInfo) error {
+	b := def.GetRcloneBisync()
+	var v domain.Validation
+	if i := slices.Index(b.GetOptions().GetCompare(), syncrv1.BisyncCompare_BISYNC_COMPARE_CHECKSUM); i >= 0 &&
+		slices.ContainsFunc(sideRemotes(b.GetPath1(), b.GetPath2()), func(id domain.RemoteID) bool { return infos[id].NoChecksum }) {
+		v.Add(fmt.Sprintf("%s.options.compare[%d]", bisyncField, i), NoChecksumMessage)
+	}
+	var discard domain.Validation
+	p1 := storedLocation(checkLocation(&discard, bisyncField+".path1", b.GetPath1()), infos)
+	p2 := storedLocation(checkLocation(&discard, bisyncField+".path2", b.GetPath2()), infos)
+	if p1.ok && p2.ok && p1.remote == p2.remote && (keyNested(p1, p2) || keyNested(p2, p1)) {
+		v.Add(bisyncField+".path2", bisyncNested)
+	}
+	return v.Err()
+}
+
+// storedLocation returns where the data of checked location l is stored:
+// on a wrapper remote (infos), the same path inside the folder of the
+// wrapped remote it stores its data in (the plain path stands for the
+// encrypted one); l itself otherwise. A location whose joined path is
+// invalid is not ok.
+func storedLocation(l location, infos map[domain.RemoteID]RemoteInfo) location {
+	if !l.ok || l.remote.IsZero() {
+		return l
+	}
+	w := infos[l.remote].Wraps
+	if w.IsZero() {
+		return l
+	}
+	key, err := backend.JoinRemote(w.Path, l.key)
+	if err != nil {
+		return location{}
+	}
+	return location{remote: w.RemoteID, path: l.path, key: key, ok: true}
 }
 
 // keyNested reports whether checked location inner is outer or inside it,
@@ -236,9 +281,12 @@ func checkBisyncOptions(v *domain.Validation, field string, o *syncrv1.RcloneBis
 // one-shot fields and the pair's state key. It refuses (on
 // definition.rclone_bisync.path1.path) two sides whose rclone paths, as
 // the worker passes them ("r1:<root/path>" or a cleaned local path), are
-// over 200 bytes together, and (on definition.rclone_bisync.path2) sides
-// that turn out to be the same or nested once their remotes are known (a
-// local remote and a worker path). It uses in.Remotes only.
+// over 200 bytes together, (on definition.rclone_bisync.path2) sides that
+// turn out to be the same or nested once their remotes are known (a local
+// remote and a worker path, a wrapper remote and the folder it stores its
+// data in), and (on the compare entry) a checksum comparison with a side
+// on a remote that keeps no checksums (Remote.NoChecksum). It uses
+// in.Remotes only.
 func (k Bisync) Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.JobSpec, error) {
 	// Stored definitions are checked again: a spec is never built from a
 	// definition the current rules reject.
@@ -264,12 +312,23 @@ func (k Bisync) Build(def *syncrv1.JobDefinition, in Resolved) (*syncrv1.JobSpec
 			sides[i].remote, _ = domain.ParseRemoteID(raw)
 		}
 	}
+	if i := slices.Index(b.GetOptions().GetCompare(), syncrv1.BisyncCompare_BISYNC_COMPARE_CHECKSUM); i >= 0 && rs.noChecksum(b.GetPath1(), b.GetPath2()) {
+		return nil, fmt.Errorf("build %s: %w", k.Name(), invalid(fmt.Sprintf("%s.options.compare[%d]", bisyncField, i), NoChecksumMessage))
+	}
 	p1, p2 := rclonePath(sides[0].loc), rclonePath(sides[1].loc)
 	if n := len(p1) + len(p2); n > maxBisyncPathBytes {
 		return nil, fmt.Errorf("build %s: %w", k.Name(), invalid(bisyncField+".path1.path",
 			fmt.Sprintf("%s: %d bytes with the remotes' roots, at most %d", bisyncTooLong, n, maxBisyncPathBytes)))
 	}
-	if specNested(sides[0].loc, sides[1].loc) || specNested(sides[1].loc, sides[0].loc) {
+	// Where the sides' data is stored: a wrapper remote's side is a folder
+	// inside the one it stores its data in.
+	var stored [2]*syncrv1.Location
+	for i, side := range sides {
+		if stored[i], err = rs.storage(side.remote, side.loc); err != nil {
+			return nil, fmt.Errorf("build %s: %w", k.Name(), err)
+		}
+	}
+	if specNested(stored[0], stored[1]) || specNested(stored[1], stored[0]) {
 		return nil, fmt.Errorf("build %s: %w", k.Name(), invalid(bisyncField+".path2", bisyncNested))
 	}
 	key, err := rs.bisyncStateKey(sides)
@@ -318,11 +377,20 @@ func specNested(outer, inner *syncrv1.Location) bool {
 // so two pairs that share a location (a desktop's and a laptop's folder
 // with the same remote path) and two jobs of one pair run one at a time,
 // on any worker. Nil for a definition Check rejects.
-func (Bisync) ConcurrencyKeys(def *syncrv1.JobDefinition) []string {
+func (k Bisync) ConcurrencyKeys(def *syncrv1.JobDefinition) []string {
+	return k.ConcurrencyKeysWith(def, nil)
+}
+
+// ConcurrencyKeysWith implements RemoteKeyed: ConcurrencyKeys, except that
+// a side on a wrapper remote holds the key of the folder its data is
+// stored in (storedLocation), so it waits for the jobs that use that
+// folder directly or through another wrapper. The keys of sides on other
+// remotes, and every key without infos, are ConcurrencyKeys's.
+func (Bisync) ConcurrencyKeysWith(def *syncrv1.JobDefinition, infos map[domain.RemoteID]RemoteInfo) []string {
 	b := def.GetRcloneBisync()
 	var v domain.Validation
-	p1 := checkLocation(&v, bisyncField+".path1", b.GetPath1())
-	p2 := checkLocation(&v, bisyncField+".path2", b.GetPath2())
+	p1 := storedLocation(checkLocation(&v, bisyncField+".path1", b.GetPath1()), infos)
+	p2 := storedLocation(checkLocation(&v, bisyncField+".path2", b.GetPath2()), infos)
 	if !p1.ok || !p2.ok {
 		return nil
 	}

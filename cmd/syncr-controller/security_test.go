@@ -26,6 +26,7 @@ import (
 	"github.com/Zeptiny/Syncr/internal/backend/builtin"
 	controllerconfig "github.com/Zeptiny/Syncr/internal/controller/config"
 	"github.com/Zeptiny/Syncr/internal/devseed"
+	"github.com/Zeptiny/Syncr/internal/link"
 )
 
 // TestDownloadBaseURLDefaultsAgree: the configuration's default download
@@ -565,6 +566,15 @@ func checkSecretsStayHidden(t *testing.T, s *seeded, admin, alice *http.Client) 
 		}
 		members = append(members, m.Msg.GetRemote().GetId())
 	}
+	// What a wrapper type (crypt) stores its data in: a remote that is not
+	// local.
+	store, err := rc.CreateRemote(ctx, connect.NewRequest(&syncrv1.CreateRemoteRequest{Input: &syncrv1.RemoteInput{
+		Name: "Alice store", BackendType: "sftp", Options: map[string]string{"host": "store.example", "user": "alice"},
+		Secrets: map[string]string{"pass": "store-password"},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	created := map[string]*syncrv1.Remote{}
 	for _, typ := range reg.Types() {
 		ex, ok := typ.(backend.Exampler)
@@ -582,6 +592,9 @@ func checkSecretsStayHidden(t *testing.T, s *seeded, admin, alice *http.Client) 
 		if typ.Capabilities().Union {
 			in.Members = []*syncrv1.UnionMember{{RemoteId: members[0]}, {RemoteId: members[1]}}
 		}
+		if typ.Capabilities().Wrapper {
+			in.Wrapped = &syncrv1.WrappedRemote{RemoteId: store.Msg.GetRemote().GetId(), Path: "vault"}
+		}
 		resp, err := rc.CreateRemote(ctx, connect.NewRequest(&syncrv1.CreateRemoteRequest{Input: in}))
 		if err != nil {
 			t.Fatalf("CreateRemote(%s): %v", typ.ID(), err)
@@ -591,16 +604,18 @@ func checkSecretsStayHidden(t *testing.T, s *seeded, admin, alice *http.Client) 
 		if want := slices.Sorted(maps.Keys(in.GetSecrets())); !slices.Equal(r.GetSecretsSet(), want) {
 			t.Errorf("%s: secrets_set %v, want %v", typ.ID(), r.GetSecretsSet(), want)
 		}
-		// Replace one secret, keep the others.
+		// Replace one secret (not a fixed one), keep the others.
 		up, ok := proto.Clone(in).(*syncrv1.RemoteInput)
 		if !ok {
 			t.Fatal("clone is not a RemoteInput")
 		}
 		up.Secrets = map[string]string{}
-		for k := range in.GetSecrets() {
-			up.Secrets[k] = sentinel(typ.ID(), k, 2)
-			sentinels = append(sentinels, up.Secrets[k])
-			break
+		for _, f := range typ.Fields() {
+			if f.Secret && !f.Fixed {
+				up.Secrets[f.Name] = sentinel(typ.ID(), f.Name, 2)
+				sentinels = append(sentinels, up.Secrets[f.Name])
+				break
+			}
 		}
 		upd, err := rc.UpdateRemote(ctx, connect.NewRequest(&syncrv1.UpdateRemoteRequest{RemoteId: r.GetId(), Version: r.GetVersion(), Input: up}))
 		if err != nil {
@@ -647,15 +662,18 @@ func checkSecretsStayHidden(t *testing.T, s *seeded, admin, alice *http.Client) 
 		jobIDs = append(jobIDs, run.Msg.GetJob().GetId())
 	}
 
-	link := syncrv1connect.NewControllerLinkServiceClient(&http.Client{Transport: headers{next: http.DefaultTransport, set: func(h http.Header) {
+	linkClient := syncrv1connect.NewControllerLinkServiceClient(&http.Client{Transport: headers{next: http.DefaultTransport, set: func(h http.Header) {
 		h.Set("Authorization", "Bearer "+workerID+"."+enrolled.Msg.GetWorkerSecret())
 	}}}, s.base)
 	// The worker's first Report carries its Hello; no StartJob comes before it.
-	hello := &syncrv1.Event{Seq: 1, Payload: &syncrv1.Event_Hello{Hello: &syncrv1.Hello{Os: "linux", Arch: "amd64", JobKinds: []string{"rclone_transfer"}}}}
-	if _, err := link.Report(ctx, connect.NewRequest(&syncrv1.ReportRequest{Epoch: "secrets-test-epoch", Events: []*syncrv1.Event{hello}})); err != nil {
+	// It accepts encrypted remotes.
+	hello := &syncrv1.Event{Seq: 1, Payload: &syncrv1.Event_Hello{Hello: &syncrv1.Hello{
+		Os: "linux", Arch: "amd64", JobKinds: []string{"rclone_transfer"}, Features: []string{link.FeatureRcloneCrypt},
+	}}}
+	if _, err := linkClient.Report(ctx, connect.NewRequest(&syncrv1.ReportRequest{Epoch: "secrets-test-epoch", Events: []*syncrv1.Event{hello}})); err != nil {
 		t.Fatal(err)
 	}
-	poll, err := link.Poll(ctx, connect.NewRequest(&syncrv1.PollRequest{Epoch: "secrets-test-epoch", Wait: durationpb.New(0)}))
+	poll, err := linkClient.Poll(ctx, connect.NewRequest(&syncrv1.PollRequest{Epoch: "secrets-test-epoch", Wait: durationpb.New(0)}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -673,7 +691,7 @@ func checkSecretsStayHidden(t *testing.T, s *seeded, admin, alice *http.Client) 
 		t.Fatalf("the worker got %d StartJob commands, want %d:\n%s", starts, len(jobIDs), specs)
 	}
 	// The worker, and only the worker, gets the current secrets.
-	for _, typ := range []string{"s3", "sftp", "b2", "webdav"} {
+	for _, typ := range []string{"s3", "sftp", "b2", "webdav", "crypt"} {
 		if !strings.Contains(string(specs), "sentinel-"+typ+"-") {
 			t.Errorf("the %s secrets are not in the worker's spec", typ)
 		}

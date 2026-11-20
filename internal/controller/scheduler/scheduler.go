@@ -25,18 +25,23 @@ func DefaultConfig() Config {
 	return Config{Tick: 10 * time.Second}
 }
 
-// Deps are the scheduler's collaborators. All are required except Signal
-// and Logger.
+// Deps are the scheduler's collaborators. All are required except
+// Remotes, Signal and Logger.
 type Deps struct {
 	Schedules Schedules
 	Jobs      Jobs
 	Workers   Workers
 	// Kinds checks a schedule's stored definition again at launch (its
 	// references and search terms).
-	Kinds  *jobkind.Registry
-	Owners Owners
-	IDs    IDGenerator
-	Clock  Clock
+	Kinds *jobkind.Registry
+	// Remotes tells the launch's definition check what its remotes are
+	// (jobkind's Registry.CheckWith: a remote that keeps no checksums, an
+	// encrypted remote's folder in the concurrency keys). The controller
+	// wires it; nil checks without them (Registry.Check).
+	Remotes Remotes
+	Owners  Owners
+	IDs     IDGenerator
+	Clock   Clock
 	// Signal wakes the scheduler. Pass the one given to the services that
 	// wake it (schedules.Deps.Waker, the jobs Notifier fan-out); New makes
 	// one if it is nil.
@@ -53,6 +58,7 @@ type Scheduler struct {
 	jobs      Jobs
 	workers   Workers
 	kinds     *jobkind.Registry
+	remotes   Remotes
 	owners    Owners
 	ids       IDGenerator
 	clock     Clock
@@ -83,7 +89,7 @@ func New(d Deps, cfg Config) (*Scheduler, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Scheduler{
-		schedules: d.Schedules, jobs: d.Jobs, workers: d.Workers, kinds: d.Kinds, owners: d.Owners,
+		schedules: d.Schedules, jobs: d.Jobs, workers: d.Workers, kinds: d.Kinds, remotes: d.Remotes, owners: d.Owners,
 		ids: d.IDs, clock: d.Clock, signal: sig, log: log, cfg: cfg,
 	}, nil
 }

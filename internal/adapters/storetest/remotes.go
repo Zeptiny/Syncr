@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -228,12 +229,12 @@ func testRemoteUnionMembers(t *testing.T, s Store) {
 		t.Errorf("a rejected union was stored: %v", err)
 	}
 
-	using, err := s.ListUnionsUsing(ctx, m1.ID)
+	using, err := s.ListRemotesUsing(ctx, m1.ID)
 	if err != nil || !slices.Equal(remoteIDs(using), []domain.RemoteID{union.ID}) {
-		t.Errorf("ListUnionsUsing(m1) = (%v, %v)", remoteIDs(using), err)
+		t.Errorf("ListRemotesUsing(m1) = (%v, %v)", remoteIDs(using), err)
 	}
-	if using, err := s.ListUnionsUsing(ctx, m3.ID); err != nil || len(using) != 0 {
-		t.Errorf("ListUnionsUsing(unused) = (%v, %v)", remoteIDs(using), err)
+	if using, err := s.ListRemotesUsing(ctx, m3.ID); err != nil || len(using) != 0 {
+		t.Errorf("ListRemotesUsing(unused) = (%v, %v)", remoteIDs(using), err)
 	}
 
 	// Members are replaced as a whole on update.
@@ -243,7 +244,7 @@ func testRemoteUnionMembers(t *testing.T, s Store) {
 	if err != nil || !slices.Equal(stored.Members, next.Members) {
 		t.Errorf("UpdateRemote(members) = (%+v, %v)", stored.Members, err)
 	}
-	if using, _ := s.ListUnionsUsing(ctx, m1.ID); len(using) != 0 {
+	if using, _ := s.ListRemotesUsing(ctx, m1.ID); len(using) != 0 {
 		t.Errorf("m1 is still used by %v after it was removed from the union", remoteIDs(using))
 	}
 	bad := stored
@@ -264,7 +265,7 @@ func testRemoteUnionMembers(t *testing.T, s Store) {
 	if err := s.DeleteRemote(ctx, union.ID, t0()); err != nil {
 		t.Fatal(err)
 	}
-	if using, _ := s.ListUnionsUsing(ctx, m3.ID); len(using) != 0 {
+	if using, _ := s.ListRemotesUsing(ctx, m3.ID); len(using) != 0 {
 		t.Errorf("a deleted union still uses m3: %v", remoteIDs(using))
 	}
 	if err := s.DeleteRemote(ctx, m3.ID, t0()); err != nil {
@@ -384,9 +385,9 @@ func testRemoteNoAliasing(t *testing.T, s Store) {
 	some, _ := s.GetRemotes(ctx, []domain.RemoteID{u.ID})
 	mutate(some[0])
 	check("GetRemotes result")
-	using, _ := s.ListUnionsUsing(ctx, m1.ID)
+	using, _ := s.ListRemotesUsing(ctx, m1.ID)
 	mutate(using[0])
-	check("ListUnionsUsing result")
+	check("ListRemotesUsing result")
 
 	cur, _ := s.GetRemote(ctx, u.ID)
 	stored, err := s.UpdateRemote(ctx, cur)
@@ -396,4 +397,202 @@ func testRemoteNoAliasing(t *testing.T, s Store) {
 	mutate(stored)
 	mutate(cur)
 	check("UpdateRemote argument and result")
+}
+
+// newWrapper is a crypt remote that stores its data at path on wrapped.
+func newWrapper(t *testing.T, n int, owner domain.UserID, name string, wrapped domain.RemoteID, path string) remotes.Remote {
+	r := newRemote(t, n, owner, name)
+	r.Type, r.Options, r.SecretKeys = "crypt", map[string]string{"filename_encryption": "standard"}, []string{"password"}
+	r.Wrapped = remotes.Wrapped{RemoteID: wrapped, Path: path}
+	return r
+}
+
+func testRemoteWrapped(t *testing.T, s Store) {
+	alice := userID(t, 1)
+	requireRemotes(t, s, alice)
+	ctx := context.Background()
+	bucket, other := newRemote(t, 1, alice, "Bucket"), newRemote(t, 2, alice, "Other")
+	mustCreateRemote(t, s, bucket)
+	mustCreateRemote(t, s, other)
+
+	vault := newWrapper(t, 10, alice, "Vault", bucket.ID, "vault/data")
+	mustCreateRemote(t, s, vault)
+	got, err := s.GetRemote(ctx, vault.ID)
+	if err != nil || got.Wrapped != vault.Wrapped || got.Type != "crypt" {
+		t.Errorf("GetRemote(wrapper) = (%+v, %v), want wrapped %+v", got, err, vault.Wrapped)
+	}
+	if got, _ := s.GetRemote(ctx, bucket.ID); !got.Wrapped.IsZero() {
+		t.Errorf("a remote that wraps nothing has %+v", got.Wrapped)
+	}
+	for what, list := range map[string]func() ([]remotes.Remote, error){
+		"GetRemotes": func() ([]remotes.Remote, error) { return s.GetRemotes(ctx, []domain.RemoteID{vault.ID}) },
+		"ListRemotes": func() ([]remotes.Remote, error) {
+			return s.ListRemotes(ctx, remotes.ListFilter{OwnerID: alice, Type: "crypt"})
+		},
+	} {
+		if rs, err := list(); err != nil || len(rs) != 1 || rs[0].Wrapped != vault.Wrapped {
+			t.Errorf("%s(wrapper) = (%+v, %v)", what, rs, err)
+		}
+	}
+
+	// The wrapped remote must exist, be live and not be the remote itself;
+	// a path needs a remote.
+	gone := newRemote(t, 3, alice, "Gone")
+	mustCreateRemote(t, s, gone)
+	if err := s.DeleteRemote(ctx, gone.ID, t0()); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		r    remotes.Remote
+		want error
+	}{
+		{"missing wrapped remote", newWrapper(t, 11, alice, "Missing", remoteID(t, 99), ""), domain.ErrNotFound},
+		{"deleted wrapped remote", newWrapper(t, 12, alice, "Deleted", gone.ID, ""), domain.ErrNotFound},
+		{"wraps itself", newWrapper(t, 13, alice, "Self", remoteID(t, 13), ""), domain.ErrInvalidArgument},
+		{"a path without a remote", newWrapper(t, 14, alice, "Pathless", domain.RemoteID{}, "x"), domain.ErrInvalidArgument},
+	} {
+		wantErr(t, "CreateRemote("+tt.name+")", s.CreateRemote(ctx, tt.r), tt.want)
+		if _, err := s.GetRemote(ctx, tt.r.ID); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("%s: the remote was stored: %v", tt.name, err)
+		}
+	}
+
+	// Unions and wrappers are both "using" a remote.
+	pool := newRemote(t, 20, alice, "A pool")
+	pool.Type, pool.Members = "union", []remotes.Member{{RemoteID: bucket.ID, Mode: backend.UnionReadWrite}, {RemoteID: other.ID, Mode: backend.UnionReadWrite}}
+	mustCreateRemote(t, s, pool)
+	using, err := s.ListRemotesUsing(ctx, bucket.ID)
+	if err != nil || !slices.Equal(remoteIDs(using), []domain.RemoteID{pool.ID, vault.ID}) {
+		t.Errorf("ListRemotesUsing(bucket) = (%v, %v), want the union and the wrapper by name", remoteIDs(using), err)
+	}
+	if len(using) == 2 && (using[1].Wrapped != vault.Wrapped || len(using[0].Members) != 2) {
+		t.Errorf("ListRemotesUsing returned %+v", using)
+	}
+	if using, _ := s.ListRemotesUsing(ctx, vault.ID); len(using) != 0 {
+		t.Errorf("ListRemotesUsing(the wrapper) = %v", remoteIDs(using))
+	}
+	if err := s.DeleteRemote(ctx, pool.ID, t0()); err != nil {
+		t.Fatal(err)
+	}
+
+	// The wrapped remote cannot be deleted while a live wrapper uses it;
+	// the refusal names the wrapper and changes nothing.
+	err = s.DeleteRemote(ctx, bucket.ID, t0())
+	wantErr(t, "DeleteRemote(wrapped remote)", err, domain.ErrFailedPrecondition)
+	if err != nil && !strings.Contains(err.Error(), `encrypted remote "Vault"`) {
+		t.Errorf("the refusal does not name the wrapper: %v", err)
+	}
+	if got, _ := s.GetRemote(ctx, bucket.ID); got.Deleted() || got.Version != 1 {
+		t.Errorf("a refused delete changed the wrapped remote: %+v", got)
+	}
+
+	// Update moves the wrapper to another remote and folder.
+	cur, _ := s.GetRemote(ctx, vault.ID)
+	moved := cur
+	moved.Wrapped = remotes.Wrapped{RemoteID: other.ID, Path: ""}
+	stored, err := s.UpdateRemote(ctx, moved)
+	if err != nil || stored.Wrapped != moved.Wrapped || stored.Version != cur.Version+1 {
+		t.Errorf("UpdateRemote(wrapped) = (%+v, %v)", stored, err)
+	}
+	if got, _ := s.GetRemote(ctx, vault.ID); got.Wrapped != moved.Wrapped {
+		t.Errorf("stored wrapped = %+v", got.Wrapped)
+	}
+	if using, _ := s.ListRemotesUsing(ctx, bucket.ID); len(using) != 0 {
+		t.Errorf("the old wrapped remote is still used by %v", remoteIDs(using))
+	}
+	for _, tt := range []struct {
+		name    string
+		wrapped remotes.Wrapped
+		want    error
+	}{
+		{"a deleted remote", remotes.Wrapped{RemoteID: gone.ID}, domain.ErrNotFound},
+		{"itself", remotes.Wrapped{RemoteID: vault.ID}, domain.ErrInvalidArgument},
+	} {
+		bad := stored
+		bad.Wrapped = tt.wrapped
+		_, err := s.UpdateRemote(ctx, bad)
+		wantErr(t, "UpdateRemote(wrapped: "+tt.name+")", err, tt.want)
+	}
+	if got, _ := s.GetRemote(ctx, vault.ID); got.Version != stored.Version || got.Wrapped != moved.Wrapped {
+		t.Errorf("a failed update changed the wrapper: %+v", got)
+	}
+	if err := s.DeleteRemote(ctx, bucket.ID, t0()); err != nil {
+		t.Errorf("DeleteRemote(no longer wrapped) = %v", err)
+	}
+
+	// Once the wrapper is deleted, its wrapped remote is free; the deleted
+	// wrapper keeps it (job history).
+	if err := s.DeleteRemote(ctx, vault.ID, t0()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetRemote(ctx, vault.ID); got.Wrapped != moved.Wrapped {
+		t.Errorf("the deleted wrapper lost its wrapped remote: %+v", got.Wrapped)
+	}
+	if using, _ := s.ListRemotesUsing(ctx, other.ID); len(using) != 0 {
+		t.Errorf("a deleted wrapper still uses its remote: %v", remoteIDs(using))
+	}
+	if err := s.DeleteRemote(ctx, other.ID, t0()); err != nil {
+		t.Errorf("DeleteRemote(wrapped by a deleted wrapper) = %v", err)
+	}
+
+	t.Run("DeleteRace", func(t *testing.T) { testRemoteWrappedDeleteRace(t, s, alice) })
+}
+
+// testRemoteWrappedDeleteRace races the deletion of a remote with the
+// creation of a wrapper that stores its data in it, and with the update of
+// a wrapper that moves to it: exactly one of them wins, so a live wrapper
+// never wraps a deleted remote.
+func testRemoteWrappedDeleteRace(t *testing.T, s Store, owner domain.UserID) {
+	ctx := context.Background()
+	anchor := newRemote(t, 400, owner, "Wrap race anchor")
+	mustCreateRemote(t, s, anchor)
+	mover := newWrapper(t, 401, owner, "Wrap race mover", anchor.ID, "")
+	mustCreateRemote(t, s, mover)
+	for i := range 10 {
+		target := newRemote(t, 500+i, owner, fmt.Sprintf("Wrap race target %d", i))
+		mustCreateRemote(t, s, target)
+		var writeErr, deleteErr error
+		var wg sync.WaitGroup
+		if i%2 == 0 {
+			w := newWrapper(t, 600+i, owner, fmt.Sprintf("Wrap race wrapper %d", i), target.ID, "x")
+			wg.Go(func() { writeErr = s.CreateRemote(ctx, w) })
+			wg.Go(func() { deleteErr = s.DeleteRemote(ctx, target.ID, t0()) })
+			wg.Wait()
+			if writeErr == nil {
+				defer func() {
+					if err := s.DeleteRemote(ctx, w.ID, t0()); err != nil {
+						t.Error(err)
+					}
+				}()
+			}
+		} else {
+			cur, err := s.GetRemote(ctx, mover.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cur.Wrapped = remotes.Wrapped{RemoteID: target.ID}
+			wg.Go(func() { _, writeErr = s.UpdateRemote(ctx, cur) })
+			wg.Go(func() { deleteErr = s.DeleteRemote(ctx, target.ID, t0()) })
+			wg.Wait()
+		}
+		switch {
+		case writeErr == nil && deleteErr == nil:
+			t.Fatalf("round %d: the wrapper was written and its wrapped remote deleted", i)
+		case writeErr == nil:
+			wantErr(t, "DeleteRemote(wrapped by the new wrapper)", deleteErr, domain.ErrFailedPrecondition)
+		case deleteErr == nil:
+			wantErr(t, "writing a wrapper of the deleted remote", writeErr, domain.ErrNotFound)
+		default:
+			t.Fatalf("round %d: both failed: %v; %v", i, writeErr, deleteErr)
+		}
+		if i%2 == 1 && writeErr == nil {
+			// Move the wrapper back, so the target is free again.
+			cur, _ := s.GetRemote(ctx, mover.ID)
+			cur.Wrapped = remotes.Wrapped{RemoteID: anchor.ID}
+			if _, err := s.UpdateRemote(ctx, cur); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 }

@@ -81,7 +81,7 @@ func (s *Service) ListRemoteFiles(ctx context.Context, actor domain.Actor, remot
 		return nil, fmt.Errorf("%s: %w", what, err)
 	}
 	spec, op := s.listing(t, dirsOnly, s.r.cfg.MaxEntries)
-	w, err := s.r.worker(ctx, selection{owner: actor.UserID, op: op, workerID: workerID, explicit: cond(t.local(), localRemoteHint)})
+	w, err := s.r.worker(ctx, selection{owner: actor.UserID, op: op, workerID: workerID, explicit: cond(t.local(), localRemoteHint), features: t.features()})
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", what, err)
 	}
@@ -129,7 +129,7 @@ func (s *Service) TestRemote(ctx context.Context, actor domain.Actor, id domain.
 		return nil, fmt.Errorf("%s: %w", what, err)
 	}
 	spec, op := s.listing(t, false, testEntries)
-	w, err := s.r.worker(ctx, selection{owner: actor.UserID, op: op, workerID: workerID, explicit: cond(t.local(), localRemoteHint)})
+	w, err := s.r.worker(ctx, selection{owner: actor.UserID, op: op, workerID: workerID, explicit: cond(t.local(), localRemoteHint), features: t.features()})
 	if err != nil {
 		if reportable(err) {
 			return &syncrv1.TestRemoteResponse{Error: publicMessage(err), ErrorCode: "no_worker"}, nil
@@ -207,6 +207,10 @@ type remoteTarget struct {
 
 // local reports whether the folder is on a worker's own filesystem.
 func (t remoteTarget) local() bool { return t.loc.GetRemote() == "" }
+
+// features are the link features a worker needs to accept t's remotes
+// (an encrypted remote's).
+func (t remoteTarget) features() []string { return jobkind.RemoteFeatures(t.defs) }
 
 // target locates path on remote id.
 func (s *Service) target(id domain.RemoteID, path string, rs map[domain.RemoteID]remotes.Resolved) (remoteTarget, error) {

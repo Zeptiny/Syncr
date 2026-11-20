@@ -13,8 +13,8 @@
 // It checks the documented semantics, above all the conditional updates the
 // use cases rely on for concurrency safety (compare-and-swap epoch,
 // monotonic cursors, single-use tokens, version-checked updates, the first
-// user race), the referential rules (owners, union members, soft delete),
-// and that returned values do not alias the store.
+// user race), the referential rules (owners, union members, wrapped
+// remotes, soft delete), and that returned values do not alias the store.
 //
 // A suite whose port an adapter does not implement yet (its methods return
 // a wrapped errors.ErrUnsupported) is skipped, naming the pending work.
@@ -105,6 +105,8 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 		{"RemoteUnionMembers", testRemoteUnionMembers},
 		{"RemoteSoftDelete", testRemoteSoftDelete},
 		{"RemoteNoAliasing", testRemoteNoAliasing},
+		// Encrypted remotes (wrappers).
+		{"RemoteWrapped", testRemoteWrapped},
 
 		// Milestone 4.
 		{"WorkerNamesUniqueAmongLive", testWorkerNamesUniqueAmongLive},

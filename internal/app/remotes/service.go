@@ -20,6 +20,20 @@ import (
 // MaxNameLen is the longest remote name, in characters.
 const MaxNameLen = 64
 
+// FixedMessage is the field error of a change to a fixed field
+// (backend.Field.Fixed): another value, a new secret or a clear.
+const FixedMessage = "cannot be changed after the remote is created"
+
+// Field errors of a wrapper's wrapped remote (Input.Wrapped).
+const (
+	// notWrapperMessage: a type that is not a wrapper got a wrapped
+	// remote (on "wrapped").
+	notWrapperMessage = "only encrypted remotes store their data in another remote"
+	// notYoursMessage: a missing, deleted or foreign remote, told apart by
+	// nothing (as members are).
+	notYoursMessage = "is not one of your remotes"
+)
+
 // Config tunes the service. Zero fields take the DefaultConfig values.
 type Config struct {
 	// MaxMembers caps the members of a union.
@@ -104,13 +118,17 @@ func (s *Service) Create(ctx context.Context, actor domain.Actor, in Input) (Rem
 	if err != nil {
 		return Remote{}, fmt.Errorf("create remote: %w", err)
 	}
+	wrapped, err := s.checkWrapped(ctx, &v, actor.UserID, id, typ, in.Wrapped)
+	if err != nil {
+		return Remote{}, fmt.Errorf("create remote: %w", err)
+	}
 	if err := v.Err(); err != nil {
 		return Remote{}, fmt.Errorf("create remote: %w", err)
 	}
 
 	now := s.clock.Now()
 	r := Remote{
-		ID: id, OwnerID: actor.UserID, Name: name, Type: typ.ID(), Options: cfg.Options, Members: members,
+		ID: id, OwnerID: actor.UserID, Name: name, Type: typ.ID(), Options: cfg.Options, Members: members, Wrapped: wrapped,
 		CreatedAt: now, UpdatedAt: now, Version: 1,
 	}
 	if r.SecretsEnc, r.SecretKeys, err = s.seal(id, cfg.Secrets); err != nil {
@@ -164,10 +182,11 @@ func (s *Service) List(ctx context.Context, actor domain.Actor, f ListFilter) ([
 
 // Update changes one of actor's remotes. version is the one the caller read
 // (ErrConflict if the remote changed since). The type cannot change (an
-// empty in.Type means the remote's). Options and members are replaced;
-// secrets are merged: a non-empty value replaces the stored one, an absent
-// or empty one keeps it, and in.ClearSecrets removes optional ones. The
-// merged configuration is validated.
+// empty in.Type means the remote's). Options, members and the wrapped
+// remote are replaced; secrets are merged: a non-empty value replaces the
+// stored one, an absent or empty one keeps it, and in.ClearSecrets removes
+// optional ones. Fixed fields keep their values (checkFixedOptions,
+// mergeSecrets). The merged configuration is validated.
 func (s *Service) Update(ctx context.Context, actor domain.Actor, id domain.RemoteID, version int64, in Input) (Remote, error) {
 	cur, err := s.owned(ctx, actor, id)
 	if err != nil {
@@ -195,7 +214,12 @@ func (s *Service) Update(ctx context.Context, actor domain.Actor, id domain.Remo
 
 	cfg := backend.Config{Options: nonEmpty(in.Options), Secrets: secrets}
 	addConfigErrors(&v, typ.Validate(cfg))
+	checkFixedOptions(&v, typ, cur.Options, cfg.Options)
 	members, err := s.checkMembers(ctx, &v, actor.UserID, id, typ, in.Members)
+	if err != nil {
+		return Remote{}, fmt.Errorf("update remote %s: %w", id, err)
+	}
+	wrapped, err := s.checkWrapped(ctx, &v, actor.UserID, id, typ, in.Wrapped)
 	if err != nil {
 		return Remote{}, fmt.Errorf("update remote %s: %w", id, err)
 	}
@@ -204,7 +228,7 @@ func (s *Service) Update(ctx context.Context, actor domain.Actor, id domain.Remo
 	}
 
 	next := cur
-	next.Name, next.Options, next.Members, next.UpdatedAt = name, cfg.Options, members, s.clock.Now()
+	next.Name, next.Options, next.Members, next.Wrapped, next.UpdatedAt = name, cfg.Options, members, wrapped, s.clock.Now()
 	if next.SecretsEnc, next.SecretKeys, err = s.seal(id, secrets); err != nil {
 		return Remote{}, fmt.Errorf("update remote %s: %w", id, err)
 	}
@@ -216,23 +240,24 @@ func (s *Service) Update(ctx context.Context, actor domain.Actor, id domain.Remo
 	return stored, nil
 }
 
-// Delete soft-deletes one of actor's remotes. ErrFailedPrecondition, naming
-// the union, while the remote is a member of a live union, or naming the
-// repository while a live restic repository is on it (the repository
-// checks that in its transaction).
+// Delete soft-deletes one of actor's remotes. ErrFailedPrecondition while
+// a live remote uses it (InUseMessage: naming the first of them by name,
+// an encrypted remote that stores its data in it or a union of which it is
+// a member), or naming the repository while a live restic repository is on
+// it (the repository checks both in its transaction).
 func (s *Service) Delete(ctx context.Context, actor domain.Actor, id domain.RemoteID) error {
 	if _, err := s.owned(ctx, actor, id); err != nil {
 		return fmt.Errorf("delete remote: %w", err)
 	}
-	unions, err := s.repo.ListUnionsUsing(ctx, id)
+	using, err := s.repo.ListRemotesUsing(ctx, id)
 	if err != nil {
 		return fmt.Errorf("delete remote %s: %w", id, err)
 	}
-	if len(unions) > 0 {
-		return fmt.Errorf("%w: the remote is a member of union %q; remove it from the union first", domain.ErrFailedPrecondition, unions[0].Name)
+	if len(using) > 0 {
+		return fmt.Errorf("%w: %s", domain.ErrFailedPrecondition, InUseMessage(id, using[0]))
 	}
 	// The repository repeats the check in its transaction, against a union
-	// created meanwhile.
+	// or a wrapper created meanwhile.
 	if err := s.repo.DeleteRemote(ctx, id, s.clock.Now()); err != nil {
 		return fmt.Errorf("delete remote %s: %w", id, err)
 	}
@@ -240,17 +265,52 @@ func (s *Service) Delete(ctx context.Context, actor domain.Actor, id domain.Remo
 	return nil
 }
 
-// UnionsUsing returns actor's live unions that have remote id as a member,
-// by name. ErrNotFound if id is not one of actor's live remotes.
-func (s *Service) UnionsUsing(ctx context.Context, actor domain.Actor, id domain.RemoteID) ([]Remote, error) {
+// InUseMessage says why remote id cannot be deleted while user, a live
+// remote of ListRemotesUsing, uses it: "the remote stores the data of
+// encrypted remote %q; delete that remote first" for a wrapper, else "the
+// remote is a member of union %q; remove it from the union first". Stores
+// use it too, for the check they repeat.
+func InUseMessage(id domain.RemoteID, user Remote) string {
+	if user.Wrapped.RemoteID == id {
+		return fmt.Sprintf("the remote stores the data of encrypted remote %q; delete that remote first", user.Name)
+	}
+	return fmt.Sprintf("the remote is a member of union %q; remove it from the union first", user.Name)
+}
+
+// RemotesUsing returns actor's live remotes that use remote id, by name:
+// the unions that have it as a member and the wrappers that store their
+// data in it (Remote.Wrapped). ErrNotFound if id is not one of actor's
+// live remotes.
+func (s *Service) RemotesUsing(ctx context.Context, actor domain.Actor, id domain.RemoteID) ([]Remote, error) {
 	if _, err := s.owned(ctx, actor, id); err != nil {
-		return nil, fmt.Errorf("unions using remote: %w", err)
+		return nil, fmt.Errorf("remotes using remote: %w", err)
 	}
-	unions, err := s.repo.ListUnionsUsing(ctx, id)
+	using, err := s.repo.ListRemotesUsing(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("unions using remote %s: %w", id, err)
+		return nil, fmt.Errorf("remotes using remote %s: %w", id, err)
 	}
-	return slices.DeleteFunc(unions, func(u Remote) bool { return !actor.Owns(u.OwnerID) }), nil
+	return slices.DeleteFunc(using, func(u Remote) bool { return !actor.Owns(u.OwnerID) }), nil
+}
+
+// Infos returns what the checks of a job definition need to know about
+// ids (Info: the type, the wrapped remote, the type's capabilities), which
+// must all be live remotes of owner: ErrNotFound otherwise. A remote whose
+// type is no longer available has no capabilities. The API and the
+// scheduler pass them to jobkind's Registry.CheckWith.
+func (s *Service) Infos(ctx context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]Info, error) {
+	rs, err := s.usable(ctx, owner, ids)
+	if err != nil {
+		return nil, fmt.Errorf("remote infos: %w", err)
+	}
+	out := make(map[domain.RemoteID]Info, len(rs))
+	for id, r := range rs {
+		info := Info{Type: r.Type, Wrapped: r.Wrapped}
+		if typ, ok := s.backends.Get(r.Type); ok {
+			info.Capabilities = typ.Capabilities()
+		}
+		out[id] = info
+	}
+	return out, nil
 }
 
 // Usable returns the names of ids, which must all be live remotes of owner:
@@ -284,7 +344,9 @@ func (s *Service) RemoteType(ctx context.Context, owner domain.UserID, id domain
 // mergeSecrets returns the secrets of cur (a stored remote of type typ)
 // with in's merged over them, as Update stores them: a non-empty value
 // replaces the stored one, an absent or empty one keeps it, and
-// in.ClearSecrets removes optional ones (problems are added to v).
+// in.ClearSecrets removes optional ones (problems are added to v). A fixed
+// secret field (backend.Field.Fixed) takes neither a new value nor a clear
+// (FixedMessage).
 func (s *Service) mergeSecrets(v *domain.Validation, typ backend.Type, cur Remote, in Input) (map[string]string, error) {
 	secrets, err := s.open(cur)
 	if err != nil {
@@ -299,6 +361,8 @@ func (s *Service) mergeSecrets(v *domain.Validation, typ backend.Type, cur Remot
 		switch f, ok := fields[key]; {
 		case !ok || !f.Secret:
 			v.Add(path, "is not a secret field of this backend")
+		case f.Fixed:
+			v.Add(path, FixedMessage)
 		case f.Required:
 			v.Add(path, "is required and cannot be cleared")
 		case in.Secrets[key] != "":
@@ -307,8 +371,29 @@ func (s *Service) mergeSecrets(v *domain.Validation, typ backend.Type, cur Remot
 			delete(secrets, key)
 		}
 	}
+	for _, key := range slices.Sorted(maps.Keys(nonEmpty(in.Secrets))) {
+		if f := fields[key]; f.Secret && f.Fixed {
+			v.Add("secrets."+key, FixedMessage)
+		}
+	}
 	maps.Copy(secrets, nonEmpty(in.Secrets))
 	return secrets, nil
+}
+
+// checkFixedOptions adds FixedMessage on "options.<name>" to v for every
+// fixed option field (backend.Field.Fixed) of typ whose effective value
+// (its value, or its default when empty) in next differs from that in
+// stored.
+func checkFixedOptions(v *domain.Validation, typ backend.Type, stored, next map[string]string) {
+	for _, f := range typ.Fields() {
+		if !f.Fixed || f.Secret {
+			continue
+		}
+		effective := func(m map[string]string) string { return cmp.Or(m[f.Name], f.Default) }
+		if effective(stored) != effective(next) {
+			v.Add("options."+f.Name, FixedMessage)
+		}
+	}
 }
 
 // Draft resolves a remote as a form describes it, without storing
@@ -316,13 +401,14 @@ func (s *Service) mergeSecrets(v *domain.Validation, typ backend.Type, cur Remot
 // new remote: it is validated as Create validates it and gets a fresh ID
 // that is never stored. Otherwise id is one of actor's live remotes
 // (ErrNotFound otherwise) and in its edited values, validated as Update
-// validates them: the type cannot change, options and members are
-// replaced, and in's secrets merge over the stored ones. The name is not
-// checked in either case: a remote can be tested before it is named.
+// validates them: the type cannot change, options, members and the
+// wrapped remote are replaced, fixed fields keep their values, and in's
+// secrets merge over the stored ones. The name is not checked in either
+// case: a remote can be tested before it is named.
 //
 // The result is what Resolve returns for the draft and, for a union, its
-// members (which must be stored remotes of actor), together with the
-// draft's ID. Errors are those of Create and Update (a
+// members or, for a wrapper, its wrapped remote (which must be stored
+// remotes of actor), together with the draft's ID. Errors are those of Create and Update (a
 // *domain.ValidationError with their field paths) and of Resolve. The
 // result holds secrets: never log or store it.
 func (s *Service) Draft(ctx context.Context, actor domain.Actor, id domain.RemoteID, in Input) (map[domain.RemoteID]Resolved, domain.RemoteID, error) {
@@ -334,6 +420,7 @@ func (s *Service) Draft(ctx context.Context, actor domain.Actor, id domain.Remot
 		v       domain.Validation
 		typ     backend.Type
 		secrets map[string]string
+		stored  map[string]string // the stored options of an existing remote
 	)
 	if id.IsZero() {
 		var ok bool
@@ -367,10 +454,18 @@ func (s *Service) Draft(ctx context.Context, actor domain.Actor, id domain.Remot
 		if secrets, err = s.mergeSecrets(&v, typ, cur, in); err != nil {
 			return nil, domain.RemoteID{}, fmt.Errorf("%s %s: %w: its credentials cannot be read: %w", op, id, domain.ErrFailedPrecondition, err)
 		}
+		stored = cur.Options
 	}
 	cfg := backend.Config{Options: nonEmpty(in.Options), Secrets: secrets}
 	addConfigErrors(&v, typ.Validate(cfg))
+	if stored != nil {
+		checkFixedOptions(&v, typ, stored, cfg.Options)
+	}
 	members, err := s.checkMembers(ctx, &v, actor.UserID, id, typ, in.Members)
+	if err != nil {
+		return nil, domain.RemoteID{}, fmt.Errorf("%s: %w", op, err)
+	}
+	wrapped, err := s.checkWrapped(ctx, &v, actor.UserID, id, typ, in.Wrapped)
 	if err != nil {
 		return nil, domain.RemoteID{}, fmt.Errorf("%s: %w", op, err)
 	}
@@ -381,18 +476,25 @@ func (s *Service) Draft(ctx context.Context, actor domain.Actor, id domain.Remot
 	if err != nil {
 		return nil, domain.RemoteID{}, fmt.Errorf("%s: %w: the configuration cannot be mapped: %w", op, domain.ErrInvalidArgument, err)
 	}
-	memberIDs := make([]domain.RemoteID, 0, len(members))
+	used := make([]domain.RemoteID, 0, len(members)+1)
 	for _, m := range members {
-		memberIDs = append(memberIDs, m.RemoteID)
+		used = append(used, m.RemoteID)
 	}
-	// The members are stored remotes: Resolve checks that they are the
-	// actor's and decrypts them. They are never unions (checkMembers), so
-	// the draft's own ID cannot be among them.
-	out, err := s.Resolve(ctx, actor.UserID, memberIDs)
+	if !wrapped.IsZero() {
+		used = append(used, wrapped.RemoteID)
+	}
+	// The members and the wrapped remote are stored remotes: Resolve checks
+	// that they are the actor's and decrypts them. They are never unions or
+	// wrappers (checkMembers, checkWrapped) and never the draft itself, so
+	// the draft's own ID cannot be among the result.
+	out, err := s.Resolve(ctx, actor.UserID, used)
 	if err != nil {
 		return nil, domain.RemoteID{}, fmt.Errorf("%s: %w", op, err)
 	}
-	out[id] = Resolved{ID: id, Name: strings.TrimSpace(in.Name), Type: typ.ID(), Rclone: rc, Members: slices.Clone(members)}
+	out[id] = Resolved{
+		ID: id, Name: strings.TrimSpace(in.Name), Type: typ.ID(), Rclone: rc, Members: slices.Clone(members), Wrapped: wrapped,
+		Capabilities: typ.Capabilities(),
+	}
 	return out, id, nil
 }
 
@@ -418,12 +520,13 @@ func (s *Service) usable(ctx context.Context, owner domain.UserID, ids []domain.
 	return out, nil
 }
 
-// maxUnionDepth is how deep Resolve follows union members: unions cannot
-// nest, so their members are never unions.
-const maxUnionDepth = 1
+// maxResolveDepth is how deep Resolve follows union members and wrapped
+// remotes: nothing nests, so they are never unions or wrappers.
+const maxResolveDepth = 1
 
-// Resolve returns ids and the members of the unions among them, decrypted
-// and mapped to rclone remotes, for building a job's spec. Every remote must
+// Resolve returns ids, the members of the unions among them and the
+// remotes the wrappers among them store their data in, decrypted and
+// mapped to rclone remotes, for building a job's spec. Every remote must
 // be a live remote of owner: ErrNotFound otherwise (also for a remote whose
 // backend type is no longer available). A stored configuration that the
 // type cannot map is ErrInvalidArgument. Stored credentials that cannot be
@@ -436,8 +539,8 @@ func (s *Service) Resolve(ctx context.Context, owner domain.UserID, ids []domain
 	visited := map[domain.RemoteID]bool{}
 	level := ids
 	for depth := 0; len(level) > 0; depth++ {
-		if depth > maxUnionDepth {
-			return nil, fmt.Errorf("resolve remotes: %w: unions are nested deeper than %d", domain.ErrInvalidArgument, maxUnionDepth)
+		if depth > maxResolveDepth {
+			return nil, fmt.Errorf("resolve remotes: %w: remotes are nested deeper than %d", domain.ErrInvalidArgument, maxResolveDepth)
 		}
 		var todo []domain.RemoteID
 		for _, id := range level {
@@ -460,6 +563,9 @@ func (s *Service) Resolve(ctx context.Context, owner domain.UserID, ids []domain
 			for _, m := range res.Members {
 				next = append(next, m.RemoteID)
 			}
+			if !res.Wrapped.IsZero() {
+				next = append(next, res.Wrapped.RemoteID)
+			}
 		}
 		level = next
 	}
@@ -481,7 +587,10 @@ func (s *Service) resolve(r Remote) (Resolved, error) {
 	if err != nil {
 		return Resolved{}, fmt.Errorf("remote %s: %w: the stored configuration cannot be mapped: %w", r.ID, domain.ErrInvalidArgument, err)
 	}
-	return Resolved{ID: r.ID, Name: r.Name, Type: r.Type, Rclone: rc, Members: slices.Clone(r.Members)}, nil
+	return Resolved{
+		ID: r.ID, Name: r.Name, Type: r.Type, Rclone: rc, Members: slices.Clone(r.Members), Wrapped: r.Wrapped,
+		Capabilities: typ.Capabilities(),
+	}, nil
 }
 
 // Names returns display references of ids, of any owner and deleted ones
@@ -645,6 +754,67 @@ func checkMemberPath(typ backend.Type, r Remote, m Member) string {
 		}
 	}
 	return ""
+}
+
+// checkWrapped validates the wrapped remote w of remote self (of type typ,
+// owned by owner) and returns it, adding problems to v on "wrapped",
+// "wrapped.remote_id" and "wrapped.path". A type that is not a wrapper
+// takes none; a wrapper needs one: a live remote of owner other than
+// self, of a known type that is not local, a union or a wrapper, and a
+// path that joins with its root (backend.JoinRemote). Errors other than
+// validation problems (the repository) are returned.
+func (s *Service) checkWrapped(ctx context.Context, v *domain.Validation, owner domain.UserID, self domain.RemoteID, typ backend.Type, w Wrapped) (Wrapped, error) {
+	if !typ.Capabilities().Wrapper {
+		if !w.IsZero() {
+			v.Add("wrapped", notWrapperMessage)
+		}
+		return Wrapped{}, nil
+	}
+	switch {
+	case w.RemoteID.IsZero():
+		v.Add("wrapped.remote_id", "is required")
+		return Wrapped{}, nil
+	case w.RemoteID == self:
+		v.Add("wrapped.remote_id", "an encrypted remote cannot store its data in itself")
+		return Wrapped{}, nil
+	}
+	r, err := s.repo.GetRemote(ctx, w.RemoteID)
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		v.Add("wrapped.remote_id", notYoursMessage)
+		return Wrapped{}, nil
+	case err != nil:
+		return Wrapped{}, fmt.Errorf("load the wrapped remote: %w", err)
+	case r.Deleted() || r.OwnerID != owner:
+		// The same message as a missing remote: it must not tell another
+		// user's remotes apart.
+		v.Add("wrapped.remote_id", notYoursMessage)
+		return Wrapped{}, nil
+	}
+	wt, ok := s.backends.Get(r.Type)
+	if !ok {
+		v.Add("wrapped.remote_id", "has a backend type that is no longer available")
+		return Wrapped{}, nil
+	}
+	switch caps := wt.Capabilities(); {
+	case caps.Local:
+		v.Add("wrapped.remote_id", "cannot be a folder of a worker")
+		return Wrapped{}, nil
+	case caps.Union || caps.Wrapper:
+		v.Add("wrapped.remote_id", "cannot be a union or another encrypted remote")
+		return Wrapped{}, nil
+	}
+	// The root comes from the options alone: secrets are never part of
+	// it.
+	var root string
+	if rc, err := wt.ToRclone(backend.Config{Options: maps.Clone(r.Options)}); err == nil {
+		root = rc.Root
+	}
+	if _, err := backend.JoinRemote(root, w.Path); err != nil {
+		v.Add("wrapped.path", err.Error())
+		return Wrapped{}, nil
+	}
+	return w, nil
 }
 
 // nonEmpty returns the entries of m with a non-empty value, as a new map.
