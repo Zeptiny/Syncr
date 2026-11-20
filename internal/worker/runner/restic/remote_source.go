@@ -450,9 +450,13 @@ func (rs *remoteRun) rclone(ctx context.Context, args []string, stdout, stderr p
 }
 
 // rcloneSpec runs the pinned rclone as spec says, with the job's remotes
-// in its environment.
+// in its environment: a copy of rs.env, unless spec.Env is set (a variant
+// of it, such as the password check's rclonetool.CryptCheckEnv).
 func (rs *remoteRun) rcloneSpec(ctx context.Context, spec proc.Spec) (proc.Result, error) {
-	spec.Path, spec.Dir, spec.Env = rs.e.cfg.RclonePath, rs.e.cfg.ScratchRoot, maps.Clone(rs.env)
+	spec.Path, spec.Dir = rs.e.cfg.RclonePath, rs.e.cfg.ScratchRoot
+	if spec.Env == nil {
+		spec.Env = maps.Clone(rs.env)
+	}
 	return rs.e.cfg.Supervisor.Run(ctx, spec)
 }
 
@@ -597,15 +601,18 @@ func (rs *remoteRun) checkCryptPassword(ctx context.Context) error {
 	defer stop()
 	t := rs.listingTracker()
 	check := rclonetool.NewCryptCheck(t, stop)
+	alias := rs.plan.src.GetRemote()
 	pres, err := rs.rcloneSpec(lctx, proc.Spec{
-		Args:   rclonetool.CryptCheckArgs(rs.plan.src.GetRemote(), "--config="),
+		Args:   rclonetool.CryptCheckArgs(alias, "--config="),
+		Env:    rclonetool.CryptCheckEnv(rs.env, alias),
 		Stdout: check.Stdout, StdoutChunks: true, Stderr: check.Stderr,
 	})
 	if ctx.Err() != nil {
 		if runner.Canceled(err) {
 			return err
 		}
-		return fmt.Errorf("restic: not started: %w", context.Cause(ctx))
+		// The check ended before the cancel: nothing else started.
+		return fmt.Errorf("canceled after the check of the encrypted remote's password, before the backup: %w", context.Cause(ctx))
 	}
 	switch check.Verdict(pres.ExitCode, err) {
 	case rclonetool.CryptReadable, rclonetool.CryptNothing:

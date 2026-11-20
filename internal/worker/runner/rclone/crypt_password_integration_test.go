@@ -5,6 +5,7 @@ package rclone
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -150,6 +151,63 @@ func cryptPasswordCase(ctx context.Context, t *testing.T, it *itest, store *sync
 	if err != nil || len(l.GetEntries()) != 2 {
 		t.Errorf("listing the root with the right password = %v, %v", l, err)
 	}
+
+	cryptForeignFile(ctx, t, it, store, base+"/"+names+"-src", names, vault(right, "src"), vault(wrong, "src"), newDir)
+}
+
+// cryptForeignFile puts a file the crypt remote did not write (README.md,
+// as another tool would) in the stored folder of its "docs" folder, at
+// folder (on store), and checks that the password check still tells the
+// right password (right) from a wrong one (wrong): rclone skips the
+// foreign name during the check (strict_names off) and reads the
+// remote's own files. Jobs keep strict_names, so only what lists the
+// folder that holds the foreign file fails, naming it.
+func cryptForeignFile(ctx context.Context, t *testing.T, it *itest, store *syncrv1.RemoteDefinition, folder, names string,
+	right, wrong []*syncrv1.RemoteDefinition, newDir func(string) string,
+) {
+	t.Helper()
+	docs := "docs" // folder names are not encrypted with names "off"
+	if names != "off" {
+		code, out := bareRclone(ctx, t, it, right, "backend", "encode", "vault:", "docs")
+		if code != 0 || len(out) != 1 {
+			t.Fatalf("rclone backend encode: exit %d, %q", code, out)
+		}
+		docs = out[0]
+	}
+	readme := newDir("readme")
+	writeFiles(t, readme, map[string]int{"README.md": 15})
+	if code, out := bareRclone(ctx, t, it, []*syncrv1.RemoteDefinition{store}, "copyto", "--",
+		filepath.Join(readme, "README.md"), store.GetAlias()+":"+folder+"/"+docs+"/README.md"); code != 0 {
+		t.Fatalf("put the foreign file: exit %d, %q", code, out)
+	}
+
+	// The right password: the check passes; a sync from a folder without
+	// the foreign file, and the browser's listing of the root, work.
+	dst := newDir("dst-foreign")
+	if _, _, err := it.run(ctx, t, modeSync, &syncrv1.Location{Remote: "vault", Path: "photos"}, local(dst), nil, right...); err != nil {
+		t.Errorf("sync from photos with the right password and a foreign file in docs = %v", err)
+	} else if got := tree(t, dst); len(got) != 2 {
+		t.Errorf("sync from photos copied %q", slicesOfKeys(got))
+	}
+	p := it.prober(t)
+	if l, err := p.List(ctx, "0195f0a4-3b7c-7d1e-9f00-0000000000c3", right, &syncrv1.ProbeListRemote{Location: &syncrv1.Location{Remote: "vault"}}); err != nil || len(l.GetEntries()) != 2 {
+		t.Errorf("listing the root with the right password and a foreign file = %v, %v", l, err)
+	}
+	// Listing the folder that holds it fails on its name (strict_names),
+	// not on the password.
+	_, err := p.List(ctx, "0195f0a4-3b7c-7d1e-9f00-0000000000c4", right, &syncrv1.ProbeListRemote{Location: &syncrv1.Location{Remote: "vault", Path: "docs"}})
+	if err == nil || strings.Contains(err.Error(), "password is wrong") || !strings.Contains(err.Error(), "README.md") {
+		t.Errorf("listing docs with the right password and a foreign file = %v, want an error naming README.md", err)
+	}
+
+	// The wrong password still fails, the foreign file or not.
+	_, _, err = it.run(ctx, t, modeSync, &syncrv1.Location{Remote: "vault", Path: "photos"}, local(dst), nil, wrong...)
+	if runner.CodeOf(err) != syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED || !strings.Contains(err.Error(), "password is wrong") {
+		t.Errorf("sync from photos with the wrong password and a foreign file = %v (code %v)", err, runner.CodeOf(err))
+	}
+	if got := tree(t, dst); len(got) != 2 {
+		t.Errorf("the wrong password changed the destination: %q", slicesOfKeys(got))
+	}
 }
 
 // TestIntegrationCryptPasswordCheck: a crypt remote over MinIO read or
@@ -162,7 +220,8 @@ func cryptPasswordCase(ctx context.Context, t *testing.T, it *itest, store *sync
 // wrong") and changes nothing; so does every transfer into the remote,
 // whose files stay as the right password wrote them; and so does a probe
 // listing ("Test remote", the browser). With the right password everything
-// works.
+// works, also with a file in the remote's folder that it did not write
+// (cryptForeignFile).
 func TestIntegrationCryptPasswordCheck(t *testing.T) {
 	it := newITest(t)
 	minio := startMinIO(t)

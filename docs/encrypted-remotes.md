@@ -35,13 +35,19 @@ Under **Remotes, Add remote**, choose **Encrypted (crypt)**:
 
 **Store in** can be any of your remotes except a **Local directory**, a
 **union** or another encrypted remote ([limits](#limits)). Use a folder of
-its own: anything else in it, such as files another tool wrote, makes the
-encrypted remote's listings fail (Syncr has rclone refuse names it cannot
-decrypt instead of skipping them).
+its own, unless you mean to read data stored there before, with
+[exactly the same settings](#a-second-remote-over-the-same-folder). A file
+in it that the encrypted remote did not write (another tool's, or another
+encrypted remote's) has a name it cannot decrypt, and Syncr has rclone
+refuse such names instead of skipping them: listing the folder that holds
+it fails and names it, and so does a job that reads that folder or a
+folder above it (a sync from the root, for example). Jobs on other folders
+work, and the [password check](#a-wrong-password) is not fooled by a few
+such files.
 
 **Test remote** reads the first bytes of one of the files already stored,
-then lists the encrypted remote's root: with a wrong password the test
-fails, whatever the name settings ([a wrong password](#a-wrong-password)).
+then lists the encrypted remote's root: with a wrong password or salt the
+test fails, in every name mode ([a wrong password](#a-wrong-password)).
 
 The remote you store in shows the encrypted remote under **Used by** in the
 Remotes list, and cannot be deleted until the encrypted remote is deleted
@@ -109,8 +115,9 @@ it, so a damaged or tampered file fails to read.
 ## A wrong password
 
 Since the password is fixed, a wrong one only happens with a **second
-encrypted remote over the same folder**, made with a mistyped password,
-salt or name setting.
+encrypted remote over the same folder**, made with a mistyped password or
+salt ([other name settings](#a-second-remote-over-the-same-folder) are
+another matter).
 
 **Before anything uses an encrypted remote, the worker checks its
 password.** It lists the remote from its root and reads the first bytes of
@@ -129,11 +136,24 @@ password nothing decrypts (rclone checks every block it decrypts), so:
 
 This holds for every name setting and on every storage. It costs one short
 rclone run per encrypted remote per job or listing: a listing that stops at
-the first file with data, and one read of at most 64 KiB (three reads with
-a wrong password, so that one damaged file does not stop every job).
+the first file with data, and one read of at most 64 KiB.
 
-Why each name setting needs it (rclone 1.75.2; Syncr always has rclone
-refuse names it cannot decrypt, `strict_names`):
+**A few foreign or damaged files do not fail it.** The check stops at the
+first file that decrypts, and only fails once it has met three signs of a
+wrong password without one: a file whose contents do not decrypt (a damaged
+file), a name that does not (a file the remote did not write; the check
+skips it, unlike jobs), or a folder of the listing that turns out to be
+missing. With a wrong password it usually meets about three (a few more
+when rclone is quicker than the stop). With the right password, it fails
+only when three such files come before the first one that decrypts: rclone
+reads the files of a folder after it has listed the whole folder (on S3 and
+B2, a batch of 100 files of the recursive listing), so three foreign files
+in the first folder it reads (or batch) fail it, wherever the good files
+are. A remote whose only files with data are foreign or damaged fails it
+too.
+
+Why each name setting needs it (rclone 1.75.2; Syncr has rclone refuse
+names it cannot decrypt in jobs and listings, `strict_names`):
 
 | File name encryption | With a wrong password, without the check |
 |---|---|
@@ -147,8 +167,42 @@ With obfuscated names and a wrong password, a sync from such a remote can
 then replace its destination's copies of those empty files with garbled
 names; nothing with contents is at stake. And if a mistyped second remote
 writes into a folder while it is still empty, its files use its own
-password: the first remote then fails the check once it reads one of them.
-Use a folder of its own for each encrypted remote.
+password: each remote then reads its own files and not the other's, and
+the check of either one passes or fails depending on which files it meets
+first. The check also counts a file as empty when the storage does not
+report its size (rare: some WebDAV servers), so a remote of only such files
+has nothing to check. Use a folder of its own for each encrypted remote.
+
+### A second remote over the same folder
+
+A second encrypted remote over data that another one stored (to follow
+data you moved, or to read it from another account) must use **exactly
+the same** password, salt, **File name encryption**, **Encrypt folder
+names**, **Name encoding** and **Suffix**. Each of them changes the names
+the files are stored under, and the password and salt also the contents.
+
+The password check catches a different password or salt in every mode,
+and most other differences, because the names then do not decrypt (rclone
+1.75.2, checked on MinIO): standard, obfuscated or no name encryption read
+as another one, another name encoding, and another suffix than `.bin` all
+fail the check. Two differences pass it, because the names still decrypt:
+
+- **Encrypt folder names** off over data written with it on: the stored
+  folder names are read as plain names. The second remote sees your
+  folders under their encrypted names, and writes new folders under their
+  plain names beside them. A **sync into it deletes the first remote's
+  files** (the source has no folders of those names), and the first remote
+  then fails to list the folder: the second remote's files have names it
+  cannot decrypt.
+- **Suffix** `none` over data written with `.bin` (names not encrypted):
+  the files are listed with `.bin` in their names, so a **sync into it
+  writes every file again without the suffix and deletes the stored
+  ones**, and the first remote then fails to list them.
+
+Nothing in Syncr tells these apart (a file's contents decrypt either
+way): check the settings before running a job that writes into a second
+remote. In both cases the sync's source still has the files, but the
+first remote's copies are deleted.
 
 **Folders that do not exist.** Before a transfer or a backup reads a folder
 below the remote's root, the worker also looks for that folder in its
@@ -223,8 +277,9 @@ cryptdecode vault: <encrypted name>` tells which file an encrypted name is.
   own repository's folder is refused.
 - **Transfers that overlap through the wrapper are not refused,** such as
   a sync from an encrypted remote into the folder it stores its data in.
-  Its foreign names then make the encrypted remote's listings fail, so it
-  fails loudly. Two-way syncs are checked: their sides are compared by
+  The plain files it writes there have names the encrypted remote cannot
+  decrypt, so listing the folders that hold them fails, and so does every
+  job that reads them: it fails loudly. Two-way syncs are checked: their sides are compared by
   where the data is stored, and pairs on an encrypted remote wait for pairs
   on the folder it is stored in ([two-way sync](bisync.md)).
 - **Changing Store in while jobs wait** leaves those queued jobs waiting

@@ -1,5 +1,4 @@
-{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"gYfkfj/8680/R.agX","objectType":"*crypt.Object","source":"operations/operations.go:1365"}
-{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"gYfkfj/S.iRn","objectType":"*crypt.Object","source":"operations/operations.go:1365"}
-{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"UfTj/s.JNJ","objectType":"*crypt.Object","source":"operations/operations.go:1365"}
-{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"HEEJvyBu.JNJ","objectType":"*crypt.Object","source":"operations/operations.go:1365"}
-{"level":"notice","msg":"Failed to cat with 4 errors: last error was: failed to authenticate decrypted block - bad password?","source":"cmd/cmd.go:336"}
+{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"vnuzuy/5357/g.pvm","objectType":"*crypt.Object","source":"operations/operations.go:1365"}
+{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"vnuzuy/h.xgC","objectType":"*crypt.Object","source":"operations/operations.go:1365"}
+{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"juiy/i.zDz","objectType":"*crypt.Object","source":"operations/operations.go:1365"}
+{"level":"notice","msg":"Failed to cat with 3 errors: last error was: failed to authenticate decrypted block - bad password?","source":"cmd/cmd.go:336"}

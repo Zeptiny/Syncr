@@ -1,2 +1,2 @@
-{"level":"error","msg":"error listing: there were 2 undecryptable name errors. first error: gjmf6m47a8i4c0dmd7orspjeb4: undecryptable dir name detected: bad PKCS#7 padding - too long","object":"","objectType":"string","source":"walk/walk.go:175"}
-{"level":"notice","msg":"Failed to cat with 2 errors: last error was: there were 2 undecryptable name errors. first error: gjmf6m47a8i4c0dmd7orspjeb4: undecryptable dir name detected: bad PKCS#7 padding - too long","source":"cmd/cmd.go:336"}
+{"level":"notice","msg":"Skipping undecryptable dir name: bad PKCS#7 padding - too long","object":"un3t32b3ne803ib9jr3d3g2eu0","objectType":"string","source":"crypt/crypt.go:376"}
+{"level":"notice","msg":"Skipping undecryptable dir name: bad PKCS#7 padding - too long","object":"6g41vk8scebcsit9k76am1j720","objectType":"string","source":"crypt/crypt.go:376"}

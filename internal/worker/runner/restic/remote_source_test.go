@@ -534,6 +534,7 @@ func TestRemoteSourceCryptFolderCheck(t *testing.T) {
 func TestRemoteSourceCryptPassword(t *testing.T) {
 	t.Parallel()
 	const badBlock = `{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"gYfkfj/S.iRn","objectType":"*crypt.Object","source":"operations/operations.go:1365"}`
+	const skipped = `{"level":"notice","msg":"Skipping undecryptable file name: illegal base32 data at input byte 6","object":"un3t32b3ne803ib9jr3d3g2eu0/README.md","objectType":"string","source":"crypt/crypt.go:358"}`
 	vault := &syncrv1.RemoteDefinition{
 		Alias: "vault", BackendType: "crypt", Wrapped: &syncrv1.Location{Remote: "src", Path: "bucket/vault"},
 		Secrets: map[string]string{"password": sourceSecret}, ObscureKeys: []string{"password"},
@@ -564,6 +565,14 @@ func TestRemoteSourceCryptPassword(t *testing.T) {
 			[]string{"rclone lsf", "rclone sync", "restic backup"}, 0},
 		{"check fails", "vault", "", mirrorMethod, false, "", []string{`{"level":"error","msg":"error listing: 403 Forbidden","object":""}`}, 1,
 			[]string{"rclone cat"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED},
+		// The check runs with strict_names off: names that do not decrypt
+		// are skipped with a notice. Only them: the password is wrong.
+		{"wrong password, names", "vault", "", mirrorMethod, false, "", []string{skipped, skipped}, 0,
+			[]string{"rclone cat"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED},
+		// One foreign file, and the remote's own data: the password is
+		// right.
+		{"a foreign file", "vault", "", mirrorMethod, false, "\x00", []string{skipped}, 0,
+			[]string{"rclone cat", "rclone lsf", "rclone sync", "restic backup"}, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -572,6 +581,10 @@ func TestRemoteSourceCryptPassword(t *testing.T) {
 			var check proc.Spec
 			e.sup.script = func(ctx context.Context, spec proc.Spec) (proc.Result, error) {
 				if commandOf(spec) != "rclone cat" {
+					// Only the check turns strict_names off.
+					if v := spec.Env["RCLONE_CONFIG_VAULT_STRICT_NAMES"]; strings.HasPrefix(commandOf(spec), "rclone ") && v == "false" {
+						t.Errorf("%s runs with strict_names %q", commandOf(spec), v)
+					}
 					return base(ctx, spec)
 				}
 				check = spec
@@ -597,6 +610,9 @@ func TestRemoteSourceCryptPassword(t *testing.T) {
 				if !slices.Equal(check.Args, want) || !check.StdoutChunks {
 					t.Errorf("check args = %q (chunks %v), want %q", check.Args, check.StdoutChunks, want)
 				}
+				if v := check.Env["RCLONE_CONFIG_VAULT_STRICT_NAMES"]; v != "false" {
+					t.Errorf("the check runs with strict_names %q, want false", v)
+				}
 			}
 			if tt.code == 0 {
 				if err != nil {
@@ -615,6 +631,34 @@ func TestRemoteSourceCryptPassword(t *testing.T) {
 				t.Errorf("mounted after a failed check: %v", e.mounter.reqs)
 			}
 		})
+	}
+}
+
+// TestRemoteSourceCryptCanceledAfterCheck: a backup canceled after the
+// password check ended is canceled before anything else runs, and says so.
+func TestRemoteSourceCryptCanceledAfterCheck(t *testing.T) {
+	t.Parallel()
+	e := newRSEnv(t, bothMethods())
+	ctx, cancel := context.WithCancel(t.Context())
+	base := e.sup.script
+	e.sup.script = func(c context.Context, spec proc.Spec) (proc.Result, error) {
+		if commandOf(spec) == "rclone cat" {
+			defer cancel()
+			return proc.Result{}, nil
+		}
+		return base(c, spec)
+	}
+	spec := remoteBackup(func(_ *syncrv1.ResticBackup, s *syncrv1.ResticBackupRemoteSource) { s.Remote, s.Path = "vault", "" })
+	spec.Remotes = append(spec.Remotes, &syncrv1.RemoteDefinition{
+		Alias: "vault", BackendType: "crypt", Wrapped: &syncrv1.Location{Remote: "src", Path: "bucket/vault"},
+		Secrets: map[string]string{"password": sourceSecret}, ObscureKeys: []string{"password"},
+	})
+	_, err := e.runners[kindOf(spec)].Run(ctx, runner.Job{ID: "job-1", Spec: spec}, nil)
+	if !runner.Canceled(err) || !strings.Contains(err.Error(), "canceled after the check of the encrypted remote's password, before the backup") {
+		t.Errorf("run = %v, want canceled after the check", err)
+	}
+	if got := e.sup.commands(); !slices.Equal(got, []string{"rclone cat"}) {
+		t.Errorf("commands = %q, want only the check", got)
 	}
 }
 

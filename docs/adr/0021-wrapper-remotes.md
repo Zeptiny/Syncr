@@ -96,7 +96,8 @@ a union and crypt over a worker's local folder are follow-ups.
 
 ### `strict_names` always, a password check, and a parent-listing guard
 
-The worker always sets `strict_names=true` and refuses the options
+The worker always sets `strict_names=true` (only the password check below
+turns it off, for its own run) and refuses the options
 `remote`, `strict_names`, `pass_bad_blocks` and `no_data_encryption` for
 crypt (the last two would let a wrong password read files as zeros or
 without decrypting), and crypt passwords that are not obscured secrets.
@@ -106,12 +107,18 @@ presenting an empty remote.
 That is not enough with obfuscated or unencrypted names (above), so the
 worker **checks the password** of every crypt remote a job or a listing
 uses, before rclone touches anything (`rclonetool.CryptCheck`): `rclone
-cat --count=1 --min-size=1B` of the remote's root, stopped at the first
-decrypted byte (the password is right), or after three files that fail to
-decrypt. A file or name that does not decrypt, or a folder of the
-listing's own that is missing, fails the job with `EXECUTION_FAILED`
-("…so its password is wrong…"); a remote with no file with data, or whose
-folder does not exist yet, has nothing to check. It runs for both sides of
+cat --count=1 --min-size=1B` of the remote's root, with `strict_names` off
+for that run only (`rclonetool.CryptCheckEnv`), so that rclone skips a name
+it cannot decrypt with a notice instead of failing the listing on it. The
+signs of a wrong password are a file that does not decrypt ("bad
+password?"), a skipped name, and a folder of the listing's own that is
+missing. The check stops at the first decrypted byte (the password is
+right: any decrypted byte wins), or after three signs without one. Any sign
+and no decrypted byte fails the job with `EXECUTION_FAILED` ("…so its
+password is wrong…"). A run without an error and without a sign, or one
+that only found the remote's own folder or bucket missing (exit 3 with the
+recorded message), has nothing to check; every other outcome fails the
+check, so a changed rclone message cannot let a job through. It runs for both sides of
 a transfer, both sides of a two-way sync, the source of a backup of a
 remote (before its empty-source pre-check, so before any mirror or mount)
 and the folder listings (the browser and Test remote); not for folder
@@ -186,9 +193,22 @@ hit `worker_outdated`.
   where a plain bucket's missing folder is an empty source; each such
   transfer costs one more listing.
 - Every job and listing on a crypt remote costs one short rclone run more
-  (a listing up to the first file with data and a read of at most 64 KiB),
-  and one damaged or foreign file among the first three read with the
-  right password does not fail it, but three do.
+  (a listing up to the first file with data and a read of at most 64 KiB).
+  With the right password, damaged files and names the remote did not
+  write count toward the three signs until a file decrypts: up to two do
+  not fail it, three before the first readable file do. rclone reads a
+  folder's files after listing the whole folder (on S3 and B2, a batch of
+  100 objects of the recursive listing), so three foreign names in the
+  first folder or batch fail it wherever the good files are. Jobs keep
+  `strict_names`, so the folder that holds a foreign name fails to list,
+  naming it.
+- A second remote over the same data must use exactly the same password,
+  salt and name settings. The check fails a different password or salt in
+  every mode, and most other differences, but not "Encrypt folder names"
+  off over data written with it on, nor suffix `none` over `.bin`: their
+  names still decrypt, and a sync into such a remote deletes the first
+  remote's files (verified on MinIO). No check can see this through
+  decryption; the docs say so.
 - A remote that holds no file with data cannot be checked. With obfuscated
   names and a wrong password, a sync from it can then replace its
   destination's copies of those empty files with garbled names, and a

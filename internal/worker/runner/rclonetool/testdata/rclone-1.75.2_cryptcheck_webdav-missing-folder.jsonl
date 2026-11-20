@@ -1,0 +1,2 @@
+{"level":"error","msg":"error listing: directory not found","object":"","objectType":"string","source":"walk/walk.go:175"}
+{"level":"notice","msg":"Failed to cat with 2 errors: last error was: directory not found","source":"cmd/cmd.go:336"}

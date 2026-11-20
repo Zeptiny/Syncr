@@ -254,6 +254,8 @@ remote (`rclone lsjson -R` through a worker) and in a snapshot
   a wrong password (a second encrypted remote over the same folder with a
   mistyped one) fails to list, in every folder: the worker reads one of
   its files first. A remote that holds no file with data cannot be checked.
+  A file in its storage folder that it did not write makes the folder that
+  holds it fail to list, naming it; other folders list.
   Its folder sizes are not checked: on S3 or B2 a folder may count as
   empty.
 - Scans have no progress and cannot run longer than `probe.scan_timeout`;

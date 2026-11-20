@@ -59,14 +59,15 @@ func (r *Runner) checkCryptPassword(ctx context.Context, dir string, env *rclone
 	t := newTracker(nil, sc)
 	check := rclonetool.NewCryptCheck(t.core, stop)
 	pres, err := r.cfg.Supervisor.Run(cctx, proc.Spec{
-		Path: r.cfg.Binary, Args: rclonetool.CryptCheckArgs(alias), Dir: dir, Env: env.Vars(),
+		Path: r.cfg.Binary, Args: rclonetool.CryptCheckArgs(alias), Dir: dir, Env: rclonetool.CryptCheckEnv(env.Vars(), alias),
 		Stdout: check.Stdout, StdoutChunks: true, Stderr: check.Stderr,
 	})
 	if ctx.Err() != nil {
 		if _, ok := errors.AsType[*proc.CanceledError](err); ok {
 			return err
 		}
-		return fmt.Errorf("rclone: not started: %w", context.Cause(ctx))
+		// The check ended before the cancel: nothing else started.
+		return fmt.Errorf("rclone: canceled after the check of the encrypted remote's password: %w", context.Cause(ctx))
 	}
 	switch check.Verdict(pres.ExitCode, err) {
 	case rclonetool.CryptReadable, rclonetool.CryptNothing:

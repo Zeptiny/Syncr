@@ -11,6 +11,7 @@ import (
 
 	syncrv1 "github.com/Zeptiny/Syncr/gen/go/syncr/v1"
 	"github.com/Zeptiny/Syncr/internal/worker/proc"
+	"github.com/Zeptiny/Syncr/internal/worker/rcloneenv"
 	"github.com/Zeptiny/Syncr/internal/worker/runner"
 )
 
@@ -188,10 +189,12 @@ func TestRunCryptSourceCheck(t *testing.T) {
 
 // The password check's output, recorded with rclone 1.75.2 (rclonetool's
 // testdata has the whole runs): a file whose first block does not decrypt,
-// and the notice of a recursive listing that failed on encrypted names.
+// and the notice of a name that does not (the check runs with
+// strict_names off, so rclone skips it and goes on).
 const (
-	badBlockLine     = `{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"gYfkfj/S.iRn","objectType":"*crypt.Object","source":"operations/operations.go:1365"}`
-	undecryptableEnd = `{"level":"notice","msg":"Failed to cat: there were 3 undecryptable name errors. first error: 9gjpins6c3djaqkmt8pl0sp8sk/1mrr09b3qo5h7mvor19it4gco0: undecryptable file name detected: bad PKCS#7 padding - too long","source":"cmd/cmd.go:334"}`
+	badBlockLine = `{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"gYfkfj/S.iRn","objectType":"*crypt.Object","source":"operations/operations.go:1365"}`
+	skippedName  = `{"level":"notice","msg":"Skipping undecryptable file name: bad PKCS#7 padding - too long","object":"6g41vk8scebcsit9k76am1j720/ebufkhlofpt2if49ob9mqv4ohc","objectType":"string","source":"crypt/crypt.go:358"}`
+	foreignName  = `{"level":"notice","msg":"Skipping undecryptable file name: illegal base32 data at input byte 6","object":"un3t32b3ne803ib9jr3d3g2eu0/README.md","objectType":"string","source":"crypt/crypt.go:358"}`
 )
 
 // catRun is how cryptSupervisor answers the password check of one crypt
@@ -289,8 +292,17 @@ func TestRunCryptPasswordCheck(t *testing.T) {
 			[]string{"cat vault:"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "bad password?"},
 		{"wrong password, destination", modeSync, nil, vault(""), map[string]catRun{"vault:": wrong}, []string{"vault:"},
 			[]string{"cat vault:"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "destination: the encrypted remote cannot decrypt"},
-		{"undecryptable names", modeCopy, vault("photos"), nil, map[string]catRun{"vault:": {stderr: []string{undecryptableEnd}, exit: 1}}, nil,
-			[]string{"cat vault:"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "undecryptable name errors"},
+		{"undecryptable names", modeCopy, vault("photos"), nil, map[string]catRun{"vault:": {stderr: []string{skippedName, skippedName}}}, nil,
+			[]string{"cat vault:"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "ebufkhlofpt2if49ob9mqv4ohc: Skipping undecryptable file name"},
+		{"three undecryptable names stop the check", modeCopy, vault("photos"), nil,
+			map[string]catRun{"vault:": {stderr: []string{skippedName, skippedName, skippedName, skippedName}}}, []string{"vault:"},
+			[]string{"cat vault:"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "password is wrong"},
+		{"a foreign file, then the remote's own data", modeSync, vault(""), nil,
+			map[string]catRun{"vault:": {stderr: []string{foreignName}, stdout: "\xd5"}}, []string{"vault:"},
+			[]string{"cat vault:", "sync <local>"}, 0, ""},
+		{"exit 3 without a missing folder", modeSync, vault(""), nil,
+			map[string]catRun{"vault:": {stderr: []string{`{"level":"notice","msg":"Failed to cat: something new"}`}, exit: 3}}, nil,
+			[]string{"cat vault:"}, syncrv1.JobErrorCode_JOB_ERROR_CODE_NOT_FOUND, "cannot check the encrypted remote's password"},
 		{"one remote on both sides, checked once", modeSync, vault(""), vault("b"),
 			map[string]catRun{"vault:": {stdout: "x"}}, []string{"vault:"},
 			[]string{"cat vault:", "sync vault:b"}, 0, ""},
@@ -315,8 +327,10 @@ func TestRunCryptPasswordCheck(t *testing.T) {
 			_, err := f.runner.Run(t.Context(), job, nil)
 			got := sup.commands()
 			for i, c := range got {
-				if strings.HasPrefix(c, "sync /") || strings.HasPrefix(c, "copy /") || strings.HasPrefix(c, "move /") {
-					got[i] = strings.Fields(c)[0] + " <local>"
+				// The local folder is an absolute path of this OS (a
+				// drive letter on Windows); remote paths are not.
+				if verb, path, ok := strings.Cut(c, " "); ok && filepath.IsAbs(path) {
+					got[i] = verb + " <local>"
 				}
 			}
 			if !slices.Equal(got, tt.commands) {
@@ -334,10 +348,23 @@ func TestRunCryptPasswordCheck(t *testing.T) {
 			if err != nil && strings.Contains(err.Error(), secret) {
 				t.Errorf("error leaks the secret: %v", err)
 			}
+			strict := rcloneenv.EnvName("vault", "strict_names")
 			for _, sp := range sup.specs {
 				if sp.Args[0] == "cat" && (!sp.StdoutChunks || !slices.Contains(sp.Args, "--min-size=1B") || !slices.Contains(sp.Args, "--count=1")) {
 					t.Errorf("check args = %q, chunks %v", sp.Args, sp.StdoutChunks)
 				}
+				// Only the check turns strict_names off, replacing the
+				// worker's variable (rclonetool.CryptCheckEnv).
+				want := "true"
+				if sp.Args[0] == "cat" {
+					want = "false"
+				}
+				if got := sp.Env[strict]; got != want {
+					t.Errorf("%s: %s = %q, want %q", sp.Args[0], strict, got, want)
+				}
+			}
+			if n := len(sup.specs); n > 1 && len(sup.specs[0].Env) != len(sup.specs[n-1].Env) {
+				t.Errorf("the check's environment has %d variables, the transfer's %d", len(sup.specs[0].Env), len(sup.specs[n-1].Env))
 			}
 		})
 	}
@@ -360,6 +387,37 @@ func TestRunCryptPasswordCheckCanceled(t *testing.T) {
 	if got := sup.commands(); !slices.Equal(got, []string{"cat vault:"}) {
 		t.Errorf("commands = %q", got)
 	}
+}
+
+// TestRunCryptPasswordCheckCanceledAfter: a job canceled after its check
+// ended (here, with nothing to decrypt) is canceled before the transfer
+// starts, and says so.
+func TestRunCryptPasswordCheckCanceledAfter(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	sup := &cryptSupervisor{}
+	f := newFixture(t, &fakeSupervisor{})
+	f.runner.cfg.Supervisor = cancelingAfter{sup, cancel}
+	job := transferJob(&syncrv1.Location{Remote: "vault"}, &syncrv1.Location{Path: f.data},
+		sftpRemote("box", "x"), cryptRemote("vault", "box", "upload/vault", "y"))
+	_, err := f.runner.Run(ctx, job, nil)
+	if !runner.Canceled(err) || !strings.Contains(err.Error(), "canceled after the check of the encrypted remote's password") {
+		t.Errorf("Run() = %v, want canceled after the check", err)
+	}
+	if got := sup.commands(); !slices.Equal(got, []string{"cat vault:"}) {
+		t.Errorf("commands = %q", got)
+	}
+}
+
+// cancelingAfter cancels the job's context after each run.
+type cancelingAfter struct {
+	Supervisor
+	cancel context.CancelFunc
+}
+
+func (c cancelingAfter) Run(ctx context.Context, spec proc.Spec) (proc.Result, error) {
+	defer c.cancel()
+	return c.Supervisor.Run(ctx, spec)
 }
 
 // canceling cancels the job's context before each run.
@@ -424,7 +482,7 @@ func TestProbeListCryptPasswordCheck(t *testing.T) {
 		{"right password", &syncrv1.Location{Remote: "vault", Path: "photos"}, catRun{stdout: "x"}, []string{"cat vault:", "lsjson vault:photos"}, 0},
 		{"wrong password, root", &syncrv1.Location{Remote: "vault"}, catRun{stderr: []string{badBlockLine}, exit: 1}, []string{"cat vault:"},
 			syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED},
-		{"wrong password, folder", &syncrv1.Location{Remote: "vault", Path: "photos"}, catRun{stderr: []string{undecryptableEnd}, exit: 1}, []string{"cat vault:"},
+		{"wrong password, folder", &syncrv1.Location{Remote: "vault", Path: "photos"}, catRun{stderr: []string{skippedName}}, []string{"cat vault:"},
 			syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED},
 		{"not a crypt remote", &syncrv1.Location{Remote: "box", Path: "upload"}, catRun{}, []string{"lsjson box:upload"}, 0},
 	} {

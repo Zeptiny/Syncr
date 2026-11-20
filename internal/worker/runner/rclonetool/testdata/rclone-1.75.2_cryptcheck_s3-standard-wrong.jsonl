@@ -1,1 +1,3 @@
-{"level":"notice","msg":"Failed to cat: there were 3 undecryptable name errors. first error: 9gjpins6c3djaqkmt8pl0sp8sk/1mrr09b3qo5h7mvor19it4gco0: undecryptable file name detected: bad PKCS#7 padding - too long","source":"cmd/cmd.go:334"}
+{"level":"notice","msg":"Skipping undecryptable file name: bad PKCS#7 padding - too long","object":"6g41vk8scebcsit9k76am1j720/ebufkhlofpt2if49ob9mqv4ohc","objectType":"string","source":"crypt/crypt.go:358"}
+{"level":"notice","msg":"Skipping undecryptable file name: bad PKCS#7 padding - too long","object":"6g41vk8scebcsit9k76am1j720/tevu551rkc1qgh1lebt3h7kpe4/04ta5jgpv32tpt2d83k0hob8o4","objectType":"string","source":"crypt/crypt.go:358"}
+{"level":"notice","msg":"Skipping undecryptable file name: bad PKCS#7 padding - too long","object":"un3t32b3ne803ib9jr3d3g2eu0/rfrdpagrjo2soooflcs078hnqc","objectType":"string","source":"crypt/crypt.go:358"}

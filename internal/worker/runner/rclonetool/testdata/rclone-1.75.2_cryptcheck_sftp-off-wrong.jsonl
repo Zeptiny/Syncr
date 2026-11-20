@@ -1,0 +1,4 @@
+{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"photos/b.raw","objectType":"*crypt.Object","source":"operations/operations.go:1365"}
+{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"photos/2024/a.jpg","objectType":"*crypt.Object","source":"operations/operations.go:1365"}
+{"level":"error","msg":"Failed to send to output: failed to authenticate decrypted block - bad password?","object":"docs/c.txt","objectType":"*crypt.Object","source":"operations/operations.go:1365"}
+{"level":"notice","msg":"Failed to cat with 3 errors: last error was: failed to authenticate decrypted block - bad password?","source":"cmd/cmd.go:336"}
