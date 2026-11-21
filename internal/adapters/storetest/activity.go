@@ -284,6 +284,7 @@ func testActivityTotals(t *testing.T, s Store) {
 		bucket int
 	}
 	sec := func(n int) time.Duration { return time.Duration(n) * time.Second }
+	us := func(d time.Duration) int64 { return d.Microseconds() }
 	check := func(name string, q jobs.TotalsQuery, want map[key]jobs.Sums) {
 		t.Helper()
 		rows, err := s.JobTotals(ctx, q)
@@ -304,16 +305,16 @@ func testActivityTotals(t *testing.T, s Store) {
 	}
 	bounds := []time.Duration{time.Minute, time.Hour}
 	mine := map[key]jobs.Sums{
-		{transfer, w1.ID, domain.JobSucceeded, "", 0}:                    {Jobs: 1, Bytes: 100, Files: 2, Started: 1, RunTime: sec(60), Dispatched: 1, QueueWait: sec(5)},
-		{transfer, w1.ID, domain.JobSucceeded, "", 1}:                    {Jobs: 1, Bytes: 10, Files: 1, Started: 1, RunTime: sec(61), Dispatched: 1, QueueWait: sec(5)},
-		{transfer, w1.ID, domain.JobFailed, "execution_failed", 2}:       {Jobs: 1, Bytes: 5, Started: 1, RunTime: 3 * time.Hour, Dispatched: 1},
-		{backup, w2.ID, domain.JobSucceeded, "", 0}:                      {Jobs: 1, Bytes: 7, Files: 3, Started: 1, RunTime: time.Second - time.Microsecond, Dispatched: 1, QueueWait: sec(1)},
+		{transfer, w1.ID, domain.JobSucceeded, "", 0}:                    {Jobs: 1, Bytes: 100, Files: 2, Started: 1, RunTimeMicros: us(sec(60)), Dispatched: 1, QueueWaitMicros: us(sec(5))},
+		{transfer, w1.ID, domain.JobSucceeded, "", 1}:                    {Jobs: 1, Bytes: 10, Files: 1, Started: 1, RunTimeMicros: us(sec(61)), Dispatched: 1, QueueWaitMicros: us(sec(5))},
+		{transfer, w1.ID, domain.JobFailed, "execution_failed", 2}:       {Jobs: 1, Bytes: 5, Started: 1, RunTimeMicros: us(3 * time.Hour), Dispatched: 1},
+		{backup, w2.ID, domain.JobSucceeded, "", 0}:                      {Jobs: 1, Bytes: 7, Files: 3, Started: 1, RunTimeMicros: us(time.Second - time.Microsecond), Dispatched: 1, QueueWaitMicros: us(sec(1))},
 		{transfer, w1.ID, domain.JobCancelled, "cancelled", -1}:          {Jobs: 1},
 		{transfer, w2.ID, domain.JobInterrupted, "worker_restarted", -1}: {Jobs: 1, Bytes: 1, Files: 1},
 	}
 	check("owner, all time", jobs.TotalsQuery{OwnerID: owner, RunTimeBounds: bounds}, mine)
 	all := maps.Clone(mine)
-	all[key{transfer, w1.ID, domain.JobSucceeded, "", 0}] = jobs.Sums{Jobs: 2, Bytes: 1100, Files: 3, Started: 2, RunTime: sec(120), Dispatched: 2, QueueWait: sec(10)}
+	all[key{transfer, w1.ID, domain.JobSucceeded, "", 0}] = jobs.Sums{Jobs: 2, Bytes: 1100, Files: 3, Started: 2, RunTimeMicros: us(sec(120)), Dispatched: 2, QueueWaitMicros: us(sec(10))}
 	check("every owner", jobs.TotalsQuery{RunTimeBounds: bounds}, all)
 	check("from inclusive, until exclusive", jobs.TotalsQuery{OwnerID: owner, From: at(70 * time.Second), Until: at(71 * time.Second), RunTimeBounds: bounds},
 		map[key]jobs.Sums{{transfer, w1.ID, domain.JobSucceeded, "", 0}: mine[key{transfer, w1.ID, domain.JobSucceeded, "", 0}]})
@@ -322,7 +323,7 @@ func testActivityTotals(t *testing.T, s Store) {
 	check("open end", jobs.TotalsQuery{OwnerID: owner, From: at(time.Hour)},
 		map[key]jobs.Sums{{transfer, w1.ID, domain.JobFailed, "execution_failed", 0}: mine[key{transfer, w1.ID, domain.JobFailed, "execution_failed", 2}]})
 	merged := map[key]jobs.Sums{
-		{transfer, w1.ID, domain.JobSucceeded, "", 0}:                    {Jobs: 2, Bytes: 110, Files: 3, Started: 2, RunTime: sec(121), Dispatched: 2, QueueWait: sec(10)},
+		{transfer, w1.ID, domain.JobSucceeded, "", 0}:                    {Jobs: 2, Bytes: 110, Files: 3, Started: 2, RunTimeMicros: us(sec(121)), Dispatched: 2, QueueWaitMicros: us(sec(10))},
 		{transfer, w1.ID, domain.JobFailed, "execution_failed", 0}:       mine[key{transfer, w1.ID, domain.JobFailed, "execution_failed", 2}],
 		{backup, w2.ID, domain.JobSucceeded, "", 0}:                      mine[key{backup, w2.ID, domain.JobSucceeded, "", 0}],
 		{transfer, w1.ID, domain.JobCancelled, "cancelled", -1}:          {Jobs: 1},
@@ -341,8 +342,8 @@ func testActivityTotals(t *testing.T, s Store) {
 		got[r.Status] = r.Sums
 	}
 	want := map[domain.JobStatus]jobs.Sums{
-		domain.JobSucceeded:   {Jobs: 3, Bytes: 117, Files: 6, Started: 3, RunTime: sec(122) - time.Microsecond, Dispatched: 3, QueueWait: sec(11)},
-		domain.JobFailed:      {Jobs: 1, Bytes: 5, Started: 1, RunTime: 3 * time.Hour, Dispatched: 1},
+		domain.JobSucceeded:   {Jobs: 3, Bytes: 117, Files: 6, Started: 3, RunTimeMicros: us(sec(122) - time.Microsecond), Dispatched: 3, QueueWaitMicros: us(sec(11))},
+		domain.JobFailed:      {Jobs: 1, Bytes: 5, Started: 1, RunTimeMicros: us(3 * time.Hour), Dispatched: 1},
 		domain.JobCancelled:   {Jobs: 1},
 		domain.JobInterrupted: {Jobs: 1, Bytes: 1, Files: 1},
 	}

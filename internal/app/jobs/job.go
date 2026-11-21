@@ -374,12 +374,12 @@ type ActivityBucket struct {
 	Start                                     time.Time
 	Succeeded, Failed, Interrupted, Cancelled int64
 	Bytes, Files                              int64
-	// Started, RunTime, Dispatched and QueueWait are the run-time and
-	// queue-wait counts and sums of the bucket's jobs (Sums).
-	Started    int64
-	RunTime    time.Duration
-	Dispatched int64
-	QueueWait  time.Duration
+	// Started, RunTimeMicros, Dispatched and QueueWaitMicros are the
+	// run-time and queue-wait counts and sums of the bucket's jobs (Sums).
+	Started         int64
+	RunTimeMicros   int64
+	Dispatched      int64
+	QueueWaitMicros int64
 }
 
 // TotalsFilter selects the finished jobs Totals counts.

@@ -157,8 +157,8 @@ func TestActivityMergesRows(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	repo := &fakeActivity{rows: []jobs.ActivityRow{
-		{Bucket: at(2026, 11, 4, 10, 0), Status: domain.JobSucceeded, Sums: jobs.Sums{Jobs: 3, Bytes: 300, Files: 30, Started: 3, RunTime: time.Minute, Dispatched: 3, QueueWait: time.Second}},
-		{Bucket: at(2026, 11, 4, 10, 0), Status: domain.JobFailed, Sums: jobs.Sums{Jobs: 1, Bytes: 5, Files: 1, Started: 1, RunTime: time.Second}},
+		{Bucket: at(2026, 11, 4, 10, 0), Status: domain.JobSucceeded, Sums: jobs.Sums{Jobs: 3, Bytes: 300, Files: 30, Started: 3, RunTimeMicros: 60e6, Dispatched: 3, QueueWaitMicros: 1e6}},
+		{Bucket: at(2026, 11, 4, 10, 0), Status: domain.JobFailed, Sums: jobs.Sums{Jobs: 1, Bytes: 5, Files: 1, Started: 1, RunTimeMicros: 1e6}},
 		{Bucket: at(2026, 11, 4, 11, 0), Status: domain.JobInterrupted, Sums: jobs.Sums{Jobs: 2}},
 		{Bucket: at(2026, 11, 4, 11, 0), Status: domain.JobCancelled, Sums: jobs.Sums{Jobs: 4, Bytes: 1}},
 		{Bucket: at(2026, 11, 4, 11, 0), Status: domain.JobRunning, Sums: jobs.Sums{Jobs: 9, Bytes: 9, Started: 9}}, // ignored
@@ -172,7 +172,7 @@ func TestActivityMergesRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []jobs.ActivityBucket{
-		{Start: at(2026, 11, 4, 10, 0), Succeeded: 3, Failed: 1, Bytes: 305, Files: 31, Started: 4, RunTime: time.Minute + time.Second, Dispatched: 3, QueueWait: time.Second},
+		{Start: at(2026, 11, 4, 10, 0), Succeeded: 3, Failed: 1, Bytes: 305, Files: 31, Started: 4, RunTimeMicros: 61e6, Dispatched: 3, QueueWaitMicros: 1e6},
 		{Start: at(2026, 11, 4, 10, 30), Succeeded: 1},
 		{Start: at(2026, 11, 4, 11, 0), Interrupted: 2, Cancelled: 4, Bytes: 1},
 	}
@@ -182,7 +182,7 @@ func TestActivityMergesRows(t *testing.T) {
 	for i := range want {
 		if g, w := got[i], want[i]; !g.Start.Equal(w.Start) || g.Succeeded != w.Succeeded || g.Failed != w.Failed ||
 			g.Interrupted != w.Interrupted || g.Cancelled != w.Cancelled || g.Bytes != w.Bytes || g.Files != w.Files ||
-			g.Started != w.Started || g.RunTime != w.RunTime || g.Dispatched != w.Dispatched || g.QueueWait != w.QueueWait {
+			g.Started != w.Started || g.RunTimeMicros != w.RunTimeMicros || g.Dispatched != w.Dispatched || g.QueueWaitMicros != w.QueueWaitMicros {
 			t.Errorf("bucket %d = %+v, want %+v", i, g, w)
 		}
 	}

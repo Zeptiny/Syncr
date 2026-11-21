@@ -176,3 +176,30 @@ func TestDashboardRepositoryGrowth(t *testing.T) {
 		t.Errorf("photos per bucket = %v, want 100 at 3, 40 at 21, 7 at 22", added)
 	}
 }
+
+// TestDurationSumsBeyondDuration checks that run-time sums larger than a
+// time.Duration holds (about 292 years) reach the dashboard's groups
+// exactly: they are summed and converted in microseconds.
+func TestDurationSumsBeyondDuration(t *testing.T) {
+	t.Parallel()
+	const year = int64(365 * 24 * 3600 * 1e6) // microseconds
+	row := jobs.TotalsRow{Kind: "restic_backup", Status: domain.JobSucceeded,
+		Sums: jobs.Sums{Jobs: 1, Started: 1, RunTimeMicros: 200*year + 1, Dispatched: 1, QueueWaitMicros: 3}}
+	kinds, _, _ := breakdowns([]jobs.TotalsRow{row, row}, nil)
+	if len(kinds) != 1 {
+		t.Fatalf("kinds = %v", kinds)
+	}
+	got := kinds[0]
+	if micros(got.GetRunTime()) != 400*year+2 || got.GetRunTime().GetSeconds() != 400*year/1e6 || got.GetRunTime().GetNanos() != 2000 {
+		t.Errorf("run time = %v, want 400 years and 2 µs", got.GetRunTime())
+	}
+	if micros(got.GetQueueWait()) != 6 {
+		t.Errorf("queue wait = %v, want 6 µs", got.GetQueueWait())
+	}
+	if s := microsToSeconds(400*year + 2); s < 1.26e10 || s > 1.27e10 {
+		t.Errorf("microsToSeconds = %v", s)
+	}
+	if durMicros(0) != nil {
+		t.Error("a zero sum is set")
+	}
+}

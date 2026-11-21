@@ -103,10 +103,10 @@ func resolveLocal(y int, m time.Month, d int, loc *time.Location) time.Time {
 func sumsOf(j jobs.Job) jobs.Sums {
 	out := jobs.Sums{Jobs: 1, Bytes: j.Stats.Bytes, Files: j.Stats.Files}
 	if run, ok := runTime(j); ok {
-		out.Started, out.RunTime = 1, run
+		out.Started, out.RunTimeMicros = 1, run.Microseconds()
 	}
 	if wait, ok := span(j.CreatedAt, j.DispatchedAt); ok {
-		out.Dispatched, out.QueueWait = 1, wait
+		out.Dispatched, out.QueueWaitMicros = 1, wait.Microseconds()
 	}
 	return out
 }

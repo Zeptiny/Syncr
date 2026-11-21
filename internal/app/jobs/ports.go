@@ -205,13 +205,15 @@ type UnfinishedRow struct {
 type Sums struct {
 	// Jobs counts the group's jobs; Bytes and Files sum their stats.
 	Jobs, Bytes, Files int64
-	// Started counts the jobs with a run time and RunTime sums them;
-	// Dispatched counts the jobs with a queue wait and QueueWait sums them
-	// (see ActivityRepository).
-	Started    int64
-	RunTime    time.Duration
-	Dispatched int64
-	QueueWait  time.Duration
+	// Started counts the jobs with a run time and RunTimeMicros sums them;
+	// Dispatched counts the jobs with a queue wait and QueueWaitMicros sums
+	// them (see ActivityRepository). The sums are whole microseconds, not
+	// time.Duration: summed over every job ever stored (TotalsQuery without
+	// bounds) they can exceed a Duration's 292 years.
+	Started         int64
+	RunTimeMicros   int64
+	Dispatched      int64
+	QueueWaitMicros int64
 }
 
 // Add adds o to s.
@@ -220,9 +222,9 @@ func (s *Sums) Add(o Sums) {
 	s.Bytes += o.Bytes
 	s.Files += o.Files
 	s.Started += o.Started
-	s.RunTime += o.RunTime
+	s.RunTimeMicros += o.RunTimeMicros
 	s.Dispatched += o.Dispatched
-	s.QueueWait += o.QueueWait
+	s.QueueWaitMicros += o.QueueWaitMicros
 }
 
 // ActivityQuery selects the jobs of ActivityRepository.JobActivity.

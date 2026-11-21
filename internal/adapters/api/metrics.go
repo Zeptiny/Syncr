@@ -271,8 +271,8 @@ func (h *metricsHandler) collectJobs(ctx context.Context, set *metricSet, actor 
 			cumulative[b.Seconds()] = acc
 		}
 		set.metrics = append(set.metrics,
-			prometheus.MustNewConstHistogram(d.runTime, uint64(max(s.Started, 0)), s.RunTime.Seconds(), cumulative, k.kind, k.worker),
-			prometheus.MustNewConstSummary(d.queueWait, uint64(max(s.Dispatched, 0)), s.QueueWait.Seconds(), nil, k.kind, k.worker))
+			prometheus.MustNewConstHistogram(d.runTime, uint64(max(s.Started, 0)), microsToSeconds(s.RunTimeMicros), cumulative, k.kind, k.worker),
+			prometheus.MustNewConstSummary(d.queueWait, uint64(max(s.Dispatched, 0)), microsToSeconds(s.QueueWaitMicros), nil, k.kind, k.worker))
 	}
 	return nil
 }

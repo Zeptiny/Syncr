@@ -94,6 +94,12 @@ The counters are read from the database: they count **every finished job
 ever stored**, so they do not restart with the controller. `rate()` and
 `increase()` work on them as on any counter.
 
+A counter's series appears when the first job of its kind, worker, status
+and error code finishes, already at 1. `increase()` has no earlier sample
+to compare with, so it does not count that first job: the first failure of
+a new kind of error on a worker shows from the second one on. For alerts
+on single failures, use `syncr_schedule_last_run_status` (below).
+
 ### Schedules
 
 | Metric | Type | Labels | |
@@ -124,6 +130,10 @@ was deleted). A schedule that never ran has none.
 
 ## Example alerts
 
+The joins match on `job` and `instance` as well as on the object's label,
+so the series of two scrape targets, or of two tokens scraping one
+controller as two jobs, are never mixed.
+
 ```yaml
 groups:
   - name: syncr
@@ -132,20 +142,30 @@ groups:
         expr: up{job="syncr"} == 0
         for: 5m
       - alert: SyncrWorkerOffline
-        expr: syncr_worker_up == 0 and on(worker) syncr_worker_last_seen_timestamp_seconds > 0
+        # Online once, offline for 15 minutes (not a worker that never connected).
+        expr: |
+          syncr_worker_up == 0
+          and on(job, instance, worker) syncr_worker_last_seen_timestamp_seconds > 0
         for: 15m
       - alert: SyncrBackupStale
         # No success for 26 hours on a daily schedule that is enabled.
         expr: |
           (time() - syncr_schedule_last_success_timestamp_seconds) > 26 * 3600
-          and on(schedule) syncr_schedule_enabled == 1
+          and on(job, instance, schedule) syncr_schedule_enabled == 1
+      - alert: SyncrBackupNeverSucceeded
+        # An enabled schedule that has no success at all, for 26 hours: it has
+        # no last-success series, so the rule above cannot see it.
+        expr: |
+          syncr_schedule_enabled == 1
+          unless on(job, instance, schedule) syncr_schedule_last_success_timestamp_seconds
+        for: 26h
       - alert: SyncrScheduleFailing
         expr: syncr_schedule_last_run_status{status=~"failed|interrupted|missed|not_started"} == 1
       - alert: SyncrJobsFailing
         # More than a quarter of the jobs that finished in the last hour failed.
         expr: |
-          sum(increase(syncr_jobs_finished_total{status=~"failed|interrupted"}[1h]))
-            / sum(increase(syncr_jobs_finished_total[1h])) > 0.25
+          sum by (job, instance) (increase(syncr_jobs_finished_total{status=~"failed|interrupted"}[1h]))
+            / sum by (job, instance) (increase(syncr_jobs_finished_total[1h])) > 0.25
       - alert: SyncrQueueStuck
         expr: time() - syncr_jobs_oldest_queued_timestamp_seconds > 3600
 ```
