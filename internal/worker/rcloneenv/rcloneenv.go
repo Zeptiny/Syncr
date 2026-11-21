@@ -36,6 +36,7 @@ package rcloneenv
 import (
 	"cmp"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -567,9 +568,11 @@ func deniedOptions() map[string]string {
 
 // checkCredentials rejects a remote that rclone would complete with the
 // worker host's own credentials or account name because it carries too few
-// of its own. vars are the remote's variables, as passed to rclone; a key
-// counts as set when its value is not empty (rclone treats an empty value
-// like a missing one). The messages name keys only, never values.
+// of its own, and a gcs service account key that would send its sign-in
+// elsewhere than Google (checkGCSKey). vars are the remote's variables, as
+// passed to rclone; a key counts as set when its value is not empty (rclone
+// treats an empty value like a missing one). The messages name keys only,
+// never values.
 //
 // azureblob needs no rule: with env_auth, use_msi, msi_client_id, use_az,
 // use_emulator, service_principal_file and client_certificate_path denied,
@@ -587,7 +590,7 @@ func checkCredentials(alias, backend string, vars map[string]string) error {
 			return errors.New(`an sftp remote needs a "pass" or a "key_pem"; the worker's ssh-agent is never used`)
 		}
 	case "gcs":
-		if !set("service_account_credentials") {
+		if !set(gcsKeyOption) {
 			// rclone then falls back to Google's Application Default
 			// Credentials (env_auth and service_account_file are denied):
 			// the gcloud file under the worker's HOME or APPDATA, or the
@@ -595,10 +598,62 @@ func checkCredentials(alias, backend string, vars map[string]string) error {
 			// may accept a token here instead.
 			return errors.New("a Google Cloud Storage remote needs a service account key; the worker's own Google credentials are never used")
 		}
+		return checkGCSKey(vars[EnvName(alias, gcsKeyOption)])
 	case "ftp", "smb":
 		if !set("user") {
 			// rclone then sends the worker process's OS account name.
 			return fmt.Errorf("an %s remote needs a user; the worker's account name is never sent", backend)
+		}
+	}
+	return nil
+}
+
+// gcsKeyOption is the option of a gcs remote's service account key.
+const gcsKeyOption = "service_account_credentials"
+
+// gcsTokenURI is the only token_uri a gcs service account key may name:
+// Google's OAuth 2.0 token endpoint, which rclone also uses when the key
+// names none or an empty one. The controller's gcs descriptor pins the
+// same address.
+//
+//nolint:gosec // G101: a public endpoint, not a credential
+const gcsTokenURI = "https://oauth2.googleapis.com/token"
+
+// checkGCSKey rejects a gcs service account key that is not one JSON
+// object (rclone could not read it either), or whose token_uri names
+// another address than gcsTokenURI: rclone posts the signed sign-in
+// request to the key's token_uri, whatever it names. rclone reads the key
+// with encoding/json, which matches a member to token_uri when their names
+// are strings.EqualFold (any case, and the Kelvin sign for "k"), keeps the
+// last of repeated ones and ignores null. So every such member must be
+// null, empty or gcsTokenURI, not only the one encoding/json keeps: a
+// repeat in another spelling cannot hide another address. The messages
+// name the option, never any part of the key.
+func checkGCSKey(key string) error {
+	notKey := fmt.Errorf("%q must be a JSON key file (one JSON object)", gcsKeyOption)
+	if !json.Valid([]byte(key)) {
+		return notKey
+	}
+	dec := json.NewDecoder(strings.NewReader(key))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return notKey
+	}
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return notKey
+		}
+		name, _ := t.(string)
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return notKey
+		}
+		if !strings.EqualFold(name, "token_uri") {
+			continue
+		}
+		var uri *string
+		if err := json.Unmarshal(value, &uri); err != nil || (uri != nil && *uri != "" && *uri != gcsTokenURI) {
+			return fmt.Errorf("%q: token_uri must be absent, empty or %s; the worker signs in to Google Cloud Storage only through Google", gcsKeyOption, gcsTokenURI)
 		}
 	}
 	return nil

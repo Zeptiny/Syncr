@@ -173,7 +173,7 @@ An FTP server, optionally over TLS (FTPS).
 | **Base path** | The folder job paths start in: `/pub/backups`. Empty is the login folder. |
 | **Port** (Advanced) | 21. |
 | **Don't verify the server certificate** (Advanced) | Accepts any certificate. Anyone between the worker and the server can then read and change the traffic: only for a test server. |
-| **Connections** (Advanced) | The most connections at once. Set it when the server refuses connections (many allow only a few per user). |
+| **Connections** (Advanced) | The most connections at once; empty or 0 means no limit. For servers that allow only a few per user. Too low a limit can make jobs hang: see **Connection limit** below. |
 | **Disable EPSV**, **Disable MLSD**, **Set times with MDTM** (Advanced) | For servers that need them. |
 
 Choose one of the two FTPS options, not both. **Without either, FTP sends
@@ -184,6 +184,20 @@ can read them. Prefer explicit FTPS when the server offers it, or
 **Anonymous FTP:** user `anonymous`. The worker always sends a password,
 an empty one when you set none. Servers that want an e-mail address as the
 anonymous password refuse an empty one: enter any address then.
+
+**Connection limit.** Leave **Connections** empty unless the server
+limits connections. rclone warns that a limit can make a job hang (a
+deadlock: it stops making progress until it is cancelled or reaches its
+time limit) unless the limit is at least **one more than the job's
+parallel transfers plus its parallel checkers**: 13 with the defaults
+(4 transfers, 8 checkers). This holds for copies, syncs and moves,
+two-way syncs, and
+[mirror backups of a folder](restic.md#back-up-a-folder-of-a-remote) of
+the remote, which always run 8 checkers, so they need their **Parallel
+downloads** plus 9. On a server that allows only a few connections per
+user, set **Connections** to its limit and lower the job's **Parallel
+transfers** and **Parallel checkers** to fit: with 4 connections, 1
+transfer and 2 checkers. Syncr does not check this for you.
 
 **Modification times.** rclone compares FTP files by modification time
 only when the server can both report times (MLSD or MDTM) and set them
@@ -289,12 +303,13 @@ for the project.
 (`"type": "service_account"`) with a `client_email` and a `private_key`.
 Other credentials (user accounts, workload identity federation's
 `external_account` files) are refused. Its `token_uri`, where the worker
-sends the signed sign-in request, must be absent or exactly
+sends the signed sign-in request, must be absent (or empty) or exactly
 `https://oauth2.googleapis.com/token`, as in every key Google makes; any
-other address is refused, so a key cannot send the worker's sign-in
-elsewhere. The messages never repeat any part of the key. The worker never
-uses its host's Google credentials (gcloud's or the metadata server's):
-without a key, a Google Cloud Storage remote is refused.
+other address is refused, when the remote is saved and again by the
+worker, so a key cannot send the worker's sign-in elsewhere. The messages
+never repeat any part of the key. The worker never uses its host's Google
+credentials (gcloud's or the metadata server's): without a key, a Google
+Cloud Storage remote is refused.
 
 Google Cloud Storage keeps MD5 checksums.
 
@@ -317,8 +332,28 @@ compares checksums is refused when it is saved.
 ![A copy from the SMB share "NAS share": checksum comparison is not offered](screenshots/remote-types/06-transfer-no-checksum.png)
 
 Types that do keep checksums do not all keep the same kind: S3 and Azure
-and Google Cloud Storage keep MD5, B2 SHA-1. Between two types with no
-kind in common, rclone compares by size instead.
+and Google Cloud Storage keep MD5, B2 SHA-1. A comparison by checksum
+uses one only when **both files have a checksum of the same kind**;
+otherwise a copy, sync or move compares the two files **by size only**.
+That is the case:
+
+- between two types with no kind in common, such as S3 and B2;
+- for a file that has **no checksum stored**, even between two types
+  that keep the same kind. rclone stores one with a file it uploads in
+  parts only when the source has a checksum of that kind, so large files
+  copied to S3, Azure or B2 from a remote without that kind have none
+  (S3 and B2 upload files of about 200 MiB or more in parts, Azure files
+  over 4 MiB): files copied from an encrypted, SMB or FTP remote, for
+  example, or between B2 and S3 or Azure. Files uploaded in parts by
+  other tools may have none either.
+
+A file changed without changing its size then looks unchanged to a copy
+that compares by checksum, which skips it. A two-way sync that compares
+size and checksum, but not modification time, misses the same change on
+a side where the file has no checksum stored. Comparing by size and
+modification time (the default) still sees such a change when the
+file's time changed with it. A comparison by checksum is not proof
+that two copies are the same.
 
 ## Older workers
 

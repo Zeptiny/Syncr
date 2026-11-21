@@ -206,6 +206,92 @@ func TestNewTypeCredentials(t *testing.T) {
 	}
 }
 
+// TestGCSKeyTokenURI checks the worker's own check of a gcs key's token_uri
+// (checkGCSKey): rclone posts its sign-in wherever the key's token_uri
+// says, so only none, an empty one or Google's is accepted, in every
+// spelling encoding/json matches (any case, the Kelvin sign) and in every
+// repeat, and a key that is not one JSON object is refused, whether the key
+// comes as a secret or as an option. No message contains any part of the
+// key.
+func TestGCSKeyTokenURI(t *testing.T) {
+	t.Parallel()
+	const (
+		elsewhere = "https://token.attacker.example/steal"
+		material  = "TOP-SECRET-KEY-MATERIAL"
+		email     = "backup@demo-project.iam.gserviceaccount.com"
+		notKey    = `"service_account_credentials" must be a JSON key file`
+		notGoogle = `"service_account_credentials": token_uri must be absent, empty or https://oauth2.googleapis.com/token`
+	)
+	// key is a service account key with members appended to its own.
+	key := func(members ...string) string {
+		return `{"type":"service_account","client_email":"` + email + `",` +
+			`"private_key":"-----BEGIN PRIVATE KEY-----\n` + material + `\n-----END PRIVATE KEY-----\n"` +
+			strings.Join(append([]string{""}, members...), ",") + "}"
+	}
+	member := func(name, value string) string { return strconv.Quote(name) + ":" + value }
+	q := strconv.Quote
+	tests := []struct {
+		name, key string
+		want      string // "" when the key is accepted
+	}{
+		{"absent", key(), ""},
+		{"empty", key(member("token_uri", `""`)), ""},
+		{"null", key(member("token_uri", "null")), ""},
+		{"Google's", key(member("token_uri", q(gcsTokenURI))), ""},
+		{"Google's with escaped slashes", key(member("token_uri", `"https:\/\/oauth2.googleapis.com\/token"`)), ""},
+		{"as Google hands it out", gcsKey, ""},
+		{"Google's twice, in two spellings", key(member("token_uri", q(gcsTokenURI)), member("TOKEN_URI", q(gcsTokenURI))), ""},
+		{"empty, then Google's in another case", key(member("token_uri", `""`), member("Token_Uri", q(gcsTokenURI))), ""},
+		{"a name encoding/json does not match", key(member("token-uri", q(elsewhere)), member("token_urı", q(elsewhere)), member("token_urİ", q(elsewhere))), ""},
+
+		{"another URL", key(member("token_uri", q(elsewhere))), notGoogle},
+		{"Google's host over http", key(member("token_uri", q("http://oauth2.googleapis.com/token"))), notGoogle},
+		{"Google's with a suffix", key(member("token_uri", q(gcsTokenURI+"?x=1"))), notGoogle},
+		{"upper case", key(member("TOKEN_URI", q(elsewhere))), notGoogle},
+		{"Kelvin sign", key(member("toKen_uri", q(elsewhere))), notGoogle},
+		{"Kelvin sign, escaped", key(`"toKen_uri":` + q(elsewhere)), notGoogle},
+		{"mixed-case repeat after Google's", key(member("token_uri", q(gcsTokenURI)), member("Token_URI", q(elsewhere))), notGoogle},
+		{"mixed-case repeat before Google's", key(member("Token_Uri", q(elsewhere)), member("token_uri", q(gcsTokenURI))), notGoogle},
+		{"another URL, then null", key(member("token_uri", q(elsewhere)), member("TOKEN_URI", "null")), notGoogle},
+		{"not a string", key(member("token_uri", "42")), notGoogle},
+		{"an object", key(member("token_uri", `{"url":`+q(elsewhere)+`}`)), notGoogle},
+
+		{"not JSON", "not a key " + material + " " + elsewhere, notKey},
+		{"cut short", strings.TrimSuffix(key(member("token_uri", q(elsewhere))), "}"), notKey},
+		{"an array", "[" + key() + "]", notKey},
+		{"two objects", key() + key(member("token_uri", q(elsewhere))), notKey},
+	}
+	for _, tt := range tests {
+		for _, place := range []string{"secret", "option"} {
+			t.Run(tt.name+"/"+place, func(t *testing.T) {
+				t.Parallel()
+				def := remote("gg", "gcs", withSecrets("service_account_credentials", tt.key))
+				if place == "option" {
+					def = remote("gg", "gcs", withOptions("Service-Account-Credentials", tt.key))
+				}
+				_, err := NewBuilder(nil).Remotes([]*syncrv1.RemoteDefinition{def})
+				if tt.want == "" {
+					if err != nil {
+						t.Fatalf("Remotes: %v, want the key accepted", err)
+					}
+					return
+				}
+				if err == nil || !strings.Contains(err.Error(), tt.want) || !errors.Is(err, ErrInvalidRemote) {
+					t.Fatalf("Remotes = %v, want an invalid remote error with %q", err, tt.want)
+				}
+				if !strings.Contains(err.Error(), strconv.Quote("gg")) {
+					t.Errorf("error %q does not name the alias", err)
+				}
+				for _, part := range []string{material, email, "attacker", "steal", "not a key"} {
+					if strings.Contains(err.Error(), part) {
+						t.Errorf("error message contains %q, a part of the key: %v", part, err)
+					}
+				}
+			})
+		}
+	}
+}
+
 // TestNewTypeOptionsDenied checks that otherwise valid remotes of the four
 // types are refused with an option that runs a command, reads a local
 // file, or reaches the worker host or its identity.

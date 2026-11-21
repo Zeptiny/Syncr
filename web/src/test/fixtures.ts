@@ -232,7 +232,7 @@ export const backends: Backend[] = [
       }),
       f("concurrency", "Connections", FieldKind.INT, {
         advanced: true,
-        help: "Most connections at once; set it if the server refuses connections. 0 or empty means no limit.",
+        help: "Most connections at once; 0 or empty means no limit. Keep it above the job's parallel transfers plus checkers (4 + 8 by default), or jobs can hang.",
       }),
       f("disable_epsv", "Disable EPSV", FieldKind.BOOL, {
         advanced: true,

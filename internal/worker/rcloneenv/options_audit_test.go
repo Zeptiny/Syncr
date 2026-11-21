@@ -77,9 +77,9 @@ import (
 //     client_credentials) are never used: they only matter to the last
 //     branch, which without a token falls back to the host's Google
 //     Application Default Credentials. The key's own token_uri is where
-//     rclone posts the signed assertion; the controller pins it, and to
-//     the worker it is a target like endpoint. user_project only bills
-//     requests to another project.
+//     rclone posts the signed assertion; the controller pins it to
+//     Google's, and the worker refuses any other (checkGCSKey).
+//     user_project only bills requests to another project.
 //   - ftp: ask_password with an empty pass reads a line from the child's
 //     stdin (the null device for jobs: rclone then exits); it reaches
 //     nothing of the host's, and the controller never emits it.

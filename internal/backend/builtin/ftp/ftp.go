@@ -65,7 +65,7 @@ func (Type) Fields() []backend.Field {
 		{Name: "no_check_certificate", Label: "Don't verify the server certificate", Kind: backend.KindBool, Advanced: true,
 			Help: "Accepts any server certificate, so anyone between the worker and the server can read and change the traffic."},
 		{Name: "concurrency", Label: "Connections", Kind: backend.KindInt, Advanced: true,
-			Help: "Most connections at once; set it if the server refuses connections. 0 or empty means no limit."},
+			Help: "Most connections at once; 0 or empty means no limit. Keep it above the job's parallel transfers plus checkers (4 + 8 by default), or jobs can hang."},
 		{Name: "disable_epsv", Label: "Disable EPSV", Kind: backend.KindBool, Advanced: true,
 			Help: "For servers that do not understand extended passive mode."},
 		{Name: "disable_mlsd", Label: "Disable MLSD", Kind: backend.KindBool, Advanced: true,
