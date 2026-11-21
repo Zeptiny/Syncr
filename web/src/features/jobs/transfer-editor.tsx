@@ -21,7 +21,8 @@ import type { Backend, Remote } from "@/gen/syncr/v1/remotes_pb";
 import { transferModes } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
-import { noChecksumError, noChecksumLookup, noChecksumNames, noChecksumNote } from "./checksums";
+import { noChecksumError, noChecksumLookup, noChecksumNames } from "./checksums";
+import { NoChecksumNote } from "./no-checksum-note";
 import type { Compare, DefinitionErrors, TransferState } from "./definition";
 import { FilterRuleList } from "./pattern-list";
 import { byteUnits, durationUnits } from "./units";
@@ -336,7 +337,7 @@ export function TransferEditor({
               id="opt-compare"
               label="Decide what changed by"
               error={compareError}
-              help={noChecksum.length ? noChecksumNote(noChecksum) : undefined}
+              help={noChecksum.length ? <NoChecksumNote names={noChecksum} /> : undefined}
             >
               <Select value={s.compare} onValueChange={(v) => set("compare", v as Compare)}>
                 <SelectTrigger

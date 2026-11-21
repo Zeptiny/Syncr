@@ -11,7 +11,7 @@ import * as hooksMock from "@/mock/hooks";
 import * as m5 from "@/mock/m5";
 import * as fx from "@/test/fixtures";
 import { m5Api } from "@/test/m5-api";
-import { renderApp } from "@/test/render";
+import { renderApp, renderWithProviders } from "@/test/render";
 
 import { WorkerHooksPanel } from "../workers/worker-detail-page";
 import { HookRunsPanel } from "./hook-runs";
@@ -60,7 +60,7 @@ const held = () => JSON.parse(screen.getByTestId("value").textContent ?? "{}") a
 
 describe("HooksPanel", () => {
   it("asks for a place to run before anything can be chosen", () => {
-    render(<Editor target={{ workers: [] }} />);
+    renderWithProviders(<Editor target={{ workers: [] }} />);
     expect(
       screen.getByText("Choose where the job runs to see the hooks its worker offers."),
     ).toBeVisible();
@@ -68,7 +68,7 @@ describe("HooksPanel", () => {
   });
 
   it("says where hooks come from when the worker defines none", () => {
-    render(<Editor target={{ workers: [worker("office-pc", [])] }} />);
+    renderWithProviders(<Editor target={{ workers: [worker("office-pc", [])] }} />);
     expect(
       screen.getByText(/office-pc defines no hooks\. A worker's operator adds them/),
     ).toBeVisible();
@@ -76,13 +76,13 @@ describe("HooksPanel", () => {
   });
 
   it("says a worker from before hooks must be upgraded", () => {
-    render(<Editor target={{ workers: [worker("old-nas", [], ["probe"])] }} />);
+    renderWithProviders(<Editor target={{ workers: [worker("old-nas", [], ["probe"])] }} />);
     expect(screen.getByText("old-nas must be upgraded before it can run hooks.")).toBeVisible();
   });
 
   it("adds hooks to a phase in the order chosen, and removes them", async () => {
     const user = userEvent.setup();
-    render(<Editor target={{ workers: [nas] }} />);
+    renderWithProviders(<Editor target={{ workers: [nas] }} />);
     // Four phases, each with its own list.
     expect(screen.getAllByRole("combobox")).toHaveLength(4);
     expect(screen.getByText(/If one fails, the job does not run and fails\./)).toBeVisible();
@@ -121,7 +121,7 @@ describe("HooksPanel", () => {
   });
 
   it("keeps, and marks, a hook the worker does not define", () => {
-    render(
+    renderWithProviders(
       <Editor
         initial={{ ...emptyHooks(), before: ["stop-app", "gone"], after: ["start-app"] }}
         target={{ workers: [nas] }}
@@ -139,7 +139,9 @@ describe("HooksPanel", () => {
   });
 
   it("keeps the hooks of a stored job visible while its worker is unknown", () => {
-    render(<Editor initial={{ ...emptyHooks(), before: ["stop-app"] }} target={{ workers: [] }} />);
+    renderWithProviders(
+      <Editor initial={{ ...emptyHooks(), before: ["stop-app"] }} target={{ workers: [] }} />,
+    );
     expect(screen.getByText("stop-app")).toBeVisible();
     // Nothing is known, so nothing is called missing.
     expect(screen.queryByRole("alert")).toBeNull();
@@ -148,7 +150,7 @@ describe("HooksPanel", () => {
   it("offers a label's hooks with how many of its workers define each", async () => {
     const user = userEvent.setup();
     const db = worker("db-01", [["dump-db", "Dump the database"]]);
-    render(<Editor target={{ workers: [nas, db], label: "app" }} />);
+    renderWithProviders(<Editor target={{ workers: [nas, db], label: "app" }} />);
     expect(
       screen.getByText(
         "A run goes to a worker with the label that defines every hook chosen here.",
@@ -169,7 +171,7 @@ describe("HooksPanel", () => {
   });
 
   it("shows the server's error", () => {
-    render(
+    renderWithProviders(
       <HooksPanel
         idPrefix="t"
         value={{ ...emptyHooks(), before: ["stop-app"] }}
@@ -235,7 +237,7 @@ describe("HookRunsPanel", () => {
 
 describe("WorkerHooksPanel", () => {
   it("lists the worker's hooks with what they do", () => {
-    render(<WorkerHooksPanel worker={nas} />);
+    renderWithProviders(<WorkerHooksPanel worker={nas} />);
     const rows = screen.getAllByRole("listitem");
     expect(rows.map((r) => r.textContent)).toEqual([
       "dump-dbDump the databasestopped after 2m",
@@ -245,11 +247,12 @@ describe("WorkerHooksPanel", () => {
   });
 
   it("says how to offer some, or that the worker is too old", () => {
-    const { rerender } = render(<WorkerHooksPanel worker={worker("office-pc", [])} />);
+    const first = renderWithProviders(<WorkerHooksPanel worker={worker("office-pc", [])} />);
     expect(
       screen.getByText(/add them to the worker's configuration file under “hooks”/),
     ).toBeVisible();
-    rerender(<WorkerHooksPanel worker={worker("old-nas", [], ["probe"])} />);
+    first.unmount();
+    renderWithProviders(<WorkerHooksPanel worker={worker("old-nas", [], ["probe"])} />);
     expect(
       screen.getByText("This worker's version cannot run hooks. Upgrade it first."),
     ).toBeVisible();

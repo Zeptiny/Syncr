@@ -8,6 +8,7 @@ import { ChannelIcon } from "@/components/app/channel-icon";
 import { DataTable } from "@/components/app/data-table";
 import { EmptyState } from "@/components/app/empty-state";
 import { PageHeader } from "@/components/app/page-header";
+import { HelpLink } from "@/features/docs/doc-link";
 import { StatusPill } from "@/components/app/status-badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -188,12 +189,15 @@ export function NotificationsPage({ search }: { search: NotificationsSearch }) {
         title="Notifications"
         description="Where Syncr tells you how your jobs went. Link a contact to a schedule to choose what it hears about."
         actions={
-          <Button asChild>
-            <Link to="/notifications/new">
-              <Plus aria-hidden />
-              Add contact
-            </Link>
-          </Button>
+          <>
+            <HelpLink page="notifications" />
+            <Button asChild>
+              <Link to="/notifications/new">
+                <Plus aria-hidden />
+                Add contact
+              </Link>
+            </Button>
+          </>
         }
       />
       <Tabs

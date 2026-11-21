@@ -7,6 +7,7 @@ import { FileBrowser } from "@/components/app/file-browser/file-browser";
 import { copyPathItem } from "@/components/app/file-browser/helpers";
 import { useBrowserSelection } from "@/components/app/file-browser/use-selection";
 import { PageHeader } from "@/components/app/page-header";
+import { HelpLink } from "@/features/docs/doc-link";
 import { StatusBadge } from "@/components/app/status-badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -63,6 +64,7 @@ export function WorkerFilesPage({ workerId, path }: { workerId: string; path?: s
           </>
         }
         description="Only the worker's allowed folders can be opened."
+        actions={<HelpLink page="browsing" />}
       />
       <FileBrowser
         source={source}

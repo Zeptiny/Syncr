@@ -6,12 +6,14 @@ import { toast } from "sonner";
 import { ChannelIcon } from "@/components/app/channel-icon";
 import { ErrorState } from "@/components/app/error-state";
 import { PageHeader } from "@/components/app/page-header";
+import { HelpLink } from "@/features/docs/doc-link";
 import { Panel } from "@/components/app/panel";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChannelService, ContactService } from "@/gen/syncr/v1/notify_pb";
 import { invalidateService } from "@/lib/invalidate";
 
+import { channelHelpFor } from "./channel-help";
 import { ContactForm } from "./contact-form";
 
 /** NewContactPage picks a channel, then shows its form. */
@@ -32,6 +34,7 @@ export function NewContactPage({ type }: { type?: string }) {
           back={{ to: "/notifications", label: "Notifications" }}
           title="Add a contact"
           description="Choose how Syncr should reach you. You can add as many contacts of each kind as you like."
+          actions={<HelpLink page="notifications" />}
         />
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {channels.isPending &&
@@ -67,9 +70,12 @@ export function NewContactPage({ type }: { type?: string }) {
         title={`New ${chosen.label} contact`}
         description={chosen.description}
         actions={
-          <Button variant="outline" asChild>
-            <Link to="/notifications/new">Choose another kind</Link>
-          </Button>
+          <>
+            <HelpLink {...channelHelpFor(chosen.id)} />
+            <Button variant="outline" asChild>
+              <Link to="/notifications/new">Choose another kind</Link>
+            </Button>
+          </>
         }
       />
       <Panel className="max-w-4xl">

@@ -16,6 +16,7 @@ import {
   JobSchema,
   JobService,
   JobStatus,
+  SystemService,
   ValidationErrorSchema,
   WorkerAdminService,
   WorkerSchema,
@@ -356,6 +357,10 @@ export function createMockTransport(): Transport {
       invalid,
       sleep: (ms) => sleep(ms),
       queueJob,
+    });
+    // The version of the docs and the "What's new" notice.
+    service(SystemService, {
+      getInfo: () => ({ version: "v2.3.0", commit: "mock" }),
     });
     service(SetupService, {
       getSetupStatus: () => ({ setupRequired }),

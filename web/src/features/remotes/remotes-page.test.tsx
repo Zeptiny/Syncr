@@ -6,6 +6,32 @@ import * as fx from "@/test/fixtures";
 import { m5Api } from "@/test/m5-api";
 import { renderApp } from "@/test/render";
 
+describe("help links on the remote pages", () => {
+  it("opens the section of the chosen type, in a new tab", async () => {
+    const api = m5Api(Date.now());
+    const picker = renderApp("/remotes/new", api.transport);
+    expect(await screen.findByRole("link", { name: /^Help: Remotes/ })).toHaveAttribute(
+      "href",
+      "/docs/remotes",
+    );
+    picker.unmount();
+
+    const smb = renderApp("/remotes/new?type=smb", api.transport);
+    // The picker shows until the types are loaded.
+    expect(await screen.findByRole("heading", { name: /^New SMB/ })).toBeInTheDocument();
+    const help = screen.getByRole("link", { name: /^Help: Remotes/ });
+    expect(help).toHaveAttribute("href", "/docs/remotes#smb-windows-share");
+    expect(help).toHaveAttribute("target", "_blank");
+    smb.unmount();
+
+    renderApp(`/remotes/${fx.ids.vault}`, api.transport);
+    expect(await screen.findByRole("link", { name: /^Help: Encrypted remotes/ })).toHaveAttribute(
+      "href",
+      "/docs/encrypted-remotes",
+    );
+  });
+});
+
 describe("RemotesPage", () => {
   it("opens a remote's browser page, which lists files as well as folders", async () => {
     const user = userEvent.setup();

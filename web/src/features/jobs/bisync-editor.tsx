@@ -17,6 +17,7 @@ import {
 import type { Worker } from "@/gen/syncr/v1/api_pb";
 import { BisyncConflictLoser, type BisyncResyncMode } from "@/gen/syncr/v1/link_pb";
 import type { Backend, Remote } from "@/gen/syncr/v1/remotes_pb";
+import { HelpLink } from "@/features/docs/doc-link";
 
 import {
   conflictResolutions,
@@ -26,7 +27,8 @@ import {
   type BisyncState,
   type CompareState,
 } from "./bisync-definition";
-import { noChecksumError, noChecksumLookup, noChecksumNames, noChecksumNote } from "./checksums";
+import { noChecksumError, noChecksumLookup, noChecksumNames } from "./checksums";
+import { NoChecksumNote } from "./no-checksum-note";
 import { FilterRuleList } from "./pattern-list";
 import { NumberInput, QuantityInput, Toggle } from "./transfer-editor";
 import { byteUnits } from "./units";
@@ -146,6 +148,7 @@ export function BisyncEditor({
       <Panel
         title="Safety"
         description="Guards against a drive that is not mounted or a wrong path, which would make every file look deleted."
+        actions={<HelpLink page="bisync" anchor="deletions-and-the-safety-checks" />}
       >
         <div className="grid gap-x-8 gap-y-5 md:grid-cols-2">
           <NumberInput
@@ -171,6 +174,7 @@ export function BisyncEditor({
       <Panel
         title="Conflicts"
         description="A conflict is a file changed on both sides since the last run."
+        actions={<HelpLink page="bisync" anchor="conflicts" />}
       >
         <div className="grid gap-x-8 gap-y-5 md:grid-cols-2">
           <div className="flex flex-col gap-5">
@@ -271,7 +275,7 @@ export function BisyncEditor({
               </p>
             ) : noChecksum.length ? (
               <p id={id("compare-help")} className="text-xs leading-5 text-muted-foreground">
-                Size and modification time is the default. {noChecksumNote(noChecksum)}
+                Size and modification time is the default. <NoChecksumNote names={noChecksum} />
               </p>
             ) : (
               <p id={id("compare-help")} className="text-xs leading-5 text-muted-foreground">
@@ -284,6 +288,7 @@ export function BisyncEditor({
         <Panel
           title="Resync"
           description="What a resync keeps of a file that differs on the two sides."
+          actions={<HelpLink page="bisync" anchor="filters-and-resync" />}
         >
           <FieldShell
             id={id("resync-mode")}

@@ -39,6 +39,7 @@ import {
   isOutdated,
   outdatedHelp,
 } from "@/lib/workers";
+import { DocLink, HelpLink } from "@/features/docs/doc-link";
 import { JobsTable } from "@/features/jobs/jobs-table";
 import { workerAbilities } from "@/lib/remote-sources";
 
@@ -113,6 +114,7 @@ export function WorkerHooksPanel({ worker: w }: { worker: Worker }) {
       className="mb-6"
       title="Hooks"
       description="Commands its operator prepared, which jobs on this worker can run before or after their operation: stop an app, dump a database, start the app again."
+      actions={<HelpLink page="hooks" anchor="defining-hooks-on-a-worker" />}
       flush={hooks.length > 0}
     >
       {hooks.length > 0 ? (
@@ -226,7 +228,19 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
           )
         }
       />
-      {isOutdated(w) && <p className="mb-4 text-[13px] text-muted-foreground">{outdatedHelp(w)}</p>}
+      {isOutdated(w) && (
+        <p className="mb-4 text-[13px] text-muted-foreground">
+          {outdatedHelp(w)}{" "}
+          <DocLink
+            page="upgrade"
+            anchor="what-a-version-mismatch-looks-like"
+            newTab
+            className="font-medium text-primary hover:underline"
+          >
+            What a version mismatch means
+          </DocLink>
+        </p>
+      )}
       {isAdmin && isOutdated(w) && (
         <div className="mb-6">
           <UpgradeWorkerCard worker={w} />
@@ -248,7 +262,7 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
               { label: "Job kinds", value: info?.jobKinds.join(", ") || "–", mono: true },
               { label: "Parallel jobs", value: info?.maxConcurrentJobs || "–" },
               ...(workerAbilities(w)
-                ? [{ label: "Remote backups", value: <RemoteAbilities worker={w} stacked /> }]
+                ? [{ label: "Remote backups", value: <RemoteAbilities worker={w} stacked help /> }]
                 : []),
               ...(w.mode === WorkerMode.PASSIVE
                 ? [
@@ -265,33 +279,36 @@ export function WorkerDetailPage({ workerId }: { workerId: string }) {
           title="Allowed folders"
           description="Jobs may read and write the worker's own disks only inside these folders."
           actions={
-            info?.localRoots.length ? (
-              <Button
-                variant="outline"
-                size="sm"
-                asChild={browsable}
-                disabled={!browsable}
-                title={
-                  !isOnline(w)
-                    ? "The worker is offline."
-                    : !hasFeature(w, FEATURE_PROBE)
-                      ? "This worker's version cannot list files."
-                      : undefined
-                }
-              >
-                {browsable ? (
-                  <Link to="/workers/$workerId/files" params={{ workerId: w.id }}>
-                    <FolderSearch aria-hidden />
-                    Browse files
-                  </Link>
-                ) : (
-                  <>
-                    <FolderSearch aria-hidden />
-                    Browse files
-                  </>
-                )}
-              </Button>
-            ) : undefined
+            <>
+              <HelpLink page="worker-config" anchor="local-folders" />
+              {info?.localRoots.length ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  asChild={browsable}
+                  disabled={!browsable}
+                  title={
+                    !isOnline(w)
+                      ? "The worker is offline."
+                      : !hasFeature(w, FEATURE_PROBE)
+                        ? "This worker's version cannot list files."
+                        : undefined
+                  }
+                >
+                  {browsable ? (
+                    <Link to="/workers/$workerId/files" params={{ workerId: w.id }}>
+                      <FolderSearch aria-hidden />
+                      Browse files
+                    </Link>
+                  ) : (
+                    <>
+                      <FolderSearch aria-hidden />
+                      Browse files
+                    </>
+                  )}
+                </Button>
+              ) : undefined}
+            </>
           }
         >
           {info?.localRoots.length ? (

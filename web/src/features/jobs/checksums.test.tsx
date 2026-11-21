@@ -142,6 +142,10 @@ describe("checksums and remotes that keep none", () => {
         "This remote keeps no checksums (Vault), so checksum comparison is not offered.",
       ),
     ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Which remotes keep none/ })).toHaveAttribute(
+      "href",
+      "/docs/remotes#checksums",
+    );
     await user.click(screen.getByRole("combobox", { name: "Decide what changed by" }));
     const options = screen.getAllByRole("option").map((o) => o.textContent);
     expect(options).toEqual(["Modification time and size", "Size only"]);

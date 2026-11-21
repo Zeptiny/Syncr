@@ -9,7 +9,7 @@
 //   SYNCR_UI_USER           sign-in user (default admin)
 //   SYNCR_UI_PASSWORD       sign-in password (default syncr-demo-admin)
 //   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3, hooks, bisync, browser,
-//                           remote-backup, crypt, remote-types or readme:
+//                           remote-backup, crypt, remote-types, docs or readme:
 //                           which shot list
 //   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/<set>)
 //   SYNCR_SCREENSHOT_ONLY   comma-separated shot names to take (default all)
@@ -44,6 +44,7 @@ const set = [
   "remote-backup",
   "crypt",
   "remote-types",
+  "docs",
   "readme",
 ].includes(process.env.SYNCR_SCREENSHOT_SET)
   ? process.env.SYNCR_SCREENSHOT_SET
@@ -1642,6 +1643,82 @@ async function remoteTypesSet(browser) {
   }
 }
 
+// The docs in the controller: the viewer signed out and in, search, copy
+// buttons, What's new, a help link, the phone layout, the 404 and the
+// release notes. Run it against a controller built as a release (for
+// example -X .../version.version=v2.3.0), so the version label and the
+// What's new notice appear.
+const seenNews = { "syncr-whats-new": "v2.3.0" };
+const docsShots = [
+  ["01-index-signed-out", { signedOut: true }, async (p) => open(p, "/docs", 600)],
+  ["02-restic-dark", { dark: true, init: seenNews }, async (p) => open(p, "/docs/restic", 600)],
+  [
+    "03-search",
+    { init: seenNews },
+    async (p) => {
+      await open(p, "/docs", 400);
+      await p.keyboard.press("/");
+      const input = p.getByRole("combobox", { name: "Search the docs" });
+      await input.pressSequentially("setup code", { delay: 30 });
+      await p.getByRole("option").first().waitFor();
+      await settle(p, 400);
+    },
+  ],
+  [
+    "04-copy-button",
+    { init: seenNews, clipboard: true },
+    async (p) => {
+      await open(p, "/docs/deployment#first-start", 600);
+      const block = p.locator(".doc-code").first();
+      await block.getByRole("button", { name: /Copy/ }).click();
+      await p.getByText("Copied").first().waitFor();
+      await settle(p, 100);
+    },
+  ],
+  ["05-whats-new", {}, async (p) => (await p.goto(`${base}/?range=7d`), settle(p, 900))],
+  [
+    "06-help-link-smb",
+    { init: seenNews },
+    async (p) => {
+      await open(p, "/remotes/new?type=smb", 600);
+      await p.getByRole("link", { name: /^Help: Remotes/ }).hover();
+      await settle(p, 300);
+    },
+  ],
+  [
+    "07-phone-contents",
+    { width: 390, height: 844, init: seenNews },
+    async (p) => {
+      await open(p, "/docs/bisync", 600);
+      await p.getByRole("button", { name: "Contents" }).click();
+      await p.getByRole("dialog").waitFor();
+      await settle(p, 400);
+    },
+  ],
+  ["08-not-found", { init: seenNews }, async (p) => open(p, "/docs/no-such-page", 600)],
+  ["09-release-notes", { init: seenNews }, async (p) => open(p, "/docs/releases/v2.3.0", 600)],
+];
+
+// docsSet takes the docs shots, signed in once (01 is signed out).
+async function docsSet(browser) {
+  const first = await newPage(browser);
+  await signIn(first);
+  const storageState = await first.context().storageState();
+  await first.context().close();
+  for (const [name, { signedOut, clipboard, ...opts }, go] of docsShots) {
+    if (!wanted(name)) continue;
+    const p = await newPage(browser, {
+      ...opts,
+      storageState: signedOut ? undefined : storageState,
+    });
+    if (clipboard)
+      await p.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: base });
+    await go(p);
+    await shot(p, name);
+    await p.context().close();
+  }
+}
+
 // The README shots: one page per feature from the same seeded controller,
 // each in light and dark so the README can follow the reader's theme.
 const readmeShots = [
@@ -1714,6 +1791,10 @@ async function main() {
     }
     if (set === "crypt") {
       await cryptSet(browser);
+      return;
+    }
+    if (set === "docs") {
+      await docsSet(browser);
       return;
     }
     if (set === "remote-types") {

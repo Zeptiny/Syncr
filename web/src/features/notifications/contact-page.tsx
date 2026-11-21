@@ -9,6 +9,7 @@ import { ChannelIcon } from "@/components/app/channel-icon";
 import { ConfirmDialog } from "@/components/app/confirm-dialog";
 import { ErrorState } from "@/components/app/error-state";
 import { PageHeader } from "@/components/app/page-header";
+import { HelpLink } from "@/features/docs/doc-link";
 import { Panel } from "@/components/app/panel";
 import { RelativeTime } from "@/components/app/relative-time";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ import { useKeysetPager } from "@/hooks/use-keyset-pager";
 import { tsDate } from "@/lib/format";
 import { invalidateService } from "@/lib/invalidate";
 
+import { channelHelpFor } from "./channel-help";
 import { ContactForm } from "./contact-form";
 import { DeliveriesTable } from "./deliveries-table";
 
@@ -67,6 +69,7 @@ export function ContactPage({ contactId }: { contactId: string }) {
             <RelativeTime date={tsDate(contact.updatedAt)} />
           </span>
         }
+        actions={<HelpLink {...channelHelpFor(channel.id)} />}
       />
       <div className="flex flex-col gap-6">
         <Panel className="max-w-4xl">

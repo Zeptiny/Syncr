@@ -6,7 +6,14 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default defineConfig([
-  globalIgnores(["dist", "node_modules", "src/gen", "src/routeTree.gen.ts", "placeholder"]),
+  globalIgnores([
+    "dist",
+    "node_modules",
+    "src/gen",
+    "src/routeTree.gen.ts",
+    "src/features/docs/docs.gen.ts",
+    "placeholder",
+  ]),
   {
     files: ["**/*.{ts,tsx}"],
     extends: [

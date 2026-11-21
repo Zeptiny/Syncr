@@ -17,6 +17,7 @@ import { ErrorState } from "@/components/app/error-state";
 import { SearchInput } from "@/components/app/filter-bar";
 import { WorkerChooser } from "@/components/app/file-browser/worker-chooser";
 import { PageHeader } from "@/components/app/page-header";
+import { HelpLink } from "@/features/docs/doc-link";
 import { Panel } from "@/components/app/panel";
 import { StatCard, StatGrid } from "@/components/app/stat-card";
 import { Button } from "@/components/ui/button";
@@ -187,6 +188,7 @@ export function ComparePage({
           </Link>
         }
         description="What changed from an older snapshot to a newer one: added, removed and changed files."
+        actions={<HelpLink page="restic" anchor="compare-two-snapshots" />}
       />
       <div className="flex flex-col gap-6">
         <Panel>

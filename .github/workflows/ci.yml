@@ -461,11 +461,24 @@ jobs:
       - run: npm ci
       - name: Route tree is up to date
         run: npm run generate:routes && git diff --exit-code -- src/routeTree.gen.ts
+      - name: Docs types are up to date
+        run: npm run generate:docs && git diff --exit-code -- src/features/docs/docs.gen.ts
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
       - run: npm test
       - run: npm run build
+      - name: Bundle size
+        # The controller embeds dist. (The build itself fails when a docs
+        # module is in the entry chunk or a chunk it imports statically:
+        # generateBundle in docs-plugin/index.ts.)
+        run: |
+          size=$(du -sb dist | cut -f1)
+          echo "dist is $size bytes"
+          if [ "$size" -gt 6000000 ]; then
+            echo "::error::web/dist is $size bytes, over the 6,000,000-byte budget"
+            exit 1
+          fi
 
   release-build:
     # The release's own build definition (.goreleaser.yaml), as a snapshot:

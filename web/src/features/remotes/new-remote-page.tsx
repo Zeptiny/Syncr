@@ -15,9 +15,11 @@ import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
 import { useBackendMap, useBackends } from "@/hooks/use-backends";
 import { invalidateService } from "@/lib/invalidate";
 import { cn } from "@/lib/utils";
+import { HelpLink } from "@/features/docs/doc-link";
 
 import { BackendIcon } from "./backend-icon";
 import { HOST_KEYS_FIELD, HostKeysField } from "./host-keys";
+import { remoteHelp } from "./remote-type-help";
 
 /** NewRemotePage picks a backend type, then shows its form. */
 export function NewRemotePage({ type }: { type?: string }) {
@@ -40,6 +42,7 @@ export function NewRemotePage({ type }: { type?: string }) {
           back={{ to: "/remotes", label: "Remotes" }}
           title="Add a remote"
           description="Choose the kind of storage. You can add as many remotes of each kind as you like."
+          actions={<HelpLink page="remotes" />}
         />
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {backendsQ.isPending &&
@@ -77,9 +80,12 @@ export function NewRemotePage({ type }: { type?: string }) {
         title={`New ${chosen.label} remote`}
         description={chosen.description}
         actions={
-          <Button variant="outline" asChild>
-            <Link to="/remotes/new">Choose another kind</Link>
-          </Button>
+          <>
+            <HelpLink {...remoteHelp(chosen.id)} />
+            <Button variant="outline" asChild>
+              <Link to="/remotes/new">Choose another kind</Link>
+            </Button>
+          </>
         }
       />
       <Panel className="max-w-4xl">

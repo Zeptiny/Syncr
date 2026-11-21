@@ -52,6 +52,7 @@ func TestSPA(t *testing.T) {
 		{"index file", "GET", "/index.html", 200, testIndex, cacheRevalidate, html, true},
 		{"client route", "GET", "/jobs/0b9c8f1e-4a7d-4c55", 200, testIndex, cacheRevalidate, html, true},
 		{"client route with query", "GET", "/login?redirect=%2Fjobs", 200, testIndex, cacheRevalidate, html, true},
+		{"docs route with a dot", "GET", "/docs/releases/v2.3.0", 200, testIndex, cacheRevalidate, html, true},
 		{"directory is a route", "GET", "/assets", 200, testIndex, cacheRevalidate, html, true},
 		{"traversal stays inside", "GET", "/../../etc/passwd", 200, testIndex, cacheRevalidate, html, true},
 		{"head", "HEAD", "/remotes", 200, "", cacheRevalidate, html, true},

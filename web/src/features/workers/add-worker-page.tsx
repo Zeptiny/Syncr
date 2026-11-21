@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { PageHeader } from "@/components/app/page-header";
 import { Panel } from "@/components/app/panel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { HelpLink } from "@/features/docs/doc-link";
 
 import { ActiveEnrollment, PassiveSetup } from "./enrollment";
 
@@ -18,6 +19,12 @@ export function AddWorkerPage({ tab }: { tab: AddWorkerTab }) {
         back={{ to: "/workers", label: "Workers" }}
         title="Add a worker"
         description="Install the worker on the machine that holds the files, then connect it to this controller."
+        actions={
+          <>
+            <HelpLink page="setup-linux" label="Linux guide" />
+            <HelpLink page="setup-windows" label="Windows guide" />
+          </>
+        }
       />
       <Tabs
         value={tab}
@@ -46,6 +53,12 @@ export function AddWorkerPage({ tab }: { tab: AddWorkerTab }) {
           <Panel
             title="This controller connects to the worker"
             description="For machines that can't reach the controller but accept incoming connections, such as a server in another network."
+            actions={
+              <HelpLink
+                page="setup-linux"
+                anchor="passive-worker-the-controller-calls-the-worker"
+              />
+            }
           >
             <PassiveSetup />
           </Panel>

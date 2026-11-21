@@ -8,7 +8,10 @@ import { cn } from "@/lib/utils";
 export interface ErrorStateProps {
   error: unknown;
   title?: string;
+  /** Shown instead of the error's own message. */
+  description?: string;
   onRetry?: () => void;
+  retryLabel?: string;
   className?: string;
 }
 
@@ -16,7 +19,9 @@ export interface ErrorStateProps {
 export function ErrorState({
   error,
   title = "Couldn't load this",
+  description,
   onRetry,
+  retryLabel = "Try again",
   className,
 }: ErrorStateProps) {
   return (
@@ -29,12 +34,12 @@ export function ErrorState({
       </div>
       <h3 className="text-[15px] font-semibold">{title}</h3>
       <p className="mt-1 max-w-[52ch] text-[13px] leading-5 text-muted-foreground">
-        {errorMessage(error)}
+        {description ?? errorMessage(error)}
       </p>
       {onRetry && (
         <Button variant="outline" size="sm" className="mt-5" onClick={onRetry}>
           <RotateCw aria-hidden />
-          Try again
+          {retryLabel}
         </Button>
       )}
     </div>

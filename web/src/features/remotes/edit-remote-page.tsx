@@ -21,9 +21,11 @@ import { ScheduleService } from "@/gen/syncr/v1/schedules_pb";
 import { useBackendMap } from "@/hooks/use-backends";
 import { tsDate } from "@/lib/format";
 import { invalidateService } from "@/lib/invalidate";
+import { HelpLink } from "@/features/docs/doc-link";
 
 import { BackendIcon } from "./backend-icon";
 import { HOST_KEYS_FIELD, HostKeysField } from "./host-keys";
+import { remoteHelp } from "./remote-type-help";
 
 /** EditRemotePage edits a remote and offers to delete it. */
 export function EditRemotePage({ remoteId }: { remoteId: string }) {
@@ -89,12 +91,15 @@ export function EditRemotePage({ remoteId }: { remoteId: string }) {
           </span>
         }
         actions={
-          <Button variant="outline" asChild>
-            <Link to="/remotes/$remoteId/files" params={{ remoteId: remote.id }}>
-              <FolderSearch aria-hidden />
-              Browse
-            </Link>
-          </Button>
+          <>
+            <HelpLink {...remoteHelp(backend.id)} />
+            <Button variant="outline" asChild>
+              <Link to="/remotes/$remoteId/files" params={{ remoteId: remote.id }}>
+                <FolderSearch aria-hidden />
+                Browse
+              </Link>
+            </Button>
+          </>
         }
       />
       <Panel className="max-w-4xl">

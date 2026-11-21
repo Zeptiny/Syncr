@@ -14,6 +14,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "generate:routes": "tsr generate",
+    "generate:docs": "node docs-plugin/generate.ts",
     "screenshots": "node scripts/screenshots.mjs"
   },
   "dependencies": {
@@ -57,8 +58,10 @@
     "eslint": "10.15.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-react-refresh": "0.5.7",
+    "github-slugger": "2.0.0",
     "globals": "17.14.0",
     "jsdom": "31.0.1",
+    "marked": "18.2.1",
     "playwright-core": "1.65.1",
     "prettier": "3.10.1",
     "prettier-plugin-tailwindcss": "0.8.1",
