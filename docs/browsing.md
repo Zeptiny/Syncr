@@ -83,7 +83,7 @@ each with a button to remove it. The tray shows:
 - **The total size** of what is selected: files' sizes plus the measured
   folders. While a selected folder is not measured, it says "at least".
 - **Covered items**: when you select a folder and also something inside
-  it, the inner item is marked "in <folder>" and the actions ignore it;
+  it, the inner item is marked "in *folder*" and the actions ignore it;
   the folder brings it anyway.
 - **Copy paths** copies the selected paths, one per line (covered items
   left out), for a script or a ticket.

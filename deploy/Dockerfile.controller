@@ -13,12 +13,17 @@ ARG GO_VERSION=1.27.4
 # Keep in sync with web/.nvmrc and node-version in .github/workflows/ci.yml.
 ARG NODE_VERSION=26
 
-# The web UI (web/dist), platform independent.
+# The web UI (web/dist), platform independent. It renders the user docs from
+# ../docs (web/docs-plugin); the rest of the repository is not in this stage,
+# so links from the docs to files outside docs/ are not checked here (CI
+# checks them).
 FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS web
-WORKDIR /web
+WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY web/ ./
+COPY docs/ ../docs/
+ENV SYNCR_DOCS_REPO_LINKS=skip
 RUN npm run build
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS build
@@ -27,7 +32,7 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 # Embedded with -tags webui.
-COPY --from=web /web/dist ./web/dist
+COPY --from=web /src/web/dist ./web/dist
 ARG TARGETOS TARGETARCH
 ARG VERSION=dev
 ARG COMMIT=unknown
