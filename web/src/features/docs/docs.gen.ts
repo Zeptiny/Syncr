@@ -60,6 +60,16 @@ export interface DocAnchors {
     | "restores"
     | "windows"
     | "limits-and-known-gaps";
+  "metrics":
+    | "scraping"
+    | "what-a-scrape-shows"
+    | "metrics"
+    | "controller-and-workers"
+    | "jobs"
+    | "schedules"
+    | "restic-repositories"
+    | "example-alerts"
+    | "cost";
   "notifications":
     | "network-policy"
     | "discord"
@@ -105,6 +115,7 @@ export interface DocAnchors {
     | "whats-new"
     | "encrypted-remotes"
     | "more-remote-types"
+    | "metrics-for-prometheus-and-a-fuller-dashboard"
     | "documentation-in-the-controller"
     | "remotes"
     | "fixes"
@@ -209,6 +220,7 @@ export const DOC_TITLES: Record<DocPage, string> = {
   "deployment": "Running the controller",
   "encrypted-remotes": "Encrypted remotes",
   "hooks": "Hooks",
+  "metrics": "Metrics for Prometheus",
   "notifications": "Notifications",
   "releases": "Releases",
   "releases/v2.0.0": "Syncr 2.0.0",

@@ -1018,6 +1018,56 @@ func testScheduleLists(t *testing.T, s Store) {
 	}
 }
 
+func testScheduleLastSucceeded(t *testing.T, s Store) {
+	ctx := context.Background()
+	alice := userID(t, 1)
+	requireSchedules(t, s, alice)
+	w := newWorker(t, 1)
+	mustCreateWorker(t, s, w)
+	a := newSchedule(t, 1, alice, "Nightly", w.ID)
+	b := newSchedule(t, 2, alice, "Hourly", w.ID)
+	c := newSchedule(t, 3, alice, "Weekly", w.ID)
+	for _, sc := range []schedules.Schedule{a, b, c} {
+		mustCreateSchedule(t, s, sc)
+	}
+	n := 0
+	job := func(sc domain.ScheduleID, st domain.JobStatus, finished time.Time) {
+		t.Helper()
+		n++
+		j := newJob(t, n, w.ID)
+		j.ScheduleID = sc
+		mustCreateJob(t, s, j)
+		if st != domain.JobQueued {
+			j.Status, j.FinishedAt = st, finished
+			if _, err := s.UpdateJob(ctx, j); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// a: two successes, then a failure and a running job; the newest
+	// success by ID counts even though an older one finished later.
+	job(a.ID, domain.JobSucceeded, t0().Add(2*time.Hour))
+	job(a.ID, domain.JobSucceeded, t0().Add(time.Hour))
+	job(a.ID, domain.JobFailed, t0().Add(3*time.Hour))
+	job(a.ID, domain.JobRunning, time.Time{})
+	// b: only failures and a cancelled job; c: no jobs. A job by hand
+	// (no schedule) succeeds.
+	job(b.ID, domain.JobFailed, t0())
+	job(b.ID, domain.JobCancelled, t0())
+	job(domain.ScheduleID{}, domain.JobSucceeded, t0().Add(5*time.Hour))
+
+	got, err := s.LastSucceeded(ctx, []domain.ScheduleID{a.ID, b.ID, c.ID, a.ID, domain.NewScheduleID()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[a.ID].Equal(t0().Add(time.Hour)) {
+		t.Errorf("LastSucceeded = %v, want only %s: %v", got, a.ID, t0().Add(time.Hour))
+	}
+	if got, err := s.LastSucceeded(ctx, nil); err != nil || len(got) != 0 {
+		t.Errorf("LastSucceeded(nil) = (%v, %v)", got, err)
+	}
+}
+
 func testScheduleDeleteCascades(t *testing.T, s Store) {
 	ctx := context.Background()
 	alice := userID(t, 1)

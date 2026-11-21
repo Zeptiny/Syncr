@@ -1,4 +1,4 @@
-# ADR 0022: Documentation in the web UI
+# ADR 0023: Documentation in the web UI
 
 - Status: accepted (v2.3.0)
 - Date: 2026-11-21

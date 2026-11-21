@@ -26,6 +26,7 @@ order.
 ## Reference
 
 - [Scripting the API](api.md): API tokens and examples
+- [Metrics for Prometheus](metrics.md): `/metrics`, scraping with an API token, every metric and example alerts
 - [Release notes](releases/README.md)
   - [2.3.0](releases/v2.3.0.md)
   - [2.2.0](releases/v2.2.0.md)

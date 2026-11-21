@@ -73,6 +73,9 @@ func TestIndexes(t *testing.T) {
 		// The dashboard's problem lookups (migration 00006).
 		"schedule_runs_problem_idx": "status = ANY",
 		"jobs_failed_idx":           "status = ANY",
+		// The metrics' totals read only this index (migration 00013): it
+		// must include every column JobTotals reads.
+		"jobs_totals_idx": "INCLUDE (kind, worker_id, status, error_code, stat_bytes, stat_files, created_at, dispatched_at, started_at) WHERE (finished_at IS NOT NULL)",
 	} {
 		var def string
 		err := s.pool.QueryRow(t.Context(), "SELECT indexdef FROM pg_indexes WHERE indexname = $1", name).Scan(&def)

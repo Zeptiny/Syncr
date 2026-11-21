@@ -8,7 +8,7 @@ snapshots, and get notified when something fails.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme/dashboard-dark.png">
-  <img alt="The dashboard: success rate, activity per day, upcoming runs and worker health" src="docs/screenshots/readme/dashboard.png">
+  <img alt="The dashboard: success rate, run time and queue wait, activity per day, upcoming runs and worker health" src="docs/screenshots/readme/dashboard.png">
 </picture>
 
 ## Features
@@ -44,6 +44,11 @@ snapshots, and get notified when something fails.
   for missed runs and overlaps.
 - **Notifications.** Discord, email and signed webhooks (or Slack's format),
   stored before sending and retried, with a delivery log per contact.
+- **Dashboard and metrics.** See how jobs went by kind, worker and cause of
+  failure, how long they ran and waited, how each schedule's last run went
+  and what backups added to each repository; scrape the same from
+  Prometheus at [`/metrics`](docs/metrics.md) and alert on a backup that
+  stopped succeeding.
 - **Workers anywhere.** Workers connect to the controller (active) or the
   controller connects to them over pinned TLS (passive), install as a system
   or per-user service, and upgrade in place with automatic rollback.
@@ -157,6 +162,6 @@ index.
   [encrypted remotes](docs/encrypted-remotes.md),
   [restic backups](docs/restic.md), [hooks](docs/hooks.md) and
   [notifications](docs/notifications.md)
-- [Scripting the API](docs/api.md)
+- [Scripting the API](docs/api.md) and [metrics for Prometheus](docs/metrics.md)
 - [Development](docs/development.md): building, testing and the architecture
 - [Release notes](docs/releases/) · [Security policy](SECURITY.md)

@@ -1,7 +1,7 @@
 // Package api is the controller's inbound HTTP adapter: it serves the
 // Connect API (proto/syncr/v1/*.proto, except the worker link), the
-// embedded web UI and the health endpoint, translating between wire
-// messages and application services.
+// embedded web UI, the health endpoint and the Prometheus metrics
+// (metrics.go), translating between wire messages and application services.
 //
 // # Access control
 //
@@ -15,6 +15,9 @@
 // http.CrossOriginProtection, so browsers cannot send cross-origin
 // state-changing requests.
 //
+// GET /metrics is not a Connect procedure: it authenticates through the
+// same Authenticator but accepts only personal API tokens (metrics.go).
+//
 // Without an authenticator only the public SystemService, /healthz and the
 // web UI are served (fail closed) and a warning is logged.
 //
@@ -27,8 +30,9 @@
 // http.Server ReadTimeout and WriteTimeout for ordinary calls without cutting
 // streams short.
 //
-// Allowed dependencies: the standard library, connect, the generated
-// protobuf code, internal/domain, internal/app/... services,
+// Allowed dependencies: the standard library, connect, the Prometheus
+// client library (metrics only), the generated protobuf code,
+// internal/domain, internal/app/... services,
 // internal/backend, internal/descriptor, internal/notify, internal/jobkind
 // and internal/platform packages. It must
 // not import other adapters; the composition root (cmd/syncr-controller)
@@ -157,8 +161,8 @@ type Deps struct {
 }
 
 // NewHandler returns the controller's HTTP handler: the Connect services
-// under their /syncr.v1.<Service>/ paths, GET /healthz and, with Deps.UI,
-// the web UI for every other path. See the package documentation for access
+// under their /syncr.v1.<Service>/ paths, GET /healthz, GET /metrics and,
+// with Deps.UI, the web UI for every other path. See the package documentation for access
 // control.
 func NewHandler(deps Deps) http.Handler {
 	logger := deps.Logger
@@ -302,10 +306,15 @@ func mountMilestone4(mux *http.ServeMux, deps Deps, errs errorMapper, disabled f
 	if ok && deps.Workers != nil && deps.Schedules != nil {
 		mux.Handle(syncrv1connect.NewDashboardServiceHandler(&dashboardHandler{
 			jobs: deps.Jobs, activity: activity, workers: deps.Workers, schedules: deps.Schedules, remotes: deps.Remotes,
-			kinds: deps.Kinds, repos: repositoryNames(deps), version: deps.Install.Version, errs: errs,
+			kinds: deps.Kinds, repos: repositoryNames(deps), restic: deps.Restic, version: deps.Install.Version, errs: errs,
 		}, opts...))
 	} else {
 		disabled(syncrv1connect.DashboardServiceName)
+	}
+	if ok && deps.Workers != nil && deps.Schedules != nil {
+		mux.Handle("GET "+MetricsPath, newMetricsHandler(deps, deps.Auth, activity, errs.log))
+	} else {
+		disabled(MetricsPath)
 	}
 }
 

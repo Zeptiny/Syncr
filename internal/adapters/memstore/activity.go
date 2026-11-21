@@ -11,9 +11,10 @@ import (
 	"github.com/Zeptiny/Syncr/internal/domain"
 )
 
-// This file implements jobs.ActivityRepository: the aggregation of
-// queries/activity.sql (date_trunc(unit, finished_at, tz) grouped by bucket
-// and status) in Go, bucket for bucket the same as Postgres 17.
+// This file implements jobs.ActivityRepository: the aggregations of
+// queries/activity.sql in Go (date_trunc(unit, finished_at, tz) bucket for
+// bucket the same as Postgres 17), with run times and queue waits in whole
+// microseconds like Postgres's timestamps.
 
 // JobActivity implements jobs.ActivityRepository.
 func (s *Store) JobActivity(_ context.Context, q jobs.ActivityQuery) ([]jobs.ActivityRow, error) {
@@ -39,9 +40,7 @@ func (s *Store) JobActivity(_ context.Context, q jobs.ActivityQuery) ([]jobs.Act
 			g = &jobs.ActivityRow{Bucket: b, Status: j.Status}
 			groups[k] = g
 		}
-		g.Jobs++
-		g.Bytes += j.Stats.Bytes
-		g.Files += j.Stats.Files
+		g.Add(sumsOf(j))
 	}
 	out := make([]jobs.ActivityRow, 0, len(groups))
 	for _, g := range groups {
@@ -100,15 +99,100 @@ func resolveLocal(y int, m time.Month, d int, loc *time.Location) time.Time {
 	}
 }
 
-// CountUnfinished implements jobs.ActivityRepository.
-func (s *Store) CountUnfinished(_ context.Context, owner domain.UserID) (map[domain.JobStatus]int64, error) {
+// sumsOf returns the Sums of the one finished job j.
+func sumsOf(j jobs.Job) jobs.Sums {
+	out := jobs.Sums{Jobs: 1, Bytes: j.Stats.Bytes, Files: j.Stats.Files}
+	if run, ok := runTime(j); ok {
+		out.Started, out.RunTimeMicros = 1, run.Microseconds()
+	}
+	if wait, ok := span(j.CreatedAt, j.DispatchedAt); ok {
+		out.Dispatched, out.QueueWaitMicros = 1, wait.Microseconds()
+	}
+	return out
+}
+
+// runTime returns j's run time (FinishedAt - StartedAt), if it has one.
+func runTime(j jobs.Job) (time.Duration, bool) { return span(j.StartedAt, j.FinishedAt) }
+
+// span returns to - from with both cut to whole microseconds, as Postgres
+// stores them, if both are set and to is not before from.
+func span(from, to time.Time) (time.Duration, bool) {
+	if from.IsZero() || to.IsZero() {
+		return 0, false
+	}
+	d := to.Truncate(time.Microsecond).Sub(from.Truncate(time.Microsecond))
+	return d, d >= 0
+}
+
+// JobTotals implements jobs.ActivityRepository.
+func (s *Store) JobTotals(_ context.Context, q jobs.TotalsQuery) ([]jobs.TotalsRow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := map[domain.JobStatus]int64{}
+	type key struct {
+		kind   string
+		worker domain.WorkerID
+		status domain.JobStatus
+		code   string
+		bucket int
+	}
+	groups := map[key]*jobs.TotalsRow{}
 	for _, j := range s.jobs {
-		if !j.Status.Terminal() && (owner.IsZero() || j.OwnerID == owner) {
-			out[j.Status]++
+		if j.FinishedAt.IsZero() || !q.From.IsZero() && j.FinishedAt.Before(q.From) ||
+			!q.Until.IsZero() && !j.FinishedAt.Before(q.Until) || !q.OwnerID.IsZero() && j.OwnerID != q.OwnerID {
+			continue
 		}
+		bucket := -1
+		if run, ok := runTime(j); ok {
+			bucket = 0
+			for _, b := range q.RunTimeBounds {
+				if b < run {
+					bucket++
+				}
+			}
+		}
+		k := key{j.Kind, j.WorkerID, j.Status, j.Error.Code, bucket}
+		g := groups[k]
+		if g == nil {
+			g = &jobs.TotalsRow{Kind: k.kind, WorkerID: k.worker, Status: k.status, ErrorCode: k.code, RunTimeBucket: bucket}
+			groups[k] = g
+		}
+		g.Add(sumsOf(j))
+	}
+	out := make([]jobs.TotalsRow, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, *g)
+	}
+	return out, nil
+}
+
+// UnfinishedJobs implements jobs.ActivityRepository.
+func (s *Store) UnfinishedJobs(_ context.Context, owner domain.UserID) ([]jobs.UnfinishedRow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	type key struct {
+		status domain.JobStatus
+		kind   string
+		worker domain.WorkerID
+	}
+	groups := map[key]*jobs.UnfinishedRow{}
+	for _, j := range s.jobs {
+		if j.Status.Terminal() || !owner.IsZero() && j.OwnerID != owner {
+			continue
+		}
+		k := key{j.Status, j.Kind, j.WorkerID}
+		g := groups[k]
+		if g == nil {
+			g = &jobs.UnfinishedRow{Status: j.Status, Kind: j.Kind, WorkerID: j.WorkerID, OldestQueuedAt: j.QueuedAt}
+			groups[k] = g
+		}
+		g.Jobs++
+		if j.QueuedAt.Before(g.OldestQueuedAt) {
+			g.OldestQueuedAt = j.QueuedAt
+		}
+	}
+	out := make([]jobs.UnfinishedRow, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, *g)
 	}
 	return out, nil
 }

@@ -95,28 +95,92 @@ func (s *Service) Activity(ctx context.Context, actor domain.Actor, f ActivityFi
 		}
 		b.Bytes += r.Bytes
 		b.Files += r.Files
+		b.Started += r.Started
+		b.RunTimeMicros += r.RunTimeMicros
+		b.Dispatched += r.Dispatched
+		b.QueueWaitMicros += r.QueueWaitMicros
 	}
 	return buckets, nil
+}
+
+// Totals counts the finished jobs of f by kind, worker, terminal status,
+// error code and run-time bucket (ActivityRepository.JobTotals): the
+// actor's, or every user's for an admin with f.AllUsers. Rows of
+// non-terminal statuses never occur. Both bounds zero count every finished
+// job, which is what the metrics' counters are.
+func (s *Service) Totals(ctx context.Context, actor domain.Actor, f TotalsFilter) ([]TotalsRow, error) {
+	const op = "job totals"
+	if s.activity == nil {
+		return nil, fmt.Errorf("%s: %w", op, errNoActivity)
+	}
+	var v domain.Validation
+	if !f.From.IsZero() && !f.Until.IsZero() && !f.Until.After(f.From) {
+		v.Add("range", "must end after it starts")
+	}
+	if len(f.RunTimeBounds) > MaxRunTimeBounds {
+		v.Add("run_time_bounds", fmt.Sprintf("must be at most %d", MaxRunTimeBounds))
+	}
+	for i, b := range f.RunTimeBounds {
+		if b <= 0 || i > 0 && b <= f.RunTimeBounds[i-1] {
+			v.Add("run_time_bounds", "must be positive and ascending")
+			break
+		}
+	}
+	if err := v.Err(); err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+	owner, ok := activityOwner(actor, f.AllUsers)
+	if !ok {
+		return []TotalsRow{}, nil
+	}
+	rows, err := s.activity.JobTotals(ctx, TotalsQuery{
+		From: f.From, Until: f.Until, OwnerID: owner, RunTimeBounds: slices.Clone(f.RunTimeBounds),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+	out := make([]TotalsRow, 0, len(rows))
+	for _, r := range rows {
+		if r.Status.Terminal() {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// UnfinishedCounts counts the queued, dispatched and running jobs by status,
+// kind and worker (ActivityRepository.UnfinishedJobs): the actor's, or
+// every user's for an admin with allUsers.
+func (s *Service) UnfinishedCounts(ctx context.Context, actor domain.Actor, allUsers bool) ([]UnfinishedRow, error) {
+	const op = "unfinished jobs"
+	if s.activity == nil {
+		return nil, fmt.Errorf("%s: %w", op, errNoActivity)
+	}
+	owner, ok := activityOwner(actor, allUsers)
+	if !ok {
+		return []UnfinishedRow{}, nil
+	}
+	rows, err := s.activity.UnfinishedJobs(ctx, owner)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+	if rows == nil {
+		rows = []UnfinishedRow{}
+	}
+	return rows, nil
 }
 
 // CountUnfinished counts the queued, dispatched and running jobs by
 // status: the actor's, or every user's for an admin with allUsers.
 // Statuses without jobs are omitted.
 func (s *Service) CountUnfinished(ctx context.Context, actor domain.Actor, allUsers bool) (map[domain.JobStatus]int64, error) {
-	const op = "count unfinished jobs"
-	if s.activity == nil {
-		return nil, fmt.Errorf("%s: %w", op, errNoActivity)
-	}
-	owner, ok := activityOwner(actor, allUsers)
-	if !ok {
-		return map[domain.JobStatus]int64{}, nil
-	}
-	counts, err := s.activity.CountUnfinished(ctx, owner)
+	rows, err := s.UnfinishedCounts(ctx, actor, allUsers)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", op, err)
+		return nil, fmt.Errorf("count unfinished jobs: %w", err)
 	}
-	if counts == nil {
-		counts = map[domain.JobStatus]int64{}
+	counts := map[domain.JobStatus]int64{}
+	for _, r := range rows {
+		counts[r.Status] += r.Jobs
 	}
 	return counts, nil
 }

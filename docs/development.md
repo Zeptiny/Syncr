@@ -122,7 +122,7 @@ The controller's web UI ships the user docs under **Docs** (`/docs`). A Vite
 plugin (`web/docs-plugin/`) renders them from `docs/` when the UI is built:
 one lazy module per page, a search index, and the images through Vite. There
 is no markdown parser in the browser. Why it works this way:
-[ADR 0022](adr/0022-docs-in-the-ui.md).
+[ADR 0023](adr/0023-docs-in-the-ui.md).
 
 - **The index.** `docs/README.md` is the table of contents and the reading
   order. Its H1 is the title and the text before the first `##` is the
@@ -212,7 +212,8 @@ Design records: [architecture](adr/0001-architecture.md),
 [browser operations](adr/0019-browser-operations.md),
 [backing up a remote](adr/0020-backing-up-a-remote.md),
 [wrapper remotes](adr/0021-wrapper-remotes.md),
-[docs in the web UI](adr/0022-docs-in-the-ui.md).
+[metrics and the dashboard](adr/0022-metrics.md),
+[docs in the web UI](adr/0023-docs-in-the-ui.md).
 
 ## Repository layout
 
