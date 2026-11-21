@@ -26,7 +26,7 @@ To choose the code yourself, for automation, set `SYNCR_SETUP_CODE`
 (`auth.setup_code`, at least 16 characters besides dashes and spaces): the
 controller then uses it on every start instead and logs only that a preset
 code is in use, never the code. Once the first administrator exists, no
-setup code works any more: the setup page leads to the sign-in page, and
+setup code works any more: the setup page is no longer offered, and
 administrators add more users under **Users**.
 
 ## Versions and the compose file

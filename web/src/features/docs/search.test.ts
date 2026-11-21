@@ -45,13 +45,43 @@ describe("searchDocs", () => {
     expect(found("backup")).toEqual([
       "restic#",
       "restic#restore",
-      "hooks#examples",
+      // The same exact word once in each: the shorter text ranks first.
       "hooks#windows",
+      "hooks#examples",
       "remotes#sftp",
     ]);
     // A heading beats the body; the title of "Hooks" makes both of its sections match.
     expect(found("windows")).toEqual(["hooks#windows"]);
     expect(found("hook")[0]).toBe("hooks#windows");
+  });
+
+  it("does not let a long section win by word count alone", () => {
+    // A page without headings is one long section; a word it repeats must
+    // not outrank a short section that is about it.
+    const sentence = (i: number) =>
+      i % 20 === 0 ? "Conflicts need a resync." : "Calls take a token.";
+    const filler =
+      "Workers run jobs and report their progress to the controller every few seconds.";
+    const idx = prepareIndex({
+      pages: [
+        { slug: "api", title: "The API" },
+        { slug: "bisync", title: "Two-way sync" },
+      ],
+      sections: [
+        [0, "", "", Array.from({ length: 160 }, (_, i) => sentence(i)).join(" ")],
+        [1, "how-it-works", "How it works", "Both sides changed: these conflicts need a resync."],
+        ...Array.from({ length: 10 }, (_, i): [number, string, string, string] => [
+          1,
+          `s${i}`,
+          `Part ${i}`,
+          Array.from({ length: 8 }, () => filler).join(" "),
+        ]),
+      ],
+    });
+    expect(searchDocs(idx, "conflicts resync").map((r) => `${r.slug}#${r.anchor}`)).toEqual([
+      "bisync#how-it-works",
+      "api#",
+    ]);
   });
 
   it("keeps the index order for equal scores", () => {

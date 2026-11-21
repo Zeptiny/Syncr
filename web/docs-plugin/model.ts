@@ -527,7 +527,13 @@ export function buildDocs(
   }));
 
   for (const f of docFiles) {
-    if (f.endsWith(".md") && !shipped.has(f) && !site.githubOnly(f)) {
+    if (/\.md$/i.test(f) && !f.endsWith(".md")) {
+      errors.add(
+        f,
+        1,
+        'write the extension as ".md": other spellings are neither shipped nor checked',
+      );
+    } else if (f.endsWith(".md") && !shipped.has(f) && !site.githubOnly(f)) {
       errors.add(f, 1, "not listed in docs/README.md (or in githubOnly in web/vite.config.ts)");
     }
   }

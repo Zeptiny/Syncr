@@ -10,6 +10,7 @@ import path from "node:path";
 
 import { normalizePath, type Plugin, type ViteDevServer } from "vite";
 
+import { eagerModules } from "./bundle.ts";
 import {
   genFileText,
   MANIFEST_ID,
@@ -85,13 +86,15 @@ export function syncrDocs(options: DocsOptions): Plugin {
         build: {
           rolldownOptions: {
             output: {
-              chunkFileNames: (chunk: { facadeModuleId: string | null }) => {
+              chunkFileNames: (chunk: { facadeModuleId: string | null; moduleIds: string[] }) => {
                 const id = chunk.facadeModuleId ?? "";
                 if (id.startsWith(`\0${PAGE_PREFIX}`)) {
                   return `assets/doc-${id.slice(PAGE_PREFIX.length + 1).replaceAll("/", "-")}-[hash].js`;
                 }
                 if (id === `\0${SEARCH_ID}`) return "assets/doc-search-[hash].js";
-                if (id === `\0${MANIFEST_ID}`) return "assets/doc-manifest-[hash].js";
+                // The manifest shares its chunk with manifest.ts, which imports it.
+                if (chunk.moduleIds.includes(`\0${MANIFEST_ID}`))
+                  return "assets/doc-manifest-[hash].js";
                 return "assets/[name]-[hash].js";
               },
             },
@@ -142,6 +145,17 @@ export function syncrDocs(options: DocsOptions): Plugin {
         : undefined;
       if (!page) this.error(`no docs page "${slug}" (see docs/README.md)`);
       return pageModule(page, imagePath);
+    },
+
+    generateBundle(_options, bundle) {
+      // The docs are lazy chunks; one imported statically would load with
+      // every page of the app (and grow the entry chunk by its text).
+      const eager = eagerModules(bundle, (id) => id.startsWith(VIRTUAL_PREFIX));
+      if (eager.length > 0) {
+        this.error(
+          `the app loads docs modules at start (import them only through import(), as the /docs routes do):\n${eager.join("\n")}`,
+        );
+      }
     },
 
     configureServer(server) {

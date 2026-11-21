@@ -123,6 +123,10 @@ export function resolveLink(
   else kind = dirSyntax ? "dir" : "file";
   if (!kind || (dirSyntax && kind === "file"))
     return error(`${quoted}: no such file in the repository`);
+  // With repoLinks "skip" a folder outside docs/ is known only by its "/":
+  // requiring it keeps that build's links the same as a checked build's.
+  if (kind === "dir" && !inDocs && !dirSyntax)
+    return error(`${quoted} is a folder: end the link with "/"`);
   if (opts.forIndex && (!inDocs || fragment !== undefined)) return error(indexOnly);
 
   // A shipped page, or a folder whose README is one.
@@ -143,6 +147,8 @@ export function resolveLink(
     return { kind: "page", file: pageFile, href: `/docs${slug ? `/${slug}` : ""}${hash}` };
   }
 
+  if (fragment !== undefined && kind === "dir")
+    return error(`${quoted}: a folder has no headings; link to a file in it`);
   if (fragment !== undefined && kind === "file" && target.endsWith(".md") && checked) {
     const problem = checkAnchor(target, fragment);
     if (problem) return error(problem);

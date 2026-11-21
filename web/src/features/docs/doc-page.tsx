@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef } from "react";
 
 import { DocBody } from "./doc-body";
 import { DocLink } from "./doc-link";
-import { focusSection } from "./doc-navigation";
+import { focusSection, keepInView } from "./doc-navigation";
 import { DocToc } from "./doc-toc";
 import type { DocPage } from "./docs.gen";
 import { useFirstLocationKey } from "./docs-layout";
@@ -73,7 +73,9 @@ export function DocPageView({ slug, content }: { slug: DocPage; content: DocCont
   }, [slug]);
 
   useEffect(() => {
-    if (hash && focusSection(hash)) return;
+    const section = hash ? focusSection(hash) : undefined;
+    // Fonts and images that arrive later move the text above the section.
+    if (section) return keepInView(section);
     // The page the reader opened keeps the browser's focus and scroll.
     if (key === firstKey) return;
     window.scrollTo({ top: 0 });

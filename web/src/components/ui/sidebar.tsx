@@ -46,6 +46,18 @@ function useSidebar() {
   return context;
 }
 
+/**
+ * sidebarCookieOpen is the open state SidebarProvider last stored in its
+ * cookie, or fallback: layouts that mount their own provider (the app and
+ * the docs) start the way the reader left the sidebar.
+ */
+function sidebarCookieOpen(fallback = true): boolean {
+  const m = new RegExp(`(?:^|;\\s*)${SIDEBAR_COOKIE_NAME}=(true|false)(?:;|$)`).exec(
+    document.cookie,
+  );
+  return m ? m[1] === "true" : fallback;
+}
+
 function SidebarProvider({
   defaultOpen = true,
   open: openProp,
@@ -686,5 +698,6 @@ export {
   SidebarRail,
   SidebarSeparator,
   SidebarTrigger,
+  sidebarCookieOpen,
   useSidebar,
 };

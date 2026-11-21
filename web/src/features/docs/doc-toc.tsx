@@ -82,8 +82,13 @@ export function DocToc({
   variant: "column" | "collapsible";
   className?: string;
 }) {
-  const ids = useMemo(() => headings.map((h) => h.id), [headings]);
-  const active = useActiveHeading(ids, variant === "column" ? content : null);
+  // Only the column shows the active section: the list above the page
+  // observes nothing.
+  const ids = useMemo(
+    () => (variant === "column" ? headings.map((h) => h.id) : []),
+    [headings, variant],
+  );
+  const active = useActiveHeading(ids, content);
   if (headings.length === 0) return null;
 
   if (variant === "column") {

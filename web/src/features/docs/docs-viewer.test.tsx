@@ -3,6 +3,8 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const isEqual = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
 import { SystemService } from "@/gen/syncr/v1/api_pb";
 import { AuthMethod, AuthService, SetupService } from "@/gen/syncr/v1/auth_pb";
 import { copyText } from "@/lib/clipboard";
@@ -119,6 +121,58 @@ describe("docs layouts", () => {
     );
   });
 
+  it("asks for the session once while a signed-out reader moves between pages", async () => {
+    const user = userEvent.setup();
+    const { transport, calls } = api();
+    renderApp("/docs/restic", transport);
+    await title("Restic backups");
+    await user.click(
+      document.querySelector<HTMLAnchorElement>('.doc-prose a[href="/docs/browsing"]')!,
+    );
+    await title("Browsing files");
+    const nav = screen.getByRole("navigation", { name: "Documentation" });
+    await user.click(within(nav).getByRole("link", { name: "Two-way sync" }));
+    await title("Two-way sync");
+    expect(calls.filter((c) => c === "GetSession")).toHaveLength(1);
+  });
+
+  it("keeps the sidebar collapsed between the app and the docs", async () => {
+    const { transport } = api({ signedIn: true });
+    const { router } = renderApp("/docs/restic", transport);
+    await title("Restic backups");
+    const sidebar = () => document.querySelector('[data-slot="sidebar"][data-state]');
+    expect(sidebar()).toHaveAttribute("data-state", "expanded");
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    expect(sidebar()).toHaveAttribute("data-state", "collapsed");
+    // Another layout, another sidebar: it starts the way the reader left it.
+    await router.navigate({ to: "/settings" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings"));
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Restic backups" })).toBeNull(),
+    );
+    expect(sidebar()).toHaveAttribute("data-state", "collapsed");
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    await router.navigate({ to: "/docs" });
+    expect(await title("Syncr documentation")).toBeInTheDocument();
+    expect(sidebar()).toHaveAttribute("data-state", "expanded");
+    document.cookie = "sidebar_state=; path=/; max-age=0";
+  });
+
+  it("asks for a reload when a page's chunk is gone after an upgrade", async () => {
+    vi.spyOn(manifest.loaders, "bisync").mockRejectedValue(
+      new TypeError("Failed to fetch dynamically imported module: /assets/doc-bisync-old.js"),
+    );
+    const { transport } = api();
+    renderApp("/docs/bisync", transport);
+    expect(await screen.findByText("This page needs a reload")).toBeInTheDocument();
+    expect(
+      screen.getByText("Syncr may have been updated since this tab was opened."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    // Still inside the docs, with their navigation.
+    expect(screen.getByRole("navigation", { name: "Documentation" })).toBeInTheDocument();
+  });
+
   it("points GitHub links at main for a development build", async () => {
     const { transport } = api({ version: "dev" });
     renderApp("/docs/upgrade", transport);
@@ -186,7 +240,16 @@ describe("docs pages", () => {
     renderApp("/docs/restic#back-up-a-folder-of-a-remote", transport);
     await title("Restic backups");
     await waitFor(() => expect(document.activeElement?.id).toBe("back-up-a-folder-of-a-remote"));
-    expect(scroll.mock.contexts).toContain(document.activeElement);
+    // focusSection's own scroll, which puts the heading under the sticky
+    // header (the router also scrolls, with scrollIntoView(true)). jsdom has
+    // no layout: keepInView's re-scroll after the fonts arrive is checked in
+    // doc-navigation.test.ts and in a real browser.
+    const section = document.activeElement;
+    expect(
+      scroll.mock.calls.filter(
+        (args, i) => scroll.mock.contexts[i] === section && isEqual(args[0], { block: "start" }),
+      ),
+    ).toHaveLength(1);
   });
 
   it("moves to a section of the same page through its link", async () => {

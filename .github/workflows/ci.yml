@@ -469,17 +469,14 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Bundle size
-        # The controller embeds dist. The docs are lazy chunks: their text in
-        # the entry chunk means a page module is imported eagerly.
+        # The controller embeds dist. (The build itself fails when a docs
+        # module is in the entry chunk or a chunk it imports statically:
+        # generateBundle in docs-plugin/index.ts.)
         run: |
           size=$(du -sb dist | cut -f1)
           echo "dist is $size bytes"
           if [ "$size" -gt 6000000 ]; then
             echo "::error::web/dist is $size bytes, over the 6,000,000-byte budget"
-            exit 1
-          fi
-          if grep -l 'back-up-a-folder-of-a-remote' dist/assets/index-*.js; then
-            echo "::error::the docs ended up in the entry chunk"
             exit 1
           fi
 

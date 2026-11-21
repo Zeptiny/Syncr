@@ -190,6 +190,45 @@ describe("checks", () => {
     ]);
   });
 
+  it("requires a trailing slash on folder links outside docs/", () => {
+    // With repoLinks skip the build cannot tell the folder from a file: it
+    // would link /blob/ where the checked build links /tree/.
+    const files = {
+      "proto/v1/api.proto": "",
+      "docs/a.md": "# A\n\n[p](../proto/v1) [q](../proto/v1/)\n",
+    };
+    expect(errorsOf(files)).toEqual([
+      'docs/a.md:3: link "../proto/v1" is a folder: end the link with "/"',
+    ]);
+  });
+
+  it("rejects an anchor on a folder link", () => {
+    expect(
+      errorsOf({
+        "proto/v1/api.proto": "",
+        "docs/adr/0001.md": "# ADR\n\n## Context\n",
+        "docs/development.md": "# Dev\n",
+        "docs/a.md": "# A\n\n[d](adr/#context) [p](../proto/#v1)\n",
+      }),
+    ).toEqual([
+      'docs/a.md:3: link "../proto/#v1": a folder has no headings; link to a file in it',
+      'docs/a.md:3: link "adr/#context": a folder has no headings; link to a file in it',
+    ]);
+  });
+
+  it("rejects a markdown file whose extension is not .md", () => {
+    expect(
+      errorsOf({
+        "docs/README.md": "# T\n\n## S\n\n- [A](a.md)\n- [B](b.md)\n- [U](Upper.MD)\n",
+        "docs/Upper.MD": "# Upper\n",
+        "docs/adr/0002.Md": "# ADR\n",
+      }),
+    ).toEqual([
+      'docs/Upper.MD:1: write the extension as ".md": other spellings are neither shipped nor checked',
+      'docs/adr/0002.Md:1: write the extension as ".md": other spellings are neither shipped nor checked',
+    ]);
+  });
+
   it("rejects raw HTML, block and inline", () => {
     expect(errorsOf({ "docs/a.md": "# A\n\n<div>\nx\n</div>\n\nin <folder> here\n" })).toEqual([
       'docs/a.md:3: raw HTML "<div>..." is not allowed: put it in backticks or escape it (\\<div\\>...)',

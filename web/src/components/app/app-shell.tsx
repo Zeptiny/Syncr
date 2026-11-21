@@ -20,6 +20,7 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -46,6 +47,7 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarTrigger,
+  sidebarCookieOpen,
   useSidebar,
 } from "@/components/ui/sidebar";
 import { WhatsNewNotice } from "@/features/docs/whats-new";
@@ -249,8 +251,11 @@ function UserMenu() {
  */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { isAdmin } = useSession();
+  // The app pages and the docs each mount a shell: both start the sidebar
+  // as the reader left it (also after a reload).
+  const [defaultOpen] = useState(() => sidebarCookieOpen());
   return (
-    <SidebarProvider>
+    <SidebarProvider defaultOpen={defaultOpen}>
       <SkipLink />
       <Sidebar className="border-r border-sidebar-border">
         <SidebarHeader className="gap-4 px-4 pt-5 pb-2">

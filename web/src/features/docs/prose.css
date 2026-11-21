@@ -63,7 +63,8 @@
     text-decoration-thickness: 2px;
   }
   .doc-prose a[target="_blank"]::after {
-    content: "\2197";
+    /* The link's sr-only text says it opens a new tab: no alt text. */
+    content: "\2197" / "";
     margin-left: 0.15em;
     font-size: 0.8em;
   }

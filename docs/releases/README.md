@@ -3,7 +3,8 @@
 Each release has its notes here, as `<tag>.md` (for example
 [v2.0.0.md](v2.0.0.md)); the release workflow publishes them as the GitHub
 release's text, and the controller shows them under **Docs**, where a
-signed-in user sees a notice linking to them after an upgrade. How releases are built, named and tagged:
+signed-in user sees a notice linking to them after an upgrade. How
+releases are built, named and tagged:
 [ADR 0016](../adr/0016-releases-versioning.md). How to upgrade:
 [upgrading](../upgrade.md).
 
@@ -28,8 +29,7 @@ Tags are pushed by a maintainer, by hand; everything else is
 1. Write `docs/releases/vX.Y.Z.md`, add it to the Release notes list in
    [`docs/README.md`](../README.md) (newest first; the web build fails on
    any notes file missing from that list, an `-rc.N` one included), and
-   merge both. A release
-   candidate uses the notes of its version unless
+   merge both. A release candidate uses the notes of its version unless
    `docs/releases/vX.Y.Z-rc.N.md` exists.
 2. Wait for CI to pass on the commit to tag, Windows included.
 3. Tag the release candidate and push the tag:

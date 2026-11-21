@@ -161,17 +161,27 @@ describe("the plugin", () => {
     const config = (hook(syncrDocs(testOptions(TESTDATA_ROOT)), "config").call(context) ?? {}) as {
       build: {
         rolldownOptions: {
-          output: { chunkFileNames: (c: { facadeModuleId: string | null }) => string };
+          output: {
+            chunkFileNames: (c: { facadeModuleId: string | null; moduleIds: string[] }) => string;
+          };
         };
       };
     };
-    const name = config.build.rolldownOptions.output.chunkFileNames;
-    expect(name({ facadeModuleId: "\0virtual:syncr-docs/page/releases/v1.0.0" })).toBe(
+    const chunkFileNames = config.build.rolldownOptions.output.chunkFileNames;
+    const name = (facadeModuleId: string | null, moduleIds: string[] = []) =>
+      chunkFileNames({
+        facadeModuleId,
+        moduleIds: facadeModuleId ? [facadeModuleId, ...moduleIds] : moduleIds,
+      });
+    expect(name("\0virtual:syncr-docs/page/releases/v1.0.0")).toBe(
       "assets/doc-releases-v1.0.0-[hash].js",
     );
-    expect(name({ facadeModuleId: "\0virtual:syncr-docs/search" })).toBe(
-      "assets/doc-search-[hash].js",
+    expect(name("\0virtual:syncr-docs/search")).toBe("assets/doc-search-[hash].js");
+    // The manifest is merged into the chunk of manifest.ts, which imports it.
+    expect(name("/web/src/features/docs/manifest.ts", ["\0virtual:syncr-docs/manifest"])).toBe(
+      "assets/doc-manifest-[hash].js",
     );
-    expect(name({ facadeModuleId: null })).toBe("assets/[name]-[hash].js");
+    expect(name(null)).toBe("assets/[name]-[hash].js");
+    expect(name("/web/src/main.tsx")).toBe("assets/[name]-[hash].js");
   });
 });

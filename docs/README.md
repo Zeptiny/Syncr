@@ -1,8 +1,8 @@
 # Syncr documentation
 
-How to run and use Syncr. The controller's web UI shows the same pages under
-**Docs**, for the version it runs; this file is their table of contents and
-their order.
+How to run and use Syncr. The controller's web UI shows these same pages
+under **Docs**, for the version it runs. They are listed below in reading
+order.
 
 ## Get started
 

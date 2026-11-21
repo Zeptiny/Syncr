@@ -35,23 +35,24 @@ interface PreparedSection {
 export interface PreparedIndex {
   pages: { slug: DocPage; title: string }[];
   sections: PreparedSection[];
+  /** The average number of words in a section's text. */
+  averageWords: number;
 }
 
 /** prepareIndex normalizes the index once, when it is first loaded. */
 export function prepareIndex(index: DocSearchIndex): PreparedIndex {
   const titleWords = index.pages.map((p) => words(p.title));
-  return {
-    pages: index.pages,
-    sections: index.sections.map(([page, anchor, heading, text]) => ({
-      page,
-      anchor,
-      heading,
-      text,
-      titleWords: titleWords[page] ?? [],
-      headingWords: words(heading),
-      bodyWords: words(text),
-    })),
-  };
+  const sections = index.sections.map(([page, anchor, heading, text]) => ({
+    page,
+    anchor,
+    heading,
+    text,
+    titleWords: titleWords[page] ?? [],
+    headingWords: words(heading),
+    bodyWords: words(text),
+  }));
+  const total = sections.reduce((n, s) => n + s.bodyWords.length, 0);
+  return { pages: index.pages, sections, averageWords: Math.max(1, total / sections.length || 1) };
 }
 
 /** Segment is a piece of a snippet; match marks the text a query word matched. */
@@ -76,6 +77,18 @@ const SNIPPET_LENGTH = 120;
 
 /** Points per query word (design section 5). */
 const POINTS = { title: 10, heading: 6, exact: 2, prefix: 1 };
+
+/**
+ * occurrences is the bonus for how often a word occurs in a section's text,
+ * at most POINTS.exact. It saturates and shrinks with the section's length
+ * (as in BM25), so a long page without headings does not win a search by
+ * word count alone.
+ */
+function occurrences(count: number, length: number, averageWords: number): number {
+  const k = 1.2;
+  const b = 0.75;
+  return (POINTS.exact * count) / (count + k * (1 - b + (b * length) / averageWords));
+}
 
 const hasPrefix = (list: string[], q: string): boolean => list.some((w) => w.startsWith(q));
 
@@ -108,7 +121,7 @@ export function searchDocs(
       if (inHeading) score += POINTS.heading;
       if (exact > 0) score += POINTS.exact;
       else if (prefix > 0) score += POINTS.prefix;
-      score += Math.log2(1 + prefix);
+      score += occurrences(prefix, section.bodyWords.length, index.averageWords);
     }
     scored.push({ at, score });
   });
