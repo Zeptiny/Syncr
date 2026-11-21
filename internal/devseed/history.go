@@ -239,6 +239,18 @@ func (h *history) create(ctx context.Context, ss *seededSchedule) error {
 	if d.worker != "" {
 		in.Target = schedules.Target{WorkerID: h.s.Workers[d.worker]}
 	}
+	if name := demoGroupOf(d.name); name != "" {
+		id, ok := h.s.Groups[name]
+		if !ok {
+			g, err := h.sched.CreateGroup(ctx, h.s.actor(d.owner), name)
+			if err != nil {
+				return fmt.Errorf("group %q: %w", name, err)
+			}
+			id = g.ID
+			h.s.Groups[name] = id
+		}
+		in.GroupID = id
+	}
 	for _, l := range d.links {
 		id, ok := h.s.Contacts[l.contact]
 		if !ok {

@@ -59,7 +59,7 @@ var schemaTables = []string{
 	"workers", "enrollment_tokens", "jobs", "job_samples",
 	"users", "sessions", "api_tokens", "remotes", "union_members", "job_remotes",
 	"contacts", "schedules", "schedule_remotes", "schedule_contacts", "schedule_runs", "deliveries",
-	"restic_repositories", "restic_snapshots",
+	"restic_repositories", "restic_snapshots", "schedule_groups",
 }
 
 // milestone4Tables are the tables of migration 00003.
@@ -69,7 +69,7 @@ var milestone4Tables = []string{"contacts", "schedules", "schedule_remotes", "sc
 var milestone5Tables = []string{"restic_repositories", "restic_snapshots"}
 
 // allVersions are the versions of the embedded migrations.
-var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
+var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
 
 func columnExists(t *testing.T, s *Store, table, column string) bool {
 	t.Helper()
@@ -777,6 +777,88 @@ func TestMigrateWrappedRemotes(t *testing.T) {
 	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) {
 		t.Errorf("applied versions = %v, want %v", got, allVersions)
 	}
+}
+
+// TestMigrateScheduleGroups checks migration 00014: schedules from before
+// it are in no group, a schedule can only be in a group of its own owner,
+// deleting a group moves its schedules out of it (keeping their owner),
+// and down removes the column, the constraint and the table.
+func TestMigrateScheduleGroups(t *testing.T) {
+	s := openStore(t, createDB(t, true))
+	ctx := t.Context()
+	owner := seedUser(t, s)
+	other := seedUser(t, s)
+	p, closeDB, err := s.migrationProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	if _, err := p.DownTo(ctx, 13); err != nil {
+		t.Fatalf("down to 13: %v", err)
+	}
+	const (
+		sched   = "00000000-0000-7000-8000-000000000401"
+		mine    = "00000000-0000-7000-8000-000000000402"
+		theirs  = "00000000-0000-7000-8000-000000000403"
+		missing = "00000000-0000-7000-8000-0000000004ff"
+	)
+	if _, err := s.pool.Exec(ctx, `INSERT INTO schedules (id, owner_id, name, cron, timezone, kind, definition,
+		worker_label, missed_action, overlap, enabled, created_at, updated_at)
+		VALUES ($1, $2, 'Nightly', '0 2 * * *', 'UTC', 'rclone_transfer', '{}', 'nas', 'skip', 'skip', false, now(), now())`,
+		sched, owner.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) {
+		t.Errorf("applied versions = %v, want %v", got, allVersions)
+	}
+	row, err := s.q.GetSchedule(ctx, pgID(mustScheduleID(t, sched)))
+	if err != nil || row.GroupID.Valid {
+		t.Errorf("a schedule from before the migration: group %v, %v; want none", row.GroupID, err)
+	}
+	for id, o := range map[string]string{mine: owner.String(), theirs: other.String()} {
+		if _, err := s.pool.Exec(ctx, `INSERT INTO schedule_groups (id, owner_id, name, created_at, updated_at)
+			VALUES ($1, $2, 'Photos', now(), now())`, id, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, group := range map[string]string{"another owner's group": theirs, "a missing group": missing} {
+		if _, err := s.pool.Exec(ctx, `UPDATE schedules SET group_id = $2 WHERE id = $1`, sched, group); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE schedules SET group_id = $2 WHERE id = $1`, sched, mine); err != nil {
+		t.Fatalf("the owner's group: %v", err)
+	}
+	// The foreign key's own action keeps the owner.
+	if _, err := s.pool.Exec(ctx, `DELETE FROM schedule_groups WHERE id = $1`, mine); err != nil {
+		t.Fatal(err)
+	}
+	row, err = s.q.GetSchedule(ctx, pgID(mustScheduleID(t, sched)))
+	if err != nil || row.GroupID.Valid || row.OwnerID != pgID(owner) {
+		t.Errorf("after deleting its group: group %v, owner %v, %v; want no group and the same owner", row.GroupID, row.OwnerID, err)
+	}
+
+	if _, err := p.DownTo(ctx, 13); err != nil {
+		t.Fatalf("down to 13: %v", err)
+	}
+	if columnExists(t, s, "schedules", "group_id") || tableExists(t, s, "schedule_groups") {
+		t.Error("down left schedules.group_id or schedule_groups")
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+}
+
+func mustScheduleID(t *testing.T, s string) domain.ScheduleID {
+	t.Helper()
+	id, err := domain.ParseScheduleID(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 func mustRemoteID(t *testing.T, s string) domain.RemoteID {

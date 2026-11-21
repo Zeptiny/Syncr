@@ -1,14 +1,7 @@
-import {
-  ArrowRightLeft,
-  Archive,
-  FolderSync,
-  Scissors,
-  ShieldCheck,
-  Sparkles,
-  type LucideIcon,
-} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 import { ChoiceCards } from "./choice-cards";
+import { kindIcons } from "./kind-icons";
 
 /** KindOption is one job kind a form can create. */
 export interface KindOption {
@@ -24,37 +17,37 @@ const kindOptions: KindOption[] = [
     kind: "rclone_transfer",
     label: "Transfer",
     help: "Copy, sync or move files between two places.",
-    icon: ArrowRightLeft,
+    icon: kindIcons.rclone_transfer,
   },
   {
     kind: "rclone_bisync",
     label: "Two-way sync",
     help: "Keep two folders in step both ways, deletions included (rclone bisync).",
-    icon: FolderSync,
+    icon: kindIcons.rclone_bisync,
   },
   {
     kind: "restic_backup",
     label: "Backup",
     help: "Save folders into a repository as a new snapshot.",
-    icon: Archive,
+    icon: kindIcons.restic_backup,
   },
   {
     kind: "restic_forget",
     label: "Retention",
     help: "Remove old snapshots, keeping the ones your rules name.",
-    icon: Scissors,
+    icon: kindIcons.restic_forget,
   },
   {
     kind: "restic_check",
     label: "Check",
     help: "Verify that a repository is intact and readable.",
-    icon: ShieldCheck,
+    icon: kindIcons.restic_check,
   },
   {
     kind: "restic_prune",
     label: "Prune",
     help: "Reclaim the space of data no snapshot uses.",
-    icon: Sparkles,
+    icon: kindIcons.restic_prune,
   },
 ];
 

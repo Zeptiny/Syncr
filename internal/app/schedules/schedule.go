@@ -13,6 +13,9 @@ type Schedule struct {
 	// Name is 1 to 64 characters, unique per owner (case-insensitive).
 	Name        string
 	Description string
+	// GroupID is the owner's group the schedule is listed in; zero for
+	// none. Groups only organize the list: nothing that runs reads them.
+	GroupID domain.ScheduleGroupID
 
 	// Cron is the normalized cron expression (cronexpr.Normalize) and
 	// Timezone its IANA zone.
@@ -257,7 +260,24 @@ const (
 	MaxCoalesce = 1000
 	// MaxContacts bounds the contacts linked to a schedule.
 	MaxContacts = 20
+	// MaxGroupNameLen bounds a group name, in characters.
+	MaxGroupNameLen = 64
+	// MaxMove bounds the schedules one MoveSchedules call moves.
+	MaxMove = 500
 )
+
+// Group is a named group of one user's schedules, for organizing the list
+// (ADR 0024). A schedule is in at most one group; nothing that runs
+// schedules reads groups.
+type Group struct {
+	ID      domain.ScheduleGroupID
+	OwnerID domain.UserID
+	// Name is 1 to MaxGroupNameLen characters, unique per owner
+	// (case-insensitive).
+	Name      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
 
 // Input is the configuration of a schedule to create or update, as the API
 // passes it: the definition already checked and encoded (jobkind.Check,
@@ -265,10 +285,12 @@ const (
 type Input struct {
 	Name        string
 	Description string
-	Cron        string
-	Timezone    string
-	Target      Target
-	Missed      MissedPolicy
+	// GroupID must be zero or one of the actor's groups.
+	GroupID  domain.ScheduleGroupID
+	Cron     string
+	Timezone string
+	Target   Target
+	Missed   MissedPolicy
 	// Overlap "" means OverlapSkip.
 	Overlap Overlap
 	Enabled bool

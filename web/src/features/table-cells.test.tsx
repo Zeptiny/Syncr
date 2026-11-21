@@ -93,7 +93,10 @@ describe("table cells stay mounted", () => {
       expect(table.querySelectorAll("tbody [role=switch]").length).toBeGreaterThan(1),
     );
     const before = cells(table);
-    const toggle = table.querySelector<HTMLButtonElement>("tbody [role=switch]")!;
+    // The list is sorted by name in the browser: pick Nightly's switch.
+    const toggle = table.querySelector<HTMLButtonElement>(
+      'tbody [role=switch][aria-label$="Nightly photos → B2"]',
+    )!;
     const wasOn = toggle.getAttribute("aria-checked");
 
     const user = userEvent.setup();

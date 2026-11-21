@@ -104,7 +104,7 @@ on single failures, use `syncr_schedule_last_run_status` (below).
 
 | Metric | Type | Labels | |
 |---|---|---|---|
-| `syncr_schedule_info` | gauge | `schedule`, `kind` | always 1 |
+| `syncr_schedule_info` | gauge | `schedule`, `kind`, `group` | always 1; `group` is the schedule's [group](schedules.md#groups), empty for none |
 | `syncr_schedule_enabled` | gauge | `schedule` | 1 enabled, 0 paused |
 | `syncr_schedule_next_run_timestamp_seconds` | gauge | `schedule` | when it runs next (absent while paused) |
 | `syncr_schedule_last_run_timestamp_seconds` | gauge | `schedule` | when its newest run was due |

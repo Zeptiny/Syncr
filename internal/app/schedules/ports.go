@@ -22,8 +22,8 @@ type Repository interface {
 	// the owner has a schedule with the same name, case-insensitively, or a
 	// contact is linked twice (primary key of schedule_contacts);
 	// ErrNotFound if the owner, the target worker (removed ones exist), a
-	// remote (deleted ones exist) or a contact does not exist (foreign
-	// keys). ErrInvalidArgument if both or neither of Target.WorkerID and
+	// remote (deleted ones exist), a contact or the group does not exist,
+	// or the group is another owner's (foreign keys). ErrInvalidArgument if both or neither of Target.WorkerID and
 	// Target.Label are set, or a disabled schedule has a NextRunAt (checks).
 	CreateSchedule(ctx context.Context, s Schedule) error
 
@@ -41,8 +41,8 @@ type Repository interface {
 	// UpdateSchedule is an optimistic, version-checked update of the
 	// configuration: if the stored Version equals s.Version, it writes
 	// Name, Description, Cron, Timezone, Kind, Definition, RemoteIDs,
-	// SearchText, Target, Missed, Overlap, Enabled, PausedReason, Contacts
-	// and UpdatedAt, and NextRunAt only if reschedule (the service
+	// SearchText, GroupID, Target, Missed, Overlap, Enabled, PausedReason,
+	// Contacts and UpdatedAt, and NextRunAt only if reschedule (the service
 	// recomputed it because Cron, Timezone or Enabled changed); otherwise
 	// the stored NextRunAt is kept, so an edit racing a fire cannot rewind
 	// it. LastFiredAt, ID, OwnerID and CreatedAt are never written. It sets
@@ -160,6 +160,37 @@ type Repository interface {
 	// schedules of owner (zero: every owner) with a NextRunAt, by
 	// NextRunAt, then ID (index schedules_owner_next_idx).
 	ListUpcoming(ctx context.Context, owner domain.UserID, limit int) ([]Upcoming, error)
+
+	// CreateGroup inserts g. ErrAlreadyExists if g.ID is taken or the
+	// owner has a group with the same name, case-insensitively;
+	// ErrNotFound if the owner does not exist.
+	CreateGroup(ctx context.Context, g Group) error
+
+	// GetGroup returns a group. ErrNotFound if missing.
+	GetGroup(ctx context.Context, id domain.ScheduleGroupID) (Group, error)
+
+	// ListGroups returns the groups of owner (zero: every owner), by
+	// lower-cased name, then ID.
+	ListGroups(ctx context.Context, owner domain.UserID) ([]Group, error)
+
+	// RenameGroup sets a group's Name and UpdatedAt = at and returns it;
+	// its schedules are untouched. ErrNotFound if missing,
+	// ErrAlreadyExists if the owner has another group with the name,
+	// case-insensitively.
+	RenameGroup(ctx context.Context, id domain.ScheduleGroupID, name string, at time.Time) (Group, error)
+
+	// DeleteGroup deletes a group, in one transaction with moving its
+	// schedules out of it (GroupID zero, UpdatedAt = at, Version + 1, so an
+	// edit read before fails its version check instead of naming the
+	// deleted group). ErrNotFound if missing.
+	DeleteGroup(ctx context.Context, id domain.ScheduleGroupID, at time.Time) error
+
+	// MoveSchedules sets the GroupID of the schedules ids (each once) to
+	// group, zero for none, with UpdatedAt = at and Version + 1, without a
+	// version check, in one transaction, and returns them by ID. Nothing
+	// changes if it fails: ErrNotFound if a schedule or the group does not
+	// exist, or the group is not the owner's of every schedule.
+	MoveSchedules(ctx context.Context, ids []domain.ScheduleID, group domain.ScheduleGroupID, at time.Time) ([]Schedule, error)
 }
 
 // RemoteChecker checks the remotes of a schedule's definition
@@ -209,9 +240,10 @@ type Clock interface {
 	Now() time.Time
 }
 
-// IDGenerator mints schedule and run IDs. They must be time-ordered
+// IDGenerator mints schedule, run and group IDs. They must be time-ordered
 // (UUIDv7) for the newest-first run lists.
 type IDGenerator interface {
 	NewScheduleID() domain.ScheduleID
 	NewScheduleRunID() domain.ScheduleRunID
+	NewScheduleGroupID() domain.ScheduleGroupID
 }

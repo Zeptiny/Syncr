@@ -7,7 +7,8 @@ export interface DocAnchors {
     | "using-syncr"
     | "reference"
     | "for-contributors-on-github";
-  "api": never;
+  "api":
+    | "schedule-groups";
   "bisync":
     | "which-job-to-use"
     | "how-it-works"
@@ -120,6 +121,15 @@ export interface DocAnchors {
     | "remotes"
     | "fixes"
     | "known-limitations";
+  "releases/v2.4.0":
+    | "upgrade"
+    | "whats-new"
+    | "the-schedule-list"
+    | "groups"
+    | "several-schedules-at-once"
+    | "api-and-metrics"
+    | "docs"
+    | "known-limitations";
   "remotes":
     | "the-types-you-know-from-22"
     | "amazon-s3-and-compatible"
@@ -162,6 +172,11 @@ export interface DocAnchors {
     | "browsing-and-testing"
     | "deleting-a-repository"
     | "limits-and-known-gaps";
+  "schedules":
+    | "the-schedule-list"
+    | "groups"
+    | "several-schedules-at-once"
+    | "in-metrics-and-the-api";
   "setup-linux":
     | "quick-path-one-command"
     | "verifying-a-download"
@@ -227,8 +242,10 @@ export const DOC_TITLES: Record<DocPage, string> = {
   "releases/v2.1.0": "Syncr 2.1.0",
   "releases/v2.2.0": "Syncr 2.2.0",
   "releases/v2.3.0": "Syncr 2.3.0",
+  "releases/v2.4.0": "Syncr 2.4.0",
   "remotes": "Remotes",
   "restic": "Restic backups",
+  "schedules": "Schedules",
   "setup-linux": "Setting up a worker on Linux",
   "setup-windows": "Setting up a worker on Windows",
   "upgrade": "Upgrading Syncr",

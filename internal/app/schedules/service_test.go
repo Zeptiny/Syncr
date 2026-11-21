@@ -695,8 +695,9 @@ func TestFireDueConcurrent(t *testing.T) {
 // the first).
 type domainIDs struct{}
 
-func (domainIDs) NewScheduleID() domain.ScheduleID       { return domain.NewScheduleID() }
-func (domainIDs) NewScheduleRunID() domain.ScheduleRunID { return domain.NewScheduleRunID() }
+func (domainIDs) NewScheduleID() domain.ScheduleID           { return domain.NewScheduleID() }
+func (domainIDs) NewScheduleRunID() domain.ScheduleRunID     { return domain.NewScheduleRunID() }
+func (domainIDs) NewScheduleGroupID() domain.ScheduleGroupID { return domain.NewScheduleGroupID() }
 
 func TestFireDuePausesAnUnparsableSchedule(t *testing.T) {
 	t.Parallel()

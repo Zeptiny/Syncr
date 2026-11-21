@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/Zeptiny/Syncr/internal/cronexpr"
@@ -167,6 +168,9 @@ func (s *Service) CountMissed(ctx context.Context, actor domain.Actor, from, unt
 // Health is one of an actor's schedules with how its runs went (Service.Health).
 type Health struct {
 	Schedule Schedule
+	// GroupName is the name of the schedule's group; "" when it is in
+	// none.
+	GroupName string
 	// LatestRun is the schedule's newest run (its JobStatus filled in);
 	// HasRun is false, and LatestRun zero, when it never had one.
 	LatestRun Run
@@ -200,9 +204,19 @@ func (s *Service) Health(ctx context.Context, actor domain.Actor) ([]Health, err
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
+	groups := map[domain.ScheduleGroupID]string{}
+	if slices.ContainsFunc(scs, func(sc Schedule) bool { return !sc.GroupID.IsZero() }) {
+		gs, err := s.repo.ListGroups(ctx, actor.UserID)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", op, err)
+		}
+		for _, g := range gs {
+			groups[g.ID] = g.Name
+		}
+	}
 	for _, sc := range scs {
 		r, ok := latest[sc.ID]
-		out = append(out, Health{Schedule: sc, LatestRun: r, HasRun: ok, LastSuccessAt: succeeded[sc.ID]})
+		out = append(out, Health{Schedule: sc, GroupName: groups[sc.GroupID], LatestRun: r, HasRun: ok, LastSuccessAt: succeeded[sc.ID]})
 	}
 	return out, nil
 }

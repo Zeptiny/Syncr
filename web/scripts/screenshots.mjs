@@ -10,7 +10,7 @@
 //   SYNCR_UI_PASSWORD       sign-in password (default syncr-demo-admin)
 //   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3, hooks, bisync, browser,
 //                           remote-backup, crypt, remote-types, dashboard,
-//                           docs or readme: which shot list
+//                           docs, schedules or readme: which shot list
 //   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/<set>)
 //   SYNCR_SCREENSHOT_ONLY   comma-separated shot names to take (default all)
 //   SYNCR_SCREENSHOT_MOBILE 1 to also take 390px-wide shots
@@ -46,6 +46,7 @@ const set = [
   "remote-types",
   "dashboard",
   "docs",
+  "schedules",
   "readme",
 ].includes(process.env.SYNCR_SCREENSHOT_SET)
   ? process.env.SYNCR_SCREENSHOT_SET
@@ -67,9 +68,13 @@ const wanted = (name) => !only || only.some((o) => name.includes(o));
 
 // newPage opens a page in a new context. storageState (from a signed-in
 // context) reuses its session instead of signing in again.
-async function newPage(browser, { width, height, dark = false, init, storageState } = {}) {
+async function newPage(
+  browser,
+  { width, height, dark = false, init, storageState, timezoneId } = {},
+) {
   const context = await browser.newContext({
     viewport: { width: width ?? 1440, height: height ?? 900 },
+    timezoneId,
     deviceScaleFactor: 1,
     colorScheme: dark ? "dark" : "light",
     reducedMotion: "reduce",
@@ -1783,6 +1788,137 @@ async function docsSet(browser) {
   }
 }
 
+// The schedule list: groups, filters, a selection with its actions, the
+// section menu, group dialogs, the form's group and a schedule's page. The
+// seed puts the admin's schedules in three groups (Photos, Office, NAS).
+// A fresh seeded controller is needed: the last shot creates a group of
+// its own to show its deletion (never a seed's).
+async function schedulesAt(page, query = "") {
+  await open(page, `/schedules${query}`, 700);
+  await page.getByRole("table", { name: "Schedules" }).waitFor();
+}
+
+// sectionMenu opens the menu on a section's heading.
+async function sectionMenu(page, title) {
+  await page.getByRole("button", { name: `Actions for ${title}`, exact: true }).click();
+  await page.getByRole("menu").waitFor();
+  await settle(page, 200);
+}
+
+const schedulesShots = [
+  ["01-groups", {}, (p) => schedulesAt(p)],
+  ["02-groups-dark", { dark: true }, (p) => schedulesAt(p)],
+  [
+    "03-filters",
+    {},
+    async (p) => {
+      await schedulesAt(p);
+      await p.getByRole("searchbox", { name: /Search/ }).pressSequentially("photos", { delay: 30 });
+      await settle(p, 600);
+    },
+  ],
+  [
+    "04-selection",
+    {},
+    async (p) => {
+      await schedulesAt(p);
+      for (const name of ["Old laptop weekly backup", "Office docs hourly"])
+        await p.getByRole("checkbox", { name: `Select ${name}` }).click();
+      await p
+        .getByRole("region", { name: "Selected schedules" })
+        .getByRole("button", { name: "Move to group" })
+        .click();
+      await p.getByRole("menu").waitFor();
+      await settle(p, 300);
+    },
+  ],
+  ["05-needs-attention", {}, (p) => schedulesAt(p, "?status=attention&by=status")],
+  ["06-by-worker", {}, (p) => schedulesAt(p, "?by=target")],
+  [
+    "07-section-menu",
+    {},
+    async (p) => {
+      await schedulesAt(p);
+      await sectionMenu(p, "Photos");
+    },
+  ],
+  [
+    "08-new-group",
+    {},
+    async (p) => {
+      await schedulesAt(p);
+      await p.getByRole("checkbox", { name: "Select Old laptop weekly backup" }).click();
+      await p
+        .getByRole("region", { name: "Selected schedules" })
+        .getByRole("button", { name: "Move to group" })
+        .click();
+      await p.getByRole("menuitem", { name: "New group…" }).click();
+      await p.getByRole("dialog").getByLabel("Name").pressSequentially("Laptops", { delay: 30 });
+      await settle(p, 300);
+    },
+  ],
+  [
+    "09-form-group",
+    {},
+    async (p) => {
+      await schedulesAt(p);
+      await sectionMenu(p, "Photos");
+      await p.getByRole("menuitem", { name: "New schedule in this group" }).click();
+      await settle(p, 700);
+    },
+  ],
+  [
+    "10-schedule-page",
+    {},
+    async (p) => {
+      await schedulesAt(p);
+      await p.getByRole("row", { name: "Nightly photos → B2", exact: true }).click();
+      await settle(p, 900);
+    },
+  ],
+  ["11-phone", { width: 390, height: 844 }, (p) => schedulesAt(p), true],
+  // Last: it leaves a group of its own behind (the delete is not confirmed).
+  [
+    "12-delete-group",
+    {},
+    async (p) => {
+      await schedulesAt(p);
+      await p.getByRole("button", { name: "New group" }).click();
+      await p.getByRole("dialog").getByLabel("Name").fill("Old machines");
+      await p.getByRole("dialog").getByRole("button", { name: "Create group" }).click();
+      await p.getByRole("dialog").waitFor({ state: "detached" });
+      await p.getByRole("checkbox", { name: "Select Old laptop weekly backup" }).click();
+      await p
+        .getByRole("region", { name: "Selected schedules" })
+        .getByRole("button", { name: "Move to group" })
+        .click();
+      await p.getByRole("menuitem", { name: "Old machines" }).click();
+      await settle(p, 600);
+      await p.getByRole("button", { name: "Clear selection" }).click();
+      await sectionMenu(p, "Old machines");
+      await p.getByRole("menuitem", { name: "Delete group…" }).click();
+      await p.getByRole("alertdialog").waitFor();
+      await settle(p, 300);
+    },
+  ],
+];
+
+// schedulesSet signs in once and reuses the session for every shot. The
+// browser is in the seed's zone, so a new schedule's default zone is too.
+async function schedulesSet(browser) {
+  const first = await newPage(browser);
+  await signIn(first);
+  const storageState = await first.context().storageState();
+  await first.context().close();
+  for (const [name, opts, go, full] of schedulesShots) {
+    if (!wanted(name)) continue;
+    const p = await newPage(browser, { ...opts, storageState, timezoneId: "Europe/Berlin" });
+    await go(p);
+    await shot(p, name, full ? { full: true } : undefined);
+    await p.context().close();
+  }
+}
+
 // The README shots: one page per feature from the same seeded controller,
 // each in light and dark so the README can follow the reader's theme.
 const readmeShots = [
@@ -1855,6 +1991,10 @@ async function main() {
     }
     if (set === "crypt") {
       await cryptSet(browser);
+      return;
+    }
+    if (set === "schedules") {
+      await schedulesSet(browser);
       return;
     }
     if (set === "docs") {

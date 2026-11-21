@@ -286,7 +286,7 @@ func (h *metricsHandler) collectSchedules(ctx context.Context, set *metricSet, a
 	}
 	for _, hs := range health {
 		sc := hs.Schedule
-		set.gauge(d.scheduleInfo, 1, sc.Name, sc.Kind)
+		set.gauge(d.scheduleInfo, 1, sc.Name, sc.Kind, hs.GroupName)
 		set.gauge(d.scheduleEnabled, boolValue(sc.Enabled), sc.Name)
 		set.timestamp(d.scheduleNextRun, sc.NextRunAt, sc.Name)
 		set.timestamp(d.scheduleLastSuccess, hs.LastSuccessAt, sc.Name)
@@ -399,7 +399,7 @@ func newMetricDescs() metricDescs {
 		runTime:      desc("job_run_duration_seconds", "How long the finished jobs that started ran (from start to end, the worker's clock).", "kind", "worker"),
 		queueWait:    desc("job_queue_wait_seconds", "How long the finished jobs a worker accepted waited for it (from creation to acceptance).", "kind", "worker"),
 
-		scheduleInfo:          desc("schedule_info", "The schedule and the job kind it runs; always 1.", "schedule", "kind"),
+		scheduleInfo:          desc("schedule_info", "The schedule, the job kind it runs and its group (empty for none); always 1.", "schedule", "kind", "group"),
 		scheduleEnabled:       desc("schedule_enabled", "Whether the schedule is enabled (1) or paused (0).", "schedule"),
 		scheduleNextRun:       desc("schedule_next_run_timestamp_seconds", "When the schedule runs next.", "schedule"),
 		scheduleLastRun:       desc("schedule_last_run_timestamp_seconds", "When the schedule's newest run was due.", "schedule"),

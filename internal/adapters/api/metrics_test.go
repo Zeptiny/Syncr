@@ -150,6 +150,7 @@ func TestMetrics(t *testing.T) {
 	m.sched.health = []schedules.Health{
 		{
 			Schedule:      schedules.Schedule{Name: "Nightly", Kind: backup, Enabled: true, NextRunAt: time.Date(2026, 11, 5, 3, 0, 0, 0, time.UTC)},
+			GroupName:     "Photos",
 			HasRun:        true,
 			LatestRun:     schedules.Run{Status: schedules.RunLaunched, JobStatus: domain.JobFailed, ScheduledFor: time.Date(2026, 11, 4, 3, 0, 0, 0, time.UTC)},
 			LastSuccessAt: success,
@@ -192,8 +193,9 @@ func TestMetrics(t *testing.T) {
 		`syncr_job_run_duration_seconds_count{kind="restic_backup",worker="worker"} 0`,
 		`syncr_job_queue_wait_seconds_sum{kind="rclone_transfer",worker="worker"} 6`,
 		`syncr_job_queue_wait_seconds_count{kind="rclone_transfer",worker="worker"} 2`,
-		// The user's schedules (label values escaped).
-		`syncr_schedule_info{kind="restic_backup",schedule="Nightly"} 1`,
+		// The user's schedules (label values escaped), with their groups.
+		`syncr_schedule_info{group="Photos",kind="restic_backup",schedule="Nightly"} 1`,
+		`syncr_schedule_info{group="",kind="rclone_transfer",schedule="Paused \"old\""} 1`,
 		`syncr_schedule_enabled{schedule="Nightly"} 1`,
 		`syncr_schedule_enabled{schedule="Paused \"old\""} 0`,
 		`syncr_schedule_next_run_timestamp_seconds{schedule="Nightly"} 1.7938476e+09`,

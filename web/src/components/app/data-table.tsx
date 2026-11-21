@@ -6,6 +6,7 @@ import {
   type RowData,
 } from "@tanstack/react-table";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { useMemo } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -30,6 +31,22 @@ export interface Pager {
   onNext: () => void;
 }
 
+/**
+ * DataTableSection is one part of a table split into sections: a heading
+ * row across every column, then its rows (none while collapsed).
+ */
+export interface DataTableSection<T> {
+  /** key identifies the section among the table's. */
+  key: string;
+  /** header is the heading row's content; a section without one has no heading. */
+  header?: React.ReactNode;
+  rows: T[];
+  /** collapsed hides the rows; the heading stays. */
+  collapsed?: boolean;
+  /** empty renders instead of the rows of a section that has none. */
+  empty?: React.ReactNode;
+}
+
 /** DataTableProps configures DataTable. */
 export interface DataTableProps<T> {
   // ColumnDef's value type varies per column.
@@ -45,6 +62,15 @@ export interface DataTableProps<T> {
   /** onRowClick makes rows act as links (Enter works too). */
   onRowClick?: (row: T) => void;
   rowLabel?: (row: T) => string;
+  /** ariaSort gives a column's aria-sort, for columns whose header sorts the table. */
+  ariaSort?: (columnId: string) => "ascending" | "descending" | "none" | undefined;
+  /** isRowSelected highlights selected rows (with a selection column of the caller's). */
+  isRowSelected?: (row: T) => boolean;
+  /**
+   * sections splits the rows into titled parts; data is then ignored. The
+   * empty state shows when there are no sections.
+   */
+  sections?: DataTableSection<T>[];
   pager?: Pager;
   skeletonRows?: number;
   className?: string;
@@ -65,13 +91,17 @@ export function DataTable<T>({
   getRowId,
   onRowClick,
   rowLabel,
+  ariaSort,
+  isRowSelected,
+  sections,
   pager,
   skeletonRows = 6,
   className,
   ...aria
 }: DataTableProps<T>) {
+  const flat = useMemo(() => (sections ? sections.flatMap((s) => s.rows) : data), [sections, data]);
   const table = useReactTable({
-    data: data ?? [],
+    data: flat ?? [],
     columns,
     getCoreRowModel: getCoreRowModel(),
     getRowId: getRowId ? (row) => getRowId(row) : undefined,
@@ -79,7 +109,45 @@ export function DataTable<T>({
   const colCount = table.getVisibleLeafColumns().length;
   const rows = table.getRowModel().rows;
   const showError = error !== undefined && error !== null && !isLoading;
-  const showSkeleton = isLoading && !data;
+  const showSkeleton = isLoading && !flat;
+  const byOriginal = new Map(rows.map((r) => [r.original, r]));
+  const showSections = !showSkeleton && !showError && !!sections && sections.length > 0;
+  const isEmpty = sections ? sections.length === 0 : rows.length === 0;
+
+  const renderRow = (row: (typeof rows)[number]) => {
+    const selected = isRowSelected?.(row.original) ?? false;
+    return (
+      <tr
+        key={row.id}
+        data-state={selected ? "selected" : undefined}
+        className={cn(
+          "border-b transition-colors last:border-0",
+          selected && "bg-primary/5",
+          onRowClick &&
+            "cursor-pointer hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:outline-none",
+        )}
+        onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+        onKeyDown={
+          onRowClick
+            ? (e) => {
+                if (e.key === "Enter") onRowClick(row.original);
+              }
+            : undefined
+        }
+        tabIndex={onRowClick ? 0 : undefined}
+        aria-label={rowLabel?.(row.original)}
+      >
+        {row.getVisibleCells().map((cell) => (
+          <td
+            key={cell.id}
+            className={cn("h-12 px-4 py-2 align-middle", cell.column.columnDef.meta?.className)}
+          >
+            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+          </td>
+        ))}
+      </tr>
+    );
+  };
 
   return (
     <div className={cn("overflow-hidden rounded-lg border bg-card", className)}>
@@ -97,6 +165,7 @@ export function DataTable<T>({
                   <th
                     key={h.id}
                     scope="col"
+                    aria-sort={ariaSort?.(h.column.id)}
                     className={cn(
                       "h-9 px-4 text-left text-xs font-medium whitespace-nowrap text-muted-foreground",
                       h.column.columnDef.meta?.className,
@@ -126,7 +195,7 @@ export function DataTable<T>({
                 </td>
               </tr>
             )}
-            {!showSkeleton && !showError && rows.length === 0 && (
+            {!showSkeleton && !showError && isEmpty && (
               <tr>
                 <td colSpan={colCount}>
                   {empty ?? (
@@ -135,41 +204,35 @@ export function DataTable<T>({
                 </td>
               </tr>
             )}
-            {!showSkeleton &&
-              !showError &&
-              rows.map((row) => (
-                <tr
-                  key={row.id}
-                  className={cn(
-                    "border-b transition-colors last:border-0",
-                    onRowClick &&
-                      "cursor-pointer hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:outline-none",
-                  )}
-                  onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-                  onKeyDown={
-                    onRowClick
-                      ? (e) => {
-                          if (e.key === "Enter") onRowClick(row.original);
-                        }
-                      : undefined
-                  }
-                  tabIndex={onRowClick ? 0 : undefined}
-                  aria-label={rowLabel?.(row.original)}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <td
-                      key={cell.id}
-                      className={cn(
-                        "h-12 px-4 py-2 align-middle",
-                        cell.column.columnDef.meta?.className,
-                      )}
-                    >
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  ))}
-                </tr>
-              ))}
+            {!showSkeleton && !showError && !sections && rows.map(renderRow)}
           </tbody>
+          {showSections &&
+            sections.map((section) => {
+              const sectionRows = section.rows
+                .map((r) => byOriginal.get(r))
+                .filter((r): r is (typeof rows)[number] => !!r);
+              return (
+                <tbody key={section.key} className="border-b last:border-0">
+                  {section.header !== undefined && (
+                    <tr className="border-b bg-muted/30">
+                      <th
+                        scope="rowgroup"
+                        colSpan={colCount}
+                        className="px-2 py-1.5 text-left font-normal"
+                      >
+                        {section.header}
+                      </th>
+                    </tr>
+                  )}
+                  {!section.collapsed && sectionRows.map(renderRow)}
+                  {!section.collapsed && sectionRows.length === 0 && section.empty && (
+                    <tr>
+                      <td colSpan={colCount}>{section.empty}</td>
+                    </tr>
+                  )}
+                </tbody>
+              );
+            })}
         </table>
       </div>
       {pager && (pager.canPrev || pager.canNext) && (

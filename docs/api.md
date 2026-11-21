@@ -190,3 +190,29 @@ plain `curl`). Calls with the browser's session cookie need the
 `X-Syncr-CSRF: 1` header; bearer calls do not. API tokens cannot create or
 delete tokens or change the password, and an admin's token cannot create
 users or reset passwords: each of these needs a signed-in session.
+
+## Schedule groups
+
+[Groups](schedules.md#groups) are in `ScheduleService`, private to their
+owner like schedules. A schedule's `groupId` (in `ScheduleInput` and
+`Schedule`) is one of your groups, or empty for none; `MoveSchedules`
+moves up to 500 schedules at once, all of them or none, without the
+`version` an edit needs (each moved schedule's version changes):
+
+```sh
+curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Photos"}' http://127.0.0.1:8080/syncr.v1.ScheduleService/CreateScheduleGroup
+# {"group":{"id":"019a...","name":"Photos",...}}
+
+curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"scheduleIds":["<schedule id>","<schedule id>"],"groupId":"<group id>"}' \
+  http://127.0.0.1:8080/syncr.v1.ScheduleService/MoveSchedules
+```
+
+An empty `groupId` moves the schedules out of their group.
+`DeleteScheduleGroup` keeps the group's schedules, in no group.
+
+`UpdateSchedule` replaces the whole `ScheduleInput`, `groupId` included,
+so a script written before groups existed, which sends no `groupId`,
+takes the schedule out of its group. Send back the `groupId` that
+`GetSchedule` returns, with the schedule's other settings.

@@ -60,6 +60,21 @@ const (
 	// ScheduleServicePreviewScheduleProcedure is the fully-qualified name of the ScheduleService's
 	// PreviewSchedule RPC.
 	ScheduleServicePreviewScheduleProcedure = "/syncr.v1.ScheduleService/PreviewSchedule"
+	// ScheduleServiceListScheduleGroupsProcedure is the fully-qualified name of the ScheduleService's
+	// ListScheduleGroups RPC.
+	ScheduleServiceListScheduleGroupsProcedure = "/syncr.v1.ScheduleService/ListScheduleGroups"
+	// ScheduleServiceCreateScheduleGroupProcedure is the fully-qualified name of the ScheduleService's
+	// CreateScheduleGroup RPC.
+	ScheduleServiceCreateScheduleGroupProcedure = "/syncr.v1.ScheduleService/CreateScheduleGroup"
+	// ScheduleServiceRenameScheduleGroupProcedure is the fully-qualified name of the ScheduleService's
+	// RenameScheduleGroup RPC.
+	ScheduleServiceRenameScheduleGroupProcedure = "/syncr.v1.ScheduleService/RenameScheduleGroup"
+	// ScheduleServiceDeleteScheduleGroupProcedure is the fully-qualified name of the ScheduleService's
+	// DeleteScheduleGroup RPC.
+	ScheduleServiceDeleteScheduleGroupProcedure = "/syncr.v1.ScheduleService/DeleteScheduleGroup"
+	// ScheduleServiceMoveSchedulesProcedure is the fully-qualified name of the ScheduleService's
+	// MoveSchedules RPC.
+	ScheduleServiceMoveSchedulesProcedure = "/syncr.v1.ScheduleService/MoveSchedules"
 )
 
 // ScheduleServiceClient is a client for the syncr.v1.ScheduleService service.
@@ -93,6 +108,25 @@ type ScheduleServiceClient interface {
 	// PreviewSchedule checks a cron expression and time zone and returns the
 	// next occurrences, for the schedule form.
 	PreviewSchedule(context.Context, *connect.Request[v1.PreviewScheduleRequest]) (*connect.Response[v1.PreviewScheduleResponse], error)
+	// ListScheduleGroups lists the caller's groups, by name.
+	ListScheduleGroups(context.Context, *connect.Request[v1.ListScheduleGroupsRequest]) (*connect.Response[v1.ListScheduleGroupsResponse], error)
+	// CreateScheduleGroup creates a group. ALREADY_EXISTS if the caller has a
+	// group with the same name (case-insensitive); INVALID_ARGUMENT ("name")
+	// for an empty or too long name.
+	CreateScheduleGroup(context.Context, *connect.Request[v1.CreateScheduleGroupRequest]) (*connect.Response[v1.CreateScheduleGroupResponse], error)
+	// RenameScheduleGroup renames one of the caller's groups, with the errors
+	// of CreateScheduleGroup. Its schedules are unchanged.
+	RenameScheduleGroup(context.Context, *connect.Request[v1.RenameScheduleGroupRequest]) (*connect.Response[v1.RenameScheduleGroupResponse], error)
+	// DeleteScheduleGroup deletes one of the caller's groups. Its schedules
+	// are kept, in no group, and run as before; their version changes.
+	DeleteScheduleGroup(context.Context, *connect.Request[v1.DeleteScheduleGroupRequest]) (*connect.Response[v1.DeleteScheduleGroupResponse], error)
+	// MoveSchedules moves schedules of the caller into one of the caller's
+	// groups, or out of their group with an empty group_id: all of them or,
+	// on an error, none. Like SetScheduleEnabled it needs no version, and the
+	// version of each moved schedule changes. NOT_FOUND if a schedule or the
+	// group is not the caller's; INVALID_ARGUMENT ("schedule_ids") for no IDs,
+	// more than 500 or an invalid one.
+	MoveSchedules(context.Context, *connect.Request[v1.MoveSchedulesRequest]) (*connect.Response[v1.MoveSchedulesResponse], error)
 }
 
 // NewScheduleServiceClient constructs a client for the syncr.v1.ScheduleService service. By
@@ -166,20 +200,59 @@ func NewScheduleServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 			connect.WithClientOptions(opts...),
 		),
+		listScheduleGroups: connect.NewClient[v1.ListScheduleGroupsRequest, v1.ListScheduleGroupsResponse](
+			httpClient,
+			baseURL+ScheduleServiceListScheduleGroupsProcedure,
+			connect.WithSchema(scheduleServiceMethods.ByName("ListScheduleGroups")),
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
+		),
+		createScheduleGroup: connect.NewClient[v1.CreateScheduleGroupRequest, v1.CreateScheduleGroupResponse](
+			httpClient,
+			baseURL+ScheduleServiceCreateScheduleGroupProcedure,
+			connect.WithSchema(scheduleServiceMethods.ByName("CreateScheduleGroup")),
+			connect.WithClientOptions(opts...),
+		),
+		renameScheduleGroup: connect.NewClient[v1.RenameScheduleGroupRequest, v1.RenameScheduleGroupResponse](
+			httpClient,
+			baseURL+ScheduleServiceRenameScheduleGroupProcedure,
+			connect.WithSchema(scheduleServiceMethods.ByName("RenameScheduleGroup")),
+			connect.WithIdempotency(connect.IdempotencyIdempotent),
+			connect.WithClientOptions(opts...),
+		),
+		deleteScheduleGroup: connect.NewClient[v1.DeleteScheduleGroupRequest, v1.DeleteScheduleGroupResponse](
+			httpClient,
+			baseURL+ScheduleServiceDeleteScheduleGroupProcedure,
+			connect.WithSchema(scheduleServiceMethods.ByName("DeleteScheduleGroup")),
+			connect.WithIdempotency(connect.IdempotencyIdempotent),
+			connect.WithClientOptions(opts...),
+		),
+		moveSchedules: connect.NewClient[v1.MoveSchedulesRequest, v1.MoveSchedulesResponse](
+			httpClient,
+			baseURL+ScheduleServiceMoveSchedulesProcedure,
+			connect.WithSchema(scheduleServiceMethods.ByName("MoveSchedules")),
+			connect.WithIdempotency(connect.IdempotencyIdempotent),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // scheduleServiceClient implements ScheduleServiceClient.
 type scheduleServiceClient struct {
-	listSchedules      *connect.Client[v1.ListSchedulesRequest, v1.ListSchedulesResponse]
-	getSchedule        *connect.Client[v1.GetScheduleRequest, v1.GetScheduleResponse]
-	createSchedule     *connect.Client[v1.CreateScheduleRequest, v1.CreateScheduleResponse]
-	updateSchedule     *connect.Client[v1.UpdateScheduleRequest, v1.UpdateScheduleResponse]
-	setScheduleEnabled *connect.Client[v1.SetScheduleEnabledRequest, v1.SetScheduleEnabledResponse]
-	deleteSchedule     *connect.Client[v1.DeleteScheduleRequest, v1.DeleteScheduleResponse]
-	runScheduleNow     *connect.Client[v1.RunScheduleNowRequest, v1.RunScheduleNowResponse]
-	listScheduleRuns   *connect.Client[v1.ListScheduleRunsRequest, v1.ListScheduleRunsResponse]
-	previewSchedule    *connect.Client[v1.PreviewScheduleRequest, v1.PreviewScheduleResponse]
+	listSchedules       *connect.Client[v1.ListSchedulesRequest, v1.ListSchedulesResponse]
+	getSchedule         *connect.Client[v1.GetScheduleRequest, v1.GetScheduleResponse]
+	createSchedule      *connect.Client[v1.CreateScheduleRequest, v1.CreateScheduleResponse]
+	updateSchedule      *connect.Client[v1.UpdateScheduleRequest, v1.UpdateScheduleResponse]
+	setScheduleEnabled  *connect.Client[v1.SetScheduleEnabledRequest, v1.SetScheduleEnabledResponse]
+	deleteSchedule      *connect.Client[v1.DeleteScheduleRequest, v1.DeleteScheduleResponse]
+	runScheduleNow      *connect.Client[v1.RunScheduleNowRequest, v1.RunScheduleNowResponse]
+	listScheduleRuns    *connect.Client[v1.ListScheduleRunsRequest, v1.ListScheduleRunsResponse]
+	previewSchedule     *connect.Client[v1.PreviewScheduleRequest, v1.PreviewScheduleResponse]
+	listScheduleGroups  *connect.Client[v1.ListScheduleGroupsRequest, v1.ListScheduleGroupsResponse]
+	createScheduleGroup *connect.Client[v1.CreateScheduleGroupRequest, v1.CreateScheduleGroupResponse]
+	renameScheduleGroup *connect.Client[v1.RenameScheduleGroupRequest, v1.RenameScheduleGroupResponse]
+	deleteScheduleGroup *connect.Client[v1.DeleteScheduleGroupRequest, v1.DeleteScheduleGroupResponse]
+	moveSchedules       *connect.Client[v1.MoveSchedulesRequest, v1.MoveSchedulesResponse]
 }
 
 // ListSchedules calls syncr.v1.ScheduleService.ListSchedules.
@@ -227,6 +300,31 @@ func (c *scheduleServiceClient) PreviewSchedule(ctx context.Context, req *connec
 	return c.previewSchedule.CallUnary(ctx, req)
 }
 
+// ListScheduleGroups calls syncr.v1.ScheduleService.ListScheduleGroups.
+func (c *scheduleServiceClient) ListScheduleGroups(ctx context.Context, req *connect.Request[v1.ListScheduleGroupsRequest]) (*connect.Response[v1.ListScheduleGroupsResponse], error) {
+	return c.listScheduleGroups.CallUnary(ctx, req)
+}
+
+// CreateScheduleGroup calls syncr.v1.ScheduleService.CreateScheduleGroup.
+func (c *scheduleServiceClient) CreateScheduleGroup(ctx context.Context, req *connect.Request[v1.CreateScheduleGroupRequest]) (*connect.Response[v1.CreateScheduleGroupResponse], error) {
+	return c.createScheduleGroup.CallUnary(ctx, req)
+}
+
+// RenameScheduleGroup calls syncr.v1.ScheduleService.RenameScheduleGroup.
+func (c *scheduleServiceClient) RenameScheduleGroup(ctx context.Context, req *connect.Request[v1.RenameScheduleGroupRequest]) (*connect.Response[v1.RenameScheduleGroupResponse], error) {
+	return c.renameScheduleGroup.CallUnary(ctx, req)
+}
+
+// DeleteScheduleGroup calls syncr.v1.ScheduleService.DeleteScheduleGroup.
+func (c *scheduleServiceClient) DeleteScheduleGroup(ctx context.Context, req *connect.Request[v1.DeleteScheduleGroupRequest]) (*connect.Response[v1.DeleteScheduleGroupResponse], error) {
+	return c.deleteScheduleGroup.CallUnary(ctx, req)
+}
+
+// MoveSchedules calls syncr.v1.ScheduleService.MoveSchedules.
+func (c *scheduleServiceClient) MoveSchedules(ctx context.Context, req *connect.Request[v1.MoveSchedulesRequest]) (*connect.Response[v1.MoveSchedulesResponse], error) {
+	return c.moveSchedules.CallUnary(ctx, req)
+}
+
 // ScheduleServiceHandler is an implementation of the syncr.v1.ScheduleService service.
 type ScheduleServiceHandler interface {
 	// ListSchedules lists the caller's schedules, by name.
@@ -258,6 +356,25 @@ type ScheduleServiceHandler interface {
 	// PreviewSchedule checks a cron expression and time zone and returns the
 	// next occurrences, for the schedule form.
 	PreviewSchedule(context.Context, *connect.Request[v1.PreviewScheduleRequest]) (*connect.Response[v1.PreviewScheduleResponse], error)
+	// ListScheduleGroups lists the caller's groups, by name.
+	ListScheduleGroups(context.Context, *connect.Request[v1.ListScheduleGroupsRequest]) (*connect.Response[v1.ListScheduleGroupsResponse], error)
+	// CreateScheduleGroup creates a group. ALREADY_EXISTS if the caller has a
+	// group with the same name (case-insensitive); INVALID_ARGUMENT ("name")
+	// for an empty or too long name.
+	CreateScheduleGroup(context.Context, *connect.Request[v1.CreateScheduleGroupRequest]) (*connect.Response[v1.CreateScheduleGroupResponse], error)
+	// RenameScheduleGroup renames one of the caller's groups, with the errors
+	// of CreateScheduleGroup. Its schedules are unchanged.
+	RenameScheduleGroup(context.Context, *connect.Request[v1.RenameScheduleGroupRequest]) (*connect.Response[v1.RenameScheduleGroupResponse], error)
+	// DeleteScheduleGroup deletes one of the caller's groups. Its schedules
+	// are kept, in no group, and run as before; their version changes.
+	DeleteScheduleGroup(context.Context, *connect.Request[v1.DeleteScheduleGroupRequest]) (*connect.Response[v1.DeleteScheduleGroupResponse], error)
+	// MoveSchedules moves schedules of the caller into one of the caller's
+	// groups, or out of their group with an empty group_id: all of them or,
+	// on an error, none. Like SetScheduleEnabled it needs no version, and the
+	// version of each moved schedule changes. NOT_FOUND if a schedule or the
+	// group is not the caller's; INVALID_ARGUMENT ("schedule_ids") for no IDs,
+	// more than 500 or an invalid one.
+	MoveSchedules(context.Context, *connect.Request[v1.MoveSchedulesRequest]) (*connect.Response[v1.MoveSchedulesResponse], error)
 }
 
 // NewScheduleServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -327,6 +444,40 @@ func NewScheduleServiceHandler(svc ScheduleServiceHandler, opts ...connect.Handl
 		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 		connect.WithHandlerOptions(opts...),
 	)
+	scheduleServiceListScheduleGroupsHandler := connect.NewUnaryHandler(
+		ScheduleServiceListScheduleGroupsProcedure,
+		svc.ListScheduleGroups,
+		connect.WithSchema(scheduleServiceMethods.ByName("ListScheduleGroups")),
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
+	)
+	scheduleServiceCreateScheduleGroupHandler := connect.NewUnaryHandler(
+		ScheduleServiceCreateScheduleGroupProcedure,
+		svc.CreateScheduleGroup,
+		connect.WithSchema(scheduleServiceMethods.ByName("CreateScheduleGroup")),
+		connect.WithHandlerOptions(opts...),
+	)
+	scheduleServiceRenameScheduleGroupHandler := connect.NewUnaryHandler(
+		ScheduleServiceRenameScheduleGroupProcedure,
+		svc.RenameScheduleGroup,
+		connect.WithSchema(scheduleServiceMethods.ByName("RenameScheduleGroup")),
+		connect.WithIdempotency(connect.IdempotencyIdempotent),
+		connect.WithHandlerOptions(opts...),
+	)
+	scheduleServiceDeleteScheduleGroupHandler := connect.NewUnaryHandler(
+		ScheduleServiceDeleteScheduleGroupProcedure,
+		svc.DeleteScheduleGroup,
+		connect.WithSchema(scheduleServiceMethods.ByName("DeleteScheduleGroup")),
+		connect.WithIdempotency(connect.IdempotencyIdempotent),
+		connect.WithHandlerOptions(opts...),
+	)
+	scheduleServiceMoveSchedulesHandler := connect.NewUnaryHandler(
+		ScheduleServiceMoveSchedulesProcedure,
+		svc.MoveSchedules,
+		connect.WithSchema(scheduleServiceMethods.ByName("MoveSchedules")),
+		connect.WithIdempotency(connect.IdempotencyIdempotent),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/syncr.v1.ScheduleService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ScheduleServiceListSchedulesProcedure:
@@ -347,6 +498,16 @@ func NewScheduleServiceHandler(svc ScheduleServiceHandler, opts ...connect.Handl
 			scheduleServiceListScheduleRunsHandler.ServeHTTP(w, r)
 		case ScheduleServicePreviewScheduleProcedure:
 			scheduleServicePreviewScheduleHandler.ServeHTTP(w, r)
+		case ScheduleServiceListScheduleGroupsProcedure:
+			scheduleServiceListScheduleGroupsHandler.ServeHTTP(w, r)
+		case ScheduleServiceCreateScheduleGroupProcedure:
+			scheduleServiceCreateScheduleGroupHandler.ServeHTTP(w, r)
+		case ScheduleServiceRenameScheduleGroupProcedure:
+			scheduleServiceRenameScheduleGroupHandler.ServeHTTP(w, r)
+		case ScheduleServiceDeleteScheduleGroupProcedure:
+			scheduleServiceDeleteScheduleGroupHandler.ServeHTTP(w, r)
+		case ScheduleServiceMoveSchedulesProcedure:
+			scheduleServiceMoveSchedulesHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -390,4 +551,24 @@ func (UnimplementedScheduleServiceHandler) ListScheduleRuns(context.Context, *co
 
 func (UnimplementedScheduleServiceHandler) PreviewSchedule(context.Context, *connect.Request[v1.PreviewScheduleRequest]) (*connect.Response[v1.PreviewScheduleResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ScheduleService.PreviewSchedule is not implemented"))
+}
+
+func (UnimplementedScheduleServiceHandler) ListScheduleGroups(context.Context, *connect.Request[v1.ListScheduleGroupsRequest]) (*connect.Response[v1.ListScheduleGroupsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ScheduleService.ListScheduleGroups is not implemented"))
+}
+
+func (UnimplementedScheduleServiceHandler) CreateScheduleGroup(context.Context, *connect.Request[v1.CreateScheduleGroupRequest]) (*connect.Response[v1.CreateScheduleGroupResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ScheduleService.CreateScheduleGroup is not implemented"))
+}
+
+func (UnimplementedScheduleServiceHandler) RenameScheduleGroup(context.Context, *connect.Request[v1.RenameScheduleGroupRequest]) (*connect.Response[v1.RenameScheduleGroupResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ScheduleService.RenameScheduleGroup is not implemented"))
+}
+
+func (UnimplementedScheduleServiceHandler) DeleteScheduleGroup(context.Context, *connect.Request[v1.DeleteScheduleGroupRequest]) (*connect.Response[v1.DeleteScheduleGroupResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ScheduleService.DeleteScheduleGroup is not implemented"))
+}
+
+func (UnimplementedScheduleServiceHandler) MoveSchedules(context.Context, *connect.Request[v1.MoveSchedulesRequest]) (*connect.Response[v1.MoveSchedulesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("syncr.v1.ScheduleService.MoveSchedules is not implemented"))
 }

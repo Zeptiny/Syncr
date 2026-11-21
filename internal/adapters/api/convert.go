@@ -542,6 +542,9 @@ func scheduleToProto(sc schedules.Schedule, refs scheduleRefs) (*syncrv1.Schedul
 		UpdatedAt:    ts(sc.UpdatedAt),
 		Version:      sc.Version,
 	}
+	if !sc.GroupID.IsZero() {
+		out.GroupId = sc.GroupID.String()
+	}
 	if sc.Missed.MaxDelay > 0 {
 		out.MissedRun.MaxDelay = durationpb.New(sc.Missed.MaxDelay)
 	}

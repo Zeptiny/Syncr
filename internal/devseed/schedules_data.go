@@ -58,6 +58,28 @@ const (
 	sAlice   = "Alice's documents"
 )
 
+// Demo schedule groups (the admin's).
+const (
+	gPhotos = "Photos"
+	gOffice = "Office"
+	gNAS    = "NAS"
+)
+
+// demoGroupOf is the group of the admin's schedule named schedule; the
+// others (the old laptop's backup, alice's) are in none (""). A group is
+// created with its first schedule.
+func demoGroupOf(schedule string) string {
+	switch schedule {
+	case sNightly, sPhotosBackup, sPhotosForget, sPhotosCheck, sCloudBackup:
+		return gPhotos
+	case sOffice, sOfficeBackup:
+		return gOffice
+	case sWeekly, sOffsite, sOldNAS, sShared:
+		return gNAS
+	}
+	return ""
+}
+
 // demoLink links a demo schedule to a demo contact.
 type demoLink struct {
 	contact string

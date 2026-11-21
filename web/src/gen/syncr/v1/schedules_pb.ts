@@ -16,7 +16,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file syncr/v1/schedules.proto.
  */
 export const file_syncr_v1_schedules: GenFile = /*@__PURE__*/
-  fileDesc("ChhzeW5jci92MS9zY2hlZHVsZXMucHJvdG8SCHN5bmNyLnYxIkcKDlNjaGVkdWxlVGFyZ2V0EhMKCXdvcmtlcl9pZBgBIAEoCUgAEhYKDHdvcmtlcl9sYWJlbBgCIAEoCUgAQggKBnRhcmdldCJqCg9NaXNzZWRSdW5Qb2xpY3kSKQoGYWN0aW9uGAEgASgOMhkuc3luY3IudjEuTWlzc2VkUnVuQWN0aW9uEiwKCW1heF9kZWxheRgCIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbiJ+Cg9TY2hlZHVsZUNvbnRhY3QSEgoKY29udGFjdF9pZBgBIAEoCRIrCgZldmVudHMYAiADKA4yGy5zeW5jci52MS5Ob3RpZmljYXRpb25FdmVudBIUCgxjb250YWN0X25hbWUYAyABKAkSFAoMY2hhbm5lbF90eXBlGAQgASgJIsACCg1TY2hlZHVsZUlucHV0EgwKBG5hbWUYASABKAkSEwoLZGVzY3JpcHRpb24YAiABKAkSDAoEY3JvbhgDIAEoCRIQCgh0aW1lem9uZRgEIAEoCRIoCgZ0YXJnZXQYBSABKAsyGC5zeW5jci52MS5TY2hlZHVsZVRhcmdldBItCgptaXNzZWRfcnVuGAYgASgLMhkuc3luY3IudjEuTWlzc2VkUnVuUG9saWN5EigKB292ZXJsYXAYByABKA4yFy5zeW5jci52MS5PdmVybGFwUG9saWN5Eg8KB2VuYWJsZWQYCCABKAgSKwoKZGVmaW5pdGlvbhgJIAEoCzIXLnN5bmNyLnYxLkpvYkRlZmluaXRpb24SKwoIY29udGFjdHMYCiADKAsyGS5zeW5jci52MS5TY2hlZHVsZUNvbnRhY3QizQUKCFNjaGVkdWxlEgoKAmlkGAEgASgJEhAKCG93bmVyX2lkGAIgASgJEgwKBG5hbWUYAyABKAkSEwoLZGVzY3JpcHRpb24YBCABKAkSDAoEY3JvbhgFIAEoCRIQCgh0aW1lem9uZRgGIAEoCRIoCgZ0YXJnZXQYByABKAsyGC5zeW5jci52MS5TY2hlZHVsZVRhcmdldBItCgptaXNzZWRfcnVuGAggASgLMhkuc3luY3IudjEuTWlzc2VkUnVuUG9saWN5EigKB292ZXJsYXAYCSABKA4yFy5zeW5jci52MS5PdmVybGFwUG9saWN5Eg8KB2VuYWJsZWQYCiABKAgSFQoNcGF1c2VkX3JlYXNvbhgLIAEoCRIrCgpkZWZpbml0aW9uGAwgASgLMhcuc3luY3IudjEuSm9iRGVmaW5pdGlvbhInCgdyZW1vdGVzGA0gAygLMhYuc3luY3IudjEuSm9iUmVtb3RlUmVmEisKCGNvbnRhY3RzGA4gAygLMhkuc3luY3IudjEuU2NoZWR1bGVDb250YWN0Ei8KC25leHRfcnVuX2F0GA8gASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIxCg1sYXN0X2ZpcmVkX2F0GBAgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBInCghsYXN0X3J1bhgRIAEoCzIVLnN5bmNyLnYxLlNjaGVkdWxlUnVuEi4KCmNyZWF0ZWRfYXQYEiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYEyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEg8KB3ZlcnNpb24YFCABKAMSLgoKcmVwb3NpdG9yeRgVIAEoCzIaLnN5bmNyLnYxLkpvYlJlcG9zaXRvcnlSZWZKBAgWECgi0QMKC1NjaGVkdWxlUnVuEgoKAmlkGAEgASgJEhMKC3NjaGVkdWxlX2lkGAIgASgJEi0KB3RyaWdnZXIYAyABKA4yHC5zeW5jci52MS5TY2hlZHVsZVJ1blRyaWdnZXISMQoNc2NoZWR1bGVkX2ZvchgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLAoIZGVhZGxpbmUYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhEKCWNvYWxlc2NlZBgGIAEoBRIrCgZzdGF0dXMYByABKA4yGy5zeW5jci52MS5TY2hlZHVsZVJ1blN0YXR1cxIOCgZyZWFzb24YCCABKAkSDwoHbWVzc2FnZRgJIAEoCRIRCgl3b3JrZXJfaWQYCiABKAkSDgoGam9iX2lkGAsgASgJEicKCmpvYl9zdGF0dXMYDCABKA4yEy5zeW5jci52MS5Kb2JTdGF0dXMSLgoKY3JlYXRlZF9hdBgNIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgOIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBKBAgPEB4iVAoUTGlzdFNjaGVkdWxlc1JlcXVlc3QSEQoJcmVtb3RlX2lkGAEgASgJEhIKCmNvbnRhY3RfaWQYAiABKAkSFQoNcmVwb3NpdG9yeV9pZBgDIAEoCSI+ChVMaXN0U2NoZWR1bGVzUmVzcG9uc2USJQoJc2NoZWR1bGVzGAEgAygLMhIuc3luY3IudjEuU2NoZWR1bGUiKQoSR2V0U2NoZWR1bGVSZXF1ZXN0EhMKC3NjaGVkdWxlX2lkGAEgASgJIjsKE0dldFNjaGVkdWxlUmVzcG9uc2USJAoIc2NoZWR1bGUYASABKAsyEi5zeW5jci52MS5TY2hlZHVsZSI/ChVDcmVhdGVTY2hlZHVsZVJlcXVlc3QSJgoFaW5wdXQYASABKAsyFy5zeW5jci52MS5TY2hlZHVsZUlucHV0Ij4KFkNyZWF0ZVNjaGVkdWxlUmVzcG9uc2USJAoIc2NoZWR1bGUYASABKAsyEi5zeW5jci52MS5TY2hlZHVsZSJlChVVcGRhdGVTY2hlZHVsZVJlcXVlc3QSEwoLc2NoZWR1bGVfaWQYASABKAkSDwoHdmVyc2lvbhgCIAEoAxImCgVpbnB1dBgDIAEoCzIXLnN5bmNyLnYxLlNjaGVkdWxlSW5wdXQiPgoWVXBkYXRlU2NoZWR1bGVSZXNwb25zZRIkCghzY2hlZHVsZRgBIAEoCzISLnN5bmNyLnYxLlNjaGVkdWxlIkEKGVNldFNjaGVkdWxlRW5hYmxlZFJlcXVlc3QSEwoLc2NoZWR1bGVfaWQYASABKAkSDwoHZW5hYmxlZBgCIAEoCCJCChpTZXRTY2hlZHVsZUVuYWJsZWRSZXNwb25zZRIkCghzY2hlZHVsZRgBIAEoCzISLnN5bmNyLnYxLlNjaGVkdWxlIiwKFURlbGV0ZVNjaGVkdWxlUmVxdWVzdBITCgtzY2hlZHVsZV9pZBgBIAEoCSIYChZEZWxldGVTY2hlZHVsZVJlc3BvbnNlIiwKFVJ1blNjaGVkdWxlTm93UmVxdWVzdBITCgtzY2hlZHVsZV9pZBgBIAEoCSI8ChZSdW5TY2hlZHVsZU5vd1Jlc3BvbnNlEiIKA3J1bhgBIAEoCzIVLnN5bmNyLnYxLlNjaGVkdWxlUnVuIlUKF0xpc3RTY2hlZHVsZVJ1bnNSZXF1ZXN0EhMKC3NjaGVkdWxlX2lkGAEgASgJEhEKCXBhZ2Vfc2l6ZRgCIAEoBRISCgpwYWdlX3Rva2VuGAMgASgJIlgKGExpc3RTY2hlZHVsZVJ1bnNSZXNwb25zZRIjCgRydW5zGAEgAygLMhUuc3luY3IudjEuU2NoZWR1bGVSdW4SFwoPbmV4dF9wYWdlX3Rva2VuGAIgASgJInIKFlByZXZpZXdTY2hlZHVsZVJlcXVlc3QSDAoEY3JvbhgBIAEoCRIQCgh0aW1lem9uZRgCIAEoCRINCgVjb3VudBgDIAEoBRIpCgVhZnRlchgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiXAoXUHJldmlld1NjaGVkdWxlUmVzcG9uc2USLQoJbmV4dF9ydW5zGAEgAygLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBISCgpub3JtYWxpemVkGAIgASgJKnAKD01pc3NlZFJ1bkFjdGlvbhIhCh1NSVNTRURfUlVOX0FDVElPTl9VTlNQRUNJRklFRBAAEh4KGk1JU1NFRF9SVU5fQUNUSU9OX1JVTl9MQVRFEAESGgoWTUlTU0VEX1JVTl9BQ1RJT05fU0tJUBACKnwKDU92ZXJsYXBQb2xpY3kSHgoaT1ZFUkxBUF9QT0xJQ1lfVU5TUEVDSUZJRUQQABIXChNPVkVSTEFQX1BPTElDWV9TS0lQEAESGAoUT1ZFUkxBUF9QT0xJQ1lfUVVFVUUQAhIYChRPVkVSTEFQX1BPTElDWV9BTExPVxADKoECChFTY2hlZHVsZVJ1blN0YXR1cxIjCh9TQ0hFRFVMRV9SVU5fU1RBVFVTX1VOU1BFQ0lGSUVEEAASHwobU0NIRURVTEVfUlVOX1NUQVRVU19QRU5ESU5HEAESIQodU0NIRURVTEVfUlVOX1NUQVRVU19MQVVOQ0hJTkcQAhIgChxTQ0hFRFVMRV9SVU5fU1RBVFVTX0xBVU5DSEVEEAMSHgoaU0NIRURVTEVfUlVOX1NUQVRVU19NSVNTRUQQBBIeChpTQ0hFRFVMRV9SVU5fU1RBVFVTX0ZBSUxFRBAFEiEKHVNDSEVEVUxFX1JVTl9TVEFUVVNfQ0FOQ0VMTEVEEAYqegoSU2NoZWR1bGVSdW5UcmlnZ2VyEiQKIFNDSEVEVUxFX1JVTl9UUklHR0VSX1VOU1BFQ0lGSUVEEAASHQoZU0NIRURVTEVfUlVOX1RSSUdHRVJfQ1JPThABEh8KG1NDSEVEVUxFX1JVTl9UUklHR0VSX01BTlVBTBACMrsGCg9TY2hlZHVsZVNlcnZpY2USVQoNTGlzdFNjaGVkdWxlcxIeLnN5bmNyLnYxLkxpc3RTY2hlZHVsZXNSZXF1ZXN0Gh8uc3luY3IudjEuTGlzdFNjaGVkdWxlc1Jlc3BvbnNlIgOQAgESTwoLR2V0U2NoZWR1bGUSHC5zeW5jci52MS5HZXRTY2hlZHVsZVJlcXVlc3QaHS5zeW5jci52MS5HZXRTY2hlZHVsZVJlc3BvbnNlIgOQAgESVQoOQ3JlYXRlU2NoZWR1bGUSHy5zeW5jci52MS5DcmVhdGVTY2hlZHVsZVJlcXVlc3QaIC5zeW5jci52MS5DcmVhdGVTY2hlZHVsZVJlc3BvbnNlIgASVQoOVXBkYXRlU2NoZWR1bGUSHy5zeW5jci52MS5VcGRhdGVTY2hlZHVsZVJlcXVlc3QaIC5zeW5jci52MS5VcGRhdGVTY2hlZHVsZVJlc3BvbnNlIgASZAoSU2V0U2NoZWR1bGVFbmFibGVkEiMuc3luY3IudjEuU2V0U2NoZWR1bGVFbmFibGVkUmVxdWVzdBokLnN5bmNyLnYxLlNldFNjaGVkdWxlRW5hYmxlZFJlc3BvbnNlIgOQAgISWAoORGVsZXRlU2NoZWR1bGUSHy5zeW5jci52MS5EZWxldGVTY2hlZHVsZVJlcXVlc3QaIC5zeW5jci52MS5EZWxldGVTY2hlZHVsZVJlc3BvbnNlIgOQAgISVQoOUnVuU2NoZWR1bGVOb3cSHy5zeW5jci52MS5SdW5TY2hlZHVsZU5vd1JlcXVlc3QaIC5zeW5jci52MS5SdW5TY2hlZHVsZU5vd1Jlc3BvbnNlIgASXgoQTGlzdFNjaGVkdWxlUnVucxIhLnN5bmNyLnYxLkxpc3RTY2hlZHVsZVJ1bnNSZXF1ZXN0GiIuc3luY3IudjEuTGlzdFNjaGVkdWxlUnVuc1Jlc3BvbnNlIgOQAgESWwoPUHJldmlld1NjaGVkdWxlEiAuc3luY3IudjEuUHJldmlld1NjaGVkdWxlUmVxdWVzdBohLnN5bmNyLnYxLlByZXZpZXdTY2hlZHVsZVJlc3BvbnNlIgOQAgFCkQEKDGNvbS5zeW5jci52MUIOU2NoZWR1bGVzUHJvdG9QAVowZ2l0aHViLmNvbS9aZXB0aW55L1N5bmNyL2dlbi9nby9zeW5jci92MTtzeW5jcnYxogIDU1hYqgIIU3luY3IuVjHKAghTeW5jclxWMeICFFN5bmNyXFYxXEdQQk1ldGFkYXRh6gIJU3luY3I6OlYxYgZwcm90bzM", [file_google_protobuf_duration, file_google_protobuf_timestamp, file_syncr_v1_api, file_syncr_v1_notify]);
+  fileDesc("ChhzeW5jci92MS9zY2hlZHVsZXMucHJvdG8SCHN5bmNyLnYxIkcKDlNjaGVkdWxlVGFyZ2V0EhMKCXdvcmtlcl9pZBgBIAEoCUgAEhYKDHdvcmtlcl9sYWJlbBgCIAEoCUgAQggKBnRhcmdldCJqCg9NaXNzZWRSdW5Qb2xpY3kSKQoGYWN0aW9uGAEgASgOMhkuc3luY3IudjEuTWlzc2VkUnVuQWN0aW9uEiwKCW1heF9kZWxheRgCIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbiJ+Cg9TY2hlZHVsZUNvbnRhY3QSEgoKY29udGFjdF9pZBgBIAEoCRIrCgZldmVudHMYAiADKA4yGy5zeW5jci52MS5Ob3RpZmljYXRpb25FdmVudBIUCgxjb250YWN0X25hbWUYAyABKAkSFAoMY2hhbm5lbF90eXBlGAQgASgJItICCg1TY2hlZHVsZUlucHV0EgwKBG5hbWUYASABKAkSEwoLZGVzY3JpcHRpb24YAiABKAkSDAoEY3JvbhgDIAEoCRIQCgh0aW1lem9uZRgEIAEoCRIoCgZ0YXJnZXQYBSABKAsyGC5zeW5jci52MS5TY2hlZHVsZVRhcmdldBItCgptaXNzZWRfcnVuGAYgASgLMhkuc3luY3IudjEuTWlzc2VkUnVuUG9saWN5EigKB292ZXJsYXAYByABKA4yFy5zeW5jci52MS5PdmVybGFwUG9saWN5Eg8KB2VuYWJsZWQYCCABKAgSKwoKZGVmaW5pdGlvbhgJIAEoCzIXLnN5bmNyLnYxLkpvYkRlZmluaXRpb24SKwoIY29udGFjdHMYCiADKAsyGS5zeW5jci52MS5TY2hlZHVsZUNvbnRhY3QSEAoIZ3JvdXBfaWQYCyABKAki3wUKCFNjaGVkdWxlEgoKAmlkGAEgASgJEhAKCG93bmVyX2lkGAIgASgJEgwKBG5hbWUYAyABKAkSEwoLZGVzY3JpcHRpb24YBCABKAkSDAoEY3JvbhgFIAEoCRIQCgh0aW1lem9uZRgGIAEoCRIoCgZ0YXJnZXQYByABKAsyGC5zeW5jci52MS5TY2hlZHVsZVRhcmdldBItCgptaXNzZWRfcnVuGAggASgLMhkuc3luY3IudjEuTWlzc2VkUnVuUG9saWN5EigKB292ZXJsYXAYCSABKA4yFy5zeW5jci52MS5PdmVybGFwUG9saWN5Eg8KB2VuYWJsZWQYCiABKAgSFQoNcGF1c2VkX3JlYXNvbhgLIAEoCRIrCgpkZWZpbml0aW9uGAwgASgLMhcuc3luY3IudjEuSm9iRGVmaW5pdGlvbhInCgdyZW1vdGVzGA0gAygLMhYuc3luY3IudjEuSm9iUmVtb3RlUmVmEisKCGNvbnRhY3RzGA4gAygLMhkuc3luY3IudjEuU2NoZWR1bGVDb250YWN0Ei8KC25leHRfcnVuX2F0GA8gASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIxCg1sYXN0X2ZpcmVkX2F0GBAgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBInCghsYXN0X3J1bhgRIAEoCzIVLnN5bmNyLnYxLlNjaGVkdWxlUnVuEi4KCmNyZWF0ZWRfYXQYEiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYEyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEg8KB3ZlcnNpb24YFCABKAMSLgoKcmVwb3NpdG9yeRgVIAEoCzIaLnN5bmNyLnYxLkpvYlJlcG9zaXRvcnlSZWYSEAoIZ3JvdXBfaWQYFiABKAlKBAgXECgi0QMKC1NjaGVkdWxlUnVuEgoKAmlkGAEgASgJEhMKC3NjaGVkdWxlX2lkGAIgASgJEi0KB3RyaWdnZXIYAyABKA4yHC5zeW5jci52MS5TY2hlZHVsZVJ1blRyaWdnZXISMQoNc2NoZWR1bGVkX2ZvchgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLAoIZGVhZGxpbmUYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhEKCWNvYWxlc2NlZBgGIAEoBRIrCgZzdGF0dXMYByABKA4yGy5zeW5jci52MS5TY2hlZHVsZVJ1blN0YXR1cxIOCgZyZWFzb24YCCABKAkSDwoHbWVzc2FnZRgJIAEoCRIRCgl3b3JrZXJfaWQYCiABKAkSDgoGam9iX2lkGAsgASgJEicKCmpvYl9zdGF0dXMYDCABKA4yEy5zeW5jci52MS5Kb2JTdGF0dXMSLgoKY3JlYXRlZF9hdBgNIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgOIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBKBAgPEB4iVAoUTGlzdFNjaGVkdWxlc1JlcXVlc3QSEQoJcmVtb3RlX2lkGAEgASgJEhIKCmNvbnRhY3RfaWQYAiABKAkSFQoNcmVwb3NpdG9yeV9pZBgDIAEoCSI+ChVMaXN0U2NoZWR1bGVzUmVzcG9uc2USJQoJc2NoZWR1bGVzGAEgAygLMhIuc3luY3IudjEuU2NoZWR1bGUiKQoSR2V0U2NoZWR1bGVSZXF1ZXN0EhMKC3NjaGVkdWxlX2lkGAEgASgJIjsKE0dldFNjaGVkdWxlUmVzcG9uc2USJAoIc2NoZWR1bGUYASABKAsyEi5zeW5jci52MS5TY2hlZHVsZSI/ChVDcmVhdGVTY2hlZHVsZVJlcXVlc3QSJgoFaW5wdXQYASABKAsyFy5zeW5jci52MS5TY2hlZHVsZUlucHV0Ij4KFkNyZWF0ZVNjaGVkdWxlUmVzcG9uc2USJAoIc2NoZWR1bGUYASABKAsyEi5zeW5jci52MS5TY2hlZHVsZSJlChVVcGRhdGVTY2hlZHVsZVJlcXVlc3QSEwoLc2NoZWR1bGVfaWQYASABKAkSDwoHdmVyc2lvbhgCIAEoAxImCgVpbnB1dBgDIAEoCzIXLnN5bmNyLnYxLlNjaGVkdWxlSW5wdXQiPgoWVXBkYXRlU2NoZWR1bGVSZXNwb25zZRIkCghzY2hlZHVsZRgBIAEoCzISLnN5bmNyLnYxLlNjaGVkdWxlIkEKGVNldFNjaGVkdWxlRW5hYmxlZFJlcXVlc3QSEwoLc2NoZWR1bGVfaWQYASABKAkSDwoHZW5hYmxlZBgCIAEoCCJCChpTZXRTY2hlZHVsZUVuYWJsZWRSZXNwb25zZRIkCghzY2hlZHVsZRgBIAEoCzISLnN5bmNyLnYxLlNjaGVkdWxlIiwKFURlbGV0ZVNjaGVkdWxlUmVxdWVzdBITCgtzY2hlZHVsZV9pZBgBIAEoCSIYChZEZWxldGVTY2hlZHVsZVJlc3BvbnNlIiwKFVJ1blNjaGVkdWxlTm93UmVxdWVzdBITCgtzY2hlZHVsZV9pZBgBIAEoCSI8ChZSdW5TY2hlZHVsZU5vd1Jlc3BvbnNlEiIKA3J1bhgBIAEoCzIVLnN5bmNyLnYxLlNjaGVkdWxlUnVuIlUKF0xpc3RTY2hlZHVsZVJ1bnNSZXF1ZXN0EhMKC3NjaGVkdWxlX2lkGAEgASgJEhEKCXBhZ2Vfc2l6ZRgCIAEoBRISCgpwYWdlX3Rva2VuGAMgASgJIlgKGExpc3RTY2hlZHVsZVJ1bnNSZXNwb25zZRIjCgRydW5zGAEgAygLMhUuc3luY3IudjEuU2NoZWR1bGVSdW4SFwoPbmV4dF9wYWdlX3Rva2VuGAIgASgJInIKFlByZXZpZXdTY2hlZHVsZVJlcXVlc3QSDAoEY3JvbhgBIAEoCRIQCgh0aW1lem9uZRgCIAEoCRINCgVjb3VudBgDIAEoBRIpCgVhZnRlchgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiXAoXUHJldmlld1NjaGVkdWxlUmVzcG9uc2USLQoJbmV4dF9ydW5zGAEgAygLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBISCgpub3JtYWxpemVkGAIgASgJIokBCg1TY2hlZHVsZUdyb3VwEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSLgoKY3JlYXRlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiGwoZTGlzdFNjaGVkdWxlR3JvdXBzUmVxdWVzdCJFChpMaXN0U2NoZWR1bGVHcm91cHNSZXNwb25zZRInCgZncm91cHMYASADKAsyFy5zeW5jci52MS5TY2hlZHVsZUdyb3VwIioKGkNyZWF0ZVNjaGVkdWxlR3JvdXBSZXF1ZXN0EgwKBG5hbWUYASABKAkiRQobQ3JlYXRlU2NoZWR1bGVHcm91cFJlc3BvbnNlEiYKBWdyb3VwGAEgASgLMhcuc3luY3IudjEuU2NoZWR1bGVHcm91cCI8ChpSZW5hbWVTY2hlZHVsZUdyb3VwUmVxdWVzdBIQCghncm91cF9pZBgBIAEoCRIMCgRuYW1lGAIgASgJIkUKG1JlbmFtZVNjaGVkdWxlR3JvdXBSZXNwb25zZRImCgVncm91cBgBIAEoCzIXLnN5bmNyLnYxLlNjaGVkdWxlR3JvdXAiLgoaRGVsZXRlU2NoZWR1bGVHcm91cFJlcXVlc3QSEAoIZ3JvdXBfaWQYASABKAkiHQobRGVsZXRlU2NoZWR1bGVHcm91cFJlc3BvbnNlIj4KFE1vdmVTY2hlZHVsZXNSZXF1ZXN0EhQKDHNjaGVkdWxlX2lkcxgBIAMoCRIQCghncm91cF9pZBgCIAEoCSI+ChVNb3ZlU2NoZWR1bGVzUmVzcG9uc2USJQoJc2NoZWR1bGVzGAEgAygLMhIuc3luY3IudjEuU2NoZWR1bGUqcAoPTWlzc2VkUnVuQWN0aW9uEiEKHU1JU1NFRF9SVU5fQUNUSU9OX1VOU1BFQ0lGSUVEEAASHgoaTUlTU0VEX1JVTl9BQ1RJT05fUlVOX0xBVEUQARIaChZNSVNTRURfUlVOX0FDVElPTl9TS0lQEAIqfAoNT3ZlcmxhcFBvbGljeRIeChpPVkVSTEFQX1BPTElDWV9VTlNQRUNJRklFRBAAEhcKE09WRVJMQVBfUE9MSUNZX1NLSVAQARIYChRPVkVSTEFQX1BPTElDWV9RVUVVRRACEhgKFE9WRVJMQVBfUE9MSUNZX0FMTE9XEAMqgQIKEVNjaGVkdWxlUnVuU3RhdHVzEiMKH1NDSEVEVUxFX1JVTl9TVEFUVVNfVU5TUEVDSUZJRUQQABIfChtTQ0hFRFVMRV9SVU5fU1RBVFVTX1BFTkRJTkcQARIhCh1TQ0hFRFVMRV9SVU5fU1RBVFVTX0xBVU5DSElORxACEiAKHFNDSEVEVUxFX1JVTl9TVEFUVVNfTEFVTkNIRUQQAxIeChpTQ0hFRFVMRV9SVU5fU1RBVFVTX01JU1NFRBAEEh4KGlNDSEVEVUxFX1JVTl9TVEFUVVNfRkFJTEVEEAUSIQodU0NIRURVTEVfUlVOX1NUQVRVU19DQU5DRUxMRUQQBip6ChJTY2hlZHVsZVJ1blRyaWdnZXISJAogU0NIRURVTEVfUlVOX1RSSUdHRVJfVU5TUEVDSUZJRUQQABIdChlTQ0hFRFVMRV9SVU5fVFJJR0dFUl9DUk9OEAESHwobU0NIRURVTEVfUlVOX1RSSUdHRVJfTUFOVUFMEAIysAoKD1NjaGVkdWxlU2VydmljZRJVCg1MaXN0U2NoZWR1bGVzEh4uc3luY3IudjEuTGlzdFNjaGVkdWxlc1JlcXVlc3QaHy5zeW5jci52MS5MaXN0U2NoZWR1bGVzUmVzcG9uc2UiA5ACARJPCgtHZXRTY2hlZHVsZRIcLnN5bmNyLnYxLkdldFNjaGVkdWxlUmVxdWVzdBodLnN5bmNyLnYxLkdldFNjaGVkdWxlUmVzcG9uc2UiA5ACARJVCg5DcmVhdGVTY2hlZHVsZRIfLnN5bmNyLnYxLkNyZWF0ZVNjaGVkdWxlUmVxdWVzdBogLnN5bmNyLnYxLkNyZWF0ZVNjaGVkdWxlUmVzcG9uc2UiABJVCg5VcGRhdGVTY2hlZHVsZRIfLnN5bmNyLnYxLlVwZGF0ZVNjaGVkdWxlUmVxdWVzdBogLnN5bmNyLnYxLlVwZGF0ZVNjaGVkdWxlUmVzcG9uc2UiABJkChJTZXRTY2hlZHVsZUVuYWJsZWQSIy5zeW5jci52MS5TZXRTY2hlZHVsZUVuYWJsZWRSZXF1ZXN0GiQuc3luY3IudjEuU2V0U2NoZWR1bGVFbmFibGVkUmVzcG9uc2UiA5ACAhJYCg5EZWxldGVTY2hlZHVsZRIfLnN5bmNyLnYxLkRlbGV0ZVNjaGVkdWxlUmVxdWVzdBogLnN5bmNyLnYxLkRlbGV0ZVNjaGVkdWxlUmVzcG9uc2UiA5ACAhJVCg5SdW5TY2hlZHVsZU5vdxIfLnN5bmNyLnYxLlJ1blNjaGVkdWxlTm93UmVxdWVzdBogLnN5bmNyLnYxLlJ1blNjaGVkdWxlTm93UmVzcG9uc2UiABJeChBMaXN0U2NoZWR1bGVSdW5zEiEuc3luY3IudjEuTGlzdFNjaGVkdWxlUnVuc1JlcXVlc3QaIi5zeW5jci52MS5MaXN0U2NoZWR1bGVSdW5zUmVzcG9uc2UiA5ACARJbCg9QcmV2aWV3U2NoZWR1bGUSIC5zeW5jci52MS5QcmV2aWV3U2NoZWR1bGVSZXF1ZXN0GiEuc3luY3IudjEuUHJldmlld1NjaGVkdWxlUmVzcG9uc2UiA5ACARJkChJMaXN0U2NoZWR1bGVHcm91cHMSIy5zeW5jci52MS5MaXN0U2NoZWR1bGVHcm91cHNSZXF1ZXN0GiQuc3luY3IudjEuTGlzdFNjaGVkdWxlR3JvdXBzUmVzcG9uc2UiA5ACARJkChNDcmVhdGVTY2hlZHVsZUdyb3VwEiQuc3luY3IudjEuQ3JlYXRlU2NoZWR1bGVHcm91cFJlcXVlc3QaJS5zeW5jci52MS5DcmVhdGVTY2hlZHVsZUdyb3VwUmVzcG9uc2UiABJnChNSZW5hbWVTY2hlZHVsZUdyb3VwEiQuc3luY3IudjEuUmVuYW1lU2NoZWR1bGVHcm91cFJlcXVlc3QaJS5zeW5jci52MS5SZW5hbWVTY2hlZHVsZUdyb3VwUmVzcG9uc2UiA5ACAhJnChNEZWxldGVTY2hlZHVsZUdyb3VwEiQuc3luY3IudjEuRGVsZXRlU2NoZWR1bGVHcm91cFJlcXVlc3QaJS5zeW5jci52MS5EZWxldGVTY2hlZHVsZUdyb3VwUmVzcG9uc2UiA5ACAhJVCg1Nb3ZlU2NoZWR1bGVzEh4uc3luY3IudjEuTW92ZVNjaGVkdWxlc1JlcXVlc3QaHy5zeW5jci52MS5Nb3ZlU2NoZWR1bGVzUmVzcG9uc2UiA5ACAkKRAQoMY29tLnN5bmNyLnYxQg5TY2hlZHVsZXNQcm90b1ABWjBnaXRodWIuY29tL1plcHRpbnkvU3luY3IvZ2VuL2dvL3N5bmNyL3YxO3N5bmNydjGiAgNTWFiqAghTeW5jci5WMcoCCFN5bmNyXFYx4gIUU3luY3JcVjFcR1BCTWV0YWRhdGHqAglTeW5jcjo6VjFiBnByb3RvMw", [file_google_protobuf_duration, file_google_protobuf_timestamp, file_syncr_v1_api, file_syncr_v1_notify]);
 
 /**
  * ScheduleTarget is where a schedule's jobs run.
@@ -206,6 +206,14 @@ export type ScheduleInput = Message<"syncr.v1.ScheduleInput"> & {
    * @generated from field: repeated syncr.v1.ScheduleContact contacts = 10;
    */
   contacts: ScheduleContact[];
+
+  /**
+   * One of the caller's groups to list the schedule in; empty for none.
+   * Groups change nothing about how the schedule runs.
+   *
+   * @generated from field: string group_id = 11;
+   */
+  groupId: string;
 };
 
 /**
@@ -354,6 +362,13 @@ export type Schedule = Message<"syncr.v1.Schedule"> & {
    * @generated from field: syncr.v1.JobRepositoryRef repository = 21;
    */
   repository?: JobRepositoryRef | undefined;
+
+  /**
+   * See ScheduleInput.
+   *
+   * @generated from field: string group_id = 22;
+   */
+  groupId: string;
 };
 
 /**
@@ -909,6 +924,244 @@ export const PreviewScheduleResponseSchema: GenMessage<PreviewScheduleResponse> 
   messageDesc(file_syncr_v1_schedules, 23);
 
 /**
+ * ScheduleGroup is a named group of the caller's schedules, for organizing
+ * the schedule list. A schedule is in at most one group (Schedule.group_id);
+ * nothing about how schedules run depends on groups.
+ *
+ * @generated from message syncr.v1.ScheduleGroup
+ */
+export type ScheduleGroup = Message<"syncr.v1.ScheduleGroup"> & {
+  /**
+   * Group ID (UUID).
+   *
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * Display name, 1 to 64 characters, unique per user (case-insensitive).
+   *
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * When the group was created and last renamed.
+   *
+   * @generated from field: google.protobuf.Timestamp created_at = 3;
+   */
+  createdAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp updated_at = 4;
+   */
+  updatedAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message syncr.v1.ScheduleGroup.
+ * Use `create(ScheduleGroupSchema)` to create a new message.
+ */
+export const ScheduleGroupSchema: GenMessage<ScheduleGroup> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_schedules, 24);
+
+/**
+ * ListScheduleGroupsRequest lists the caller's groups.
+ *
+ * @generated from message syncr.v1.ListScheduleGroupsRequest
+ */
+export type ListScheduleGroupsRequest = Message<"syncr.v1.ListScheduleGroupsRequest"> & {
+};
+
+/**
+ * Describes the message syncr.v1.ListScheduleGroupsRequest.
+ * Use `create(ListScheduleGroupsRequestSchema)` to create a new message.
+ */
+export const ListScheduleGroupsRequestSchema: GenMessage<ListScheduleGroupsRequest> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_schedules, 25);
+
+/**
+ * ListScheduleGroupsResponse lists groups by name.
+ *
+ * @generated from message syncr.v1.ListScheduleGroupsResponse
+ */
+export type ListScheduleGroupsResponse = Message<"syncr.v1.ListScheduleGroupsResponse"> & {
+  /**
+   * @generated from field: repeated syncr.v1.ScheduleGroup groups = 1;
+   */
+  groups: ScheduleGroup[];
+};
+
+/**
+ * Describes the message syncr.v1.ListScheduleGroupsResponse.
+ * Use `create(ListScheduleGroupsResponseSchema)` to create a new message.
+ */
+export const ListScheduleGroupsResponseSchema: GenMessage<ListScheduleGroupsResponse> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_schedules, 26);
+
+/**
+ * CreateScheduleGroupRequest names the new group.
+ *
+ * @generated from message syncr.v1.CreateScheduleGroupRequest
+ */
+export type CreateScheduleGroupRequest = Message<"syncr.v1.CreateScheduleGroupRequest"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+};
+
+/**
+ * Describes the message syncr.v1.CreateScheduleGroupRequest.
+ * Use `create(CreateScheduleGroupRequestSchema)` to create a new message.
+ */
+export const CreateScheduleGroupRequestSchema: GenMessage<CreateScheduleGroupRequest> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_schedules, 27);
+
+/**
+ * CreateScheduleGroupResponse returns the new group.
+ *
+ * @generated from message syncr.v1.CreateScheduleGroupResponse
+ */
+export type CreateScheduleGroupResponse = Message<"syncr.v1.CreateScheduleGroupResponse"> & {
+  /**
+   * @generated from field: syncr.v1.ScheduleGroup group = 1;
+   */
+  group?: ScheduleGroup | undefined;
+};
+
+/**
+ * Describes the message syncr.v1.CreateScheduleGroupResponse.
+ * Use `create(CreateScheduleGroupResponseSchema)` to create a new message.
+ */
+export const CreateScheduleGroupResponseSchema: GenMessage<CreateScheduleGroupResponse> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_schedules, 28);
+
+/**
+ * RenameScheduleGroupRequest gives a group a new name.
+ *
+ * @generated from message syncr.v1.RenameScheduleGroupRequest
+ */
+export type RenameScheduleGroupRequest = Message<"syncr.v1.RenameScheduleGroupRequest"> & {
+  /**
+   * @generated from field: string group_id = 1;
+   */
+  groupId: string;
+
+  /**
+   * @generated from field: string name = 2;
+   */
+  name: string;
+};
+
+/**
+ * Describes the message syncr.v1.RenameScheduleGroupRequest.
+ * Use `create(RenameScheduleGroupRequestSchema)` to create a new message.
+ */
+export const RenameScheduleGroupRequestSchema: GenMessage<RenameScheduleGroupRequest> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_schedules, 29);
+
+/**
+ * RenameScheduleGroupResponse returns the renamed group.
+ *
+ * @generated from message syncr.v1.RenameScheduleGroupResponse
+ */
+export type RenameScheduleGroupResponse = Message<"syncr.v1.RenameScheduleGroupResponse"> & {
+  /**
+   * @generated from field: syncr.v1.ScheduleGroup group = 1;
+   */
+  group?: ScheduleGroup | undefined;
+};
+
+/**
+ * Describes the message syncr.v1.RenameScheduleGroupResponse.
+ * Use `create(RenameScheduleGroupResponseSchema)` to create a new message.
+ */
+export const RenameScheduleGroupResponseSchema: GenMessage<RenameScheduleGroupResponse> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_schedules, 30);
+
+/**
+ * DeleteScheduleGroupRequest names the group to delete.
+ *
+ * @generated from message syncr.v1.DeleteScheduleGroupRequest
+ */
+export type DeleteScheduleGroupRequest = Message<"syncr.v1.DeleteScheduleGroupRequest"> & {
+  /**
+   * @generated from field: string group_id = 1;
+   */
+  groupId: string;
+};
+
+/**
+ * Describes the message syncr.v1.DeleteScheduleGroupRequest.
+ * Use `create(DeleteScheduleGroupRequestSchema)` to create a new message.
+ */
+export const DeleteScheduleGroupRequestSchema: GenMessage<DeleteScheduleGroupRequest> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_schedules, 31);
+
+/**
+ * DeleteScheduleGroupResponse is empty.
+ *
+ * @generated from message syncr.v1.DeleteScheduleGroupResponse
+ */
+export type DeleteScheduleGroupResponse = Message<"syncr.v1.DeleteScheduleGroupResponse"> & {
+};
+
+/**
+ * Describes the message syncr.v1.DeleteScheduleGroupResponse.
+ * Use `create(DeleteScheduleGroupResponseSchema)` to create a new message.
+ */
+export const DeleteScheduleGroupResponseSchema: GenMessage<DeleteScheduleGroupResponse> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_schedules, 32);
+
+/**
+ * MoveSchedulesRequest moves schedules into a group.
+ *
+ * @generated from message syncr.v1.MoveSchedulesRequest
+ */
+export type MoveSchedulesRequest = Message<"syncr.v1.MoveSchedulesRequest"> & {
+  /**
+   * The schedules to move: 1 to 500; duplicates count once.
+   *
+   * @generated from field: repeated string schedule_ids = 1;
+   */
+  scheduleIds: string[];
+
+  /**
+   * The group to move them into; empty moves them out of their group.
+   *
+   * @generated from field: string group_id = 2;
+   */
+  groupId: string;
+};
+
+/**
+ * Describes the message syncr.v1.MoveSchedulesRequest.
+ * Use `create(MoveSchedulesRequestSchema)` to create a new message.
+ */
+export const MoveSchedulesRequestSchema: GenMessage<MoveSchedulesRequest> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_schedules, 33);
+
+/**
+ * MoveSchedulesResponse returns the moved schedules.
+ *
+ * @generated from message syncr.v1.MoveSchedulesResponse
+ */
+export type MoveSchedulesResponse = Message<"syncr.v1.MoveSchedulesResponse"> & {
+  /**
+   * @generated from field: repeated syncr.v1.Schedule schedules = 1;
+   */
+  schedules: Schedule[];
+};
+
+/**
+ * Describes the message syncr.v1.MoveSchedulesResponse.
+ * Use `create(MoveSchedulesResponseSchema)` to create a new message.
+ */
+export const MoveSchedulesResponseSchema: GenMessage<MoveSchedulesResponse> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_schedules, 34);
+
+/**
  * MissedRunAction is what happens to a run whose worker is offline when it
  * is due.
  *
@@ -1076,13 +1329,14 @@ export const ScheduleRunTriggerSchema: GenEnum<ScheduleRunTrigger> = /*@__PURE__
   enumDesc(file_syncr_v1_schedules, 3);
 
 /**
- * ScheduleService manages the caller's schedules. Schedules are private to
- * their owner, admins included: another user's schedule is NOT_FOUND. Jobs a
- * schedule launches belong to its owner (admins see them through
- * ListJobs.all_users).
+ * ScheduleService manages the caller's schedules and their groups.
+ * Schedules and groups are private to their owner, admins included: another
+ * user's schedule or group is NOT_FOUND. Jobs a schedule launches belong to
+ * its owner (admins see them through ListJobs.all_users). Groups only
+ * organize the list (ScheduleGroup).
  *
  * Invalid input fails with INVALID_ARGUMENT carrying a ValidationError
- * detail. Field paths: "name", "cron", "timezone", "target.worker_id",
+ * detail. Field paths: "name", "group_id", "cron", "timezone", "target.worker_id",
  * "target.worker_label", "missed_run.max_delay", "contacts[1].contact_id",
  * "contacts[1].events", and "definition...." as for RunJob. Restores cannot
  * be scheduled ("definition.restic_restore": "restores cannot be
@@ -1194,6 +1448,65 @@ export const ScheduleService: GenService<{
     methodKind: "unary";
     input: typeof PreviewScheduleRequestSchema;
     output: typeof PreviewScheduleResponseSchema;
+  },
+  /**
+   * ListScheduleGroups lists the caller's groups, by name.
+   *
+   * @generated from rpc syncr.v1.ScheduleService.ListScheduleGroups
+   */
+  listScheduleGroups: {
+    methodKind: "unary";
+    input: typeof ListScheduleGroupsRequestSchema;
+    output: typeof ListScheduleGroupsResponseSchema;
+  },
+  /**
+   * CreateScheduleGroup creates a group. ALREADY_EXISTS if the caller has a
+   * group with the same name (case-insensitive); INVALID_ARGUMENT ("name")
+   * for an empty or too long name.
+   *
+   * @generated from rpc syncr.v1.ScheduleService.CreateScheduleGroup
+   */
+  createScheduleGroup: {
+    methodKind: "unary";
+    input: typeof CreateScheduleGroupRequestSchema;
+    output: typeof CreateScheduleGroupResponseSchema;
+  },
+  /**
+   * RenameScheduleGroup renames one of the caller's groups, with the errors
+   * of CreateScheduleGroup. Its schedules are unchanged.
+   *
+   * @generated from rpc syncr.v1.ScheduleService.RenameScheduleGroup
+   */
+  renameScheduleGroup: {
+    methodKind: "unary";
+    input: typeof RenameScheduleGroupRequestSchema;
+    output: typeof RenameScheduleGroupResponseSchema;
+  },
+  /**
+   * DeleteScheduleGroup deletes one of the caller's groups. Its schedules
+   * are kept, in no group, and run as before; their version changes.
+   *
+   * @generated from rpc syncr.v1.ScheduleService.DeleteScheduleGroup
+   */
+  deleteScheduleGroup: {
+    methodKind: "unary";
+    input: typeof DeleteScheduleGroupRequestSchema;
+    output: typeof DeleteScheduleGroupResponseSchema;
+  },
+  /**
+   * MoveSchedules moves schedules of the caller into one of the caller's
+   * groups, or out of their group with an empty group_id: all of them or,
+   * on an error, none. Like SetScheduleEnabled it needs no version, and the
+   * version of each moved schedule changes. NOT_FOUND if a schedule or the
+   * group is not the caller's; INVALID_ARGUMENT ("schedule_ids") for no IDs,
+   * more than 500 or an invalid one.
+   *
+   * @generated from rpc syncr.v1.ScheduleService.MoveSchedules
+   */
+  moveSchedules: {
+    methodKind: "unary";
+    input: typeof MoveSchedulesRequestSchema;
+    output: typeof MoveSchedulesResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_syncr_v1_schedules, 0);

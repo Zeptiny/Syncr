@@ -498,7 +498,10 @@ type ScheduleInput struct {
 	// What each run runs (checked as for RunJob).
 	Definition *JobDefinition `protobuf:"bytes,9,opt,name=definition,proto3" json:"definition,omitempty"`
 	// Contacts to notify and their events.
-	Contacts      []*ScheduleContact `protobuf:"bytes,10,rep,name=contacts,proto3" json:"contacts,omitempty"`
+	Contacts []*ScheduleContact `protobuf:"bytes,10,rep,name=contacts,proto3" json:"contacts,omitempty"`
+	// One of the caller's groups to list the schedule in; empty for none.
+	// Groups change nothing about how the schedule runs.
+	GroupId       string `protobuf:"bytes,11,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -603,6 +606,13 @@ func (x *ScheduleInput) GetContacts() []*ScheduleContact {
 	return nil
 }
 
+func (x *ScheduleInput) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
 // Schedule is a configured schedule.
 type Schedule struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -642,7 +652,9 @@ type Schedule struct {
 	Version int64 `protobuf:"varint,20,opt,name=version,proto3" json:"version,omitempty"`
 	// The restic repository the definition uses, for display; unset for other
 	// kinds.
-	Repository    *JobRepositoryRef `protobuf:"bytes,21,opt,name=repository,proto3" json:"repository,omitempty"`
+	Repository *JobRepositoryRef `protobuf:"bytes,21,opt,name=repository,proto3" json:"repository,omitempty"`
+	// See ScheduleInput.
+	GroupId       string `protobuf:"bytes,22,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -822,6 +834,13 @@ func (x *Schedule) GetRepository() *JobRepositoryRef {
 		return x.Repository
 	}
 	return nil
+}
+
+func (x *Schedule) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
 }
 
 // ScheduleRun is one run of a schedule.
@@ -1908,6 +1927,532 @@ func (x *PreviewScheduleResponse) GetNormalized() string {
 	return ""
 }
 
+// ScheduleGroup is a named group of the caller's schedules, for organizing
+// the schedule list. A schedule is in at most one group (Schedule.group_id);
+// nothing about how schedules run depends on groups.
+type ScheduleGroup struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Group ID (UUID).
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Display name, 1 to 64 characters, unique per user (case-insensitive).
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// When the group was created and last renamed.
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ScheduleGroup) Reset() {
+	*x = ScheduleGroup{}
+	mi := &file_syncr_v1_schedules_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ScheduleGroup) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ScheduleGroup) ProtoMessage() {}
+
+func (x *ScheduleGroup) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_schedules_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ScheduleGroup.ProtoReflect.Descriptor instead.
+func (*ScheduleGroup) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_schedules_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ScheduleGroup) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ScheduleGroup) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ScheduleGroup) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *ScheduleGroup) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+// ListScheduleGroupsRequest lists the caller's groups.
+type ListScheduleGroupsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListScheduleGroupsRequest) Reset() {
+	*x = ListScheduleGroupsRequest{}
+	mi := &file_syncr_v1_schedules_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListScheduleGroupsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListScheduleGroupsRequest) ProtoMessage() {}
+
+func (x *ListScheduleGroupsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_schedules_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListScheduleGroupsRequest.ProtoReflect.Descriptor instead.
+func (*ListScheduleGroupsRequest) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_schedules_proto_rawDescGZIP(), []int{25}
+}
+
+// ListScheduleGroupsResponse lists groups by name.
+type ListScheduleGroupsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Groups        []*ScheduleGroup       `protobuf:"bytes,1,rep,name=groups,proto3" json:"groups,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListScheduleGroupsResponse) Reset() {
+	*x = ListScheduleGroupsResponse{}
+	mi := &file_syncr_v1_schedules_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListScheduleGroupsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListScheduleGroupsResponse) ProtoMessage() {}
+
+func (x *ListScheduleGroupsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_schedules_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListScheduleGroupsResponse.ProtoReflect.Descriptor instead.
+func (*ListScheduleGroupsResponse) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_schedules_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ListScheduleGroupsResponse) GetGroups() []*ScheduleGroup {
+	if x != nil {
+		return x.Groups
+	}
+	return nil
+}
+
+// CreateScheduleGroupRequest names the new group.
+type CreateScheduleGroupRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateScheduleGroupRequest) Reset() {
+	*x = CreateScheduleGroupRequest{}
+	mi := &file_syncr_v1_schedules_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateScheduleGroupRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateScheduleGroupRequest) ProtoMessage() {}
+
+func (x *CreateScheduleGroupRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_schedules_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateScheduleGroupRequest.ProtoReflect.Descriptor instead.
+func (*CreateScheduleGroupRequest) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_schedules_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *CreateScheduleGroupRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+// CreateScheduleGroupResponse returns the new group.
+type CreateScheduleGroupResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Group         *ScheduleGroup         `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateScheduleGroupResponse) Reset() {
+	*x = CreateScheduleGroupResponse{}
+	mi := &file_syncr_v1_schedules_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateScheduleGroupResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateScheduleGroupResponse) ProtoMessage() {}
+
+func (x *CreateScheduleGroupResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_schedules_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateScheduleGroupResponse.ProtoReflect.Descriptor instead.
+func (*CreateScheduleGroupResponse) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_schedules_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *CreateScheduleGroupResponse) GetGroup() *ScheduleGroup {
+	if x != nil {
+		return x.Group
+	}
+	return nil
+}
+
+// RenameScheduleGroupRequest gives a group a new name.
+type RenameScheduleGroupRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	GroupId       string                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenameScheduleGroupRequest) Reset() {
+	*x = RenameScheduleGroupRequest{}
+	mi := &file_syncr_v1_schedules_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenameScheduleGroupRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenameScheduleGroupRequest) ProtoMessage() {}
+
+func (x *RenameScheduleGroupRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_schedules_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenameScheduleGroupRequest.ProtoReflect.Descriptor instead.
+func (*RenameScheduleGroupRequest) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_schedules_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *RenameScheduleGroupRequest) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+func (x *RenameScheduleGroupRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+// RenameScheduleGroupResponse returns the renamed group.
+type RenameScheduleGroupResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Group         *ScheduleGroup         `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenameScheduleGroupResponse) Reset() {
+	*x = RenameScheduleGroupResponse{}
+	mi := &file_syncr_v1_schedules_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenameScheduleGroupResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenameScheduleGroupResponse) ProtoMessage() {}
+
+func (x *RenameScheduleGroupResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_schedules_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenameScheduleGroupResponse.ProtoReflect.Descriptor instead.
+func (*RenameScheduleGroupResponse) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_schedules_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *RenameScheduleGroupResponse) GetGroup() *ScheduleGroup {
+	if x != nil {
+		return x.Group
+	}
+	return nil
+}
+
+// DeleteScheduleGroupRequest names the group to delete.
+type DeleteScheduleGroupRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	GroupId       string                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteScheduleGroupRequest) Reset() {
+	*x = DeleteScheduleGroupRequest{}
+	mi := &file_syncr_v1_schedules_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteScheduleGroupRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteScheduleGroupRequest) ProtoMessage() {}
+
+func (x *DeleteScheduleGroupRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_schedules_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteScheduleGroupRequest.ProtoReflect.Descriptor instead.
+func (*DeleteScheduleGroupRequest) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_schedules_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *DeleteScheduleGroupRequest) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+// DeleteScheduleGroupResponse is empty.
+type DeleteScheduleGroupResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteScheduleGroupResponse) Reset() {
+	*x = DeleteScheduleGroupResponse{}
+	mi := &file_syncr_v1_schedules_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteScheduleGroupResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteScheduleGroupResponse) ProtoMessage() {}
+
+func (x *DeleteScheduleGroupResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_schedules_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteScheduleGroupResponse.ProtoReflect.Descriptor instead.
+func (*DeleteScheduleGroupResponse) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_schedules_proto_rawDescGZIP(), []int{32}
+}
+
+// MoveSchedulesRequest moves schedules into a group.
+type MoveSchedulesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The schedules to move: 1 to 500; duplicates count once.
+	ScheduleIds []string `protobuf:"bytes,1,rep,name=schedule_ids,json=scheduleIds,proto3" json:"schedule_ids,omitempty"`
+	// The group to move them into; empty moves them out of their group.
+	GroupId       string `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MoveSchedulesRequest) Reset() {
+	*x = MoveSchedulesRequest{}
+	mi := &file_syncr_v1_schedules_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MoveSchedulesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MoveSchedulesRequest) ProtoMessage() {}
+
+func (x *MoveSchedulesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_schedules_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MoveSchedulesRequest.ProtoReflect.Descriptor instead.
+func (*MoveSchedulesRequest) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_schedules_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *MoveSchedulesRequest) GetScheduleIds() []string {
+	if x != nil {
+		return x.ScheduleIds
+	}
+	return nil
+}
+
+func (x *MoveSchedulesRequest) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+// MoveSchedulesResponse returns the moved schedules.
+type MoveSchedulesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Schedules     []*Schedule            `protobuf:"bytes,1,rep,name=schedules,proto3" json:"schedules,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MoveSchedulesResponse) Reset() {
+	*x = MoveSchedulesResponse{}
+	mi := &file_syncr_v1_schedules_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MoveSchedulesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MoveSchedulesResponse) ProtoMessage() {}
+
+func (x *MoveSchedulesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_schedules_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MoveSchedulesResponse.ProtoReflect.Descriptor instead.
+func (*MoveSchedulesResponse) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_schedules_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *MoveSchedulesResponse) GetSchedules() []*Schedule {
+	if x != nil {
+		return x.Schedules
+	}
+	return nil
+}
+
 var File_syncr_v1_schedules_proto protoreflect.FileDescriptor
 
 const file_syncr_v1_schedules_proto_rawDesc = "" +
@@ -1925,7 +2470,7 @@ const file_syncr_v1_schedules_proto_rawDesc = "" +
 	"contact_id\x18\x01 \x01(\tR\tcontactId\x123\n" +
 	"\x06events\x18\x02 \x03(\x0e2\x1b.syncr.v1.NotificationEventR\x06events\x12!\n" +
 	"\fcontact_name\x18\x03 \x01(\tR\vcontactName\x12!\n" +
-	"\fchannel_type\x18\x04 \x01(\tR\vchannelType\"\x9e\x03\n" +
+	"\fchannel_type\x18\x04 \x01(\tR\vchannelType\"\xb9\x03\n" +
 	"\rScheduleInput\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x12\n" +
@@ -1940,7 +2485,8 @@ const file_syncr_v1_schedules_proto_rawDesc = "" +
 	"definition\x18\t \x01(\v2\x17.syncr.v1.JobDefinitionR\n" +
 	"definition\x125\n" +
 	"\bcontacts\x18\n" +
-	" \x03(\v2\x19.syncr.v1.ScheduleContactR\bcontacts\"\x9b\a\n" +
+	" \x03(\v2\x19.syncr.v1.ScheduleContactR\bcontacts\x12\x19\n" +
+	"\bgroup_id\x18\v \x01(\tR\agroupId\"\xb6\a\n" +
 	"\bSchedule\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bowner_id\x18\x02 \x01(\tR\aownerId\x12\x12\n" +
@@ -1970,7 +2516,8 @@ const file_syncr_v1_schedules_proto_rawDesc = "" +
 	"\aversion\x18\x14 \x01(\x03R\aversion\x12:\n" +
 	"\n" +
 	"repository\x18\x15 \x01(\v2\x1a.syncr.v1.JobRepositoryRefR\n" +
-	"repositoryJ\x04\b\x16\x10(\"\xd8\x04\n" +
+	"repository\x12\x19\n" +
+	"\bgroup_id\x18\x16 \x01(\tR\agroupIdJ\x04\b\x17\x10(\"\xd8\x04\n" +
 	"\vScheduleRun\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vschedule_id\x18\x02 \x01(\tR\n" +
@@ -2047,7 +2594,34 @@ const file_syncr_v1_schedules_proto_rawDesc = "" +
 	"\tnext_runs\x18\x01 \x03(\v2\x1a.google.protobuf.TimestampR\bnextRuns\x12\x1e\n" +
 	"\n" +
 	"normalized\x18\x02 \x01(\tR\n" +
-	"normalized*p\n" +
+	"normalized\"\xa9\x01\n" +
+	"\rScheduleGroup\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x129\n" +
+	"\n" +
+	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x1b\n" +
+	"\x19ListScheduleGroupsRequest\"M\n" +
+	"\x1aListScheduleGroupsResponse\x12/\n" +
+	"\x06groups\x18\x01 \x03(\v2\x17.syncr.v1.ScheduleGroupR\x06groups\"0\n" +
+	"\x1aCreateScheduleGroupRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"L\n" +
+	"\x1bCreateScheduleGroupResponse\x12-\n" +
+	"\x05group\x18\x01 \x01(\v2\x17.syncr.v1.ScheduleGroupR\x05group\"K\n" +
+	"\x1aRenameScheduleGroupRequest\x12\x19\n" +
+	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"L\n" +
+	"\x1bRenameScheduleGroupResponse\x12-\n" +
+	"\x05group\x18\x01 \x01(\v2\x17.syncr.v1.ScheduleGroupR\x05group\"7\n" +
+	"\x1aDeleteScheduleGroupRequest\x12\x19\n" +
+	"\bgroup_id\x18\x01 \x01(\tR\agroupId\"\x1d\n" +
+	"\x1bDeleteScheduleGroupResponse\"T\n" +
+	"\x14MoveSchedulesRequest\x12!\n" +
+	"\fschedule_ids\x18\x01 \x03(\tR\vscheduleIds\x12\x19\n" +
+	"\bgroup_id\x18\x02 \x01(\tR\agroupId\"I\n" +
+	"\x15MoveSchedulesResponse\x120\n" +
+	"\tschedules\x18\x01 \x03(\v2\x12.syncr.v1.ScheduleR\tschedules*p\n" +
 	"\x0fMissedRunAction\x12!\n" +
 	"\x1dMISSED_RUN_ACTION_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aMISSED_RUN_ACTION_RUN_LATE\x10\x01\x12\x1a\n" +
@@ -2068,7 +2642,8 @@ const file_syncr_v1_schedules_proto_rawDesc = "" +
 	"\x12ScheduleRunTrigger\x12$\n" +
 	" SCHEDULE_RUN_TRIGGER_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19SCHEDULE_RUN_TRIGGER_CRON\x10\x01\x12\x1f\n" +
-	"\x1bSCHEDULE_RUN_TRIGGER_MANUAL\x10\x022\xbb\x06\n" +
+	"\x1bSCHEDULE_RUN_TRIGGER_MANUAL\x10\x022\xb0\n" +
+	"\n" +
 	"\x0fScheduleService\x12U\n" +
 	"\rListSchedules\x12\x1e.syncr.v1.ListSchedulesRequest\x1a\x1f.syncr.v1.ListSchedulesResponse\"\x03\x90\x02\x01\x12O\n" +
 	"\vGetSchedule\x12\x1c.syncr.v1.GetScheduleRequest\x1a\x1d.syncr.v1.GetScheduleResponse\"\x03\x90\x02\x01\x12U\n" +
@@ -2078,7 +2653,12 @@ const file_syncr_v1_schedules_proto_rawDesc = "" +
 	"\x0eDeleteSchedule\x12\x1f.syncr.v1.DeleteScheduleRequest\x1a .syncr.v1.DeleteScheduleResponse\"\x03\x90\x02\x02\x12U\n" +
 	"\x0eRunScheduleNow\x12\x1f.syncr.v1.RunScheduleNowRequest\x1a .syncr.v1.RunScheduleNowResponse\"\x00\x12^\n" +
 	"\x10ListScheduleRuns\x12!.syncr.v1.ListScheduleRunsRequest\x1a\".syncr.v1.ListScheduleRunsResponse\"\x03\x90\x02\x01\x12[\n" +
-	"\x0fPreviewSchedule\x12 .syncr.v1.PreviewScheduleRequest\x1a!.syncr.v1.PreviewScheduleResponse\"\x03\x90\x02\x01B\x91\x01\n" +
+	"\x0fPreviewSchedule\x12 .syncr.v1.PreviewScheduleRequest\x1a!.syncr.v1.PreviewScheduleResponse\"\x03\x90\x02\x01\x12d\n" +
+	"\x12ListScheduleGroups\x12#.syncr.v1.ListScheduleGroupsRequest\x1a$.syncr.v1.ListScheduleGroupsResponse\"\x03\x90\x02\x01\x12d\n" +
+	"\x13CreateScheduleGroup\x12$.syncr.v1.CreateScheduleGroupRequest\x1a%.syncr.v1.CreateScheduleGroupResponse\"\x00\x12g\n" +
+	"\x13RenameScheduleGroup\x12$.syncr.v1.RenameScheduleGroupRequest\x1a%.syncr.v1.RenameScheduleGroupResponse\"\x03\x90\x02\x02\x12g\n" +
+	"\x13DeleteScheduleGroup\x12$.syncr.v1.DeleteScheduleGroupRequest\x1a%.syncr.v1.DeleteScheduleGroupResponse\"\x03\x90\x02\x02\x12U\n" +
+	"\rMoveSchedules\x12\x1e.syncr.v1.MoveSchedulesRequest\x1a\x1f.syncr.v1.MoveSchedulesResponse\"\x03\x90\x02\x02B\x91\x01\n" +
 	"\fcom.syncr.v1B\x0eSchedulesProtoP\x01Z0github.com/Zeptiny/Syncr/gen/go/syncr/v1;syncrv1\xa2\x02\x03SXX\xaa\x02\bSyncr.V1\xca\x02\bSyncr\\V1\xe2\x02\x14Syncr\\V1\\GPBMetadata\xea\x02\tSyncr::V1b\x06proto3"
 
 var (
@@ -2094,72 +2674,83 @@ func file_syncr_v1_schedules_proto_rawDescGZIP() []byte {
 }
 
 var file_syncr_v1_schedules_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_syncr_v1_schedules_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_syncr_v1_schedules_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_syncr_v1_schedules_proto_goTypes = []any{
-	(MissedRunAction)(0),               // 0: syncr.v1.MissedRunAction
-	(OverlapPolicy)(0),                 // 1: syncr.v1.OverlapPolicy
-	(ScheduleRunStatus)(0),             // 2: syncr.v1.ScheduleRunStatus
-	(ScheduleRunTrigger)(0),            // 3: syncr.v1.ScheduleRunTrigger
-	(*ScheduleTarget)(nil),             // 4: syncr.v1.ScheduleTarget
-	(*MissedRunPolicy)(nil),            // 5: syncr.v1.MissedRunPolicy
-	(*ScheduleContact)(nil),            // 6: syncr.v1.ScheduleContact
-	(*ScheduleInput)(nil),              // 7: syncr.v1.ScheduleInput
-	(*Schedule)(nil),                   // 8: syncr.v1.Schedule
-	(*ScheduleRun)(nil),                // 9: syncr.v1.ScheduleRun
-	(*ListSchedulesRequest)(nil),       // 10: syncr.v1.ListSchedulesRequest
-	(*ListSchedulesResponse)(nil),      // 11: syncr.v1.ListSchedulesResponse
-	(*GetScheduleRequest)(nil),         // 12: syncr.v1.GetScheduleRequest
-	(*GetScheduleResponse)(nil),        // 13: syncr.v1.GetScheduleResponse
-	(*CreateScheduleRequest)(nil),      // 14: syncr.v1.CreateScheduleRequest
-	(*CreateScheduleResponse)(nil),     // 15: syncr.v1.CreateScheduleResponse
-	(*UpdateScheduleRequest)(nil),      // 16: syncr.v1.UpdateScheduleRequest
-	(*UpdateScheduleResponse)(nil),     // 17: syncr.v1.UpdateScheduleResponse
-	(*SetScheduleEnabledRequest)(nil),  // 18: syncr.v1.SetScheduleEnabledRequest
-	(*SetScheduleEnabledResponse)(nil), // 19: syncr.v1.SetScheduleEnabledResponse
-	(*DeleteScheduleRequest)(nil),      // 20: syncr.v1.DeleteScheduleRequest
-	(*DeleteScheduleResponse)(nil),     // 21: syncr.v1.DeleteScheduleResponse
-	(*RunScheduleNowRequest)(nil),      // 22: syncr.v1.RunScheduleNowRequest
-	(*RunScheduleNowResponse)(nil),     // 23: syncr.v1.RunScheduleNowResponse
-	(*ListScheduleRunsRequest)(nil),    // 24: syncr.v1.ListScheduleRunsRequest
-	(*ListScheduleRunsResponse)(nil),   // 25: syncr.v1.ListScheduleRunsResponse
-	(*PreviewScheduleRequest)(nil),     // 26: syncr.v1.PreviewScheduleRequest
-	(*PreviewScheduleResponse)(nil),    // 27: syncr.v1.PreviewScheduleResponse
-	(*durationpb.Duration)(nil),        // 28: google.protobuf.Duration
-	(NotificationEvent)(0),             // 29: syncr.v1.NotificationEvent
-	(*JobDefinition)(nil),              // 30: syncr.v1.JobDefinition
-	(*JobRemoteRef)(nil),               // 31: syncr.v1.JobRemoteRef
-	(*timestamppb.Timestamp)(nil),      // 32: google.protobuf.Timestamp
-	(*JobRepositoryRef)(nil),           // 33: syncr.v1.JobRepositoryRef
-	(JobStatus)(0),                     // 34: syncr.v1.JobStatus
+	(MissedRunAction)(0),                // 0: syncr.v1.MissedRunAction
+	(OverlapPolicy)(0),                  // 1: syncr.v1.OverlapPolicy
+	(ScheduleRunStatus)(0),              // 2: syncr.v1.ScheduleRunStatus
+	(ScheduleRunTrigger)(0),             // 3: syncr.v1.ScheduleRunTrigger
+	(*ScheduleTarget)(nil),              // 4: syncr.v1.ScheduleTarget
+	(*MissedRunPolicy)(nil),             // 5: syncr.v1.MissedRunPolicy
+	(*ScheduleContact)(nil),             // 6: syncr.v1.ScheduleContact
+	(*ScheduleInput)(nil),               // 7: syncr.v1.ScheduleInput
+	(*Schedule)(nil),                    // 8: syncr.v1.Schedule
+	(*ScheduleRun)(nil),                 // 9: syncr.v1.ScheduleRun
+	(*ListSchedulesRequest)(nil),        // 10: syncr.v1.ListSchedulesRequest
+	(*ListSchedulesResponse)(nil),       // 11: syncr.v1.ListSchedulesResponse
+	(*GetScheduleRequest)(nil),          // 12: syncr.v1.GetScheduleRequest
+	(*GetScheduleResponse)(nil),         // 13: syncr.v1.GetScheduleResponse
+	(*CreateScheduleRequest)(nil),       // 14: syncr.v1.CreateScheduleRequest
+	(*CreateScheduleResponse)(nil),      // 15: syncr.v1.CreateScheduleResponse
+	(*UpdateScheduleRequest)(nil),       // 16: syncr.v1.UpdateScheduleRequest
+	(*UpdateScheduleResponse)(nil),      // 17: syncr.v1.UpdateScheduleResponse
+	(*SetScheduleEnabledRequest)(nil),   // 18: syncr.v1.SetScheduleEnabledRequest
+	(*SetScheduleEnabledResponse)(nil),  // 19: syncr.v1.SetScheduleEnabledResponse
+	(*DeleteScheduleRequest)(nil),       // 20: syncr.v1.DeleteScheduleRequest
+	(*DeleteScheduleResponse)(nil),      // 21: syncr.v1.DeleteScheduleResponse
+	(*RunScheduleNowRequest)(nil),       // 22: syncr.v1.RunScheduleNowRequest
+	(*RunScheduleNowResponse)(nil),      // 23: syncr.v1.RunScheduleNowResponse
+	(*ListScheduleRunsRequest)(nil),     // 24: syncr.v1.ListScheduleRunsRequest
+	(*ListScheduleRunsResponse)(nil),    // 25: syncr.v1.ListScheduleRunsResponse
+	(*PreviewScheduleRequest)(nil),      // 26: syncr.v1.PreviewScheduleRequest
+	(*PreviewScheduleResponse)(nil),     // 27: syncr.v1.PreviewScheduleResponse
+	(*ScheduleGroup)(nil),               // 28: syncr.v1.ScheduleGroup
+	(*ListScheduleGroupsRequest)(nil),   // 29: syncr.v1.ListScheduleGroupsRequest
+	(*ListScheduleGroupsResponse)(nil),  // 30: syncr.v1.ListScheduleGroupsResponse
+	(*CreateScheduleGroupRequest)(nil),  // 31: syncr.v1.CreateScheduleGroupRequest
+	(*CreateScheduleGroupResponse)(nil), // 32: syncr.v1.CreateScheduleGroupResponse
+	(*RenameScheduleGroupRequest)(nil),  // 33: syncr.v1.RenameScheduleGroupRequest
+	(*RenameScheduleGroupResponse)(nil), // 34: syncr.v1.RenameScheduleGroupResponse
+	(*DeleteScheduleGroupRequest)(nil),  // 35: syncr.v1.DeleteScheduleGroupRequest
+	(*DeleteScheduleGroupResponse)(nil), // 36: syncr.v1.DeleteScheduleGroupResponse
+	(*MoveSchedulesRequest)(nil),        // 37: syncr.v1.MoveSchedulesRequest
+	(*MoveSchedulesResponse)(nil),       // 38: syncr.v1.MoveSchedulesResponse
+	(*durationpb.Duration)(nil),         // 39: google.protobuf.Duration
+	(NotificationEvent)(0),              // 40: syncr.v1.NotificationEvent
+	(*JobDefinition)(nil),               // 41: syncr.v1.JobDefinition
+	(*JobRemoteRef)(nil),                // 42: syncr.v1.JobRemoteRef
+	(*timestamppb.Timestamp)(nil),       // 43: google.protobuf.Timestamp
+	(*JobRepositoryRef)(nil),            // 44: syncr.v1.JobRepositoryRef
+	(JobStatus)(0),                      // 45: syncr.v1.JobStatus
 }
 var file_syncr_v1_schedules_proto_depIdxs = []int32{
 	0,  // 0: syncr.v1.MissedRunPolicy.action:type_name -> syncr.v1.MissedRunAction
-	28, // 1: syncr.v1.MissedRunPolicy.max_delay:type_name -> google.protobuf.Duration
-	29, // 2: syncr.v1.ScheduleContact.events:type_name -> syncr.v1.NotificationEvent
+	39, // 1: syncr.v1.MissedRunPolicy.max_delay:type_name -> google.protobuf.Duration
+	40, // 2: syncr.v1.ScheduleContact.events:type_name -> syncr.v1.NotificationEvent
 	4,  // 3: syncr.v1.ScheduleInput.target:type_name -> syncr.v1.ScheduleTarget
 	5,  // 4: syncr.v1.ScheduleInput.missed_run:type_name -> syncr.v1.MissedRunPolicy
 	1,  // 5: syncr.v1.ScheduleInput.overlap:type_name -> syncr.v1.OverlapPolicy
-	30, // 6: syncr.v1.ScheduleInput.definition:type_name -> syncr.v1.JobDefinition
+	41, // 6: syncr.v1.ScheduleInput.definition:type_name -> syncr.v1.JobDefinition
 	6,  // 7: syncr.v1.ScheduleInput.contacts:type_name -> syncr.v1.ScheduleContact
 	4,  // 8: syncr.v1.Schedule.target:type_name -> syncr.v1.ScheduleTarget
 	5,  // 9: syncr.v1.Schedule.missed_run:type_name -> syncr.v1.MissedRunPolicy
 	1,  // 10: syncr.v1.Schedule.overlap:type_name -> syncr.v1.OverlapPolicy
-	30, // 11: syncr.v1.Schedule.definition:type_name -> syncr.v1.JobDefinition
-	31, // 12: syncr.v1.Schedule.remotes:type_name -> syncr.v1.JobRemoteRef
+	41, // 11: syncr.v1.Schedule.definition:type_name -> syncr.v1.JobDefinition
+	42, // 12: syncr.v1.Schedule.remotes:type_name -> syncr.v1.JobRemoteRef
 	6,  // 13: syncr.v1.Schedule.contacts:type_name -> syncr.v1.ScheduleContact
-	32, // 14: syncr.v1.Schedule.next_run_at:type_name -> google.protobuf.Timestamp
-	32, // 15: syncr.v1.Schedule.last_fired_at:type_name -> google.protobuf.Timestamp
+	43, // 14: syncr.v1.Schedule.next_run_at:type_name -> google.protobuf.Timestamp
+	43, // 15: syncr.v1.Schedule.last_fired_at:type_name -> google.protobuf.Timestamp
 	9,  // 16: syncr.v1.Schedule.last_run:type_name -> syncr.v1.ScheduleRun
-	32, // 17: syncr.v1.Schedule.created_at:type_name -> google.protobuf.Timestamp
-	32, // 18: syncr.v1.Schedule.updated_at:type_name -> google.protobuf.Timestamp
-	33, // 19: syncr.v1.Schedule.repository:type_name -> syncr.v1.JobRepositoryRef
+	43, // 17: syncr.v1.Schedule.created_at:type_name -> google.protobuf.Timestamp
+	43, // 18: syncr.v1.Schedule.updated_at:type_name -> google.protobuf.Timestamp
+	44, // 19: syncr.v1.Schedule.repository:type_name -> syncr.v1.JobRepositoryRef
 	3,  // 20: syncr.v1.ScheduleRun.trigger:type_name -> syncr.v1.ScheduleRunTrigger
-	32, // 21: syncr.v1.ScheduleRun.scheduled_for:type_name -> google.protobuf.Timestamp
-	32, // 22: syncr.v1.ScheduleRun.deadline:type_name -> google.protobuf.Timestamp
+	43, // 21: syncr.v1.ScheduleRun.scheduled_for:type_name -> google.protobuf.Timestamp
+	43, // 22: syncr.v1.ScheduleRun.deadline:type_name -> google.protobuf.Timestamp
 	2,  // 23: syncr.v1.ScheduleRun.status:type_name -> syncr.v1.ScheduleRunStatus
-	34, // 24: syncr.v1.ScheduleRun.job_status:type_name -> syncr.v1.JobStatus
-	32, // 25: syncr.v1.ScheduleRun.created_at:type_name -> google.protobuf.Timestamp
-	32, // 26: syncr.v1.ScheduleRun.updated_at:type_name -> google.protobuf.Timestamp
+	45, // 24: syncr.v1.ScheduleRun.job_status:type_name -> syncr.v1.JobStatus
+	43, // 25: syncr.v1.ScheduleRun.created_at:type_name -> google.protobuf.Timestamp
+	43, // 26: syncr.v1.ScheduleRun.updated_at:type_name -> google.protobuf.Timestamp
 	8,  // 27: syncr.v1.ListSchedulesResponse.schedules:type_name -> syncr.v1.Schedule
 	8,  // 28: syncr.v1.GetScheduleResponse.schedule:type_name -> syncr.v1.Schedule
 	7,  // 29: syncr.v1.CreateScheduleRequest.input:type_name -> syncr.v1.ScheduleInput
@@ -2169,31 +2760,47 @@ var file_syncr_v1_schedules_proto_depIdxs = []int32{
 	8,  // 33: syncr.v1.SetScheduleEnabledResponse.schedule:type_name -> syncr.v1.Schedule
 	9,  // 34: syncr.v1.RunScheduleNowResponse.run:type_name -> syncr.v1.ScheduleRun
 	9,  // 35: syncr.v1.ListScheduleRunsResponse.runs:type_name -> syncr.v1.ScheduleRun
-	32, // 36: syncr.v1.PreviewScheduleRequest.after:type_name -> google.protobuf.Timestamp
-	32, // 37: syncr.v1.PreviewScheduleResponse.next_runs:type_name -> google.protobuf.Timestamp
-	10, // 38: syncr.v1.ScheduleService.ListSchedules:input_type -> syncr.v1.ListSchedulesRequest
-	12, // 39: syncr.v1.ScheduleService.GetSchedule:input_type -> syncr.v1.GetScheduleRequest
-	14, // 40: syncr.v1.ScheduleService.CreateSchedule:input_type -> syncr.v1.CreateScheduleRequest
-	16, // 41: syncr.v1.ScheduleService.UpdateSchedule:input_type -> syncr.v1.UpdateScheduleRequest
-	18, // 42: syncr.v1.ScheduleService.SetScheduleEnabled:input_type -> syncr.v1.SetScheduleEnabledRequest
-	20, // 43: syncr.v1.ScheduleService.DeleteSchedule:input_type -> syncr.v1.DeleteScheduleRequest
-	22, // 44: syncr.v1.ScheduleService.RunScheduleNow:input_type -> syncr.v1.RunScheduleNowRequest
-	24, // 45: syncr.v1.ScheduleService.ListScheduleRuns:input_type -> syncr.v1.ListScheduleRunsRequest
-	26, // 46: syncr.v1.ScheduleService.PreviewSchedule:input_type -> syncr.v1.PreviewScheduleRequest
-	11, // 47: syncr.v1.ScheduleService.ListSchedules:output_type -> syncr.v1.ListSchedulesResponse
-	13, // 48: syncr.v1.ScheduleService.GetSchedule:output_type -> syncr.v1.GetScheduleResponse
-	15, // 49: syncr.v1.ScheduleService.CreateSchedule:output_type -> syncr.v1.CreateScheduleResponse
-	17, // 50: syncr.v1.ScheduleService.UpdateSchedule:output_type -> syncr.v1.UpdateScheduleResponse
-	19, // 51: syncr.v1.ScheduleService.SetScheduleEnabled:output_type -> syncr.v1.SetScheduleEnabledResponse
-	21, // 52: syncr.v1.ScheduleService.DeleteSchedule:output_type -> syncr.v1.DeleteScheduleResponse
-	23, // 53: syncr.v1.ScheduleService.RunScheduleNow:output_type -> syncr.v1.RunScheduleNowResponse
-	25, // 54: syncr.v1.ScheduleService.ListScheduleRuns:output_type -> syncr.v1.ListScheduleRunsResponse
-	27, // 55: syncr.v1.ScheduleService.PreviewSchedule:output_type -> syncr.v1.PreviewScheduleResponse
-	47, // [47:56] is the sub-list for method output_type
-	38, // [38:47] is the sub-list for method input_type
-	38, // [38:38] is the sub-list for extension type_name
-	38, // [38:38] is the sub-list for extension extendee
-	0,  // [0:38] is the sub-list for field type_name
+	43, // 36: syncr.v1.PreviewScheduleRequest.after:type_name -> google.protobuf.Timestamp
+	43, // 37: syncr.v1.PreviewScheduleResponse.next_runs:type_name -> google.protobuf.Timestamp
+	43, // 38: syncr.v1.ScheduleGroup.created_at:type_name -> google.protobuf.Timestamp
+	43, // 39: syncr.v1.ScheduleGroup.updated_at:type_name -> google.protobuf.Timestamp
+	28, // 40: syncr.v1.ListScheduleGroupsResponse.groups:type_name -> syncr.v1.ScheduleGroup
+	28, // 41: syncr.v1.CreateScheduleGroupResponse.group:type_name -> syncr.v1.ScheduleGroup
+	28, // 42: syncr.v1.RenameScheduleGroupResponse.group:type_name -> syncr.v1.ScheduleGroup
+	8,  // 43: syncr.v1.MoveSchedulesResponse.schedules:type_name -> syncr.v1.Schedule
+	10, // 44: syncr.v1.ScheduleService.ListSchedules:input_type -> syncr.v1.ListSchedulesRequest
+	12, // 45: syncr.v1.ScheduleService.GetSchedule:input_type -> syncr.v1.GetScheduleRequest
+	14, // 46: syncr.v1.ScheduleService.CreateSchedule:input_type -> syncr.v1.CreateScheduleRequest
+	16, // 47: syncr.v1.ScheduleService.UpdateSchedule:input_type -> syncr.v1.UpdateScheduleRequest
+	18, // 48: syncr.v1.ScheduleService.SetScheduleEnabled:input_type -> syncr.v1.SetScheduleEnabledRequest
+	20, // 49: syncr.v1.ScheduleService.DeleteSchedule:input_type -> syncr.v1.DeleteScheduleRequest
+	22, // 50: syncr.v1.ScheduleService.RunScheduleNow:input_type -> syncr.v1.RunScheduleNowRequest
+	24, // 51: syncr.v1.ScheduleService.ListScheduleRuns:input_type -> syncr.v1.ListScheduleRunsRequest
+	26, // 52: syncr.v1.ScheduleService.PreviewSchedule:input_type -> syncr.v1.PreviewScheduleRequest
+	29, // 53: syncr.v1.ScheduleService.ListScheduleGroups:input_type -> syncr.v1.ListScheduleGroupsRequest
+	31, // 54: syncr.v1.ScheduleService.CreateScheduleGroup:input_type -> syncr.v1.CreateScheduleGroupRequest
+	33, // 55: syncr.v1.ScheduleService.RenameScheduleGroup:input_type -> syncr.v1.RenameScheduleGroupRequest
+	35, // 56: syncr.v1.ScheduleService.DeleteScheduleGroup:input_type -> syncr.v1.DeleteScheduleGroupRequest
+	37, // 57: syncr.v1.ScheduleService.MoveSchedules:input_type -> syncr.v1.MoveSchedulesRequest
+	11, // 58: syncr.v1.ScheduleService.ListSchedules:output_type -> syncr.v1.ListSchedulesResponse
+	13, // 59: syncr.v1.ScheduleService.GetSchedule:output_type -> syncr.v1.GetScheduleResponse
+	15, // 60: syncr.v1.ScheduleService.CreateSchedule:output_type -> syncr.v1.CreateScheduleResponse
+	17, // 61: syncr.v1.ScheduleService.UpdateSchedule:output_type -> syncr.v1.UpdateScheduleResponse
+	19, // 62: syncr.v1.ScheduleService.SetScheduleEnabled:output_type -> syncr.v1.SetScheduleEnabledResponse
+	21, // 63: syncr.v1.ScheduleService.DeleteSchedule:output_type -> syncr.v1.DeleteScheduleResponse
+	23, // 64: syncr.v1.ScheduleService.RunScheduleNow:output_type -> syncr.v1.RunScheduleNowResponse
+	25, // 65: syncr.v1.ScheduleService.ListScheduleRuns:output_type -> syncr.v1.ListScheduleRunsResponse
+	27, // 66: syncr.v1.ScheduleService.PreviewSchedule:output_type -> syncr.v1.PreviewScheduleResponse
+	30, // 67: syncr.v1.ScheduleService.ListScheduleGroups:output_type -> syncr.v1.ListScheduleGroupsResponse
+	32, // 68: syncr.v1.ScheduleService.CreateScheduleGroup:output_type -> syncr.v1.CreateScheduleGroupResponse
+	34, // 69: syncr.v1.ScheduleService.RenameScheduleGroup:output_type -> syncr.v1.RenameScheduleGroupResponse
+	36, // 70: syncr.v1.ScheduleService.DeleteScheduleGroup:output_type -> syncr.v1.DeleteScheduleGroupResponse
+	38, // 71: syncr.v1.ScheduleService.MoveSchedules:output_type -> syncr.v1.MoveSchedulesResponse
+	58, // [58:72] is the sub-list for method output_type
+	44, // [44:58] is the sub-list for method input_type
+	44, // [44:44] is the sub-list for extension type_name
+	44, // [44:44] is the sub-list for extension extendee
+	0,  // [0:44] is the sub-list for field type_name
 }
 
 func init() { file_syncr_v1_schedules_proto_init() }
@@ -2213,7 +2820,7 @@ func file_syncr_v1_schedules_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_syncr_v1_schedules_proto_rawDesc), len(file_syncr_v1_schedules_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   24,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

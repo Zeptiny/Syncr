@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   CirclePause,
   Copy,
+  Folder,
   ListFilter,
   Pause,
   Pencil,
@@ -26,13 +27,7 @@ import { RelativeTime } from "@/components/app/relative-time";
 import { StatusPill } from "@/components/app/status-badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  JobService,
-  JobStatus,
-  WorkerAdminService,
-  type Job,
-  type Worker,
-} from "@/gen/syncr/v1/api_pb";
+import { JobService, JobStatus, WorkerAdminService, type Worker } from "@/gen/syncr/v1/api_pb";
 import { JobErrorCode } from "@/gen/syncr/v1/link_pb";
 import { DashboardService } from "@/gen/syncr/v1/dashboard_pb";
 import { ScheduleService, type Schedule } from "@/gen/syncr/v1/schedules_pb";
@@ -48,14 +43,10 @@ import { BisyncRecovery } from "../jobs/bisync-recovery";
 import { RouteEndpoints } from "../jobs/endpoint";
 import { jobRoute, resticSummary, transferOf } from "../jobs/model";
 import { useScheduleActions } from "./actions";
-import { missedSummary, overlapLabel } from "./model";
+import { useScheduleGroups } from "./groups";
+import { asJob, missedSummary, overlapLabel } from "./model";
 import { ScheduleRunsTable } from "./runs-table";
 import { TargetChip } from "./schedules-page";
-
-// A schedule stores a definition, not a job; Endpoint helpers take a job.
-function asJob(s: Schedule): Job {
-  return { definition: s.definition, remotes: s.remotes } as Job;
-}
 
 function JobSummary({ schedule }: { schedule: Schedule }) {
   const job = asJob(schedule);
@@ -168,6 +159,8 @@ export function ScheduleDetailPage({ scheduleId }: { scheduleId: string }) {
     { placeholderData: (prev) => prev, refetchInterval: 10_000 },
   );
   const workers = useQuery(WorkerAdminService.method.listWorkers, {});
+  const groups = useScheduleGroups();
+  const group = groups.data?.groups.find((g) => g.id === s?.groupId);
   const workerMap = useMemo(
     () => new Map((workers.data?.workers ?? []).map((w) => [w.id, w])),
     [workers.data],
@@ -209,6 +202,17 @@ export function ScheduleDetailPage({ scheduleId }: { scheduleId: string }) {
               {cronText(s.cron)}, {zoneLabel(s.timezone)}
             </span>
             <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{s.cron}</code>
+            {group && (
+              <Link
+                to="/schedules"
+                search={{ group: group.id }}
+                className="inline-flex items-center gap-1 rounded-md bg-secondary px-1.5 py-0.5 text-[12.5px] text-secondary-foreground hover:bg-accent"
+                title={`The schedules in ${group.name}`}
+              >
+                <Folder className="size-3.5 text-muted-foreground" aria-hidden />
+                {group.name}
+              </Link>
+            )}
           </>
         }
         description={s.description || undefined}
@@ -301,6 +305,20 @@ export function ScheduleDetailPage({ scheduleId }: { scheduleId: string }) {
               items={[
                 { label: "Job", value: <JobSummary schedule={s} /> },
                 { label: "Runs on", value: <TargetChip schedule={s} workers={workerMap} /> },
+                {
+                  label: "Group",
+                  value: group ? (
+                    <Link
+                      to="/schedules"
+                      search={{ group: group.id }}
+                      className="font-medium hover:underline"
+                    >
+                      {group.name}
+                    </Link>
+                  ) : (
+                    <span className="text-muted-foreground">None</span>
+                  ),
+                },
                 { label: "Worker offline", value: missedSummary(s.missedRun) },
                 { label: "Last run still going", value: overlapLabel(s.overlap) },
                 {

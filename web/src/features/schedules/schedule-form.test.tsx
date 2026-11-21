@@ -11,6 +11,7 @@ import { BackendService, RemoteService } from "@/gen/syncr/v1/remotes_pb";
 import {
   MissedRunAction,
   OverlapPolicy,
+  ScheduleGroupSchema,
   ScheduleSchema,
   ScheduleService,
   type ScheduleInput,
@@ -32,6 +33,12 @@ function api(opts: { reject?: { field: string; message: string } } = {}) {
     router.service(BackendService, { listBackends: () => ({ backends: fx.backends }) });
     router.service(ContactService, { listContacts: () => ({ contacts: fx.contacts(now) }) });
     router.service(ScheduleService, {
+      listScheduleGroups: () => ({ groups: hist.groups }),
+      createScheduleGroup: (req) => {
+        const g = create(ScheduleGroupSchema, { id: "g-new", name: req.name });
+        hist.groups.push(g);
+        return { group: g };
+      },
       previewSchedule: () => ({ nextRuns: [timestampFromMs(now + 3_600_000)] }),
       listScheduleRuns: () => ({ runs: [] }),
       getSchedule: (req) => ({
@@ -65,6 +72,41 @@ function api(opts: { reject?: { field: string; message: string } } = {}) {
 // These tests drive the whole form through the router, which is slow under
 // a parallel run.
 describe("schedule form", { timeout: 30_000 }, () => {
+  it("puts a new schedule in a group created from the form", async () => {
+    const user = userEvent.setup();
+    const { transport, created } = api();
+    renderApp("/schedules/new", transport);
+    await user.type(await screen.findByLabelText("Name"), "Archive nightly");
+    await user.click(screen.getByRole("combobox", { name: /Group/ }));
+    await user.click(await screen.findByRole("option", { name: "New group…" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Name"), "Archive");
+    await user.click(within(dialog).getByRole("button", { name: "Create group" }));
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: /Group/ })).toHaveTextContent("Archive"),
+    );
+
+    await user.click(screen.getByRole("radio", { name: "Any worker with a label" }));
+    await user.click(screen.getByRole("button", { name: "nas" }));
+    await user.type(document.getElementById("sched-src-path")!, "/srv/photos");
+    await user.type(document.getElementById("sched-dst-path")!, "/srv/backup/photos");
+    await user.click(screen.getByRole("button", { name: "Create schedule" }));
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0].groupId).toBe("g-new");
+  });
+
+  it("keeps a schedule's group when editing it", async () => {
+    const user = userEvent.setup();
+    const { transport, updated } = api();
+    renderApp(`/schedules/${fx.ids.nightly}/edit`, transport);
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: /Group/ })).toHaveTextContent("Photos"),
+    );
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(updated).toHaveLength(1));
+    expect(updated[0].input?.groupId).toBe(fx.ids.groupPhotos);
+  });
+
   it("creates a schedule on a label, with policies and a contact", async () => {
     const user = userEvent.setup();
     const { transport, created } = api();

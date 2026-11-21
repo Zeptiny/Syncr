@@ -99,7 +99,7 @@ const createSchedule = `-- name: CreateSchedule :exec
 INSERT INTO schedules (
     id, owner_id, name, description, cron, timezone, kind, definition, search_text,
     worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason,
-    next_run_at, last_fired_at, created_at, updated_at, version, repository_id
+    next_run_at, last_fired_at, created_at, updated_at, version, repository_id, group_id
 ) VALUES (
     $1::uuid, $2::uuid, $3::text, $4::text,
     $5::text, $6::text, $7::text, $8::jsonb,
@@ -108,7 +108,7 @@ INSERT INTO schedules (
     $15::boolean, $16::text,
     $17::timestamptz, $18::timestamptz,
     $19::timestamptz, $20::timestamptz, $21::bigint,
-    $22::uuid
+    $22::uuid, $23::uuid
 )
 `
 
@@ -135,6 +135,7 @@ type CreateScheduleParams struct {
 	UpdatedAt    pgtype.Timestamptz
 	Version      int64
 	RepositoryID pgtype.UUID
+	GroupID      pgtype.UUID
 }
 
 func (q *Queries) CreateSchedule(ctx context.Context, arg CreateScheduleParams) error {
@@ -161,6 +162,36 @@ func (q *Queries) CreateSchedule(ctx context.Context, arg CreateScheduleParams) 
 		arg.UpdatedAt,
 		arg.Version,
 		arg.RepositoryID,
+		arg.GroupID,
+	)
+	return err
+}
+
+const createScheduleGroup = `-- name: CreateScheduleGroup :exec
+INSERT INTO schedule_groups (id, owner_id, name, created_at, updated_at)
+VALUES (
+    $1::uuid, $2::uuid, $3::text,
+    $4::timestamptz, $5::timestamptz
+)
+`
+
+type CreateScheduleGroupParams struct {
+	ID        pgtype.UUID
+	OwnerID   pgtype.UUID
+	Name      string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
+// A missing owner violates the foreign key, a name the owner uses
+// schedule_groups_owner_name_key.
+func (q *Queries) CreateScheduleGroup(ctx context.Context, arg CreateScheduleGroupParams) error {
+	_, err := q.db.Exec(ctx, createScheduleGroup,
+		arg.ID,
+		arg.OwnerID,
+		arg.Name,
+		arg.CreatedAt,
+		arg.UpdatedAt,
 	)
 	return err
 }
@@ -186,6 +217,20 @@ DELETE FROM schedule_contacts WHERE schedule_id = $1::uuid
 func (q *Queries) DeleteScheduleContacts(ctx context.Context, scheduleID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteScheduleContacts, scheduleID)
 	return err
+}
+
+const deleteScheduleGroup = `-- name: DeleteScheduleGroup :execrows
+DELETE FROM schedule_groups WHERE id = $1::uuid
+`
+
+// A schedule moved into the group after UngroupSchedules is moved out by
+// the foreign key (ON DELETE SET NULL (group_id)).
+func (q *Queries) DeleteScheduleGroup(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteScheduleGroup, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteScheduleRemotes = `-- name: DeleteScheduleRemotes :exec
@@ -234,7 +279,7 @@ func (q *Queries) GetRun(ctx context.Context, id pgtype.UUID) (GetRunRow, error)
 }
 
 const getSchedule = `-- name: GetSchedule :one
-SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id FROM schedules WHERE id = $1::uuid
+SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id, group_id FROM schedules WHERE id = $1::uuid
 `
 
 func (q *Queries) GetSchedule(ctx context.Context, id pgtype.UUID) (Schedule, error) {
@@ -263,12 +308,30 @@ func (q *Queries) GetSchedule(ctx context.Context, id pgtype.UUID) (Schedule, er
 		&i.UpdatedAt,
 		&i.Version,
 		&i.RepositoryID,
+		&i.GroupID,
+	)
+	return i, err
+}
+
+const getScheduleGroup = `-- name: GetScheduleGroup :one
+SELECT id, owner_id, name, created_at, updated_at FROM schedule_groups WHERE id = $1::uuid
+`
+
+func (q *Queries) GetScheduleGroup(ctx context.Context, id pgtype.UUID) (ScheduleGroup, error) {
+	row := q.db.QueryRow(ctx, getScheduleGroup, id)
+	var i ScheduleGroup
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const getSchedules = `-- name: GetSchedules :many
-SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id FROM schedules WHERE id = ANY ($1::uuid[]) ORDER BY id
+SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id, group_id FROM schedules WHERE id = ANY ($1::uuid[]) ORDER BY id
 `
 
 func (q *Queries) GetSchedules(ctx context.Context, ids []pgtype.UUID) ([]Schedule, error) {
@@ -303,6 +366,7 @@ func (q *Queries) GetSchedules(ctx context.Context, ids []pgtype.UUID) ([]Schedu
 			&i.UpdatedAt,
 			&i.Version,
 			&i.RepositoryID,
+			&i.GroupID,
 		); err != nil {
 			return nil, err
 		}
@@ -515,7 +579,7 @@ func (q *Queries) LatestRuns(ctx context.Context, scheduleIds []pgtype.UUID) ([]
 }
 
 const listDueSchedules = `-- name: ListDueSchedules :many
-SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id FROM schedules
+SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id, group_id FROM schedules
 WHERE enabled AND next_run_at IS NOT NULL AND next_run_at <= $1::timestamptz
 ORDER BY next_run_at, id
 LIMIT $2::bigint
@@ -559,6 +623,7 @@ func (q *Queries) ListDueSchedules(ctx context.Context, arg ListDueSchedulesPara
 			&i.UpdatedAt,
 			&i.Version,
 			&i.RepositoryID,
+			&i.GroupID,
 		); err != nil {
 			return nil, err
 		}
@@ -722,6 +787,39 @@ func (q *Queries) ListScheduleContacts(ctx context.Context, scheduleIds []pgtype
 	return items, nil
 }
 
+const listScheduleGroups = `-- name: ListScheduleGroups :many
+SELECT id, owner_id, name, created_at, updated_at FROM schedule_groups
+WHERE ($1::uuid IS NULL OR owner_id = $1::uuid)
+ORDER BY lower(name) COLLATE "C", id
+`
+
+// A NULL owner lists every owner's groups.
+func (q *Queries) ListScheduleGroups(ctx context.Context, ownerID pgtype.UUID) ([]ScheduleGroup, error) {
+	rows, err := q.db.Query(ctx, listScheduleGroups, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ScheduleGroup{}
+	for rows.Next() {
+		var i ScheduleGroup
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listScheduleRemotes = `-- name: ListScheduleRemotes :many
 SELECT schedule_id, remote_id FROM schedule_remotes
 WHERE schedule_id = ANY ($1::uuid[])
@@ -749,7 +847,7 @@ func (q *Queries) ListScheduleRemotes(ctx context.Context, scheduleIds []pgtype.
 }
 
 const listSchedules = `-- name: ListSchedules :many
-SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id FROM schedules
+SELECT id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id, group_id FROM schedules
 WHERE ($1::uuid IS NULL OR owner_id = $1::uuid)
   AND ($2::uuid IS NULL OR EXISTS (
       SELECT 1 FROM schedule_remotes sr
@@ -811,6 +909,7 @@ func (q *Queries) ListSchedules(ctx context.Context, arg ListSchedulesParams) ([
 			&i.UpdatedAt,
 			&i.Version,
 			&i.RepositoryID,
+			&i.GroupID,
 		); err != nil {
 			return nil, err
 		}
@@ -957,6 +1056,30 @@ func (q *Queries) MergePendingRun(ctx context.Context, arg MergePendingRunParams
 	return id, err
 }
 
+const moveSchedules = `-- name: MoveSchedules :execrows
+UPDATE schedules SET
+    group_id = $1::uuid,
+    updated_at = $2::timestamptz,
+    version = version + 1
+WHERE id = ANY ($3::uuid[])
+`
+
+type MoveSchedulesParams struct {
+	GroupID   pgtype.UUID
+	UpdatedAt pgtype.Timestamptz
+	Ids       []pgtype.UUID
+}
+
+// A missing group, or one that is not the schedule's owner's, violates the
+// foreign key (group_id, owner_id).
+func (q *Queries) MoveSchedules(ctx context.Context, arg MoveSchedulesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, moveSchedules, arg.GroupID, arg.UpdatedAt, arg.Ids)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const pauseSchedule = `-- name: PauseSchedule :exec
 UPDATE schedules SET
     enabled = false, next_run_at = NULL, paused_reason = $1::text,
@@ -974,6 +1097,31 @@ type PauseScheduleParams struct {
 func (q *Queries) PauseSchedule(ctx context.Context, arg PauseScheduleParams) error {
 	_, err := q.db.Exec(ctx, pauseSchedule, arg.PausedReason, arg.UpdatedAt, arg.ID)
 	return err
+}
+
+const renameScheduleGroup = `-- name: RenameScheduleGroup :one
+UPDATE schedule_groups SET name = $1::text, updated_at = $2::timestamptz
+WHERE id = $3::uuid
+RETURNING id, owner_id, name, created_at, updated_at
+`
+
+type RenameScheduleGroupParams struct {
+	Name      string
+	UpdatedAt pgtype.Timestamptz
+	ID        pgtype.UUID
+}
+
+func (q *Queries) RenameScheduleGroup(ctx context.Context, arg RenameScheduleGroupParams) (ScheduleGroup, error) {
+	row := q.db.QueryRow(ctx, renameScheduleGroup, arg.Name, arg.UpdatedAt, arg.ID)
+	var i ScheduleGroup
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const runExists = `-- name: RunExists :one
@@ -1006,7 +1154,7 @@ UPDATE schedules SET
     updated_at = $4::timestamptz,
     version = version + 1
 WHERE id = $5::uuid
-RETURNING id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id
+RETURNING id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id, group_id
 `
 
 type SetScheduleEnabledParams struct {
@@ -1050,6 +1198,7 @@ func (q *Queries) SetScheduleEnabled(ctx context.Context, arg SetScheduleEnabled
 		&i.UpdatedAt,
 		&i.Version,
 		&i.RepositoryID,
+		&i.GroupID,
 	)
 	return i, err
 }
@@ -1079,6 +1228,23 @@ func (q *Queries) SupersedePendingRun(ctx context.Context, arg SupersedePendingR
 		arg.UpdatedAt,
 		arg.ScheduleID,
 	)
+	return err
+}
+
+const ungroupSchedules = `-- name: UngroupSchedules :exec
+UPDATE schedules SET group_id = NULL, updated_at = $1::timestamptz, version = version + 1
+WHERE group_id = $2::uuid
+`
+
+type UngroupSchedulesParams struct {
+	UpdatedAt pgtype.Timestamptz
+	GroupID   pgtype.UUID
+}
+
+// DeleteGroup moves the group's schedules out of it first, as a change of
+// their configuration (schedules_group_idx).
+func (q *Queries) UngroupSchedules(ctx context.Context, arg UngroupSchedulesParams) error {
+	_, err := q.db.Exec(ctx, ungroupSchedules, arg.UpdatedAt, arg.GroupID)
 	return err
 }
 
@@ -1143,11 +1309,12 @@ UPDATE schedules SET
     enabled = $13::boolean,
     paused_reason = $14::text,
     repository_id = $15::uuid,
-    next_run_at = CASE WHEN $16::boolean THEN $17::timestamptz ELSE next_run_at END,
-    updated_at = $18::timestamptz,
+    group_id = $16::uuid,
+    next_run_at = CASE WHEN $17::boolean THEN $18::timestamptz ELSE next_run_at END,
+    updated_at = $19::timestamptz,
     version = version + 1
-WHERE id = $19::uuid AND version = $20::bigint
-RETURNING id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id
+WHERE id = $20::uuid AND version = $21::bigint
+RETURNING id, owner_id, name, description, cron, timezone, kind, definition, search_text, worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason, next_run_at, last_fired_at, created_at, updated_at, version, repository_id, group_id
 `
 
 type UpdateScheduleParams struct {
@@ -1166,6 +1333,7 @@ type UpdateScheduleParams struct {
 	Enabled         bool
 	PausedReason    string
 	RepositoryID    pgtype.UUID
+	GroupID         pgtype.UUID
 	Reschedule      bool
 	NextRunAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
@@ -1193,6 +1361,7 @@ func (q *Queries) UpdateSchedule(ctx context.Context, arg UpdateScheduleParams) 
 		arg.Enabled,
 		arg.PausedReason,
 		arg.RepositoryID,
+		arg.GroupID,
 		arg.Reschedule,
 		arg.NextRunAt,
 		arg.UpdatedAt,
@@ -1223,6 +1392,7 @@ func (q *Queries) UpdateSchedule(ctx context.Context, arg UpdateScheduleParams) 
 		&i.UpdatedAt,
 		&i.Version,
 		&i.RepositoryID,
+		&i.GroupID,
 	)
 	return i, err
 }

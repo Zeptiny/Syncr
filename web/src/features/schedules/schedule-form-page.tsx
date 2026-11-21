@@ -36,6 +36,7 @@ import {
   type JobDefinitionState,
 } from "../jobs/definition";
 import { JobDefinitionEditor } from "../jobs/job-definition-editor";
+import { GroupPicker, useScheduleGroups } from "./groups";
 import {
   labelTargetAllowed,
   scheduleServerErrors,
@@ -71,6 +72,7 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
   const remotes = useQuery(RemoteService.method.listRemotes, {});
   const contacts = useQuery(ContactService.method.listContacts, {});
   const repositories = useQuery(ResticService.method.listRepositories, {});
+  const groups = useScheduleGroups();
   const create = useMutation(ScheduleService.method.createSchedule);
   const update = useMutation(ScheduleService.method.updateSchedule);
   const [s, setS] = useState<ScheduleFormState>(initial);
@@ -134,6 +136,9 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
     }
     try {
       const input = toScheduleInput(s, worker?.info?.os);
+      // A group deleted since the form opened (the picker shows "No group").
+      if (groups.data && !groups.data.groups.some((g) => g.id === input.groupId))
+        input.groupId = "";
       const res = schedule
         ? await update.mutateAsync({ scheduleId: schedule.id, version: schedule.version, input })
         : await create.mutateAsync({ input });
@@ -169,7 +174,7 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
       />
       <form onSubmit={(e) => void submit(e)} noValidate className="flex max-w-5xl flex-col gap-6">
         <Panel title="Name">
-          <div className="grid grid-cols-1 gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,0.8fr)]">
             <FieldShell id="sched-name" label="Name" error={errors.name}>
               <Input
                 id="sched-name"
@@ -190,6 +195,21 @@ export function ScheduleFormPage({ initial, schedule, title, description }: Sche
                 placeholder="What it is for, so others know"
                 className="bg-card"
                 autoComplete="off"
+              />
+            </FieldShell>
+            <FieldShell
+              id="sched-group"
+              label="Group"
+              optional
+              error={errors.group}
+              help="Where it is listed. It changes nothing about how it runs."
+            >
+              <GroupPicker
+                id="sched-group"
+                value={s.groupId}
+                onChange={(v) => set("groupId", v)}
+                groups={groups.data?.groups ?? []}
+                invalid={!!errors.group}
               />
             </FieldShell>
           </div>
