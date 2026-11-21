@@ -193,8 +193,20 @@ describe("DashboardPage", () => {
       "href",
       expect.stringContaining("worker=w1"),
     );
+    // Rows open the finished jobs they count.
+    const params = (a: Element | null) =>
+      new URL(a?.getAttribute("href") ?? "", "http://ui").searchParams;
+    expect(params(transfer).get("status")).toBe(
+      [JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.INTERRUPTED, JobStatus.CANCELLED].join(","),
+    );
+    // A cause opens every failed and interrupted job of its kind, and says so.
     const failed = screen.getByText("Execution failed").closest("a");
-    expect(failed).toHaveAttribute("href", expect.stringContaining("kind=rclone_transfer"));
+    expect(params(failed).get("status")).toBe(`${JobStatus.FAILED},${JobStatus.INTERRUPTED}`);
+    expect(params(failed).get("kind")).toBe("rclone_transfer");
+    expect(failed).toHaveAttribute(
+      "title",
+      "Opens every failed and interrupted Transfer job of the period, whatever the cause.",
+    );
     expect(screen.getByText("Worker restarted")).toBeInTheDocument();
 
     const schedules = screen.getByRole("region", { name: "Schedules" });

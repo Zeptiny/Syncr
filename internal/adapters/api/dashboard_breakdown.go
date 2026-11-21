@@ -20,13 +20,24 @@ import (
 	"github.com/Zeptiny/Syncr/internal/link"
 )
 
-// dur converts a duration; zero stays unset.
-func dur(d time.Duration) *durationpb.Duration {
-	if d == 0 {
+// durMicros converts a sum of microseconds; zero stays unset. It never
+// goes through time.Duration, whose 292 years a sum may exceed.
+func durMicros(us int64) *durationpb.Duration {
+	if us == 0 {
 		return nil
 	}
-	return durationpb.New(d)
+	// The remainder is below a million microseconds, so the nanoseconds fit.
+	return &durationpb.Duration{Seconds: us / 1e6, Nanos: int32(us % 1e6 * 1000)}
 }
+
+// micros returns d in whole microseconds (a Duration field of the API's
+// messages, which never exceeds what the dashboard sums into it).
+func micros(d *durationpb.Duration) int64 {
+	return d.GetSeconds()*1e6 + int64(d.GetNanos())/1000
+}
+
+// microsToSeconds converts a sum of microseconds to seconds.
+func microsToSeconds(us int64) float64 { return float64(us) / 1e6 }
 
 // addToGroup adds the jobs of r to the dashboard group g.
 func addToGroup(g *syncrv1.ActivityGroup, r jobs.TotalsRow) {
@@ -44,8 +55,8 @@ func addToGroup(g *syncrv1.ActivityGroup, r jobs.TotalsRow) {
 	g.Files += r.Files
 	g.Started += r.Started
 	g.Dispatched += r.Dispatched
-	g.RunTime = dur(g.GetRunTime().AsDuration() + r.RunTime)
-	g.QueueWait = dur(g.GetQueueWait().AsDuration() + r.QueueWait)
+	g.RunTime = durMicros(micros(g.GetRunTime()) + r.RunTimeMicros)
+	g.QueueWait = durMicros(micros(g.GetQueueWait()) + r.QueueWaitMicros)
 }
 
 func groupJobs(g *syncrv1.ActivityGroup) int64 {

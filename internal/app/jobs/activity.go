@@ -96,9 +96,9 @@ func (s *Service) Activity(ctx context.Context, actor domain.Actor, f ActivityFi
 		b.Bytes += r.Bytes
 		b.Files += r.Files
 		b.Started += r.Started
-		b.RunTime += r.RunTime
+		b.RunTimeMicros += r.RunTimeMicros
 		b.Dispatched += r.Dispatched
-		b.QueueWait += r.QueueWait
+		b.QueueWaitMicros += r.QueueWaitMicros
 	}
 	return buckets, nil
 }

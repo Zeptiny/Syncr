@@ -105,7 +105,10 @@ export function OutcomeBar({ stats, max }: { stats: GroupStats; max: number }) {
   );
 }
 
-const statusParam = `${JobStatus.FAILED},${JobStatus.INTERRUPTED}`;
+/** The jobs list's status filters: the failed and interrupted jobs, and
+ * every finished job (what a group counts). */
+const failedParam = `${JobStatus.FAILED},${JobStatus.INTERRUPTED}`;
+const finishedParam = `${JobStatus.SUCCEEDED},${JobStatus.FAILED},${JobStatus.INTERRUPTED},${JobStatus.CANCELLED}`;
 
 /**
  * ActivityGroups lists the period's finished jobs by job kind or by
@@ -145,6 +148,8 @@ export function ActivityGroups({
               to="/jobs"
               search={{
                 ...(by === "kind" ? { kind: g.key } : { worker: g.key }),
+                // Only the finished jobs, as the row counts them.
+                status: finishedParam,
                 period,
                 all: allUsers || undefined,
               }}
@@ -224,12 +229,16 @@ export function FailureReasons({
       {reasons.map((r) => {
         const n = count(r);
         const single = r.kinds.length === 1 ? r.kinds[0] : undefined;
+        const opens = `Opens every failed and interrupted ${single ? `${kindLabel(single)} job` : "job"} of the period, whatever the cause.`;
         return (
           <li key={r.code}>
             <Link
               to="/jobs"
-              search={{ status: statusParam, kind: single, period, all: allUsers || undefined }}
+              search={{ status: failedParam, kind: single, period, all: allUsers || undefined }}
               className="flex flex-col gap-1.5 px-5 py-2.5 hover:bg-accent/50"
+              // The jobs list cannot filter by cause: say what the link opens.
+              aria-label={`${errorCodeLabel(r.code)}: ${formatCount(n)} jobs. ${opens}`}
+              title={opens}
             >
               <div className="flex items-baseline gap-2 text-[13px]">
                 <span className="min-w-0 flex-1 truncate font-medium">

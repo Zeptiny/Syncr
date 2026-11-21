@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/Zeptiny/Syncr/internal/adapters/postgres/db"
 	"github.com/Zeptiny/Syncr/internal/app/jobs"
@@ -48,8 +47,8 @@ func (s *Store) JobActivity(ctx context.Context, q jobs.ActivityQuery) ([]jobs.A
 func sums(n, bytes, files, started, runUs, dispatched, waitUs int64) jobs.Sums {
 	return jobs.Sums{
 		Jobs: n, Bytes: bytes, Files: files,
-		Started: started, RunTime: time.Duration(runUs) * time.Microsecond,
-		Dispatched: dispatched, QueueWait: time.Duration(waitUs) * time.Microsecond,
+		Started: started, RunTimeMicros: runUs,
+		Dispatched: dispatched, QueueWaitMicros: waitUs,
 	}
 }
 

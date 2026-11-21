@@ -815,7 +815,7 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
             (c) => `_${c.toLowerCase()}`,
           ),
           enabled: sc.enabled,
-          latestRun: latest,
+          latestRun: latest ? joined(latest) : undefined,
           lastSuccessAt: success?.finishedAt,
           nextRunAt: sc.nextRunAt,
         });

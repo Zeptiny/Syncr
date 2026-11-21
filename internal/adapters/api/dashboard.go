@@ -150,7 +150,7 @@ func (h *dashboardHandler) GetDashboard(ctx context.Context, req *connect.Reques
 		resp.Activity = append(resp.Activity, &syncrv1.ActivityBucket{
 			Start: ts(b.Start), Succeeded: b.Succeeded, Failed: b.Failed, Interrupted: b.Interrupted,
 			Cancelled: b.Cancelled, Bytes: b.Bytes, Files: b.Files,
-			RunTime: dur(b.RunTime), Started: b.Started, QueueWait: dur(b.QueueWait), Dispatched: b.Dispatched,
+			RunTime: durMicros(b.RunTimeMicros), Started: b.Started, QueueWait: durMicros(b.QueueWaitMicros), Dispatched: b.Dispatched,
 		})
 	}
 
@@ -204,14 +204,14 @@ func totalsToProto(buckets []jobs.ActivityBucket, unfinished map[domain.JobStatu
 		t.Bytes += b.Bytes
 		t.Files += b.Files
 	}
-	var run, wait time.Duration
+	var run, wait int64
 	for _, b := range buckets {
 		t.Started += b.Started
 		t.Dispatched += b.Dispatched
-		run += b.RunTime
-		wait += b.QueueWait
+		run += b.RunTimeMicros
+		wait += b.QueueWaitMicros
 	}
-	t.RunTime, t.QueueWait = dur(run), dur(wait)
+	t.RunTime, t.QueueWait = durMicros(run), durMicros(wait)
 	if done := t.Succeeded + t.Failed + t.Interrupted; done > 0 {
 		t.SuccessRate = float64(t.Succeeded) / float64(done)
 	}

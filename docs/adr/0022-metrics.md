@@ -65,7 +65,9 @@ count took 25 ms.
 Run time is `finished_at - started_at` (the worker's clock, as on the job
 pages) and queue wait `dispatched_at - created_at` (the controller's), in
 whole microseconds in both stores; jobs without one are left out of its
-count and sum. Run-time buckets are computed in the query (the number of
+count and sum. The sums stay whole microseconds (`int64`) up to the
+exposition and the dashboard's protobuf durations: summed over every job
+ever stored, a `time.Duration` would overflow after 292 years of run time. Run-time buckets are computed in the query (the number of
 bounds below the run time, Prometheus's `le` semantics), so the histogram
 needs no per-job rows.
 
