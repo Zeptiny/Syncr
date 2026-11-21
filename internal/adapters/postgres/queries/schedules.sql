@@ -288,6 +288,19 @@ JOIN schedule_runs r ON r.id = (
 )
 LEFT JOIN jobs j ON j.id = r.job_id;
 
+-- name: LastSucceededJobs :many
+-- The newest succeeded job of each schedule in schedule_ids that has one:
+-- one walk of jobs_schedule_idx per schedule, newest first, up to its first
+-- succeeded job.
+SELECT ids.schedule_id::uuid AS schedule_id, j.finished_at::timestamptz AS finished_at
+FROM (SELECT DISTINCT unnest(sqlc.arg(schedule_ids)::uuid[]) AS schedule_id) ids
+JOIN LATERAL (
+    SELECT finished_at FROM jobs
+    WHERE jobs.schedule_id = ids.schedule_id AND status = 'succeeded'
+    ORDER BY id DESC
+    LIMIT 1
+) j ON true;
+
 -- name: HasActiveRun :one
 -- A launching run, or a job of the schedule that is not finished
 -- (jobs_schedule_active_idx).

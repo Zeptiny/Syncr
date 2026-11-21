@@ -24,6 +24,11 @@ const (
 	dashboardUpcoming       = 8
 	dashboardRecentFailures = 5
 	dashboardRecentMissed   = 5
+	dashboardFailureReasons = 8
+	// dashboardBackups bounds the backup jobs read for the repositories'
+	// growth (newest first), in pages of dashboardBackupPage.
+	dashboardBackups    = 2000
+	dashboardBackupPage = 500
 	// maxTimezoneLen bounds GetDashboardRequest.timezone.
 	maxTimezoneLen = 64
 )
@@ -44,6 +49,9 @@ type dashboardHandler struct {
 	// repositories, as JobService does; nil leaves both out.
 	kinds *jobkind.Registry
 	repos RepositoryNames
+	// restic lists the caller's repositories for their growth; nil leaves
+	// GetDashboardResponse.repositories empty.
+	restic ResticService
 	// version is the controller's version, for Worker.outdated.
 	version string
 	errs    errorMapper
@@ -142,14 +150,27 @@ func (h *dashboardHandler) GetDashboard(ctx context.Context, req *connect.Reques
 		resp.Activity = append(resp.Activity, &syncrv1.ActivityBucket{
 			Start: ts(b.Start), Succeeded: b.Succeeded, Failed: b.Failed, Interrupted: b.Interrupted,
 			Cancelled: b.Cancelled, Bytes: b.Bytes, Files: b.Files,
+			RunTime: dur(b.RunTime), Started: b.Started, QueueWait: dur(b.QueueWait), Dispatched: b.Dispatched,
 		})
 	}
 
-	ws, err := h.workers.List(ctx, workers.ListFilter{})
+	all, err := h.workers.List(ctx, workers.ListFilter{IncludeRemoved: true})
 	if err != nil {
 		return nil, h.fail(ctx, err)
 	}
+	ws := slices.DeleteFunc(slices.Clone(all), workers.Worker.Removed)
 	resp.Workers = h.workerHealth(ws)
+	totals, err := h.activity.Totals(ctx, actor, jobs.TotalsFilter{From: rng.from, Until: rng.until, AllUsers: allUsers})
+	if err != nil {
+		return nil, h.fail(ctx, err)
+	}
+	resp.Kinds, resp.WorkerActivity, resp.FailureReasons = breakdowns(totals, all)
+	if resp.Schedules, err = h.scheduleHealth(ctx, actor); err != nil {
+		return nil, h.fail(ctx, err)
+	}
+	if resp.Repositories, err = h.repositoryGrowth(ctx, actor, rng, buckets); err != nil {
+		return nil, h.fail(ctx, err)
+	}
 	if resp.Upcoming, err = h.upcoming(ctx, actor, ws); err != nil {
 		return nil, h.fail(ctx, err)
 	}
@@ -183,6 +204,14 @@ func totalsToProto(buckets []jobs.ActivityBucket, unfinished map[domain.JobStatu
 		t.Bytes += b.Bytes
 		t.Files += b.Files
 	}
+	var run, wait time.Duration
+	for _, b := range buckets {
+		t.Started += b.Started
+		t.Dispatched += b.Dispatched
+		run += b.RunTime
+		wait += b.QueueWait
+	}
+	t.RunTime, t.QueueWait = dur(run), dur(wait)
 	if done := t.Succeeded + t.Failed + t.Interrupted; done > 0 {
 		t.SuccessRate = float64(t.Succeeded) / float64(done)
 	}

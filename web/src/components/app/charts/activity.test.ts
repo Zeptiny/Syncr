@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { ActivityBucketSchema } from "@/gen/syncr/v1/dashboard_pb";
 
-import { bucketLabel, shapeActivity, stack } from "./activity";
+import { averages, bucketLabel, overall, shapeActivity, stack } from "./activity";
 
 const utc = (iso: string) => Date.parse(iso);
 const iso = (ms: number) => new Date(ms).toISOString().slice(0, 16) + "Z";
@@ -236,5 +236,30 @@ describe("bucketLabel", () => {
     // The hours around it need no zone name.
     expect(bucketLabel(utc("2026-11-01T04:00:00Z"), "hour", NY)).toBe("Sun 1 Nov, 00:00");
     expect(bucketLabel(utc("2026-11-01T07:00:00Z"), "hour", NY)).toBe("Sun 1 Nov, 02:00");
+  });
+});
+
+describe("averages and overall", () => {
+  const point = (started: number, runTime: number, dispatched = 0, queueWait = 0) => ({
+    start: 0,
+    succeeded: 0,
+    failed: 0,
+    interrupted: 0,
+    cancelled: 0,
+    bytes: 0,
+    files: 0,
+    started,
+    runTime,
+    dispatched,
+    queueWait,
+  });
+
+  it("averages each bucket over its own jobs, with gaps where none counts", () => {
+    const pts = [point(2, 60, 1, 5), point(0, 0), point(1, 30, 0, 0)];
+    expect(averages(pts, "runTime")).toEqual([30, null, 30]);
+    expect(averages(pts, "queueWait")).toEqual([5, null, null]);
+    expect(overall(pts, "runTime")).toEqual({ avg: 30, n: 3 });
+    expect(overall(pts, "queueWait")).toEqual({ avg: 5, n: 1 });
+    expect(overall([], "runTime")).toEqual({ avg: 0, n: 0 });
   });
 });

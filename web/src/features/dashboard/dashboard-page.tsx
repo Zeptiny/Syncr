@@ -2,9 +2,10 @@ import { useQuery } from "@connectrpc/connect-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo } from "react";
 
-import { shapeActivity, type BucketUnit } from "@/components/app/charts/activity";
+import { overall, shapeActivity, type BucketUnit } from "@/components/app/charts/activity";
 import { ActivityChart } from "@/components/app/charts/activity-chart";
 import { BytesChart } from "@/components/app/charts/bytes-chart";
+import { DurationChart } from "@/components/app/charts/duration-chart";
 import { ErrorState } from "@/components/app/error-state";
 import { PageHeader } from "@/components/app/page-header";
 import { Panel } from "@/components/app/panel";
@@ -15,10 +16,16 @@ import { Switch } from "@/components/ui/switch";
 import { DashboardRange, DashboardService } from "@/gen/syncr/v1/dashboard_pb";
 import { ScheduleService } from "@/gen/syncr/v1/schedules_pb";
 import { useSession } from "@/hooks/use-session";
-import { formatBytes, formatCount, toNumber, tsDate } from "@/lib/format";
+import { formatBytes, formatCount, formatDuration, toNumber, tsDate } from "@/lib/format";
 import { browserTimeZone } from "@/lib/timezones";
 import { cn } from "@/lib/utils";
 
+import {
+  ActivityGroups,
+  FailureReasons,
+  RepositoryGrowthList,
+  ScheduleHealthList,
+} from "./breakdowns";
 import { RecentFailures, UpcomingRuns, WorkerHealthPanel } from "./panels";
 import type { DashboardRangeKey, DashboardSearch } from "./search";
 
@@ -70,8 +77,10 @@ export function formatSuccessRate(rate: number, finished: number): string {
 }
 
 /**
- * DashboardPage is the landing page: how jobs went over a period, what runs
- * next, which workers are up and what needs attention.
+ * DashboardPage is the landing page: how jobs went over a period (by
+ * outcome, kind, worker and failure reason, with run times and queue
+ * waits), what runs next, which workers are up, how the schedules and the
+ * restic repositories are doing, and what needs attention.
  */
 export function DashboardPage({ search }: { search: DashboardSearch }) {
   const navigate = useNavigate();
@@ -117,6 +126,8 @@ export function DashboardPage({ search }: { search: DashboardSearch }) {
   const queued = toNumber(t?.queued);
   const missed = toNumber(t?.missedRuns);
   const rate = t?.successRate ?? 0;
+  const run = overall(points, "runTime");
+  const wait = overall(points, "queueWait");
 
   return (
     <>
@@ -150,7 +161,7 @@ export function DashboardPage({ search }: { search: DashboardSearch }) {
           {!d ? (
             <Skeleton className="h-[86px] w-full rounded-lg" />
           ) : (
-            <StatGrid>
+            <StatGrid className="md:grid-cols-3 xl:grid-cols-6">
               <StatCard
                 label="Success rate"
                 value={formatSuccessRate(rate, finished)}
@@ -178,16 +189,25 @@ export function DashboardPage({ search }: { search: DashboardSearch }) {
                 sub={`${formatCount(t?.files)} files`}
               />
               <StatCard
+                label="Average run time"
+                value={run.n ? formatDuration(run.avg) : "–"}
+                sub={
+                  run.n
+                    ? `${formatDuration(run.avg * run.n)} over ${formatCount(run.n)} jobs`
+                    : "No job ran"
+                }
+              />
+              <StatCard
+                label="Average queue wait"
+                value={wait.n ? formatDuration(wait.avg) : "–"}
+                tone={wait.n && wait.avg >= 600 ? "warning" : "default"}
+                sub={wait.n ? "Before a worker took the job" : "No job was picked up"}
+              />
+              <StatCard
                 label="Running now"
                 value={formatCount(running)}
                 tone={running ? "live" : "default"}
                 sub={queued ? `${queued} queued` : "Nothing queued"}
-              />
-              <StatCard
-                label="Missed runs"
-                value={formatCount(missed)}
-                tone={missed ? "warning" : "default"}
-                sub={missed ? "Worker offline or overlap" : "None missed"}
               />
             </StatGrid>
           )}
@@ -205,6 +225,10 @@ export function DashboardPage({ search }: { search: DashboardSearch }) {
                   <div className="border-t pt-5">
                     <BytesChart points={points} unit={unit} />
                   </div>
+                  <div className="grid grid-cols-1 gap-6 border-t pt-5 sm:grid-cols-2">
+                    <DurationChart points={points} unit={unit} metric="runTime" />
+                    <DurationChart points={points} unit={unit} metric="queueWait" />
+                  </div>
                 </div>
               )}
             </Panel>
@@ -220,6 +244,70 @@ export function DashboardPage({ search }: { search: DashboardSearch }) {
                 {!d ? <Skeleton className="m-5 h-32" /> : <WorkerHealthPanel health={d.workers} />}
               </Panel>
             </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+            <Panel title="By job kind" description="Finished jobs and how they ended." flush>
+              {!d ? (
+                <Skeleton className="m-5 h-32" />
+              ) : (
+                <ActivityGroups groups={d.kinds} by="kind" period={key} allUsers={allUsers} />
+              )}
+            </Panel>
+            <Panel title="By worker" description="Where the finished jobs ran." flush>
+              {!d ? (
+                <Skeleton className="m-5 h-32" />
+              ) : (
+                <ActivityGroups
+                  groups={d.workerActivity}
+                  by="worker"
+                  period={key}
+                  allUsers={allUsers}
+                />
+              )}
+            </Panel>
+            <Panel
+              title="Why jobs failed"
+              description="Failed and interrupted jobs by cause."
+              flush
+            >
+              {!d ? (
+                <Skeleton className="m-5 h-32" />
+              ) : (
+                <FailureReasons reasons={d.failureReasons} period={key} allUsers={allUsers} />
+              )}
+            </Panel>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+            <Panel
+              title="Schedules"
+              aria-label="Schedules"
+              description="How each schedule's latest run went."
+              flush
+            >
+              {!d ? (
+                <Skeleton className="m-5 h-40" />
+              ) : (
+                <ScheduleHealthList
+                  schedules={d.schedules}
+                  missed={missed}
+                  rangeNoun={range.noun}
+                />
+              )}
+            </Panel>
+            <Panel
+              title="Repository growth"
+              aria-label="Repository growth"
+              description="What your successful backups added to each restic repository. Pruning frees space these figures do not show."
+              flush
+            >
+              {!d ? (
+                <Skeleton className="m-5 h-40" />
+              ) : (
+                <RepositoryGrowthList repositories={d.repositories} points={points} unit={unit} />
+              )}
+            </Panel>
           </div>
 
           <Panel

@@ -164,6 +164,49 @@ func (s *Service) CountMissed(ctx context.Context, actor domain.Actor, from, unt
 	return n, nil
 }
 
+// Health is one of an actor's schedules with how its runs went (Service.Health).
+type Health struct {
+	Schedule Schedule
+	// LatestRun is the schedule's newest run (its JobStatus filled in);
+	// HasRun is false, and LatestRun zero, when it never had one.
+	LatestRun Run
+	HasRun    bool
+	// LastSuccessAt is when the newest succeeded job the schedule launched
+	// finished; zero if none did.
+	LastSuccessAt time.Time
+}
+
+// Health returns every schedule of actor, by name, with its newest run and
+// its last success (the dashboard's schedule health and the metrics).
+func (s *Service) Health(ctx context.Context, actor domain.Actor) ([]Health, error) {
+	const op = "schedule health"
+	scs, err := s.List(ctx, actor, ListFilter{})
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+	out := make([]Health, 0, len(scs))
+	if len(scs) == 0 {
+		return out, nil
+	}
+	ids := make([]domain.ScheduleID, len(scs))
+	for i, sc := range scs {
+		ids[i] = sc.ID
+	}
+	latest, err := s.repo.LatestRuns(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+	succeeded, err := s.repo.LastSucceeded(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+	for _, sc := range scs {
+		r, ok := latest[sc.ID]
+		out = append(out, Health{Schedule: sc, LatestRun: r, HasRun: ok, LastSuccessAt: succeeded[sc.ID]})
+	}
+	return out, nil
+}
+
 func dashboardLimit(limit, def int) int {
 	if limit <= 0 {
 		return def

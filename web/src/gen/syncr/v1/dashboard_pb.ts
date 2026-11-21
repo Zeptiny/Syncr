@@ -4,10 +4,12 @@
 
 import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
-import type { Timestamp } from "@bufbuild/protobuf/wkt";
-import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
+import type { Duration, Timestamp } from "@bufbuild/protobuf/wkt";
+import { file_google_protobuf_duration, file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { Job, Worker, WorkerStatus } from "./api_pb";
 import { file_syncr_v1_api } from "./api_pb";
+import type { JobErrorCode } from "./link_pb";
+import { file_syncr_v1_link } from "./link_pb";
 import type { ScheduleRun, ScheduleTarget } from "./schedules_pb";
 import { file_syncr_v1_schedules } from "./schedules_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -16,7 +18,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file syncr/v1/dashboard.proto.
  */
 export const file_syncr_v1_dashboard: GenFile = /*@__PURE__*/
-  fileDesc("ChhzeW5jci92MS9kYXNoYm9hcmQucHJvdG8SCHN5bmNyLnYxImMKE0dldERhc2hib2FyZFJlcXVlc3QSJwoFcmFuZ2UYASABKA4yGC5zeW5jci52MS5EYXNoYm9hcmRSYW5nZRIQCgh0aW1lem9uZRgCIAEoCRIRCglhbGxfdXNlcnMYAyABKAgi/wIKFEdldERhc2hib2FyZFJlc3BvbnNlEigKBGZyb20YASABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEikKBXVudGlsGAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBITCgtidWNrZXRfdW5pdBgDIAEoCRIjCgZ0b3RhbHMYBCABKAsyEy5zeW5jci52MS5Kb2JUb3RhbHMSKgoIYWN0aXZpdHkYBSADKAsyGC5zeW5jci52MS5BY3Rpdml0eUJ1Y2tldBInCgh1cGNvbWluZxgGIAMoCzIVLnN5bmNyLnYxLlVwY29taW5nUnVuEicKB3dvcmtlcnMYByABKAsyFi5zeW5jci52MS5Xb3JrZXJIZWFsdGgSJgoPcmVjZW50X2ZhaWx1cmVzGAggAygLMg0uc3luY3IudjEuSm9iEiwKDXJlY2VudF9taXNzZWQYCSADKAsyFS5zeW5jci52MS5TY2hlZHVsZVJ1bkoECAoQFCLAAQoJSm9iVG90YWxzEhEKCXN1Y2NlZWRlZBgBIAEoAxIOCgZmYWlsZWQYAiABKAMSEwoLaW50ZXJydXB0ZWQYAyABKAMSEQoJY2FuY2VsbGVkGAQgASgDEg0KBWJ5dGVzGAUgASgDEg0KBWZpbGVzGAYgASgDEhQKDHN1Y2Nlc3NfcmF0ZRgHIAEoARIPCgdydW5uaW5nGAggASgDEg4KBnF1ZXVlZBgJIAEoAxITCgttaXNzZWRfcnVucxgKIAEoAyKkAQoOQWN0aXZpdHlCdWNrZXQSKQoFc3RhcnQYASABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhEKCXN1Y2NlZWRlZBgCIAEoAxIOCgZmYWlsZWQYAyABKAMSEwoLaW50ZXJydXB0ZWQYBCABKAMSEQoJY2FuY2VsbGVkGAUgASgDEg0KBWJ5dGVzGAYgASgDEg0KBWZpbGVzGAcgASgDIs8BCgtVcGNvbWluZ1J1bhITCgtzY2hlZHVsZV9pZBgBIAEoCRIVCg1zY2hlZHVsZV9uYW1lGAIgASgJEiYKAmF0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIoCgZ0YXJnZXQYBCABKAsyGC5zeW5jci52MS5TY2hlZHVsZVRhcmdldBITCgt3b3JrZXJfbmFtZRgFIAEoCRItCg13b3JrZXJfc3RhdHVzGAYgASgOMhYuc3luY3IudjEuV29ya2VyU3RhdHVzImMKDFdvcmtlckhlYWx0aBIOCgZvbmxpbmUYASABKAUSDwoHb2ZmbGluZRgCIAEoBRIPCgdwZW5kaW5nGAMgASgFEiEKB3dvcmtlcnMYBCADKAsyEC5zeW5jci52MS5Xb3JrZXIqfwoORGFzaGJvYXJkUmFuZ2USHwobREFTSEJPQVJEX1JBTkdFX1VOU1BFQ0lGSUVEEAASFwoTREFTSEJPQVJEX1JBTkdFX0RBWRABEhgKFERBU0hCT0FSRF9SQU5HRV9XRUVLEAISGQoVREFTSEJPQVJEX1JBTkdFX01PTlRIEAMyZgoQRGFzaGJvYXJkU2VydmljZRJSCgxHZXREYXNoYm9hcmQSHS5zeW5jci52MS5HZXREYXNoYm9hcmRSZXF1ZXN0Gh4uc3luY3IudjEuR2V0RGFzaGJvYXJkUmVzcG9uc2UiA5ACAUKRAQoMY29tLnN5bmNyLnYxQg5EYXNoYm9hcmRQcm90b1ABWjBnaXRodWIuY29tL1plcHRpbnkvU3luY3IvZ2VuL2dvL3N5bmNyL3YxO3N5bmNydjGiAgNTWFiqAghTeW5jci5WMcoCCFN5bmNyXFYx4gIUU3luY3JcVjFcR1BCTWV0YWRhdGHqAglTeW5jcjo6VjFiBnByb3RvMw", [file_google_protobuf_timestamp, file_syncr_v1_api, file_syncr_v1_schedules]);
+  fileDesc("ChhzeW5jci92MS9kYXNoYm9hcmQucHJvdG8SCHN5bmNyLnYxImMKE0dldERhc2hib2FyZFJlcXVlc3QSJwoFcmFuZ2UYASABKA4yGC5zeW5jci52MS5EYXNoYm9hcmRSYW5nZRIQCgh0aW1lem9uZRgCIAEoCRIRCglhbGxfdXNlcnMYAyABKAgi6gQKFEdldERhc2hib2FyZFJlc3BvbnNlEigKBGZyb20YASABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEikKBXVudGlsGAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBITCgtidWNrZXRfdW5pdBgDIAEoCRIjCgZ0b3RhbHMYBCABKAsyEy5zeW5jci52MS5Kb2JUb3RhbHMSKgoIYWN0aXZpdHkYBSADKAsyGC5zeW5jci52MS5BY3Rpdml0eUJ1Y2tldBInCgh1cGNvbWluZxgGIAMoCzIVLnN5bmNyLnYxLlVwY29taW5nUnVuEicKB3dvcmtlcnMYByABKAsyFi5zeW5jci52MS5Xb3JrZXJIZWFsdGgSJgoPcmVjZW50X2ZhaWx1cmVzGAggAygLMg0uc3luY3IudjEuSm9iEiwKDXJlY2VudF9taXNzZWQYCSADKAsyFS5zeW5jci52MS5TY2hlZHVsZVJ1bhImCgVraW5kcxgKIAMoCzIXLnN5bmNyLnYxLkFjdGl2aXR5R3JvdXASMAoPd29ya2VyX2FjdGl2aXR5GAsgAygLMhcuc3luY3IudjEuQWN0aXZpdHlHcm91cBIwCg9mYWlsdXJlX3JlYXNvbnMYDCADKAsyFy5zeW5jci52MS5GYWlsdXJlUmVhc29uEisKCXNjaGVkdWxlcxgNIAMoCzIYLnN5bmNyLnYxLlNjaGVkdWxlSGVhbHRoEjAKDHJlcG9zaXRvcmllcxgOIAMoCzIaLnN5bmNyLnYxLlJlcG9zaXRvcnlHcm93dGhKBAgPEBQiwQIKCUpvYlRvdGFscxIRCglzdWNjZWVkZWQYASABKAMSDgoGZmFpbGVkGAIgASgDEhMKC2ludGVycnVwdGVkGAMgASgDEhEKCWNhbmNlbGxlZBgEIAEoAxINCgVieXRlcxgFIAEoAxINCgVmaWxlcxgGIAEoAxIUCgxzdWNjZXNzX3JhdGUYByABKAESDwoHcnVubmluZxgIIAEoAxIOCgZxdWV1ZWQYCSABKAMSEwoLbWlzc2VkX3J1bnMYCiABKAMSKwoIcnVuX3RpbWUYCyABKAsyGS5nb29nbGUucHJvdG9idWYuRHVyYXRpb24SDwoHc3RhcnRlZBgMIAEoAxItCgpxdWV1ZV93YWl0GA0gASgLMhkuZ29vZ2xlLnByb3RvYnVmLkR1cmF0aW9uEhIKCmRpc3BhdGNoZWQYDiABKAMipQIKDkFjdGl2aXR5QnVja2V0EikKBXN0YXJ0GAEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIRCglzdWNjZWVkZWQYAiABKAMSDgoGZmFpbGVkGAMgASgDEhMKC2ludGVycnVwdGVkGAQgASgDEhEKCWNhbmNlbGxlZBgFIAEoAxINCgVieXRlcxgGIAEoAxINCgVmaWxlcxgHIAEoAxIrCghydW5fdGltZRgIIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbhIPCgdzdGFydGVkGAkgASgDEi0KCnF1ZXVlX3dhaXQYCiABKAsyGS5nb29nbGUucHJvdG9idWYuRHVyYXRpb24SEgoKZGlzcGF0Y2hlZBgLIAEoAyKUAgoNQWN0aXZpdHlHcm91cBILCgNrZXkYASABKAkSDAoEbmFtZRgCIAEoCRIRCglzdWNjZWVkZWQYAyABKAMSDgoGZmFpbGVkGAQgASgDEhMKC2ludGVycnVwdGVkGAUgASgDEhEKCWNhbmNlbGxlZBgGIAEoAxINCgVieXRlcxgHIAEoAxINCgVmaWxlcxgIIAEoAxIrCghydW5fdGltZRgJIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbhIPCgdzdGFydGVkGAogASgDEi0KCnF1ZXVlX3dhaXQYCyABKAsyGS5nb29nbGUucHJvdG9idWYuRHVyYXRpb24SEgoKZGlzcGF0Y2hlZBgMIAEoAyJpCg1GYWlsdXJlUmVhc29uEiQKBGNvZGUYASABKA4yFi5zeW5jci52MS5Kb2JFcnJvckNvZGUSDgoGZmFpbGVkGAIgASgDEhMKC2ludGVycnVwdGVkGAMgASgDEg0KBWtpbmRzGAQgAygJIuwBCg5TY2hlZHVsZUhlYWx0aBITCgtzY2hlZHVsZV9pZBgBIAEoCRIVCg1zY2hlZHVsZV9uYW1lGAIgASgJEgwKBGtpbmQYAyABKAkSDwoHZW5hYmxlZBgEIAEoCBIpCgpsYXRlc3RfcnVuGAUgASgLMhUuc3luY3IudjEuU2NoZWR1bGVSdW4SMwoPbGFzdF9zdWNjZXNzX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgtuZXh0X3J1bl9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAihgIKEFJlcG9zaXRvcnlHcm93dGgSFQoNcmVwb3NpdG9yeV9pZBgBIAEoCRIMCgRuYW1lGAIgASgJEhYKDnNuYXBzaG90X2NvdW50GAMgASgFEjYKEmxhdGVzdF9zbmFwc2hvdF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDwoHYmFja3VwcxgFIAEoAxITCgthZGRlZF9ieXRlcxgGIAEoAxIaChJmaXJzdF9zb3VyY2VfYnl0ZXMYByABKAMSGQoRbGFzdF9zb3VyY2VfYnl0ZXMYCCABKAMSDQoFYWRkZWQYCSADKAMSEQoJdHJ1bmNhdGVkGAogASgIIs8BCgtVcGNvbWluZ1J1bhITCgtzY2hlZHVsZV9pZBgBIAEoCRIVCg1zY2hlZHVsZV9uYW1lGAIgASgJEiYKAmF0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIoCgZ0YXJnZXQYBCABKAsyGC5zeW5jci52MS5TY2hlZHVsZVRhcmdldBITCgt3b3JrZXJfbmFtZRgFIAEoCRItCg13b3JrZXJfc3RhdHVzGAYgASgOMhYuc3luY3IudjEuV29ya2VyU3RhdHVzImMKDFdvcmtlckhlYWx0aBIOCgZvbmxpbmUYASABKAUSDwoHb2ZmbGluZRgCIAEoBRIPCgdwZW5kaW5nGAMgASgFEiEKB3dvcmtlcnMYBCADKAsyEC5zeW5jci52MS5Xb3JrZXIqfwoORGFzaGJvYXJkUmFuZ2USHwobREFTSEJPQVJEX1JBTkdFX1VOU1BFQ0lGSUVEEAASFwoTREFTSEJPQVJEX1JBTkdFX0RBWRABEhgKFERBU0hCT0FSRF9SQU5HRV9XRUVLEAISGQoVREFTSEJPQVJEX1JBTkdFX01PTlRIEAMyZgoQRGFzaGJvYXJkU2VydmljZRJSCgxHZXREYXNoYm9hcmQSHS5zeW5jci52MS5HZXREYXNoYm9hcmRSZXF1ZXN0Gh4uc3luY3IudjEuR2V0RGFzaGJvYXJkUmVzcG9uc2UiA5ACAUKRAQoMY29tLnN5bmNyLnYxQg5EYXNoYm9hcmRQcm90b1ABWjBnaXRodWIuY29tL1plcHRpbnkvU3luY3IvZ2VuL2dvL3N5bmNyL3YxO3N5bmNydjGiAgNTWFiqAghTeW5jci5WMcoCCFN5bmNyXFYx4gIUU3luY3JcVjFcR1BCTWV0YWRhdGHqAglTeW5jcjo6VjFiBnByb3RvMw", [file_google_protobuf_duration, file_google_protobuf_timestamp, file_syncr_v1_api, file_syncr_v1_link, file_syncr_v1_schedules]);
 
 /**
  * GetDashboardRequest selects the statistics.
@@ -119,6 +121,46 @@ export type GetDashboardResponse = Message<"syncr.v1.GetDashboardResponse"> & {
    * @generated from field: repeated syncr.v1.ScheduleRun recent_missed = 9;
    */
   recentMissed: ScheduleRun[];
+
+  /**
+   * The jobs that finished in the range by job kind (key: the kind, e.g.
+   * "rclone_transfer"), most jobs first.
+   *
+   * @generated from field: repeated syncr.v1.ActivityGroup kinds = 10;
+   */
+  kinds: ActivityGroup[];
+
+  /**
+   * The jobs that finished in the range by worker (key: the worker ID,
+   * name: its name; removed workers included), most jobs first.
+   *
+   * @generated from field: repeated syncr.v1.ActivityGroup worker_activity = 11;
+   */
+  workerActivity: ActivityGroup[];
+
+  /**
+   * The error codes of the failed and interrupted jobs that finished in
+   * the range, most jobs first; at most eight.
+   *
+   * @generated from field: repeated syncr.v1.FailureReason failure_reasons = 12;
+   */
+  failureReasons: FailureReason[];
+
+  /**
+   * The caller's schedules with how their runs went: those whose newest
+   * run did not succeed first, then by name.
+   *
+   * @generated from field: repeated syncr.v1.ScheduleHealth schedules = 13;
+   */
+  schedules: ScheduleHealth[];
+
+  /**
+   * The caller's restic repositories with what their successful backups
+   * that finished in the range added, by name.
+   *
+   * @generated from field: repeated syncr.v1.RepositoryGrowth repositories = 14;
+   */
+  repositories: RepositoryGrowth[];
 };
 
 /**
@@ -191,6 +233,32 @@ export type JobTotals = Message<"syncr.v1.JobTotals"> & {
    * @generated from field: int64 missed_runs = 10;
    */
   missedRuns: bigint;
+
+  /**
+   * The run time (start to end, the worker's clock) of the finished jobs
+   * that started, and how many started.
+   *
+   * @generated from field: google.protobuf.Duration run_time = 11;
+   */
+  runTime?: Duration | undefined;
+
+  /**
+   * @generated from field: int64 started = 12;
+   */
+  started: bigint;
+
+  /**
+   * The queue wait (creation to a worker accepting it) of the finished
+   * jobs a worker accepted, and how many it accepted.
+   *
+   * @generated from field: google.protobuf.Duration queue_wait = 13;
+   */
+  queueWait?: Duration | undefined;
+
+  /**
+   * @generated from field: int64 dispatched = 14;
+   */
+  dispatched: bigint;
 };
 
 /**
@@ -245,6 +313,28 @@ export type ActivityBucket = Message<"syncr.v1.ActivityBucket"> & {
    * @generated from field: int64 files = 7;
    */
   files: bigint;
+
+  /**
+   * Their run time and queue wait, as in JobTotals.
+   *
+   * @generated from field: google.protobuf.Duration run_time = 8;
+   */
+  runTime?: Duration | undefined;
+
+  /**
+   * @generated from field: int64 started = 9;
+   */
+  started: bigint;
+
+  /**
+   * @generated from field: google.protobuf.Duration queue_wait = 10;
+   */
+  queueWait?: Duration | undefined;
+
+  /**
+   * @generated from field: int64 dispatched = 11;
+   */
+  dispatched: bigint;
 };
 
 /**
@@ -253,6 +343,266 @@ export type ActivityBucket = Message<"syncr.v1.ActivityBucket"> & {
  */
 export const ActivityBucketSchema: GenMessage<ActivityBucket> = /*@__PURE__*/
   messageDesc(file_syncr_v1_dashboard, 3);
+
+/**
+ * ActivityGroup counts the jobs of one job kind or one worker that finished
+ * in the range.
+ *
+ * @generated from message syncr.v1.ActivityGroup
+ */
+export type ActivityGroup = Message<"syncr.v1.ActivityGroup"> & {
+  /**
+   * The kind or the worker ID.
+   *
+   * @generated from field: string key = 1;
+   */
+  key: string;
+
+  /**
+   * The worker's name; empty for a kind.
+   *
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * @generated from field: int64 succeeded = 3;
+   */
+  succeeded: bigint;
+
+  /**
+   * @generated from field: int64 failed = 4;
+   */
+  failed: bigint;
+
+  /**
+   * @generated from field: int64 interrupted = 5;
+   */
+  interrupted: bigint;
+
+  /**
+   * @generated from field: int64 cancelled = 6;
+   */
+  cancelled: bigint;
+
+  /**
+   * @generated from field: int64 bytes = 7;
+   */
+  bytes: bigint;
+
+  /**
+   * @generated from field: int64 files = 8;
+   */
+  files: bigint;
+
+  /**
+   * Run time and queue wait, as in JobTotals.
+   *
+   * @generated from field: google.protobuf.Duration run_time = 9;
+   */
+  runTime?: Duration | undefined;
+
+  /**
+   * @generated from field: int64 started = 10;
+   */
+  started: bigint;
+
+  /**
+   * @generated from field: google.protobuf.Duration queue_wait = 11;
+   */
+  queueWait?: Duration | undefined;
+
+  /**
+   * @generated from field: int64 dispatched = 12;
+   */
+  dispatched: bigint;
+};
+
+/**
+ * Describes the message syncr.v1.ActivityGroup.
+ * Use `create(ActivityGroupSchema)` to create a new message.
+ */
+export const ActivityGroupSchema: GenMessage<ActivityGroup> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_dashboard, 4);
+
+/**
+ * FailureReason counts the failed and interrupted jobs of the range with
+ * one error code.
+ *
+ * @generated from message syncr.v1.FailureReason
+ */
+export type FailureReason = Message<"syncr.v1.FailureReason"> & {
+  /**
+   * UNSPECIFIED for jobs that ended without a known code.
+   *
+   * @generated from field: syncr.v1.JobErrorCode code = 1;
+   */
+  code: JobErrorCode;
+
+  /**
+   * @generated from field: int64 failed = 2;
+   */
+  failed: bigint;
+
+  /**
+   * @generated from field: int64 interrupted = 3;
+   */
+  interrupted: bigint;
+
+  /**
+   * The job kinds those jobs were, most jobs first.
+   *
+   * @generated from field: repeated string kinds = 4;
+   */
+  kinds: string[];
+};
+
+/**
+ * Describes the message syncr.v1.FailureReason.
+ * Use `create(FailureReasonSchema)` to create a new message.
+ */
+export const FailureReasonSchema: GenMessage<FailureReason> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_dashboard, 5);
+
+/**
+ * ScheduleHealth is one of the caller's schedules with how its runs went.
+ *
+ * @generated from message syncr.v1.ScheduleHealth
+ */
+export type ScheduleHealth = Message<"syncr.v1.ScheduleHealth"> & {
+  /**
+   * @generated from field: string schedule_id = 1;
+   */
+  scheduleId: string;
+
+  /**
+   * @generated from field: string schedule_name = 2;
+   */
+  scheduleName: string;
+
+  /**
+   * The job kind it runs.
+   *
+   * @generated from field: string kind = 3;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: bool enabled = 4;
+   */
+  enabled: boolean;
+
+  /**
+   * The newest run (with its job's status); unset if it never ran.
+   *
+   * @generated from field: syncr.v1.ScheduleRun latest_run = 5;
+   */
+  latestRun?: ScheduleRun | undefined;
+
+  /**
+   * When the newest successful job it launched finished; unset if none
+   * did.
+   *
+   * @generated from field: google.protobuf.Timestamp last_success_at = 6;
+   */
+  lastSuccessAt?: Timestamp | undefined;
+
+  /**
+   * When it runs next; unset while paused.
+   *
+   * @generated from field: google.protobuf.Timestamp next_run_at = 7;
+   */
+  nextRunAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message syncr.v1.ScheduleHealth.
+ * Use `create(ScheduleHealthSchema)` to create a new message.
+ */
+export const ScheduleHealthSchema: GenMessage<ScheduleHealth> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_dashboard, 6);
+
+/**
+ * RepositoryGrowth is one of the caller's restic repositories and what its
+ * successful backups that finished in the range added. Pruning frees space
+ * that these figures do not show: they are what backups wrote, not the
+ * repository's size.
+ *
+ * @generated from message syncr.v1.RepositoryGrowth
+ */
+export type RepositoryGrowth = Message<"syncr.v1.RepositoryGrowth"> & {
+  /**
+   * @generated from field: string repository_id = 1;
+   */
+  repositoryId: string;
+
+  /**
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * Snapshots as of the snapshot list's last refresh, and when the newest
+   * one was taken (unset if none).
+   *
+   * @generated from field: int32 snapshot_count = 3;
+   */
+  snapshotCount: number;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp latest_snapshot_at = 4;
+   */
+  latestSnapshotAt?: Timestamp | undefined;
+
+  /**
+   * The backups, and the bytes they added to the repository after
+   * deduplication and compression (restic's data_added_packed).
+   *
+   * @generated from field: int64 backups = 5;
+   */
+  backups: bigint;
+
+  /**
+   * @generated from field: int64 added_bytes = 6;
+   */
+  addedBytes: bigint;
+
+  /**
+   * The size of what the first and the last of those backups backed up
+   * (restic's total_bytes_processed); 0 without backups.
+   *
+   * @generated from field: int64 first_source_bytes = 7;
+   */
+  firstSourceBytes: bigint;
+
+  /**
+   * @generated from field: int64 last_source_bytes = 8;
+   */
+  lastSourceBytes: bigint;
+
+  /**
+   * The bytes added per activity bucket, aligned with
+   * GetDashboardResponse.activity.
+   *
+   * @generated from field: repeated int64 added = 9;
+   */
+  added: bigint[];
+
+  /**
+   * Whether the range held more backups than the dashboard reads: the
+   * figures then cover the newest ones only.
+   *
+   * @generated from field: bool truncated = 10;
+   */
+  truncated: boolean;
+};
+
+/**
+ * Describes the message syncr.v1.RepositoryGrowth.
+ * Use `create(RepositoryGrowthSchema)` to create a new message.
+ */
+export const RepositoryGrowthSchema: GenMessage<RepositoryGrowth> = /*@__PURE__*/
+  messageDesc(file_syncr_v1_dashboard, 7);
 
 /**
  * UpcomingRun is the next occurrence of a schedule.
@@ -303,7 +653,7 @@ export type UpcomingRun = Message<"syncr.v1.UpcomingRun"> & {
  * Use `create(UpcomingRunSchema)` to create a new message.
  */
 export const UpcomingRunSchema: GenMessage<UpcomingRun> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_dashboard, 4);
+  messageDesc(file_syncr_v1_dashboard, 8);
 
 /**
  * WorkerHealth summarizes the workers that have not been removed.
@@ -339,7 +689,7 @@ export type WorkerHealth = Message<"syncr.v1.WorkerHealth"> & {
  * Use `create(WorkerHealthSchema)` to create a new message.
  */
 export const WorkerHealthSchema: GenMessage<WorkerHealth> = /*@__PURE__*/
-  messageDesc(file_syncr_v1_dashboard, 5);
+  messageDesc(file_syncr_v1_dashboard, 9);
 
 /**
  * DashboardRange is the time range of the statistics, ending now.
@@ -382,7 +732,9 @@ export const DashboardRangeSchema: GenEnum<DashboardRange> = /*@__PURE__*/
 
 /**
  * DashboardService serves the overview page: job statistics over a time
- * range, upcoming scheduled runs, worker health and recent problems.
+ * range (by outcome, job kind, worker and failure reason, with run times
+ * and queue waits), upcoming scheduled runs, worker health, schedule
+ * health, restic repository growth and recent problems.
  *
  * @generated from service syncr.v1.DashboardService
  */
@@ -390,7 +742,7 @@ export const DashboardService: GenService<{
   /**
    * GetDashboard returns the dashboard of the caller's jobs and schedules
    * (with all_users, an admin's statistics cover every user's jobs;
-   * schedules stay the caller's own).
+   * schedules and repositories stay the caller's own).
    *
    * @generated from rpc syncr.v1.DashboardService.GetDashboard
    */

@@ -481,6 +481,27 @@ func (s *Store) LatestRuns(ctx context.Context, ids []domain.ScheduleID) (map[do
 	return out, nil
 }
 
+// LastSucceeded implements schedules.Repository.
+func (s *Store) LastSucceeded(ctx context.Context, ids []domain.ScheduleID) (map[domain.ScheduleID]time.Time, error) {
+	const op = "last succeeded jobs"
+	out := make(map[domain.ScheduleID]time.Time)
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.q.LastSucceededJobs(ctx, pgIDs(ids))
+	if err != nil {
+		return nil, mapErr(op, err)
+	}
+	for _, r := range rows {
+		var id domain.ScheduleID
+		if err := decodeID(&id, r.ScheduleID); err != nil {
+			return nil, fmt.Errorf("%s: %w", op, err)
+		}
+		out[id] = timeFrom(r.FinishedAt)
+	}
+	return out, nil
+}
+
 // HasActiveRun implements schedules.Repository.
 func (s *Store) HasActiveRun(ctx context.Context, id domain.ScheduleID) (bool, error) {
 	active, err := s.q.HasActiveRun(ctx, pgID(id))

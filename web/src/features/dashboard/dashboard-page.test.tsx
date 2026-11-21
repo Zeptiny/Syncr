@@ -9,9 +9,11 @@ import {
   type GetDashboardRequest,
 } from "@/gen/syncr/v1/dashboard_pb";
 import { JobStatus, WorkerStatus } from "@/gen/syncr/v1/api_pb";
+import { JobErrorCode } from "@/gen/syncr/v1/link_pb";
 import { ScheduleRunStatus, ScheduleService } from "@/gen/syncr/v1/schedules_pb";
 import { signedIn } from "@/test/app-api";
 import * as fx from "@/test/fixtures";
+import { durationFromSeconds } from "@/lib/format";
 import { formatInZone } from "@/lib/timezones";
 import { mockTransport, renderApp } from "@/test/render";
 
@@ -54,8 +56,69 @@ function api(full: boolean) {
             running: 1n,
             queued: 2n,
             missedRuns: 3n,
+            runTime: durationFromSeconds(50 * 120),
+            started: 50n,
+            queueWait: durationFromSeconds(50 * 4),
+            dispatched: 50n,
           },
-          activity: [{ start: timestampFromMs(from + 5 * HOUR), succeeded: 47n, failed: 2n }],
+          activity: [
+            {
+              start: timestampFromMs(from + 5 * HOUR),
+              succeeded: 47n,
+              failed: 2n,
+              runTime: durationFromSeconds(50 * 120),
+              started: 50n,
+              queueWait: durationFromSeconds(50 * 4),
+              dispatched: 50n,
+            },
+          ],
+          kinds: [
+            {
+              key: "rclone_transfer",
+              succeeded: 40n,
+              failed: 2n,
+              bytes: 4n * 1024n ** 3n,
+              runTime: durationFromSeconds(42 * 60),
+              started: 42n,
+            },
+            { key: "restic_backup", succeeded: 7n, interrupted: 1n },
+          ],
+          workerActivity: [
+            { key: "w1", name: "nas-01", succeeded: 40n, failed: 2n },
+            { key: "w2", name: "pi", succeeded: 7n, interrupted: 1n },
+          ],
+          failureReasons: [
+            { code: JobErrorCode.EXECUTION_FAILED, failed: 2n, kinds: ["rclone_transfer"] },
+            { code: JobErrorCode.WORKER_RESTARTED, interrupted: 1n, kinds: ["restic_backup"] },
+          ],
+          schedules: [
+            {
+              scheduleId: fx.ids.nightly,
+              scheduleName: "Nightly photos → B2",
+              kind: "rclone_transfer",
+              enabled: true,
+              latestRun: { status: ScheduleRunStatus.LAUNCHED, jobStatus: JobStatus.FAILED },
+              lastSuccessAt: timestampFromMs(now - 26 * HOUR),
+            },
+            {
+              scheduleId: "s2",
+              scheduleName: "Weekly check",
+              kind: "restic_check",
+              enabled: false,
+            },
+          ],
+          repositories: [
+            {
+              repositoryId: "r1",
+              name: "photos",
+              snapshotCount: 14,
+              backups: 2n,
+              addedBytes: 300n * 1024n ** 2n,
+              firstSourceBytes: 10n * 1024n ** 3n,
+              lastSourceBytes: 10n * 1024n ** 3n + 200n * 1024n ** 2n,
+              added: [0n, 100n * 1024n ** 2n, 200n * 1024n ** 2n],
+            },
+          ],
           upcoming: [
             {
               scheduleId: fx.ids.nightly,
@@ -98,7 +161,8 @@ describe("DashboardPage", () => {
     expect(screen.getByText("47 of 50 finished jobs")).toBeInTheDocument();
     expect(screen.getByText("5.00 GiB")).toBeInTheDocument();
     expect(screen.getByText("2 failed, 1 interrupted")).toBeInTheDocument();
-    const next = screen.getByRole("link", { name: /Nightly photos → B2/ });
+    // Up next comes before the schedules' health, which lists it too.
+    const next = screen.getAllByRole("link", { name: /Nightly photos → B2/ })[0];
     expect(within(next).getByText("nas")).toBeInTheDocument();
     // In the schedule's zone, as on the schedules pages.
     const when = await within(next).findByText(
@@ -111,6 +175,39 @@ describe("DashboardPage", () => {
     expect(screen.getByText("of 4 online")).toBeInTheDocument();
     expect(screen.getAllByText("Missed").length).toBeGreaterThan(0);
     expect(screen.getByRole("img", { name: /47 succeeded, 2 failed/ })).toBeInTheDocument();
+  });
+
+  it("breaks the jobs down and shows the schedules and the repositories", async () => {
+    const { transport } = api(true);
+    renderApp("/", transport);
+    // The stat cards; the run time and queue wait charts repeat the averages.
+    expect(await screen.findByText("1h 40m over 50 jobs")).toBeInTheDocument();
+    expect(screen.getAllByText("2m 00s")).toHaveLength(2);
+    expect(screen.getAllByText("4s")).toHaveLength(2);
+    expect(screen.getByText("Before a worker took the job")).toBeInTheDocument();
+
+    const transfer = screen.getByRole("link", { name: /^Transfer: 42 jobs, 95\.2% succeeded/ });
+    expect(transfer).toHaveAttribute("href", expect.stringContaining("kind=rclone_transfer"));
+    expect(within(transfer).getByText(/ran 1m 00s on average/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^nas-01: 42 jobs/ })).toHaveAttribute(
+      "href",
+      expect.stringContaining("worker=w1"),
+    );
+    const failed = screen.getByText("Execution failed").closest("a");
+    expect(failed).toHaveAttribute("href", expect.stringContaining("kind=rclone_transfer"));
+    expect(screen.getByText("Worker restarted")).toBeInTheDocument();
+
+    const schedules = screen.getByRole("region", { name: "Schedules" });
+    expect(within(schedules).getByText("of 2 healthy")).toBeInTheDocument();
+    expect(within(schedules).getByText("1 need attention")).toBeInTheDocument();
+    expect(within(schedules).getByText("3 runs missed in the last 24 hours")).toBeInTheDocument();
+    expect(within(schedules).getByText(/last succeeded/)).toBeInTheDocument();
+    expect(within(schedules).getByText("Failed")).toBeInTheDocument();
+    expect(within(schedules).getByText(/never succeeded/)).toBeInTheDocument();
+
+    const repos = screen.getByRole("region", { name: "Repository growth" });
+    expect(within(repos).getByText("300 MiB added · 2 backups")).toBeInTheDocument();
+    expect(within(repos).getByText("Source 10.2 GiB, +200 MiB")).toBeInTheDocument();
   });
 
   it("switches the range and, for admins, all users", async () => {
