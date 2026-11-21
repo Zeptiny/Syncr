@@ -12,13 +12,15 @@ func TestFeatures(t *testing.T) {
 	want := []string{
 		"probe", "restic.v2", "restic.delete", "job.time_limit", "job.hooks", "rclone.bisync", "restic.restore_subfolder_paths",
 		"restic.remote_source", "rclone.crypt",
+		"rclone.backend.smb", "rclone.backend.ftp", "rclone.backend.azureblob", "rclone.backend.gcs",
 	}
 	if got := Features(); !slices.Equal(got, want) {
 		t.Errorf("Features() = %q, want %q", got, want)
 	}
 	if FeatureProbe != want[0] || FeatureResticV2 != want[1] || FeatureResticDelete != want[2] || FeatureJobTimeLimit != want[3] ||
 		FeatureJobHooks != want[4] || FeatureRcloneBisync != want[5] || FeatureResticRestoreSubfolderPaths != want[6] ||
-		FeatureResticRemoteSource != want[7] || FeatureRcloneCrypt != want[8] {
+		FeatureResticRemoteSource != want[7] || FeatureRcloneCrypt != want[8] || FeatureRcloneSMB != want[9] ||
+		FeatureRcloneFTP != want[10] || FeatureRcloneAzureBlob != want[11] || FeatureRcloneGCS != want[12] {
 		t.Error("feature constants changed: they are part of the wire contract")
 	}
 }

@@ -365,8 +365,9 @@ func (f *fakeRemotes) Resolve(_ context.Context, owner domain.UserID, ids []doma
 	}
 	out := make(map[domain.RemoteID]remotes.Resolved, len(ids))
 	for len(ids) > 0 {
-		// Like the remotes service, the result holds the remotes the
-		// wrappers among them store their data in.
+		// Like the remotes service, the result holds the members of the
+		// unions and the remotes the wrappers among them store their data
+		// in.
 		var next []domain.RemoteID
 		for _, id := range ids {
 			if f.owners[id] != owner {
@@ -377,6 +378,9 @@ func (f *fakeRemotes) Resolve(_ context.Context, owner domain.UserID, ids []doma
 			out[id] = r
 			if w := r.Wrapped.RemoteID; !w.IsZero() {
 				next = append(next, w)
+			}
+			for _, m := range r.Members {
+				next = append(next, m.RemoteID)
 			}
 		}
 		ids = next

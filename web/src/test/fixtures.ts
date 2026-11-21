@@ -79,6 +79,54 @@ function choices(...values: string[]): { value: string; label: string }[] {
 /** Backend descriptors like internal/backend/builtin. */
 export const backends: Backend[] = [
   create(BackendSchema, {
+    id: "azureblob",
+    label: "Azure Blob Storage",
+    description:
+      "Microsoft Azure Blob Storage, with the account key, a SAS URL or a service principal.",
+    capabilities: { unionMember: true, resticRepository: true },
+    fields: [
+      f("account", "Storage account", FieldKind.STRING, {
+        placeholder: "mystorageaccount",
+        help: "The storage account name: 3 to 24 lowercase letters and digits. Required unless you sign in with a SAS URL.",
+      }),
+      f("key", "Account key", FieldKind.STRING, {
+        secret: true,
+        help: "One of the storage account's access keys (shared key).",
+      }),
+      f("sas_url", "SAS URL", FieldKind.STRING, {
+        secret: true,
+        help: "A SAS URL for the account or a container, instead of the account key.",
+      }),
+      f("container", "Container", FieldKind.STRING, {
+        help: "Container, optionally with a path prefix (container/prefix). Leave empty to name the container in each job's path.",
+      }),
+      f("tenant", "Tenant ID", FieldKind.STRING, {
+        advanced: true,
+        help: "To sign in as a service principal (an app registration) instead: its tenant, client ID and client secret.",
+      }),
+      f("client_id", "Client ID", FieldKind.STRING, { advanced: true }),
+      f("client_secret", "Client secret", FieldKind.STRING, { secret: true, advanced: true }),
+      f("access_tier", "Access tier", FieldKind.ENUM, {
+        advanced: true,
+        help: "The tier of uploaded blobs; empty keeps the account's default. Archive blobs cannot be read until they are rehydrated in Azure: not for a remote that holds a restic repository.",
+        choices: [
+          { value: "hot", label: "Hot" },
+          { value: "cool", label: "Cool" },
+          { value: "cold", label: "Cold" },
+          { value: "archive", label: "Archive" },
+        ],
+      }),
+      f("endpoint", "Endpoint", FieldKind.STRING, {
+        advanced: true,
+        placeholder: "https://mystorageaccount.blob.core.chinacloudapi.cn",
+        help: "The blob service URL, only for other Azure clouds.",
+      }),
+      f("no_check_container", "Don't check or create the container", FieldKind.BOOL, {
+        advanced: true,
+      }),
+    ],
+  }),
+  create(BackendSchema, {
     id: "b2",
     label: "Backblaze B2",
     description: "Backblaze B2 cloud storage buckets.",
@@ -153,6 +201,161 @@ export const backends: Backend[] = [
     ],
   }),
   create(BackendSchema, {
+    id: "ftp",
+    label: "FTP / FTPS",
+    description:
+      'An FTP server, optionally over TLS (FTPS). Anonymous FTP works with the user "anonymous".',
+    capabilities: { unionMember: true, resticRepository: true, noChecksum: true },
+    fields: [
+      f("host", "Host", FieldKind.STRING, { required: true, placeholder: "ftp.example.com" }),
+      f("user", "User", FieldKind.STRING, {
+        required: true,
+        help: '"anonymous" for anonymous FTP.',
+      }),
+      f("pass", "Password", FieldKind.STRING, {
+        secret: true,
+        help: "Without TLS the password crosses the network in clear.",
+      }),
+      f("tls", "Implicit FTPS", FieldKind.BOOL, {
+        help: "Implicit FTPS (usually port 990: set the port under Advanced options).",
+      }),
+      f("explicit_tls", "Explicit FTPS", FieldKind.BOOL, {
+        help: "Explicit FTPS (STARTTLS on port 21).",
+      }),
+      f("path", "Base path", FieldKind.STRING, {
+        help: "Folder that job paths are relative to; empty means the login folder.",
+      }),
+      f("port", "Port", FieldKind.INT, { advanced: true, defaultValue: "21" }),
+      f("no_check_certificate", "Don't verify the server certificate", FieldKind.BOOL, {
+        advanced: true,
+        help: "Accepts any server certificate, so anyone between the worker and the server can read and change the traffic.",
+      }),
+      f("concurrency", "Connections", FieldKind.INT, {
+        advanced: true,
+        help: "Most connections at once; 0 or empty means no limit. Keep it above the job's parallel transfers plus checkers (4 + 8 by default), or jobs can hang.",
+      }),
+      f("disable_epsv", "Disable EPSV", FieldKind.BOOL, {
+        advanced: true,
+        help: "For servers that do not understand extended passive mode.",
+      }),
+      f("disable_mlsd", "Disable MLSD", FieldKind.BOOL, {
+        advanced: true,
+        help: "For servers whose MLSD listings are broken.",
+      }),
+      f("writing_mdtm", "Set times with MDTM", FieldKind.BOOL, {
+        advanced: true,
+        help: "For servers such as vsftpd that set modification times with MDTM instead of MFMT.",
+      }),
+    ],
+  }),
+  create(BackendSchema, {
+    id: "gcs",
+    label: "Google Cloud Storage",
+    description: "Google Cloud Storage buckets, with a service account key.",
+    capabilities: { unionMember: true, resticRepository: true },
+    fields: [
+      f("service_account_credentials", "Service account key (JSON)", FieldKind.TEXT, {
+        required: true,
+        secret: true,
+        placeholder: '{"type": "service_account", ...}',
+        help: "The service account's JSON key file, pasted as it is. Create one in the Google Cloud console: IAM & Admin, Service accounts, Keys, Add key.",
+      }),
+      f("bucket", "Bucket", FieldKind.STRING, {
+        help: "Bucket, optionally with a path prefix (bucket/prefix). Leave empty to name the bucket in each job's path.",
+      }),
+      f("project_number", "Project number", FieldKind.STRING, {
+        advanced: true,
+        help: "Needed to list or create buckets.",
+      }),
+      f("location", "Location", FieldKind.ENUM, {
+        advanced: true,
+        help: "Where new buckets are created; empty for Google's default (US).",
+        choices: [
+          { value: "asia", label: "Asia (multi-region)" },
+          { value: "eu", label: "Europe (multi-region)" },
+          { value: "us", label: "United States (multi-region)" },
+          { value: "asia-east1", label: "Taiwan (asia-east1)" },
+          { value: "asia-east2", label: "Hong Kong (asia-east2)" },
+          { value: "asia-northeast1", label: "Tokyo (asia-northeast1)" },
+          { value: "asia-northeast2", label: "Osaka (asia-northeast2)" },
+          { value: "asia-northeast3", label: "Seoul (asia-northeast3)" },
+          { value: "asia-south1", label: "Mumbai (asia-south1)" },
+          { value: "asia-south2", label: "Delhi (asia-south2)" },
+          { value: "asia-southeast1", label: "Singapore (asia-southeast1)" },
+          { value: "asia-southeast2", label: "Jakarta (asia-southeast2)" },
+          { value: "australia-southeast1", label: "Sydney (australia-southeast1)" },
+          { value: "australia-southeast2", label: "Melbourne (australia-southeast2)" },
+          { value: "europe-north1", label: "Finland (europe-north1)" },
+          { value: "europe-west1", label: "Belgium (europe-west1)" },
+          { value: "europe-west2", label: "London (europe-west2)" },
+          { value: "europe-west3", label: "Frankfurt (europe-west3)" },
+          { value: "europe-west4", label: "Netherlands (europe-west4)" },
+          { value: "europe-west6", label: "Zürich (europe-west6)" },
+          { value: "europe-central2", label: "Warsaw (europe-central2)" },
+          { value: "us-central1", label: "Iowa (us-central1)" },
+          { value: "us-east1", label: "South Carolina (us-east1)" },
+          { value: "us-east4", label: "Northern Virginia (us-east4)" },
+          { value: "us-east5", label: "Ohio (us-east5)" },
+          { value: "us-west1", label: "Oregon (us-west1)" },
+          { value: "us-west2", label: "California (us-west2)" },
+          { value: "us-west3", label: "Salt Lake City (us-west3)" },
+          { value: "us-west4", label: "Las Vegas (us-west4)" },
+          { value: "northamerica-northeast1", label: "Montréal (northamerica-northeast1)" },
+          { value: "northamerica-northeast2", label: "Toronto (northamerica-northeast2)" },
+          { value: "southamerica-east1", label: "São Paulo (southamerica-east1)" },
+          { value: "southamerica-west1", label: "Santiago (southamerica-west1)" },
+          { value: "asia1", label: "Tokyo and Osaka (dual-region asia1)" },
+          { value: "eur4", label: "Finland and Netherlands (dual-region eur4)" },
+          { value: "nam4", label: "Iowa and South Carolina (dual-region nam4)" },
+        ],
+      }),
+      f("storage_class", "Storage class", FieldKind.ENUM, {
+        advanced: true,
+        help: "The class of new objects; empty for the bucket's default.",
+        choices: [
+          { value: "MULTI_REGIONAL", label: "Multi-regional" },
+          { value: "REGIONAL", label: "Regional" },
+          { value: "NEARLINE", label: "Nearline" },
+          { value: "COLDLINE", label: "Coldline" },
+          { value: "ARCHIVE", label: "Archive" },
+          { value: "DURABLE_REDUCED_AVAILABILITY", label: "Durable reduced availability" },
+        ],
+      }),
+      f("bucket_policy_only", "Uniform bucket-level access", FieldKind.BOOL, {
+        advanced: true,
+        defaultValue: "true",
+        help: "On: no ACLs are sent, so uploads work on buckets with uniform bucket-level access (the Google Cloud console's default) and on others, and new buckets get uniform access. Turn it off only to set the ACLs below on a bucket with fine-grained access.",
+      }),
+      f("object_acl", "Object ACL", FieldKind.ENUM, {
+        advanced: true,
+        help: "The access control list of new objects, only with uniform bucket-level access off; empty for private.",
+        choices: [
+          { value: "authenticatedRead", label: "Authenticated users can read" },
+          { value: "bucketOwnerFullControl", label: "Bucket owner has full control" },
+          { value: "bucketOwnerRead", label: "Bucket owner can read" },
+          { value: "private", label: "Private" },
+          { value: "projectPrivate", label: "Project members, by role" },
+          { value: "publicRead", label: "Anyone can read" },
+        ],
+      }),
+      f("bucket_acl", "Bucket ACL", FieldKind.ENUM, {
+        advanced: true,
+        help: "The access control list of new buckets, only with uniform bucket-level access off; empty for private.",
+        choices: [
+          { value: "authenticatedRead", label: "Authenticated users can read" },
+          { value: "private", label: "Private" },
+          { value: "projectPrivate", label: "Project members, by role" },
+          { value: "publicRead", label: "Anyone can read" },
+          { value: "publicReadWrite", label: "Anyone can read and write" },
+        ],
+      }),
+      f("endpoint", "Endpoint", FieldKind.STRING, {
+        advanced: true,
+        help: "Another storage API endpoint, e.g. a private one. Leave empty normally.",
+      }),
+    ],
+  }),
+  create(BackendSchema, {
     id: "local",
     label: "Local folder",
     description: "A folder on the worker's own disks, inside its allowed folders.",
@@ -168,22 +371,46 @@ export const backends: Backend[] = [
   create(BackendSchema, {
     id: "s3",
     label: "Amazon S3 and compatible",
-    description: "AWS S3, MinIO, Cloudflare R2, Wasabi and other S3 APIs.",
+    description:
+      "Object storage that speaks the S3 API: AWS, MinIO, Cloudflare R2, Wasabi, DigitalOcean Spaces, Ceph, Hetzner, Scaleway, OVHcloud, IDrive e2, Linode, Storj and others.",
     capabilities: { unionMember: true, resticRepository: true },
     fields: [
       f("provider", "Provider", FieldKind.ENUM, {
         defaultValue: "AWS",
-        choices: choices("AWS", "Minio", "Cloudflare", "Wasabi", "DigitalOcean", "Ceph", "Other"),
+        choices: [
+          { value: "AWS", label: "Amazon Web Services" },
+          { value: "Minio", label: "MinIO" },
+          { value: "Cloudflare", label: "Cloudflare R2" },
+          { value: "Wasabi", label: "Wasabi" },
+          { value: "DigitalOcean", label: "DigitalOcean Spaces" },
+          { value: "Ceph", label: "Ceph" },
+          { value: "Linode", label: "Akamai / Linode" },
+          { value: "Alibaba", label: "Alibaba Cloud OSS" },
+          { value: "Hetzner", label: "Hetzner Object Storage" },
+          { value: "IBMCOS", label: "IBM Cloud Object Storage" },
+          { value: "IDrive", label: "IDrive e2" },
+          { value: "IONOS", label: "IONOS Cloud" },
+          { value: "Mega", label: "MEGA S4" },
+          { value: "OVHcloud", label: "OVHcloud" },
+          { value: "Scaleway", label: "Scaleway" },
+          { value: "SeaweedFS", label: "SeaweedFS" },
+          { value: "Storj", label: "Storj S3 gateway" },
+          { value: "Synology", label: "Synology C2" },
+          { value: "Other", label: "Other S3-compatible" },
+        ],
       }),
       f("access_key_id", "Access key ID", FieldKind.STRING, { required: true }),
       f("secret_access_key", "Secret access key", FieldKind.STRING, {
         required: true,
         secret: true,
       }),
-      f("region", "Region", FieldKind.STRING, { placeholder: "us-east-1" }),
+      f("region", "Region", FieldKind.STRING, {
+        placeholder: "us-east-1",
+        help: "The region of your endpoint, as your provider names it (Hetzner fsn1, Scaleway fr-par, OVHcloud gra). Empty signs requests for us-east-1.",
+      }),
       f("endpoint", "Endpoint", FieldKind.STRING, {
         placeholder: "https://minio.example.com",
-        help: "Required unless the provider is AWS.",
+        help: "Required unless the provider is AWS: without one, rclone sends every request to AWS. Your provider's documentation lists its endpoints (they often depend on the region).",
       }),
       f("bucket", "Bucket", FieldKind.STRING, {
         help: "Optional bucket (and path) every location starts in.",
@@ -241,6 +468,44 @@ export const backends: Backend[] = [
       f("md5sum_command", "MD5 command", FieldKind.STRING, { advanced: true }),
       f("sha1sum_command", "SHA-1 command", FieldKind.STRING, { advanced: true }),
       f("use_insecure_cipher", "Allow insecure ciphers", FieldKind.BOOL, { advanced: true }),
+    ],
+  }),
+  create(BackendSchema, {
+    id: "smb",
+    label: "SMB (Windows share)",
+    description: "A shared folder on a Windows computer, a Samba server or a NAS, over SMB.",
+    capabilities: { unionMember: true, resticRepository: true, noChecksum: true },
+    fields: [
+      f("host", "Host", FieldKind.STRING, {
+        required: true,
+        placeholder: "nas.local",
+        help: "The server's name or IP address.",
+      }),
+      f("user", "User", FieldKind.STRING, {
+        required: true,
+        help: '"guest" for a share open to guests.',
+      }),
+      f("pass", "Password", FieldKind.STRING, { secret: true }),
+      f("share", "Share", FieldKind.STRING, {
+        placeholder: "backups",
+        help: "Share, optionally with a folder (share/folder). Leave empty to name the share in each job's path.",
+      }),
+      f("domain", "Domain", FieldKind.STRING, {
+        advanced: true,
+        defaultValue: "WORKGROUP",
+        help: "The Windows domain or workgroup of the user.",
+      }),
+      f("port", "Port", FieldKind.INT, { advanced: true, defaultValue: "445" }),
+      f("spn", "Service principal name", FieldKind.STRING, {
+        advanced: true,
+        placeholder: "cifs/nas.example.com",
+        help: "Only for servers that require one. Leave empty if unsure.",
+      }),
+      f("case_insensitive", "Case-insensitive names", FieldKind.BOOL, {
+        advanced: true,
+        defaultValue: "true",
+        help: "Windows shares do not tell names apart by case. Turn it off for a server that does.",
+      }),
     ],
   }),
   create(BackendSchema, {
@@ -324,6 +589,10 @@ export const ids = {
   pooled: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d06",
   media: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d07",
   vault: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d08",
+  nasShare: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d09",
+  oldFtp: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d0a",
+  azureArchive: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d0b",
+  gcsBackups: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d0c",
   runningJob: "c3d2e1f0-7a6b-4c5d-8e9f-a0b1c2d3e401",
   removedLaptop: "5a1e2b7c-1d3f-4e8a-9b0c-2d4f6a8b0c09",
   nightly: "4b8f0d2a-6c1e-4f3a-9d5b-7e2c1a0f3b01",
@@ -458,12 +727,32 @@ export function remotes(now: number): Remote[] {
   return [
     create(RemoteSchema, {
       ...base,
+      id: ids.azureArchive,
+      name: "Azure archive",
+      backendType: "azureblob",
+      options: { account: "syncrdemo", container: "cold-archive", access_tier: "archive" },
+      secretsSet: ["key"],
+    }),
+    create(RemoteSchema, {
+      ...base,
       id: ids.b2,
       name: "B2 offsite",
       backendType: "b2",
       options: { account: "0031f2e9a4b7c50000000003", bucket: "syncr-offsite" },
       secretsSet: ["key"],
       wrappedBy: [ids.vault],
+    }),
+    create(RemoteSchema, {
+      ...base,
+      id: ids.gcsBackups,
+      name: "GCS backups",
+      backendType: "gcs",
+      options: {
+        bucket: "syncr-demo-backups",
+        location: "europe-west3",
+        storage_class: "NEARLINE",
+      },
+      secretsSet: ["service_account_credentials"],
     }),
     create(RemoteSchema, {
       ...base,
@@ -489,6 +778,14 @@ export function remotes(now: number): Remote[] {
     }),
     create(RemoteSchema, {
       ...base,
+      id: ids.nasShare,
+      name: "NAS share",
+      backendType: "smb",
+      options: { host: "nas.local", user: "syncr", share: "family" },
+      secretsSet: ["pass"],
+    }),
+    create(RemoteSchema, {
+      ...base,
       id: ids.nextcloud,
       name: "Nextcloud",
       backendType: "webdav",
@@ -496,6 +793,19 @@ export function remotes(now: number): Remote[] {
         url: "https://cloud.example.net/remote.php/dav/files/dana",
         vendor: "nextcloud",
         user: "dana",
+      },
+      secretsSet: ["pass"],
+    }),
+    create(RemoteSchema, {
+      ...base,
+      id: ids.oldFtp,
+      name: "Old FTP",
+      backendType: "ftp",
+      options: {
+        host: "ftp.example.net",
+        user: "syncr",
+        explicit_tls: "true",
+        path: "/pub/backups",
       },
       secretsSet: ["pass"],
     }),
@@ -564,6 +874,10 @@ const remoteMeta: Record<string, [string, string]> = {
   [ids.pooled]: ["Pooled disks", "union"],
   [ids.media]: ["Media disk", "local"],
   [ids.vault]: ["Vault", "crypt"],
+  [ids.nasShare]: ["NAS share", "smb"],
+  [ids.oldFtp]: ["Old FTP", "ftp"],
+  [ids.azureArchive]: ["Azure archive", "azureblob"],
+  [ids.gcsBackups]: ["GCS backups", "gcs"],
 };
 
 function jobId(i: number): string {

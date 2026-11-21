@@ -295,12 +295,35 @@ func (s *Service) RemotesUsing(ctx context.Context, actor domain.Actor, id domai
 // Infos returns what the checks of a job definition need to know about
 // ids (Info: the type, the wrapped remote, the type's capabilities), which
 // must all be live remotes of owner: ErrNotFound otherwise. A remote whose
-// type is no longer available has no capabilities. The API and the
-// scheduler pass them to jobkind's Registry.CheckWith.
+// type is no longer available has no capabilities. A union keeps no
+// checksums when one of its members does not (Capabilities.NoChecksum,
+// see unionNoChecksum). The API and the scheduler pass them to jobkind's
+// Registry.CheckWith.
 func (s *Service) Infos(ctx context.Context, owner domain.UserID, ids []domain.RemoteID) (map[domain.RemoteID]Info, error) {
 	rs, err := s.usable(ctx, owner, ids)
 	if err != nil {
 		return nil, fmt.Errorf("remote infos: %w", err)
+	}
+	var memberIDs []domain.RemoteID
+	for _, r := range rs {
+		for _, m := range r.Members {
+			if !slices.Contains(memberIDs, m.RemoteID) {
+				memberIDs = append(memberIDs, m.RemoteID)
+			}
+		}
+	}
+	// The members' types only: a union's members are live remotes of its
+	// owner (the store refuses deleting a member), and they are not part of
+	// the result.
+	memberTypes := map[domain.RemoteID]string{}
+	if len(memberIDs) > 0 {
+		ms, err := s.repo.GetRemotes(ctx, memberIDs)
+		if err != nil {
+			return nil, fmt.Errorf("remote infos: %w", err)
+		}
+		for _, m := range ms {
+			memberTypes[m.ID] = m.Type
+		}
 	}
 	out := make(map[domain.RemoteID]Info, len(rs))
 	for id, r := range rs {
@@ -308,9 +331,27 @@ func (s *Service) Infos(ctx context.Context, owner domain.UserID, ids []domain.R
 		if typ, ok := s.backends.Get(r.Type); ok {
 			info.Capabilities = typ.Capabilities()
 		}
+		info.Capabilities.NoChecksum = info.Capabilities.NoChecksum || slices.ContainsFunc(r.Members, func(m Member) bool {
+			mt, ok := s.backends.Get(memberTypes[m.RemoteID])
+			return ok && mt.Capabilities().NoChecksum
+		})
 		out[id] = info
 	}
 	return out, nil
+}
+
+// unionNoChecksum sets Capabilities.NoChecksum on the unions of rs that
+// have a member in rs that keeps no checksums: rclone's union then keeps
+// none either (it hashes only with what every upstream supports), so a
+// checksum comparison through it would fall back to sizes. Infos applies
+// the same rule.
+func unionNoChecksum(rs map[domain.RemoteID]Resolved) {
+	for id, r := range rs {
+		if !r.Capabilities.NoChecksum && slices.ContainsFunc(r.Members, func(m Member) bool { return rs[m.RemoteID].Capabilities.NoChecksum }) {
+			r.Capabilities.NoChecksum = true
+			rs[id] = r
+		}
+	}
 }
 
 // Usable returns the names of ids, which must all be live remotes of owner:
@@ -512,6 +553,7 @@ func (s *Service) Draft(ctx context.Context, actor domain.Actor, id domain.Remot
 		ID: id, Name: strings.TrimSpace(in.Name), Type: typ.ID(), Rclone: rc, Members: slices.Clone(members), Wrapped: wrapped,
 		Capabilities: typ.Capabilities(),
 	}
+	unionNoChecksum(out)
 	return out, id, nil
 }
 
@@ -586,6 +628,7 @@ func (s *Service) Resolve(ctx context.Context, owner domain.UserID, ids []domain
 		}
 		level = next
 	}
+	unionNoChecksum(out)
 	return out, nil
 }
 

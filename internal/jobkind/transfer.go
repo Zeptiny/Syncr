@@ -123,9 +123,13 @@ func sideRemotes(locs ...*syncrv1.JobLocation) []domain.RemoteID {
 }
 
 // noChecksum reports whether any of the locations is on a resolved remote
-// that keeps no checksums.
+// that keeps no checksums: its NoChecksum, or, for a union, that of any of
+// its members (rclone's union hashes only with what every member keeps).
 func (s *specRemotes) noChecksum(locs ...*syncrv1.JobLocation) bool {
-	return slices.ContainsFunc(sideRemotes(locs...), func(id domain.RemoteID) bool { return s.remotes[id].NoChecksum })
+	return slices.ContainsFunc(sideRemotes(locs...), func(id domain.RemoteID) bool {
+		r := s.remotes[id]
+		return r.NoChecksum || slices.ContainsFunc(r.Members, func(m Member) bool { return s.remotes[m.RemoteID].NoChecksum })
+	})
 }
 
 // Build implements Kind: the transfer with its two locations on the

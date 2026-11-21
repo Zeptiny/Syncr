@@ -386,7 +386,7 @@ func resticLayout(root string) []demoFile {
 // demoRemoteRoots are the roots rclone joins to a path on the demo remotes
 // (the bucket, the SFTP folder), longest first.
 func demoRemoteRoots() []string {
-	return []string{"home/backups", "syncr-offsite", "alice-backup", sharedBucket, "archive"}
+	return []string{gcsRoot, "home/backups", "syncr-offsite", "alice-backup", azureRoot, oldFTPRoot, sharedBucket, "archive", nasShareRoot}
 }
 
 // remoteRel returns a location's path relative to its demo remote's root.
@@ -465,6 +465,9 @@ func remoteTree(backend string, start time.Time) (tree, error) {
 	case "webdav":
 		return nextcloudTree(start), nil
 	}
+	if files, ok := remoteTypesTree(backend); ok {
+		return newTree(start, files), nil
+	}
 	return nil, failf(syncrv1.JobErrorCode_JOB_ERROR_CODE_EXECUTION_FAILED, "the demo has no content for this kind of remote")
 }
 
@@ -509,7 +512,11 @@ func about(remotes []*syncrv1.RemoteDefinition) (*syncrv1.ProbeUsage, error) {
 	case "webdav":
 		// Nextcloud's quota.
 		return &syncrv1.ProbeUsage{Total: ptr(512 * gib), Used: ptr(74*gib + 600*mib), Free: ptr(437*gib + 424*mib)}, nil
+	case "smb":
+		// The NAS volume that holds the share.
+		return &syncrv1.ProbeUsage{Total: ptr(4096 * gib), Used: ptr(2618 * gib), Free: ptr(1478 * gib)}, nil
 	}
+	// rclone's ftp, azureblob and gcs backends report no usage.
 	return &syncrv1.ProbeUsage{Unsupported: true}, nil
 }
 

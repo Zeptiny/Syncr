@@ -108,9 +108,10 @@ encrypted side **cannot compare checksums**:
   remote that keeps no checksums". Schedules are refused when they are
   saved, and one stored before fails when it runs.
 
-This holds for any remote whose type keeps no checksums, not only
-encrypted ones. rclone still checks each file's contents as it decrypts
-it, so a damaged or tampered file fails to read.
+This holds for any remote that keeps no checksums, not only encrypted
+ones ([which remotes](remotes.md#checksums)). rclone still checks each
+file's contents as it decrypts it, so a damaged or tampered file fails to
+read.
 
 ## A wrong password
 

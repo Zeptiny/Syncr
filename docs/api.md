@@ -161,6 +161,17 @@ curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/j
   `rclone.crypt` feature (older than 2.3.0) fails a job on an encrypted
   remote with `JOB_ERROR_CODE_WORKER_OUTDATED`.
 
+The types `smb`, `ftp`, `azureblob` and `gcs` ([remotes](remotes.md)) are
+ordinary descriptor types: `ListBackends` describes their fields, and `smb`
+and `ftp` have the capability `noChecksum`. A union remote keeps no
+checksums when one of its members' types has `noChecksum`; the remote
+itself carries no capabilities, so read its `members` and their
+`backendType`. Workers report each of these types as a feature
+(`rclone.backend.smb`, `rclone.backend.ftp`, `rclone.backend.azureblob`,
+`rclone.backend.gcs`, from 2.3.0); a job on one, also through a union
+member or an encrypted remote, sent to a worker without it fails with
+`JOB_ERROR_CODE_WORKER_OUTDATED`.
+
 Copy and move from the browser are ordinary `RunJob` calls with an
 `rcloneTransfer` definition whose `filters` select the items; restoring
 selected items back to their place is a `resticRestore` with both

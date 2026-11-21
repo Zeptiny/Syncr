@@ -59,7 +59,8 @@ func tools() []workers.Tool {
 // runs a build from before Milestone 6 (no link.FeatureJobTimeLimit, no
 // link.FeatureJobHooks, no sftp_host_keys probe, no two-way sync: neither
 // link.FeatureRcloneBisync nor the rclone_bisync kind, no
-// link.FeatureRcloneCrypt), so the UI shows it
+// link.FeatureRcloneCrypt, none of the backend features of the remote
+// types of 2.3), so the UI shows it
 // outdated with the command that upgrades it. nas-01's operator defined
 // hooks (demoHooks), which the backups of its documents run.
 //
@@ -124,11 +125,14 @@ func demoWorkers() []demoWorker {
 				// Built before Milestone 6: no time limits, no hooks, no
 				// host-key probe, no two-way sync, none of Milestone 7's
 				// scans or restores of items of a subfolder, no backups of
-				// a remote and no encrypted remotes.
+				// a remote, no encrypted remotes and none of the remote
+				// types of 2.3 (SMB, FTP, Azure Blob, Google Cloud
+				// Storage).
 				JobKinds: slices.DeleteFunc(link.Kinds(), func(k string) bool { return k == "rclone_bisync" }),
 				Features: slices.DeleteFunc(slices.Clone(features), func(f string) bool {
 					return f == link.FeatureJobTimeLimit || f == link.FeatureJobHooks || f == link.FeatureRcloneBisync ||
-						f == link.FeatureResticRestoreSubfolderPaths || f == link.FeatureResticRemoteSource || f == link.FeatureRcloneCrypt
+						f == link.FeatureResticRestoreSubfolderPaths || f == link.FeatureResticRemoteSource || f == link.FeatureRcloneCrypt ||
+						f == link.FeatureRcloneSMB || f == link.FeatureRcloneFTP || f == link.FeatureRcloneAzureBlob || f == link.FeatureRcloneGCS
 				}),
 				ProbeOps: slices.DeleteFunc(slices.Clone(ops), func(op string) bool { return op == "sftp_host_keys" || link.IsHeavyProbeOp(op) }),
 			},
@@ -187,12 +191,13 @@ func demoHostKeys() []string {
 	}
 }
 
-// demoRemotes are the remotes, in creation order (union members first).
-// The credentials are demo values for hosts that do not exist.
+// demoRemotes are the remotes, in creation order (union members first),
+// then those of the remote types of 2.3 (demoRemoteTypesRemotes). The
+// credentials are demo values for hosts that do not exist.
 //
 //nolint:gosec // G101: public demo credentials
 func demoRemotes() []demoRemote {
-	return []demoRemote{
+	return append([]demoRemote{
 		{owner: ownerAdmin, input: remotes.Input{Name: rMinIO, Type: "s3",
 			Options: map[string]string{"provider": "Minio", "endpoint": "https://minio.lan:9000", "region": "us-east-1",
 				"access_key_id": "syncr-demo", "bucket": "archive", "force_path_style": "true"},
@@ -233,7 +238,7 @@ func demoRemotes() []demoRemote {
 			Options: map[string]string{"filename_encryption": "standard", "directory_name_encryption": "true"},
 			Secrets: map[string]string{"password": "syncr-demo-vault-password", "password2": "syncr-demo-vault-salt"}},
 			wrapped: loc{rB2, vaultFolder}},
-	}
+	}, demoRemoteTypesRemotes()...)
 }
 
 // loc is a job location: a remote by name ("" for the worker's

@@ -292,9 +292,10 @@ worker, not to one schedule or job: see [the limits](#limits-and-known-gaps).
 
 - **Compare files by:** size and modification time by default. Adding the
   checksum also detects changes by content where both sides have a hash
-  in common; it is slower. It is not offered when a side is an
-  [encrypted remote](encrypted-remotes.md#checksums), which keeps no
-  checksums, and the API refuses it there.
+  in common; it is slower. It is not offered when a side keeps no
+  checksums (an [encrypted remote](encrypted-remotes.md#checksums), an SMB
+  or FTP remote, or a union with an SMB or FTP member:
+  [checksums](remotes.md#checksums)), and the API refuses it there.
 - **Resync mode:** what a resync keeps of a file that differs: the newer
   (default), the older, the larger, the smaller, Folder A's or Folder B's.
 - **Advanced:** parallel transfers and checkers, a bandwidth limit,

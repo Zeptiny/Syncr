@@ -14,7 +14,7 @@ func TestTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"s3", "sftp", "local", "union", "b2", "webdav", "crypt"} {
+	for _, id := range []string{"s3", "sftp", "local", "union", "b2", "webdav", "crypt", "smb", "ftp", "azureblob", "gcs"} {
 		typ, ok := reg.Get(id)
 		if !ok {
 			t.Errorf("type %q is not built in", id)
@@ -24,8 +24,12 @@ func TestTypes(t *testing.T) {
 			t.Errorf("type %q has no examples", id)
 		}
 		// Bucket storage: a folder that does not exist looks empty there.
-		if want := id == "s3" || id == "b2"; typ.Capabilities().ObjectStore != want {
+		if want := id == "s3" || id == "b2" || id == "azureblob" || id == "gcs"; typ.Capabilities().ObjectStore != want {
 			t.Errorf("type %q: ObjectStore = %v, want %v", id, !want, want)
+		}
+		// rclone keeps no checksums on these.
+		if want := id == "crypt" || id == "smb" || id == "ftp"; typ.Capabilities().NoChecksum != want {
+			t.Errorf("type %q: NoChecksum = %v, want %v", id, !want, want)
 		}
 	}
 	backendtest.RunRegistry(t, reg)

@@ -121,6 +121,7 @@ to it first, in one of two ways (**How the worker reads it**):
 | Works on | Every worker | Linux with FUSE 3, Windows with WinFsp ([below](#what-a-worker-needs-for-the-mount)) |
 | Each run after the first | rclone downloads what changed; restic reads what changed | restic reads what changed, through the mount |
 | Remotes without stable modification times | Fine (the mirror keeps its own) | Every file looks changed: everything is read again on every run |
+| FTP servers that cannot set modification times | **Misses a change that keeps a file's size** ([below](#ftp-sources)) | Sees a change when the server lists a new time |
 | An interrupted run | The partial mirror is kept and reused | Nothing is left (stale mounts are swept) |
 
 - **Mirror** runs `rclone sync` of the folder into the worker's data
@@ -156,6 +157,19 @@ worker under **Remote backups** ("Mirror ✓ · Mount ✗ – /dev/fuse is
 missing"), and the form disables a method or a worker that cannot, with
 the reason. A worker older than 2.2 shows as outdated: it cannot run these
 backups (`worker_outdated`).
+
+### FTP sources
+
+On an FTP server that cannot set modification times (no MFMT; rclone's
+own `rclone serve ftp` is one), rclone compares files by size only. A file
+changed on the server without changing its size is then never copied into
+the mirror: every later snapshot keeps its old content, and the job still
+succeeds. The mount method shows restic the times the server lists, so it
+sees such a change when the listed time changes (to the second with MLSD
+or MDTM, to the minute or the day with a plain listing). The FTP section
+of [remotes](remotes.md#ftp--ftps) says what to do: use SFTP or WebDAV if
+the server offers them, turn on **Set times with MDTM** on vsftpd, use the
+mount method, or delete the mirror after each run.
 
 ### Skipping files
 

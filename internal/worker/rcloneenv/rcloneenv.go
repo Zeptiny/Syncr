@@ -20,9 +20,11 @@
 // aliases and option keys have a fixed charset, environment names must not
 // collide, only the backend types the worker supports are accepted (see
 // SupportedBackends; never "local", which would bypass the worker's
-// local_roots, nor backends that wrap free-form remote strings), and
-// options that make rclone run local commands, read local files or use the
-// worker host's credentials are rejected.
+// local_roots, nor backends that wrap free-form remote strings), options
+// that make rclone run local commands, read local files or use the worker
+// host's credentials are rejected, and so are remotes that carry too few
+// credentials of their own, which rclone would complete with the worker
+// host's (see checkCredentials).
 //
 // Every error message names aliases and keys only, never values, so errors
 // can be shown to users.
@@ -34,6 +36,7 @@ package rcloneenv
 import (
 	"cmp"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -411,8 +414,11 @@ func (b *Builder) addRemote(env *Env, def *syncrv1.RemoteDefinition) ([]string, 
 	}
 
 	for _, key := range sortedKeys(def.GetOptions()) {
-		if isCrypt && cryptPassword(key) {
+		if revealedSecret(backend, key) {
 			return nil, fmt.Errorf("option %q must be a secret listed in obscure_keys", key)
+		}
+		if err := checkLine(backend, key, def.GetOptions()[key], "option"); err != nil {
+			return nil, err
 		}
 		if err := add(key, def.GetOptions()[key], "option"); err != nil {
 			return nil, err
@@ -435,9 +441,13 @@ func (b *Builder) addRemote(env *Env, def *syncrv1.RemoteDefinition) ([]string, 
 		if strings.ContainsRune(value, 0) {
 			return nil, fmt.Errorf("secret %q: value contains a NUL byte", key)
 		}
-		if isCrypt && cryptPassword(key) && !obscure[key] {
+		if err := checkLine(backend, key, value, "secret"); err != nil {
+			return nil, err
+		}
+		if revealedSecret(backend, key) && !obscure[key] {
 			// rclone reveals the value as it comes: a plain password would
-			// fail, or (when it happens to decode) silently become another.
+			// fail, or (when it happens to decode) silently become another,
+			// one that checkLine never saw.
 			return nil, fmt.Errorf("secret %q must be listed in obscure_keys", key)
 		}
 		secrets = append(secrets, value)
@@ -494,11 +504,15 @@ func (b *Builder) addRemote(env *Env, def *syncrv1.RemoteDefinition) ([]string, 
 // servers). "union" is supported because its upstreams are generated from
 // typed union_upstreams, and "crypt" because its "remote" is generated from
 // the typed wrapped location (another remote of the job, never a local
-// path, a union or another crypt remote). A type is added here only after
-// every one of its options in the pinned rclone has been reviewed: see
-// deniedOptions and TestSupportedBackendOptionsReviewed.
+// path, a union or another crypt remote). "azureblob" and "gcs" (rclone's
+// "google cloud storage", named by its prefix) are supported because their
+// options that sign in as the host are denied (deniedOptions) and a gcs
+// remote must bring its own service account key (checkCredentials); "ftp"
+// and "smb" because they must name their own user. A type is added here
+// only after every one of its options in the pinned rclone has been
+// reviewed: see deniedOptions and TestSupportedBackendOptionsReviewed.
 func SupportedBackends() []string {
-	return []string{"b2", "crypt", "memory", "s3", "sftp", "union", "webdav"}
+	return []string{"azureblob", "b2", "crypt", "ftp", "gcs", "memory", "s3", "sftp", "smb", "union", "webdav"}
 }
 
 // checkBackend rejects backend types that are malformed or not supported.
@@ -521,16 +535,26 @@ func checkBackend(backend string) error {
 // controller's backend descriptors never emit them. They are denied for
 // every backend type: the supported ones were reviewed against the pinned
 // rclone (TestSupportedBackendOptionsReviewed), and the entries for other
-// backends (Azure, SMB, the cache wrapper...) keep the list safe to extend.
+// backends (Azure Files, the cache wrapper...) keep the list safe to
+// extend.
+//
+// Two azureblob options are denied although they name no file or command:
+// use_emulator points the remote at a storage emulator on the worker's own
+// loopback (127.0.0.1:10000) with the emulator's published key, and
+// msi_client_id with client_id and tenant (without use_msi) makes rclone
+// 1.75.2 sign in with "workload identity": it asks the worker host's
+// managed identity endpoint (169.254.169.254) for a token.
 func deniedOptions() map[string]string {
 	return map[string]string{ //nolint:gosec // G101 false positive: option names, not credentials
 		"ssh":                     "runs a local command",
 		"bearer_token_command":    "runs a local command",
 		"use_az":                  "runs a local command (the Azure CLI) with the worker host's login",
 		"unix_socket":             "connects to a local socket",
+		"use_emulator":            "connects to a storage emulator on the worker host",
 		"env_auth":                "uses the worker host's credentials",
 		"key_use_agent":           "uses the worker host's ssh-agent",
 		"use_msi":                 "uses the worker host's managed identity",
+		"msi_client_id":           "uses the worker host's managed identity",
 		"use_kerberos":            "uses the worker host's Kerberos tickets",
 		"shared_credentials_file": "reads a local file",
 		"config_file":             "reads a local file",
@@ -542,16 +566,119 @@ func deniedOptions() map[string]string {
 	}
 }
 
-// checkCredentials rejects a remote that rclone would sign in with the
-// worker host's own credentials because it carries none of its own. vars
-// are the remote's variables, as passed to rclone.
+// checkCredentials rejects a remote that rclone would complete with the
+// worker host's own credentials or account name because it carries too few
+// of its own, and a gcs service account key that would send its sign-in
+// elsewhere than Google (checkGCSKey). vars are the remote's variables, as
+// passed to rclone; a key counts as set when its value is not empty (rclone
+// treats an empty value like a missing one). The messages name keys only,
+// never values.
+//
+// azureblob needs no rule: with env_auth, use_msi, msi_client_id, use_az,
+// use_emulator, service_principal_file and client_certificate_path denied,
+// a remote without credentials of its own either fails ("no authentication
+// method configured") or reads its account's endpoint anonymously.
 func checkCredentials(alias, backend string, vars map[string]string) error {
-	if backend == "sftp" && vars[EnvName(alias, "pass")] == "" && vars[EnvName(alias, "key_pem")] == "" {
-		// rclone then signs in with the host's ssh-agent (key_file and
-		// ssh are denied). SSH_AUTH_SOCK never reaches children on Unix,
-		// but on Windows rclone finds Pageant or the OpenSSH agent pipe
-		// by itself.
-		return errors.New(`an sftp remote needs a "pass" or a "key_pem"; the worker's ssh-agent is never used`)
+	set := func(key string) bool { return vars[EnvName(alias, key)] != "" }
+	switch backend {
+	case "sftp":
+		if !set("pass") && !set("key_pem") {
+			// rclone then signs in with the host's ssh-agent (key_file and
+			// ssh are denied). SSH_AUTH_SOCK never reaches children on
+			// Unix, but on Windows rclone finds Pageant or the OpenSSH
+			// agent pipe by itself.
+			return errors.New(`an sftp remote needs a "pass" or a "key_pem"; the worker's ssh-agent is never used`)
+		}
+	case "gcs":
+		if !set(gcsKeyOption) {
+			// rclone then falls back to Google's Application Default
+			// Credentials (env_auth and service_account_file are denied):
+			// the gcloud file under the worker's HOME or APPDATA, or the
+			// metadata server of a Google Cloud host. Later OAuth types
+			// may accept a token here instead.
+			return errors.New("a Google Cloud Storage remote needs a service account key; the worker's own Google credentials are never used")
+		}
+		return checkGCSKey(vars[EnvName(alias, gcsKeyOption)])
+	case "ftp", "smb":
+		if !set("user") {
+			// rclone then sends the worker process's OS account name.
+			return fmt.Errorf("an %s remote needs a user; the worker's account name is never sent", backend)
+		}
+	}
+	return nil
+}
+
+// gcsKeyOption is the option of a gcs remote's service account key.
+const gcsKeyOption = "service_account_credentials"
+
+// gcsTokenURI is the only token_uri a gcs service account key may name:
+// Google's OAuth 2.0 token endpoint, which rclone also uses when the key
+// names none or an empty one. The controller's gcs descriptor pins the
+// same address.
+//
+//nolint:gosec // G101: a public endpoint, not a credential
+const gcsTokenURI = "https://oauth2.googleapis.com/token"
+
+// checkGCSKey rejects a gcs service account key that is not one JSON
+// object (rclone could not read it either), or whose token_uri names
+// another address than gcsTokenURI: rclone posts the signed sign-in
+// request to the key's token_uri, whatever it names. rclone reads the key
+// with encoding/json, which matches a member to token_uri when their names
+// are strings.EqualFold (any case, and the Kelvin sign for "k"), keeps the
+// last of repeated ones and ignores null. So every such member must be
+// null, empty or gcsTokenURI, not only the one encoding/json keeps: a
+// repeat in another spelling cannot hide another address. The messages
+// name the option, never any part of the key.
+func checkGCSKey(key string) error {
+	notKey := fmt.Errorf("%q must be a JSON key file (one JSON object)", gcsKeyOption)
+	if !json.Valid([]byte(key)) {
+		return notKey
+	}
+	dec := json.NewDecoder(strings.NewReader(key))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return notKey
+	}
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return notKey
+		}
+		name, _ := t.(string)
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return notKey
+		}
+		if !strings.EqualFold(name, "token_uri") {
+			continue
+		}
+		var uri *string
+		if err := json.Unmarshal(value, &uri); err != nil || (uri != nil && *uri != "" && *uri != gcsTokenURI) {
+			return fmt.Errorf("%q: token_uri must be absent, empty or %s; the worker signs in to Google Cloud Storage only through Google", gcsKeyOption, gcsTokenURI)
+		}
+	}
+	return nil
+}
+
+// lineOptions are the options whose values rclone writes, as they are,
+// into a line of a text protocol: ftp sends "USER <user>" and "PASS <pass>"
+// on its control connection, and "host:port" in an HTTP proxy's CONNECT
+// request. A line break in one would add lines of the remote's choosing,
+// for whatever service host and port name. (rclone encodes line breaks in
+// ftp paths itself.)
+func lineOptions(backend string) []string {
+	if backend == "ftp" {
+		return []string{"host", "user", "pass"}
+	}
+	return nil
+}
+
+// checkLine rejects a line break in the value of an option or secret key
+// that backend writes into a line of a text protocol (lineOptions). value
+// is the plain value, before it is obscured; kind is "option" or "secret".
+func checkLine(backend, key, value, kind string) error {
+	name := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+	if slices.Contains(lineOptions(backend), name) && strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("%s %q must not contain a line break: an %s remote sends it as a line of a command", kind, key, backend)
 	}
 	return nil
 }
@@ -586,11 +713,27 @@ func checkOption(backend, key string) error {
 	return nil
 }
 
-// cryptPassword reports whether key (an option or secret key) is one of
-// crypt's passwords, which rclone reads only in their obscured form.
-func cryptPassword(key string) bool {
+// revealedSecrets are the keys of backend that rclone reads only in their
+// obscured form (it reveals them as they come): crypt's passwords, and
+// the ftp and smb passwords. Such a key must be a secret listed in
+// obscure_keys, so the worker obscures it itself and its checks
+// (checkLine) see the plain value rclone will use. Earlier types keep
+// their behavior: their plain secrets are not refused here.
+func revealedSecrets(backend string) []string {
+	switch backend {
+	case "crypt":
+		return []string{"password", "password2"}
+	case "ftp", "smb":
+		return []string{"pass"}
+	}
+	return nil
+}
+
+// revealedSecret reports whether key (an option or secret key, in any case
+// or dash spelling) is one of backend's revealedSecrets.
+func revealedSecret(backend, key string) bool {
 	name := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
-	return name == "password" || name == "password2"
+	return slices.Contains(revealedSecrets(backend), name)
 }
 
 // wrappedLocation validates where the crypt remote self stores its data:

@@ -101,7 +101,8 @@ type Resolved struct {
 	// remote is also in Resolve's result); zero for other types.
 	Wrapped Wrapped
 	// Capabilities are those of the remote's backend type (e.g.
-	// NoChecksum, for the job builder).
+	// NoChecksum, for the job builder), except that a union whose members
+	// include one that keeps no checksums has NoChecksum set too.
 	Capabilities backend.Capabilities
 }
 
@@ -114,7 +115,8 @@ type Info struct {
 	// types.
 	Wrapped Wrapped
 	// Capabilities are those of the backend type; zero when the type is no
-	// longer available.
+	// longer available. A union whose members include one that keeps no
+	// checksums has NoChecksum set too.
 	Capabilities backend.Capabilities
 }
 

@@ -1,12 +1,8 @@
 package rcloneenv_test
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
-	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -206,46 +202,74 @@ func TestSupportedBackendsMatchBuiltinTypes(t *testing.T) {
 // (SYNCR_TEST_RCLONE) that every option and secret the descriptors emit is
 // an option of their rclone backend, so a misspelled option name cannot
 // slip through (rclone ignores unknown RCLONE_CONFIG_* variables).
+// Backends are looked up by rclone's name and by its prefix (the type a
+// config uses: "gcs" is "google cloud storage").
 func TestBuiltinBackendOptionsKnownToRclone(t *testing.T) {
 	t.Parallel()
-	bin := os.Getenv("SYNCR_TEST_RCLONE")
-	if bin == "" {
-		t.Skip("SYNCR_TEST_RCLONE not set")
-	}
-	out, err := exec.CommandContext(t.Context(), bin, "config", "providers").Output()
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			t.Fatalf("rclone config providers: %v: %s", err, ee.Stderr)
-		}
-		t.Fatalf("rclone config providers: %v", err)
-	}
-	var providers []struct {
-		Name    string
-		Options []struct{ Name string }
-	}
-	if err := json.Unmarshal(out, &providers); err != nil {
-		t.Fatalf("decode rclone config providers: %v", err)
-	}
-	known := map[string]map[string]bool{}
-	for _, p := range providers {
-		known[p.Name] = map[string]bool{}
-		for _, o := range p.Options {
-			known[p.Name][o.Name] = true
-		}
-	}
+	backends := rcloneenv.RcloneBackends(t)
 	for _, ex := range examples(t) {
 		if ex.rclone.Backend == "" {
 			continue
 		}
-		opts, ok := known[ex.rclone.Backend]
+		b, ok := backends[ex.rclone.Backend]
 		if !ok {
 			t.Errorf("%s: rclone has no backend %q", ex.name, ex.rclone.Backend)
 			continue
 		}
 		for _, k := range slices.Concat(slices.Collect(maps.Keys(ex.rclone.Options)), slices.Collect(maps.Keys(ex.rclone.Secrets))) {
-			if !opts[strings.ToLower(k)] {
+			if _, ok := b.Option(strings.ToLower(k)); !ok {
 				t.Errorf("%s: %q is not an option of rclone backend %q", ex.name, k, ex.rclone.Backend)
+			}
+		}
+	}
+}
+
+// rcloneEnums are the enum fields of built-in types (type ID, field name)
+// whose every choice must be one of rclone's examples for the option the
+// field maps to. An S3 provider rclone does not know would not get that
+// provider's settings (endpoints, quirks), whatever the label says.
+func rcloneEnums() [][2]string {
+	return [][2]string{
+		{"s3", "provider"},
+		{"gcs", "location"}, {"gcs", "storage_class"}, {"gcs", "object_acl"}, {"gcs", "bucket_acl"},
+	}
+}
+
+// TestBuiltinEnumChoicesKnownToRclone checks with the real rclone
+// (SYNCR_TEST_RCLONE) that every choice of the rcloneEnums is a value rclone
+// lists for that option, spelled the same way.
+func TestBuiltinEnumChoicesKnownToRclone(t *testing.T) {
+	t.Parallel()
+	backends := rcloneenv.RcloneBackends(t)
+	rcloneBackend := map[string]string{} // type ID -> rclone backend
+	for _, ex := range examples(t) {
+		rcloneBackend[ex.typ.ID()] = ex.rclone.Backend
+	}
+	for _, e := range rcloneEnums() {
+		id, name := e[0], e[1]
+		i := slices.IndexFunc(builtin.Types(), func(typ backend.Type) bool { return typ.ID() == id })
+		if i < 0 {
+			t.Errorf("no built-in type %q", id)
+			continue
+		}
+		fields := builtin.Types()[i].Fields()
+		j := slices.IndexFunc(fields, func(f backend.Field) bool { return f.Name == name })
+		if j < 0 || fields[j].Kind != backend.KindEnum || fields[j].RcloneName() == "" {
+			t.Errorf("type %q has no enum field %q that maps to an rclone option", id, name)
+			continue
+		}
+		opt, ok := backends[rcloneBackend[id]].Option(fields[j].RcloneName())
+		if !ok {
+			t.Errorf("%s.%s: rclone backend %q has no option %q", id, name, rcloneBackend[id], fields[j].RcloneName())
+			continue
+		}
+		known := make([]string, len(opt.Examples))
+		for k, ex := range opt.Examples {
+			known[k] = ex.Value
+		}
+		for _, c := range fields[j].Choices {
+			if !slices.Contains(known, c.Value) {
+				t.Errorf("%s.%s: choice %q is not one of rclone's values %q", id, name, c.Value, known)
 			}
 		}
 	}

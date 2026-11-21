@@ -520,7 +520,12 @@ func TestIntegrationUnionOfLocalDirs(t *testing.T) {
 func roundTrip(t *testing.T, it *itest, def *syncrv1.RemoteDefinition, path string) {
 	t.Helper()
 	src, back := it.dir(t, "src"), it.dir(t, "back")
-	total := writeFiles(t, src, map[string]int{"a.txt": 100, "dir/b.bin": 1 << 20, "dir/sp ace,'q\":x.txt": 3})
+	odd := "dir/sp ace,'q\":x.txt"
+	if runtime.GOOS == "windows" {
+		// Windows forbids ":" and '"' in names; the rest stays.
+		odd = "dir/sp ace,'q.txt"
+	}
+	total := writeFiles(t, src, map[string]int{"a.txt": 100, "dir/b.bin": 1 << 20, odd: 3})
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 

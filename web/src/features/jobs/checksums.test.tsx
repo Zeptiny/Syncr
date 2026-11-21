@@ -5,6 +5,7 @@ import { useState } from "react";
 import { describe, expect, it } from "vitest";
 
 import { FieldViolationSchema } from "@/gen/syncr/v1/api_pb";
+import { UnionUpstreamMode } from "@/gen/syncr/v1/link_pb";
 import { BackendSchema, RemoteSchema } from "@/gen/syncr/v1/remotes_pb";
 import * as fx from "@/test/fixtures";
 import { renderWithProviders } from "@/test/render";
@@ -26,16 +27,28 @@ import { TransferEditor } from "./transfer-editor";
 const now = Date.parse("2026-03-12T12:00:00Z");
 const remotes = fx.remotes(now);
 const backends = new Map(fx.backends.map((b) => [b.id, b]));
+// A union with an SMB member keeps no checksums, as its member; a union of
+// local folders (Pooled disks) keeps them.
+const nasPool = create(RemoteSchema, {
+  id: "nas-pool",
+  name: "NAS pool",
+  backendType: "union",
+  members: [
+    { remoteId: fx.ids.photos, mode: UnionUpstreamMode.READ_WRITE },
+    { remoteId: fx.ids.nasShare, path: "photos", mode: UnionUpstreamMode.READ_ONLY },
+  ],
+});
+remotes.push(nasPool);
 const lookup = noChecksumLookup(remotes, backends);
 
-// Another type that keeps no checksums, with another ID: the editors look
-// at the capability only.
-const ftpBackend = create(BackendSchema, {
-  id: "ftp",
-  label: "FTP",
+// A made-up type that keeps no checksums: the editors look at the
+// capability only.
+const gopherBackend = create(BackendSchema, {
+  id: "gopher",
+  label: "Gopher",
   capabilities: { unionMember: true, noChecksum: true },
 });
-const ftp = create(RemoteSchema, { id: "ftp-1", name: "Old FTP", backendType: "ftp" });
+const gopher = create(RemoteSchema, { id: "gopher-1", name: "Old gopher", backendType: "gopher" });
 
 function TransferHarness({
   initial,
@@ -52,8 +65,8 @@ function TransferHarness({
       value={s}
       onChange={setS}
       errors={errors}
-      remotes={extra ? [...remotes, ftp] : remotes}
-      backends={extra ? new Map([...backends, ["ftp", ftpBackend]]) : backends}
+      remotes={extra ? [...remotes, gopher] : remotes}
+      backends={extra ? new Map([...backends, ["gopher", gopherBackend]]) : backends}
     />
   );
 }
@@ -143,8 +156,73 @@ describe("checksums and remotes that keep none", () => {
   });
 
   it("keys on the capability, not on a type", () => {
-    renderWithProviders(<TransferHarness initial={transfer("ftp-1", fx.ids.minio)} extra />);
-    expect(screen.getByText(/This remote keeps no checksums \(Old FTP\)/)).toBeInTheDocument();
+    renderWithProviders(<TransferHarness initial={transfer("gopher-1", fx.ids.minio)} extra />);
+    expect(screen.getByText(/This remote keeps no checksums \(Old gopher\)/)).toBeInTheDocument();
+  });
+
+  it("follows union members", () => {
+    expect(noChecksumNames(lookup, [fx.ids.oldFtp, fx.ids.nasShare, "nas-pool"])).toEqual([
+      "Old FTP",
+      "NAS share",
+      "NAS pool",
+    ]);
+    expect(
+      noChecksumNames(lookup, [fx.ids.pooled, fx.ids.azureArchive, fx.ids.gcsBackups]),
+    ).toEqual([]);
+    // Only a type that combines others passes its members on.
+    const odd = create(RemoteSchema, {
+      id: "odd",
+      name: "Odd",
+      backendType: "b2",
+      members: [{ remoteId: fx.ids.nasShare }],
+    });
+    expect(noChecksumLookup([...remotes, odd], backends)("odd")).toBeUndefined();
+  });
+
+  it("hides checksum in a transfer with an FTP side", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<TransferHarness initial={transfer(fx.ids.oldFtp, fx.ids.b2)} />);
+    expect(
+      screen.getByText(
+        "This remote keeps no checksums (Old FTP), so checksum comparison is not offered.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Decide what changed by" }));
+    expect(screen.queryByRole("option", { name: /Checksum/ })).not.toBeInTheDocument();
+  });
+
+  it("hides checksum in a transfer into a union with an SMB member", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<TransferHarness initial={transfer(fx.ids.minio, "nas-pool")} />);
+    expect(
+      screen.getByText(
+        "This remote keeps no checksums (NAS pool), so checksum comparison is not offered.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Decide what changed by" }));
+    expect(screen.queryByRole("option", { name: /Checksum/ })).not.toBeInTheDocument();
+  });
+
+  it("offers checksum with a union whose members keep them", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<TransferHarness initial={transfer(fx.ids.pooled, fx.ids.gcsBackups)} />);
+    expect(screen.queryByText(/keeps no checksums/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Decide what changed by" }));
+    expect(screen.getByRole("option", { name: "Checksum (slower, exact)" })).toBeInTheDocument();
+  });
+
+  it("hides the checksum box of a two-way sync with a union with an SMB member", () => {
+    renderWithProviders(
+      <BisyncHarness
+        initial={{
+          ...emptyBisync(),
+          path1: { remoteId: "nas-pool", path: "" },
+          path2: { remoteId: "", path: "/srv/photos" },
+        }}
+      />,
+    );
+    expect(screen.queryByRole("checkbox", { name: "Checksum" })).not.toBeInTheDocument();
+    expect(screen.getByText(/This remote keeps no checksums \(NAS pool\)/)).toBeInTheDocument();
   });
 
   it("shows a stored checksum on such a side as an error until it is changed", async () => {

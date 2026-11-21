@@ -154,9 +154,13 @@ describe("RemoteForm for a wrapper type", () => {
     await user.click(within(store).getByRole("combobox", { name: "Remote" }));
     const offered = screen.getAllByRole("option").map((o) => o.textContent);
     expect(offered).toEqual([
+      expect.stringContaining("Azure archive"),
       expect.stringContaining("B2 offsite"),
+      expect.stringContaining("GCS backups"),
       expect.stringContaining("MinIO archive"),
+      expect.stringContaining("NAS share"),
       expect.stringContaining("Nextcloud"),
+      expect.stringContaining("Old FTP"),
       expect.stringContaining("Storage box"),
     ]);
     await user.click(screen.getByRole("option", { name: /B2 offsite/ }));
