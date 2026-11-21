@@ -5,6 +5,7 @@ import { FieldWarning } from "@/components/app/field-warning";
 import { Panel } from "@/components/app/panel";
 import { PathsEditor } from "@/components/app/paths-editor";
 import { Input } from "@/components/ui/input";
+import { HelpLink } from "@/features/docs/doc-link";
 import { WorkerStatus, type Worker } from "@/gen/syncr/v1/api_pb";
 import type { Backend, Remote } from "@/gen/syncr/v1/remotes_pb";
 import type { Repository } from "@/gen/syncr/v1/restic_pb";
@@ -91,7 +92,7 @@ export function BackupEditor({
   const repository = repositories.find((r) => r.id === s.repositoryId);
   return (
     <>
-      <Panel title="What to back up">
+      <Panel title="What to back up" actions={<HelpLink page="restic" anchor="jobs" />}>
         <div className="flex flex-col gap-6">
           <ChoiceCards
             labelId={`${idPrefix}-source`}
@@ -155,6 +156,7 @@ export function BackupEditor({
         <Panel
           title="How the worker reads it"
           description="Snapshots look the same either way: the folder's contents at their root."
+          actions={<HelpLink page="restic" anchor="back-up-a-folder-of-a-remote" />}
         >
           <RemoteMethodFields
             value={s.remote}

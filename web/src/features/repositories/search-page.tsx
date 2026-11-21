@@ -8,6 +8,7 @@ import { EntryIcon } from "@/components/app/entry-icon";
 import { ErrorState } from "@/components/app/error-state";
 import { WorkerChooser } from "@/components/app/file-browser/worker-chooser";
 import { PageHeader } from "@/components/app/page-header";
+import { HelpLink } from "@/features/docs/doc-link";
 import { Panel } from "@/components/app/panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -180,6 +181,7 @@ export function SearchPage({
           </Link>
         }
         description="Find files and folders by name in the repository's snapshots, then open or restore any version."
+        actions={<HelpLink page="restic" anchor="search-and-file-versions" />}
       />
       <div className="flex flex-col gap-6">
         <Panel>

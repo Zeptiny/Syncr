@@ -5,6 +5,7 @@ import {
   Archive,
   ArrowRightLeft,
   Bell,
+  BookOpen,
   CalendarClock,
   ChevronsUpDown,
   Cloud,
@@ -19,6 +20,7 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -45,8 +47,10 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarTrigger,
+  sidebarCookieOpen,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { WhatsNewNotice } from "@/features/docs/whats-new";
 import { AuthService } from "@/gen/syncr/v1/auth_pb";
 import { displayName, endSession, useSession } from "@/hooks/use-session";
 import { useTheme, type Theme } from "@/lib/theme";
@@ -61,6 +65,7 @@ interface NavItem {
     | "/repositories"
     | "/workers"
     | "/notifications"
+    | "/docs"
     | "/users";
   label: string;
   icon: LucideIcon;
@@ -75,6 +80,7 @@ const mainNav: NavItem[] = [
   { to: "/repositories", label: "Repositories", icon: Archive },
   { to: "/workers", label: "Workers", icon: Server },
   { to: "/notifications", label: "Notifications", icon: Bell },
+  { to: "/docs", label: "Docs", icon: BookOpen },
 ];
 
 const adminNav: NavItem[] = [{ to: "/users", label: "Users", icon: Users, adminOnly: true }];
@@ -94,6 +100,29 @@ export function Logo({ className }: { className?: string }) {
         className="text-primary-foreground"
       />
     </svg>
+  );
+}
+
+/**
+ * SkipLink is the first stop of the keyboard on every page: it moves the
+ * focus to the page content (the element with id main-content), past the
+ * navigation.
+ */
+export function SkipLink() {
+  return (
+    <a
+      href="#main-content"
+      onClick={(e) => {
+        const main = document.getElementById("main-content");
+        if (!main) return;
+        e.preventDefault();
+        main.focus({ preventScroll: true });
+        main.scrollIntoView({ block: "start" });
+      }}
+      className="sr-only rounded-md bg-background px-3 py-2 text-sm font-medium text-foreground shadow-md ring-2 ring-ring focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-100"
+    >
+      Skip to content
+    </a>
   );
 }
 
@@ -222,8 +251,12 @@ function UserMenu() {
  */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { isAdmin } = useSession();
+  // The app pages and the docs each mount a shell: both start the sidebar
+  // as the reader left it (also after a reload).
+  const [defaultOpen] = useState(() => sidebarCookieOpen());
   return (
-    <SidebarProvider>
+    <SidebarProvider defaultOpen={defaultOpen}>
+      <SkipLink />
       <Sidebar className="border-r border-sidebar-border">
         <SidebarHeader className="gap-4 px-4 pt-5 pb-2">
           <Link to="/" className="flex items-center gap-2.5" aria-label="Syncr home">
@@ -270,7 +303,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </SidebarFooter>
       </Sidebar>
-      <SidebarInset className="min-w-0 bg-background">
+      <SidebarInset id="main-content" tabIndex={-1} className="min-w-0 bg-background outline-none">
         <header className="sticky top-0 z-20 flex h-12 items-center gap-2 bg-sidebar px-3 text-sidebar-foreground md:hidden">
           <SidebarTrigger className="hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" />
           <Link to="/" className="flex items-center gap-2" aria-label="Syncr home">
@@ -278,7 +311,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="font-semibold text-sidebar-accent-foreground">Syncr</span>
           </Link>
         </header>
-        <div className="mx-auto w-full max-w-[1200px] px-4 py-6 sm:px-8 sm:py-8">{children}</div>
+        <div className="mx-auto w-full max-w-[1200px] px-4 py-6 sm:px-8 sm:py-8">
+          <WhatsNewNotice />
+          {children}
+        </div>
       </SidebarInset>
     </SidebarProvider>
   );

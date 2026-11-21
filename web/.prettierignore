@@ -2,5 +2,7 @@ dist
 node_modules
 src/gen
 src/routeTree.gen.ts
+src/features/docs/docs.gen.ts
+docs-plugin/testdata
 package-lock.json
 placeholder

@@ -4,6 +4,7 @@ import { TriangleAlert } from "lucide-react";
 import { CopyCommand } from "@/components/app/copy-command";
 import { Panel } from "@/components/app/panel";
 import { Skeleton } from "@/components/ui/skeleton";
+import { HelpLink } from "@/features/docs/doc-link";
 import { WorkerAdminService, type Worker } from "@/gen/syncr/v1/api_pb";
 import { errorMessage } from "@/lib/errors";
 
@@ -33,6 +34,7 @@ export function UpgradeWorkerCard({ worker }: { worker: Worker }) {
       title="Upgrade this worker"
       description={`Run one of these commands on ${worker.info?.hostname || worker.name}. The worker downloads the controller's release, checks it, swaps its program and restarts; if the new version does not stay up, the old one is put back.`}
       aria-label="Upgrade this worker"
+      actions={<HelpLink page="upgrade" anchor="2-each-worker-syncr-worker-upgrade" />}
     >
       <div className="flex flex-col gap-4">
         <div

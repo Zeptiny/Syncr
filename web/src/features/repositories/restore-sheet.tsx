@@ -23,6 +23,7 @@ import {
 import { JobService, type Worker } from "@/gen/syncr/v1/api_pb";
 import type { ResticRestoreOverwrite, ResticSnapshot } from "@/gen/syncr/v1/link_pb";
 import { ResticService, type Repository } from "@/gen/syncr/v1/restic_pb";
+import { HelpLink } from "@/features/docs/doc-link";
 import { errorMessage, fieldViolations } from "@/lib/errors";
 import { formatDateTime, tsDate } from "@/lib/format";
 import { invalidateService } from "@/lib/invalidate";
@@ -210,6 +211,7 @@ function Body({
           {snapshot.time ? `, taken ${formatDateTime(tsDate(snapshot.time))}` : ""}
           {snapshot.host ? ` on ${snapshot.host}` : ""}
         </SheetDescription>
+        <HelpLink page="restic" anchor="restore" className="-ml-2.5 self-start" />
       </SheetHeader>
 
       <div className="flex flex-1 flex-col gap-6 px-4 py-5">

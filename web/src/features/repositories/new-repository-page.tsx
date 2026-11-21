@@ -5,6 +5,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/app/page-header";
+import { HelpLink } from "@/features/docs/doc-link";
 import { Button } from "@/components/ui/button";
 import { WorkerAdminService } from "@/gen/syncr/v1/api_pb";
 import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
@@ -83,6 +84,7 @@ export function NewRepositoryPage({ remote, path }: { remote?: string; path?: st
         back={{ to: "/repositories", label: "Repositories" }}
         title="Add a repository"
         description="A restic repository keeps encrypted, deduplicated snapshots of your folders inside a remote."
+        actions={<HelpLink page="restic" anchor="repositories" />}
       />
       <form onSubmit={(e) => void submit(e)} noValidate className="flex max-w-5xl flex-col gap-6">
         <RepositoryForm

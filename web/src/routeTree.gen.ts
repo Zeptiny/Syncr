@@ -10,9 +10,12 @@
 
 import { Route as rootRouteImport } from "./routes/__root";
 import { Route as AppRouteImport } from "./routes/_app";
+import { Route as DocsRouteImport } from "./routes/docs";
 import { Route as LoginRouteImport } from "./routes/login";
 import { Route as SetupRouteImport } from "./routes/setup";
 import { Route as AppIndexRouteImport } from "./routes/_app/index";
+import { Route as DocsIndexRouteImport } from "./routes/docs/index";
+import { Route as DocsSplatRouteImport } from "./routes/docs/$";
 import { Route as AppJobsIndexRouteImport } from "./routes/_app/jobs/index";
 import { Route as AppJobsJobIdRouteImport } from "./routes/_app/jobs/$jobId";
 import { Route as AppJobsNewRouteImport } from "./routes/_app/jobs/new";
@@ -44,6 +47,11 @@ const AppRoute = AppRouteImport.update({
   id: "/_app",
   getParentRoute: () => rootRouteImport,
 } as any);
+const DocsRoute = DocsRouteImport.update({
+  id: "/docs",
+  path: "/docs",
+  getParentRoute: () => rootRouteImport,
+} as any);
 const LoginRoute = LoginRouteImport.update({
   id: "/login",
   path: "/login",
@@ -58,6 +66,16 @@ const AppIndexRoute = AppIndexRouteImport.update({
   id: "/",
   path: "/",
   getParentRoute: () => AppRoute,
+} as any);
+const DocsIndexRoute = DocsIndexRouteImport.update({
+  id: "/",
+  path: "/",
+  getParentRoute: () => DocsRoute,
+} as any);
+const DocsSplatRoute = DocsSplatRouteImport.update({
+  id: "/$",
+  path: "/$",
+  getParentRoute: () => DocsRoute,
 } as any);
 const AppJobsIndexRoute = AppJobsIndexRouteImport.update({
   id: "/jobs/",
@@ -198,8 +216,11 @@ const AppRepositoriesRepositoryIdSnapshotsSnapshotIdRoute =
 
 export interface FileRoutesByFullPath {
   "/": typeof AppIndexRoute;
+  "/docs": typeof DocsRouteWithChildren;
   "/login": typeof LoginRoute;
   "/setup": typeof SetupRoute;
+  "/docs/$": typeof DocsSplatRoute;
+  "/docs/": typeof DocsIndexRoute;
   "/jobs/$jobId": typeof AppJobsJobIdRoute;
   "/jobs/new": typeof AppJobsNewRoute;
   "/notifications/$contactId": typeof AppNotificationsContactIdRoute;
@@ -230,7 +251,9 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   "/login": typeof LoginRoute;
   "/setup": typeof SetupRoute;
+  "/docs/$": typeof DocsSplatRoute;
   "/": typeof AppIndexRoute;
+  "/docs": typeof DocsIndexRoute;
   "/jobs/$jobId": typeof AppJobsJobIdRoute;
   "/jobs/new": typeof AppJobsNewRoute;
   "/notifications/$contactId": typeof AppNotificationsContactIdRoute;
@@ -261,9 +284,12 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/_app": typeof AppRouteWithChildren;
+  "/docs": typeof DocsRouteWithChildren;
   "/login": typeof LoginRoute;
   "/setup": typeof SetupRoute;
+  "/docs/$": typeof DocsSplatRoute;
   "/_app/": typeof AppIndexRoute;
+  "/docs/": typeof DocsIndexRoute;
   "/_app/jobs/$jobId": typeof AppJobsJobIdRoute;
   "/_app/jobs/new": typeof AppJobsNewRoute;
   "/_app/notifications/$contactId": typeof AppNotificationsContactIdRoute;
@@ -295,8 +321,11 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
   fullPaths:
     | "/"
+    | "/docs"
     | "/login"
     | "/setup"
+    | "/docs/$"
+    | "/docs/"
     | "/jobs/$jobId"
     | "/jobs/new"
     | "/notifications/$contactId"
@@ -327,7 +356,9 @@ export interface FileRouteTypes {
   to:
     | "/login"
     | "/setup"
+    | "/docs/$"
     | "/"
+    | "/docs"
     | "/jobs/$jobId"
     | "/jobs/new"
     | "/notifications/$contactId"
@@ -357,9 +388,12 @@ export interface FileRouteTypes {
   id:
     | "__root__"
     | "/_app"
+    | "/docs"
     | "/login"
     | "/setup"
+    | "/docs/$"
     | "/_app/"
+    | "/docs/"
     | "/_app/jobs/$jobId"
     | "/_app/jobs/new"
     | "/_app/notifications/$contactId"
@@ -390,6 +424,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren;
+  DocsRoute: typeof DocsRouteWithChildren;
   LoginRoute: typeof LoginRoute;
   SetupRoute: typeof SetupRoute;
 }
@@ -401,6 +436,13 @@ declare module "@tanstack/react-router" {
       path: "";
       fullPath: "/";
       preLoaderRoute: typeof AppRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/docs": {
+      id: "/docs";
+      path: "/docs";
+      fullPath: "/docs";
+      preLoaderRoute: typeof DocsRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/login": {
@@ -423,6 +465,20 @@ declare module "@tanstack/react-router" {
       fullPath: "/";
       preLoaderRoute: typeof AppIndexRouteImport;
       parentRoute: typeof AppRoute;
+    };
+    "/docs/": {
+      id: "/docs/";
+      path: "/";
+      fullPath: "/docs/";
+      preLoaderRoute: typeof DocsIndexRouteImport;
+      parentRoute: typeof DocsRoute;
+    };
+    "/docs/$": {
+      id: "/docs/$";
+      path: "/$";
+      fullPath: "/docs/$";
+      preLoaderRoute: typeof DocsSplatRouteImport;
+      parentRoute: typeof DocsRoute;
     };
     "/_app/jobs/": {
       id: "/_app/jobs/";
@@ -674,8 +730,21 @@ const AppRouteChildren: AppRouteChildren = {
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren);
 
+interface DocsRouteChildren {
+  DocsSplatRoute: typeof DocsSplatRoute;
+  DocsIndexRoute: typeof DocsIndexRoute;
+}
+
+const DocsRouteChildren: DocsRouteChildren = {
+  DocsSplatRoute: DocsSplatRoute,
+  DocsIndexRoute: DocsIndexRoute,
+};
+
+const DocsRouteWithChildren = DocsRoute._addFileChildren(DocsRouteChildren);
+
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
+  DocsRoute: DocsRouteWithChildren,
   LoginRoute: LoginRoute,
   SetupRoute: SetupRoute,
 };

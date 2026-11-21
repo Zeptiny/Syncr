@@ -1,6 +1,6 @@
 # ADR 0022: Metrics and a fuller dashboard
 
-- Status: accepted (v2.4.0)
+- Status: accepted (v2.3.0)
 - Date: 2026-11-21
 
 ## Context

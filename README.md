@@ -149,7 +149,11 @@ back up the database and `SYNCR_SECRETS_KEY`: see
 
 ## Documentation
 
-- [Running the controller](docs/deployment.md): HTTPS, backups, upgrades, images
+The same guides are built into the controller under **Docs** (`/docs`),
+for the version it runs; [docs/README.md](docs/README.md) is the full
+index.
+
+- [Running the controller](docs/deployment.md): the first start, HTTPS, backups, upgrades, images
 - [Configuration](docs/configuration.md): every controller setting
 - Workers: [Linux](docs/setup-linux.md), [Windows](docs/setup-windows.md),
   [configuration](docs/worker-config.md), [upgrading](docs/upgrade.md)

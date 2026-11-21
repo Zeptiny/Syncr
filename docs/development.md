@@ -9,7 +9,7 @@ do this).
 
 ```sh
 make help              # list targets
-make generate          # npm ci in web/, buf generate (Go and TypeScript), sqlc
+make generate          # npm ci in web/, buf generate (Go and TypeScript), sqlc, the docs types
 make lint              # buf lint + golangci-lint (with layering rules)
 make test              # unit tests
 make test-race         # unit tests with the race detector (needs cgo)
@@ -116,6 +116,50 @@ SYNCR_TEST_RESTIC=.cache/tools/restic/<version>/<os>-<arch>/restic \
   `integration-windows` (local-only).
 
 
+## Documentation in the UI
+
+The controller's web UI ships the user docs under **Docs** (`/docs`). A Vite
+plugin (`web/docs-plugin/`) renders them from `docs/` when the UI is built:
+one lazy module per page, a search index, and the images through Vite. There
+is no markdown parser in the browser. Why it works this way:
+[ADR 0023](adr/0023-docs-in-the-ui.md).
+
+- **The index.** `docs/README.md` is the table of contents and the reading
+  order. Its H1 is the title and the text before the first `##` is the
+  intro. Each `##` section holds exactly one bullet list. Each item starts with
+  a link (the link text is the navigation label) and may go on with
+  `: description` and one nested list (as the release notes are).
+- **What ships.** Every `.md` file the index links to, plus the index itself.
+  `githubOnly` in `web/vite.config.ts` (`development.md` and `adr/**`) stays
+  on GitHub: index items and links to it open GitHub at the running version.
+  **Every other `.md` file under `docs/` must be in the index**, so a new
+  guide or release notes file needs its entry there, or the build fails.
+- **URLs mirror the files:** `restic.md` is `/docs/restic`,
+  `releases/v2.3.0.md` is `/docs/releases/v2.3.0`, a folder's `README.md` is
+  the folder, and the index is `/docs`. Heading IDs are GitHub's, so the same
+  `#anchors` work in both places.
+- **Checks.** The build fails, listing every problem as
+  `docs/<file>:<line>: <message>`, on: a link to a missing file, page or
+  heading (inside and outside `docs/`); a link that leaves the repository or
+  uses another scheme than `https`, `http` or `mailto`; raw HTML (put
+  placeholders such as `<path>` in backticks, or escape them as `\<path\>`); an
+  image that is not a `.png`, `.webp` or `.svg` file inside `docs/`, or that
+  has no alt text; a page that does not start with exactly one `# Title`; a
+  heading whose ID the app uses (`root`, `main-content`, `doc-content`); a
+  GitHub alert (`> [!NOTE]`); a broken index; and a file missing from the
+  index.
+- **Generated types.** `npm run generate:docs` (in `web/`; `make generate`
+  runs it too) checks the docs and writes `web/src/features/docs/docs.gen.ts`:
+  every page and its heading IDs as types, so a help link in the UI to a page
+  or heading that does not exist fails the typecheck. The file is committed;
+  `npm run build` and CI fail when it is out of date. `npm run dev` watches
+  `docs/`, rewrites the file and reloads the page; a problem shows in Vite's
+  error overlay.
+- **`SYNCR_DOCS_REPO_LINKS=skip`** stops checking that links to files outside
+  `docs/` exist (they are still rewritten). The controller's Docker image
+  builds the UI with it, because only `web/` and `docs/` are in that stage;
+  CI's `web` and release jobs check them with the whole repository.
+
 ## Architecture
 
 ```
@@ -165,7 +209,11 @@ Design records: [architecture](adr/0001-architecture.md),
 [releases and versioning](adr/0016-releases-versioning.md),
 [job hooks](adr/0017-job-hooks.md),
 [two-way sync](adr/0018-two-way-sync.md),
-[browser operations](adr/0019-browser-operations.md).
+[browser operations](adr/0019-browser-operations.md),
+[backing up a remote](adr/0020-backing-up-a-remote.md),
+[wrapper remotes](adr/0021-wrapper-remotes.md),
+[metrics and the dashboard](adr/0022-metrics.md),
+[docs in the web UI](adr/0023-docs-in-the-ui.md).
 
 ## Repository layout
 

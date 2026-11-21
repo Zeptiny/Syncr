@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/sheet";
 import { JobService, WorkerAdminService } from "@/gen/syncr/v1/api_pb";
 import { RemoteService } from "@/gen/syncr/v1/remotes_pb";
+import { HelpLink } from "@/features/docs/doc-link";
 import { useBackendMap } from "@/hooks/use-backends";
 import { errorMessage, fieldViolations } from "@/lib/errors";
 import { invalidateService } from "@/lib/invalidate";
@@ -199,6 +200,7 @@ function Body({
           {op === "move" ? "Move" : "Copy"} {itemsText(n)}
         </SheetTitle>
         <SheetDescription>From {fromText}</SheetDescription>
+        <HelpLink page="browsing" anchor="copy-and-move" className="-ml-2.5 self-start" />
       </SheetHeader>
 
       <div className="flex flex-1 flex-col gap-6 px-4 py-5">

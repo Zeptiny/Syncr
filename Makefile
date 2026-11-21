@@ -51,11 +51,12 @@ help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: generate
-generate: ## Regenerate protobuf/Connect (Go and TypeScript) and sqlc code (committed under gen/, web/src/gen/ and internal/adapters/postgres/db/)
+generate: ## Regenerate protobuf/Connect (Go and TypeScript), sqlc code and the docs types (committed under gen/, web/src/gen/, internal/adapters/postgres/db/ and web/src/features/docs/)
 	cd web && $(NPM_CI)
 	$(BUF) generate
 	$(SQLC) generate
 	$(GO) generate ./...
+	npm --prefix web run generate:docs
 
 .PHONY: lint
 lint: ## Run buf lint and golangci-lint (includes depguard layering)
