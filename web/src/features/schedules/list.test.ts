@@ -236,6 +236,12 @@ describe("sections", () => {
     expect(shape(sections(list, "none", ctx))).toEqual([["", list.map((s) => s.name)]]);
   });
 
+  it("is no section at all for an empty list", () => {
+    expect(sections([], "none", ctx)).toEqual([]);
+    expect(sections([], "group", { ...ctx, groups: [] })).toEqual([]);
+    expect(sections([], "target", ctx)).toEqual([]);
+  });
+
   it("groups by worker (workers first), kind and status", () => {
     expect(shape(sections(list, "target", ctx))).toEqual([
       ["nas-01", ["Gone", "Nightly"]],

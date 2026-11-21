@@ -191,7 +191,14 @@ const COLLAPSED_KEY = "syncr-schedule-sections";
 function loadCollapsed(): Record<string, string[]> {
   try {
     const v: unknown = JSON.parse(window.localStorage.getItem(COLLAPSED_KEY) ?? "{}");
-    return v && typeof v === "object" ? (v as Record<string, string[]>) : {};
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    // Only lists of section keys are kept: anything else stored there is dropped.
+    const out: Record<string, string[]> = {};
+    for (const [by, keys] of Object.entries(v as Record<string, unknown>)) {
+      if (Array.isArray(keys))
+        out[by] = keys.filter((k: unknown): k is string => typeof k === "string");
+    }
+    return out;
   } catch {
     return {};
   }
@@ -271,7 +278,8 @@ function sharedGroup(list: Schedule[]): string | undefined {
 
 /** TableCtx is what the table's cells share with the page; the columns themselves never change, so cells stay mounted. */
 interface TableCtx {
-  visible: Schedule[];
+  /** shown is what the list shows: the schedules that pass the filters, in open sections. */
+  shown: Schedule[];
   selectedIds: Set<string>;
   select: (list: Schedule[], on: boolean) => void;
   sort: ScheduleSort | undefined;
@@ -293,11 +301,12 @@ function useTable(): TableCtx {
 }
 
 function SelectAll() {
-  const { visible, selectedIds, select } = useTable();
+  const { shown, selectedIds, select } = useTable();
   return (
     <Checkbox
-      checked={selectionState(visible, selectedIds)}
-      onCheckedChange={(v) => select(visible, v === true)}
+      checked={selectionState(shown, selectedIds)}
+      disabled={!shown.length}
+      onCheckedChange={(v) => select(shown, v === true)}
       aria-label="Select every schedule listed"
     />
   );
@@ -479,30 +488,46 @@ export function SchedulesPage({ search }: { search: SchedulesSearch }) {
   const ctx = useMemo(() => ({ workers: workerMap, groups }), [workerMap, groups]);
   const all = q.data?.schedules;
   const by = search.by ?? "group";
+  // A group filter on a group that is gone (deleted here or elsewhere) is dropped.
+  const staleGroup =
+    !!search.group &&
+    search.group !== "none" &&
+    !!groupsQ.data &&
+    !groups.some((g) => g.id === search.group);
+  const view = useMemo(
+    () => (staleGroup ? { ...search, group: undefined } : search),
+    [search, staleGroup],
+  );
   const visible = useMemo(
     () =>
       all
         ? sortSchedules(
-            all.filter((s) => matches(s, search, ctx)),
-            search.sort,
+            all.filter((s) => matches(s, view, ctx)),
+            view.sort,
           )
         : undefined,
-    [all, search, ctx],
+    [all, view, ctx],
   );
-  const isFiltered = filtered(search);
+  const isFiltered = filtered(view);
   const secs = useMemo(
     () => (visible ? sections(visible, by, ctx, !isFiltered) : []),
     [visible, by, ctx, isFiltered],
   );
   const total = useMemo(() => counts(all ?? []), [all]);
   const [collapsed, setCollapsed] = useCollapsed(by);
-
-  // The selection: only schedules on the list (after the filters) count.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
-  const selected = useMemo(
-    () => (visible ?? []).filter((s) => selectedIds.has(s.id)),
-    [visible, selectedIds],
+  const isFolded = useCallback(
+    (sec: Section) => !!sec.title && collapsed.has(sec.key),
+    [collapsed],
   );
+  const shown = useMemo(
+    () => secs.flatMap((sec) => (isFolded(sec) ? [] : sec.schedules)),
+    [secs, isFolded],
+  );
+
+  // The selection: only schedules the list shows count. One hidden by a
+  // filter or in a folded section is left out (and counts again when shown).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const selected = useMemo(() => shown.filter((s) => selectedIds.has(s.id)), [shown, selectedIds]);
   const select = useCallback((list: Schedule[], on: boolean) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -527,7 +552,7 @@ export function SchedulesPage({ search }: { search: SchedulesSearch }) {
   );
   const tableCtx = useMemo<TableCtx>(
     () => ({
-      visible: visible ?? [],
+      shown,
       selectedIds,
       select,
       sort: search.sort,
@@ -540,7 +565,7 @@ export function SchedulesPage({ search }: { search: SchedulesSearch }) {
       newGroupFor: setNewGroupFor,
     }),
     [
-      visible,
+      shown,
       selectedIds,
       select,
       search.sort,
@@ -555,16 +580,20 @@ export function SchedulesPage({ search }: { search: SchedulesSearch }) {
 
   const sectionHeader = (sec: Section): React.ReactNode => {
     if (!sec.title) return undefined;
-    const open = !collapsed.has(sec.key);
+    const open = !isFolded(sec);
     const anyOn = sec.schedules.some((s) => s.enabled);
     const anyOff = sec.schedules.some((s) => !s.enabled);
     return (
       <div className="flex items-center gap-2">
         <span className="flex w-8 justify-center">
+          {/* A folded section's schedules are not selected; ticking it opens it. */}
           <Checkbox
-            checked={selectionState(sec.schedules, selectedIds)}
+            checked={open ? selectionState(sec.schedules, selectedIds) : false}
             disabled={!sec.schedules.length}
-            onCheckedChange={(v) => select(sec.schedules, v === true)}
+            onCheckedChange={(v) => {
+              if (!open && v === true) setCollapsed(sec.key, false);
+              select(sec.schedules, v === true);
+            }}
             aria-label={`Select every schedule in ${sec.title}`}
           />
         </span>
@@ -657,7 +686,7 @@ export function SchedulesPage({ search }: { search: SchedulesSearch }) {
           key: sec.key || "none",
           header: sectionHeader(sec),
           rows: sec.schedules,
-          collapsed: !!sec.title && collapsed.has(sec.key),
+          collapsed: isFolded(sec),
           empty: sec.group ? (
             <p className="px-4 py-3 text-[13px] text-muted-foreground">
               No schedules in this group yet. Use <strong>Move to group</strong> on schedules, or
@@ -787,7 +816,7 @@ export function SchedulesPage({ search }: { search: SchedulesSearch }) {
             </Select>
             {groups.length > 0 && (
               <Select
-                value={search.group ?? ANY}
+                value={view.group ?? ANY}
                 onValueChange={(v) => setSearch({ group: v === ANY ? undefined : v })}
               >
                 <SelectTrigger className="w-[calc(50%-0.25rem)] bg-card sm:w-40" aria-label="Group">
@@ -967,7 +996,11 @@ export function SchedulesPage({ search }: { search: SchedulesSearch }) {
           (all ?? []).filter((s) => s.groupId === deletingGroup?.id).length,
         )}
         confirmLabel="Delete group"
-        onConfirm={() => (deletingGroup ? deleteGroup(deletingGroup) : undefined)}
+        onConfirm={async () => {
+          if (!deletingGroup) return;
+          await deleteGroup(deletingGroup);
+          if (search.group === deletingGroup.id) setSearch({ group: undefined });
+        }}
       />
       <ConfirmDialog
         open={!!deleting}

@@ -194,7 +194,8 @@ export interface Section {
  * order: groups by name, then "No group"; workers by name, then labels;
  * kinds as the forms list them; statuses as statusTitles does. "none"
  * gives one section without a title, and so does "group" while the user
- * has no groups. showEmpty also lists groups without schedules (when no
+ * has no groups (none at all for an empty list, so the table shows its
+ * empty state). showEmpty also lists groups without schedules (when no
  * filter is set, so they can be renamed or deleted).
  */
 export function sections(
@@ -204,7 +205,7 @@ export function sections(
   showEmpty = false,
 ): Section[] {
   if (by === "none" || (by === "group" && ctx.groups.length === 0)) {
-    return [{ key: "all", title: "", schedules: list }];
+    return list.length ? [{ key: "all", title: "", schedules: list }] : [];
   }
   const buckets = new Map<string, Schedule[]>();
   const keyOf = (s: Schedule): string => {

@@ -211,3 +211,8 @@ curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/j
 
 An empty `groupId` moves the schedules out of their group.
 `DeleteScheduleGroup` keeps the group's schedules, in no group.
+
+`UpdateSchedule` replaces the whole `ScheduleInput`, `groupId` included,
+so a script written before groups existed, which sends no `groupId`,
+takes the schedule out of its group. Send back the `groupId` that
+`GetSchedule` returns, with the schedule's other settings.

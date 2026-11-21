@@ -17,10 +17,10 @@ import { mockTransport, renderApp } from "@/test/render";
 
 const now = Date.now();
 
-function api() {
+function api({ noGroups = false } = {}) {
   const hist = fx.history(now);
   let schedules = hist.schedules;
-  const groups: ScheduleGroup[] = [...hist.groups];
+  const groups: ScheduleGroup[] = noGroups ? [] : [...hist.groups];
   const calls = {
     enabled: [] as [string, boolean][],
     moves: [] as MoveSchedulesRequest[],
@@ -198,5 +198,83 @@ describe("schedules page", { timeout: 30_000 }, () => {
     await waitFor(() => expect(calls.deletedGroups).toEqual([fx.ids.groupOffsite]));
     await waitFor(() => expect(sectionNames(table)).toEqual(["Photos", "No group"]));
     expect(rowNames(table)).toContain("Offsite mirror");
+  });
+
+  it("says when nothing matches, also without groups", async () => {
+    const user = userEvent.setup();
+    const { transport } = api({ noGroups: true });
+    renderApp("/schedules", transport);
+    const table = await screen.findByRole("table", { name: "Schedules" });
+    await waitFor(() => expect(rowNames(table)).toHaveLength(5));
+    expect(sectionNames(table)).toEqual([]);
+
+    await user.type(screen.getByRole("searchbox", { name: /Search/ }), "nothing is called this");
+    await screen.findByText("No schedules match these filters.");
+    expect(within(table).queryAllByRole("checkbox", { name: /^Select (?!every)/ })).toEqual([]);
+    await user.click(within(table).getByRole("button", { name: "Clear filters" }));
+    await waitFor(() => expect(rowNames(table)).toHaveLength(5));
+  });
+
+  it("acts only on the schedules in open sections", async () => {
+    const user = userEvent.setup();
+    const { transport, calls, hist } = api();
+    renderApp("/schedules", transport);
+    const table = await screen.findByRole("table", { name: "Schedules" });
+    await waitFor(() => expect(rowNames(table)).toHaveLength(5));
+
+    await user.click(within(table).getByRole("checkbox", { name: "Select every schedule listed" }));
+    const bar = screen.getByRole("region", { name: "Selected schedules" });
+    expect(bar).toHaveTextContent("5 selected");
+
+    // Folding Offsite leaves its two schedules out.
+    await user.click(within(table).getByRole("button", { name: /^Offsite/ }));
+    expect(bar).toHaveTextContent("3 selected");
+    const offsite = within(table).getByRole("checkbox", {
+      name: "Select every schedule in Offsite",
+    });
+    expect(offsite).not.toBeChecked();
+
+    // Ticking a folded section opens it.
+    await user.click(offsite);
+    expect(rowNames(table)).toContain("Offsite mirror");
+    expect(bar).toHaveTextContent("5 selected");
+
+    await user.click(within(table).getByRole("button", { name: /^Offsite/ }));
+    expect(bar).toHaveTextContent("3 selected");
+    await user.click(within(bar).getByRole("button", { name: "Pause" }));
+    await waitFor(() => expect(calls.enabled.length).toBeGreaterThan(0));
+    const groupOf = (id: string) => hist.schedules.find((s) => s.id === id)?.groupId;
+    expect(calls.enabled.map(([id]) => groupOf(id))).not.toContain(fx.ids.groupOffsite);
+  });
+
+  it("ignores a damaged folding state", async () => {
+    window.localStorage.setItem(
+      "syncr-schedule-sections",
+      JSON.stringify({ group: 5, target: ["x", 3] }),
+    );
+    const { transport } = api();
+    renderApp("/schedules", transport);
+    const table = await screen.findByRole("table", { name: "Schedules" });
+    await waitFor(() => expect(sectionNames(table)).toEqual(["Offsite", "Photos", "No group"]));
+    expect(rowNames(table)).toHaveLength(5);
+  });
+
+  it("drops a filter on a group that is gone", async () => {
+    const user = userEvent.setup();
+    const { transport } = api();
+    const { router } = renderApp("/schedules?group=gone", transport);
+    const table = await screen.findByRole("table", { name: "Schedules" });
+    await waitFor(() => expect(rowNames(table)).toHaveLength(5));
+    expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
+
+    // Deleting the group the list is filtered on clears the filter.
+    await router.navigate({ to: "/schedules", search: { group: fx.ids.groupOffsite } });
+    await waitFor(() => expect(sectionNames(table)).toEqual(["Offsite"]));
+    await user.click(within(table).getByRole("button", { name: "Actions for Offsite" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete group…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Delete group" }));
+    await waitFor(() => expect(router.state.location.search).not.toHaveProperty("group"));
+    await waitFor(() => expect(rowNames(table)).toHaveLength(5));
   });
 });
