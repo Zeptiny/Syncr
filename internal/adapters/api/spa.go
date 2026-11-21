@@ -105,8 +105,9 @@ type spaHandler struct {
 // does not claim: existing files directly (/assets/* as immutable), unknown
 // GET paths as index.html (client-side routes), with the security headers
 // of the UI (Content-Security-Policy, X-Content-Type-Options,
-// Referrer-Policy). Paths under /syncr.v1. and /healthz are never answered
-// with the UI, so an unmounted service still looks absent (404) to clients.
+// Referrer-Policy). Paths under /syncr.v1., /healthz and /metrics are never
+// answered with the UI, so an unmounted service still looks absent (404) to
+// clients.
 //
 // It reads every file once, here: each gets a strong ETag, and each
 // compressible one (see compressible) a gzipped copy, served with
@@ -358,8 +359,9 @@ func (h *spaHandler) isFile(name string) bool {
 }
 
 // isAPIPath reports whether a path belongs to the API, which the UI must
-// never shadow: Connect procedures (/syncr.v1.<Service>/<Method>) and the
-// health endpoint.
+// never shadow: Connect procedures (/syncr.v1.<Service>/<Method>), the
+// health endpoint and the metrics.
 func isAPIPath(p string) bool {
-	return strings.HasPrefix(p, "/syncr.v1.") || p == "/healthz" || strings.HasPrefix(p, "/healthz/")
+	return strings.HasPrefix(p, "/syncr.v1.") || p == "/healthz" || strings.HasPrefix(p, "/healthz/") ||
+		p == MetricsPath || strings.HasPrefix(p, MetricsPath+"/")
 }

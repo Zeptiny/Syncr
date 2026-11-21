@@ -1,5 +1,5 @@
 import type { ActivityBucket } from "@/gen/syncr/v1/dashboard_pb";
-import { toNumber, tsDate } from "@/lib/format";
+import { durationSeconds, toNumber, tsDate } from "@/lib/format";
 import { browserTimeZone } from "@/lib/timezones";
 import { floorDay, floorHour, nextDay, sameWallClock } from "@/lib/zone";
 
@@ -13,6 +13,12 @@ export interface ActivityPoint {
   cancelled: number;
   bytes: number;
   files: number;
+  /** started counts the jobs that ran and runTime sums their run times, in seconds. */
+  started: number;
+  runTime: number;
+  /** dispatched counts the jobs a worker accepted and queueWait sums their waits, in seconds. */
+  dispatched: number;
+  queueWait: number;
 }
 
 /** BucketUnit is the size of an activity bucket. */
@@ -71,9 +77,39 @@ export function shapeActivity(
       cancelled: toNumber(b?.cancelled),
       bytes: toNumber(b?.bytes),
       files: toNumber(b?.files),
+      started: toNumber(b?.started),
+      runTime: durationSeconds(b?.runTime),
+      dispatched: toNumber(b?.dispatched),
+      queueWait: durationSeconds(b?.queueWait),
     });
   }
   return out;
+}
+
+/** DurationMetric is a duration the activity sums per bucket. */
+export type DurationMetric = "runTime" | "queueWait";
+
+/** durationCount names the count each DurationMetric is summed over. */
+export const durationCount: Record<DurationMetric, "started" | "dispatched"> = {
+  runTime: "started",
+  queueWait: "dispatched",
+};
+
+/** averages returns the per-bucket average of metric, null where no job counts. */
+export function averages(points: ActivityPoint[], metric: DurationMetric): (number | null)[] {
+  const count = durationCount[metric];
+  return points.map((p) => (p[count] > 0 ? p[metric] / p[count] : null));
+}
+
+/** overall returns the period's average of metric and how many jobs it covers. */
+export function overall(
+  points: ActivityPoint[],
+  metric: DurationMetric,
+): { avg: number; n: number } {
+  const count = durationCount[metric];
+  const n = points.reduce((a, p) => a + p[count], 0);
+  const sum = points.reduce((a, p) => a + p[metric], 0);
+  return { avg: n ? sum / n : 0, n };
 }
 
 /** The stacked series of the activity chart, bottom first. */

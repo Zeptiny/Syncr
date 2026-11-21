@@ -571,6 +571,30 @@ func (s *Store) LatestRuns(_ context.Context, ids []domain.ScheduleID) (map[doma
 	return out, nil
 }
 
+// LastSucceeded implements schedules.Repository.
+func (s *Store) LastSucceeded(_ context.Context, ids []domain.ScheduleID) (map[domain.ScheduleID]time.Time, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	type found struct {
+		id         domain.JobID
+		finishedAt time.Time
+	}
+	newest := map[domain.ScheduleID]found{}
+	for _, j := range s.jobs {
+		if j.Status != domain.JobSucceeded || j.ScheduleID.IsZero() || !slices.Contains(ids, j.ScheduleID) {
+			continue
+		}
+		if cur, ok := newest[j.ScheduleID]; !ok || compareIDs(j.ID, cur.id) > 0 {
+			newest[j.ScheduleID] = found{j.ID, j.FinishedAt}
+		}
+	}
+	out := make(map[domain.ScheduleID]time.Time, len(newest))
+	for id, f := range newest {
+		out[id] = f.finishedAt
+	}
+	return out, nil
+}
+
 // HasActiveRun implements schedules.Repository.
 func (s *Store) HasActiveRun(_ context.Context, id domain.ScheduleID) (bool, error) {
 	s.mu.RLock()

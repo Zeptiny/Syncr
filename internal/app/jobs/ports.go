@@ -129,24 +129,100 @@ type PurgeCursor struct {
 	ID         domain.JobID
 }
 
-// ActivityRepository aggregates finished jobs for the dashboard. Same rules
-// as Repository.
+// ActivityRepository aggregates finished jobs for the dashboard and the
+// metrics. Same rules as Repository.
+//
+// Run time and queue wait are measured like the UI's job pages: a job's
+// run time is FinishedAt - StartedAt (worker clock) when it started and
+// FinishedAt is not before StartedAt; its queue wait is DispatchedAt -
+// CreatedAt (controller clock) when a worker accepted it and DispatchedAt
+// is not before CreatedAt. Both are whole microseconds (the stores'
+// precision); jobs without one are left out of its count and sum.
 type ActivityRepository interface {
 	// JobActivity counts the jobs whose FinishedAt is in [q.From, q.Until)
 	// (of q.OwnerID; zero means every owner) by bucket and status, with the
-	// sums of their Stats.Bytes and Stats.Files, ordered by bucket, then
-	// status. Bucket is the start of the job's hour or local day in
-	// q.Location, exactly as Postgres computes date_trunc(q.Unit,
-	// finished_at, q.Location.String()): an ambiguous local time (DST
-	// fall-back) resolves to the later instant, a non-existent one (spring
-	// forward) with the offset before the transition. Buckets without jobs
-	// are omitted.
+	// sums of their Stats.Bytes and Stats.Files, run times and queue waits,
+	// ordered by bucket, then status. Bucket is the start of the job's hour
+	// or local day in q.Location, exactly as Postgres computes
+	// date_trunc(q.Unit, finished_at, q.Location.String()): an ambiguous
+	// local time (DST fall-back) resolves to the later instant, a
+	// non-existent one (spring forward) with the offset before the
+	// transition. Buckets without jobs are omitted.
 	JobActivity(ctx context.Context, q ActivityQuery) ([]ActivityRow, error)
 
-	// CountUnfinished returns the number of the owner's (zero: every
-	// owner's) queued, dispatched and running jobs, by status; statuses
+	// JobTotals counts the finished jobs of q (of q.OwnerID, zero meaning
+	// every owner, and with FinishedAt in [q.From, q.Until), a zero bound
+	// being open) by kind, worker, status, error code and run-time bucket,
+	// with the same sums as JobActivity, in no particular order. Groups
 	// without jobs are omitted.
-	CountUnfinished(ctx context.Context, owner domain.UserID) (map[domain.JobStatus]int64, error)
+	JobTotals(ctx context.Context, q TotalsQuery) ([]TotalsRow, error)
+
+	// UnfinishedJobs counts the owner's (zero: every owner's) queued,
+	// dispatched and running jobs by status, kind and worker, with the
+	// earliest QueuedAt of each group, in no particular order.
+	UnfinishedJobs(ctx context.Context, owner domain.UserID) ([]UnfinishedRow, error)
+}
+
+// TotalsQuery selects the jobs of ActivityRepository.JobTotals.
+type TotalsQuery struct {
+	// From and Until bound FinishedAt: [From, Until). A zero bound is open.
+	From, Until time.Time
+	// OwnerID keeps only this user's jobs; zero means every owner.
+	OwnerID domain.UserID
+	// RunTimeBounds are the upper bounds of the run-time buckets
+	// (TotalsRow.RunTimeBucket), ascending; empty puts every job that
+	// started in bucket 0.
+	RunTimeBounds []time.Duration
+}
+
+// TotalsRow is one group of JobTotals: the finished jobs of one kind on
+// one worker with one terminal status, error code and run-time bucket.
+type TotalsRow struct {
+	Kind     string
+	WorkerID domain.WorkerID
+	Status   domain.JobStatus
+	// ErrorCode is the jobs' JobError.Code ("" for jobs without an error).
+	ErrorCode string
+	// RunTimeBucket is -1 for jobs without a run time, otherwise the number
+	// of TotalsQuery.RunTimeBounds below the run time: bucket i holds the
+	// run times in (bounds[i-1], bounds[i]], bucket len(bounds) those above
+	// every bound (Prometheus's "le" buckets).
+	RunTimeBucket int
+	Sums
+}
+
+// UnfinishedRow is one group of UnfinishedJobs.
+type UnfinishedRow struct {
+	Status   domain.JobStatus
+	Kind     string
+	WorkerID domain.WorkerID
+	Jobs     int64
+	// OldestQueuedAt is the earliest QueuedAt of the group's jobs.
+	OldestQueuedAt time.Time
+}
+
+// Sums add up a group of finished jobs.
+type Sums struct {
+	// Jobs counts the group's jobs; Bytes and Files sum their stats.
+	Jobs, Bytes, Files int64
+	// Started counts the jobs with a run time and RunTime sums them;
+	// Dispatched counts the jobs with a queue wait and QueueWait sums them
+	// (see ActivityRepository).
+	Started    int64
+	RunTime    time.Duration
+	Dispatched int64
+	QueueWait  time.Duration
+}
+
+// Add adds o to s.
+func (s *Sums) Add(o Sums) {
+	s.Jobs += o.Jobs
+	s.Bytes += o.Bytes
+	s.Files += o.Files
+	s.Started += o.Started
+	s.RunTime += o.RunTime
+	s.Dispatched += o.Dispatched
+	s.QueueWait += o.QueueWait
 }
 
 // ActivityQuery selects the jobs of ActivityRepository.JobActivity.
@@ -164,8 +240,7 @@ type ActivityRow struct {
 	// Bucket is the first instant of the bucket.
 	Bucket time.Time
 	Status domain.JobStatus
-	// Jobs counts the group's jobs; Bytes and Files sum their stats.
-	Jobs, Bytes, Files int64
+	Sums
 }
 
 // TimeLimits computes the effective time limit of a job, the one its

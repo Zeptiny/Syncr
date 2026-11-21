@@ -37,6 +37,9 @@ type ScheduleService interface {
 	Upcoming(ctx context.Context, actor domain.Actor, limit int) ([]schedules.Upcoming, error)
 	RecentProblems(ctx context.Context, actor domain.Actor, limit int) ([]schedules.Run, error)
 	CountMissed(ctx context.Context, actor domain.Actor, from, until time.Time) (int64, error)
+	// Health returns every schedule of the actor with its newest run and
+	// last success (the dashboard's schedule health and the metrics).
+	Health(ctx context.Context, actor domain.Actor) ([]schedules.Health, error)
 }
 
 var _ ScheduleService = (*schedules.Service)(nil)

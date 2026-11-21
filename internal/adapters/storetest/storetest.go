@@ -123,6 +123,7 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 		{"ScheduleOnePendingRun", testScheduleOnePendingRun},
 		{"ScheduleFireSupersedes", testScheduleFireSupersedes},
 		{"ScheduleCancelLaunching", testScheduleCancelLaunching},
+		{"ScheduleLastSucceeded", testScheduleLastSucceeded},
 		{"ScheduleRunCAS", testScheduleRunCAS},
 		{"ScheduleHasActiveRun", testScheduleHasActiveRun},
 		{"ScheduleLists", testScheduleLists},
@@ -142,7 +143,8 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 		{"DeliveryRetryListPurge", testDeliveryRetryListPurge},
 
 		{"ActivityBuckets", testActivityBuckets},
-		{"ActivityCountUnfinished", testActivityCountUnfinished},
+		{"ActivityUnfinished", testActivityUnfinished},
+		{"ActivityTotals", testActivityTotals},
 
 		// Milestone 5: concurrency keys.
 		{"JobConcurrencyKeys", testJobConcurrencyKeys},

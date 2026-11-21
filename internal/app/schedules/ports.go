@@ -146,6 +146,11 @@ type Repository interface {
 	// has one.
 	LatestRuns(ctx context.Context, ids []domain.ScheduleID) (map[domain.ScheduleID]Run, error)
 
+	// LastSucceeded returns, for each of ids with one, the FinishedAt of
+	// the newest (greatest ID) succeeded job the schedule launched
+	// (jobs.Job.ScheduleID).
+	LastSucceeded(ctx context.Context, ids []domain.ScheduleID) (map[domain.ScheduleID]time.Time, error)
+
 	// HasActiveRun reports whether the schedule has a launching run, or a
 	// job (jobs.Job.ScheduleID) that is queued, dispatched or running
 	// (index jobs_schedule_active_idx).

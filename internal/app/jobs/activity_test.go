@@ -18,12 +18,14 @@ import (
 // fakeActivity is a jobs.ActivityRepository returning canned rows and
 // remembering the queries.
 type fakeActivity struct {
-	mu        sync.Mutex
-	rows      []jobs.ActivityRow
-	counts    map[domain.JobStatus]int64
-	err       error
-	queries   []jobs.ActivityQuery
-	countArgs []domain.UserID
+	mu           sync.Mutex
+	rows         []jobs.ActivityRow
+	totals       []jobs.TotalsRow
+	unfinished   []jobs.UnfinishedRow
+	err          error
+	queries      []jobs.ActivityQuery
+	totalQueries []jobs.TotalsQuery
+	countArgs    []domain.UserID
 }
 
 func (f *fakeActivity) JobActivity(_ context.Context, q jobs.ActivityQuery) ([]jobs.ActivityRow, error) {
@@ -33,11 +35,18 @@ func (f *fakeActivity) JobActivity(_ context.Context, q jobs.ActivityQuery) ([]j
 	return f.rows, f.err
 }
 
-func (f *fakeActivity) CountUnfinished(_ context.Context, owner domain.UserID) (map[domain.JobStatus]int64, error) {
+func (f *fakeActivity) JobTotals(_ context.Context, q jobs.TotalsQuery) ([]jobs.TotalsRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.totalQueries = append(f.totalQueries, q)
+	return slices.Clone(f.totals), f.err
+}
+
+func (f *fakeActivity) UnfinishedJobs(_ context.Context, owner domain.UserID) ([]jobs.UnfinishedRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.countArgs = append(f.countArgs, owner)
-	return maps.Clone(f.counts), f.err
+	return slices.Clone(f.unfinished), f.err
 }
 
 // newActivityService returns a jobs service over the env's store whose
@@ -148,12 +157,12 @@ func TestActivityMergesRows(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	repo := &fakeActivity{rows: []jobs.ActivityRow{
-		{Bucket: at(2026, 11, 4, 10, 0), Status: domain.JobSucceeded, Jobs: 3, Bytes: 300, Files: 30},
-		{Bucket: at(2026, 11, 4, 10, 0), Status: domain.JobFailed, Jobs: 1, Bytes: 5, Files: 1},
-		{Bucket: at(2026, 11, 4, 11, 0), Status: domain.JobInterrupted, Jobs: 2},
-		{Bucket: at(2026, 11, 4, 11, 0), Status: domain.JobCancelled, Jobs: 4, Bytes: 1},
-		{Bucket: at(2026, 11, 4, 11, 0), Status: domain.JobRunning, Jobs: 9, Bytes: 9}, // ignored
-		{Bucket: at(2026, 11, 4, 10, 30), Status: domain.JobSucceeded, Jobs: 1},        // unknown boundary: kept
+		{Bucket: at(2026, 11, 4, 10, 0), Status: domain.JobSucceeded, Sums: jobs.Sums{Jobs: 3, Bytes: 300, Files: 30, Started: 3, RunTime: time.Minute, Dispatched: 3, QueueWait: time.Second}},
+		{Bucket: at(2026, 11, 4, 10, 0), Status: domain.JobFailed, Sums: jobs.Sums{Jobs: 1, Bytes: 5, Files: 1, Started: 1, RunTime: time.Second}},
+		{Bucket: at(2026, 11, 4, 11, 0), Status: domain.JobInterrupted, Sums: jobs.Sums{Jobs: 2}},
+		{Bucket: at(2026, 11, 4, 11, 0), Status: domain.JobCancelled, Sums: jobs.Sums{Jobs: 4, Bytes: 1}},
+		{Bucket: at(2026, 11, 4, 11, 0), Status: domain.JobRunning, Sums: jobs.Sums{Jobs: 9, Bytes: 9, Started: 9}}, // ignored
+		{Bucket: at(2026, 11, 4, 10, 30), Status: domain.JobSucceeded, Sums: jobs.Sums{Jobs: 1}},                    // unknown boundary: kept
 	}}
 	svc := newActivityService(t, e, repo)
 	got, err := svc.Activity(context.Background(), e.owner, jobs.ActivityFilter{
@@ -163,7 +172,7 @@ func TestActivityMergesRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []jobs.ActivityBucket{
-		{Start: at(2026, 11, 4, 10, 0), Succeeded: 3, Failed: 1, Bytes: 305, Files: 31},
+		{Start: at(2026, 11, 4, 10, 0), Succeeded: 3, Failed: 1, Bytes: 305, Files: 31, Started: 4, RunTime: time.Minute + time.Second, Dispatched: 3, QueueWait: time.Second},
 		{Start: at(2026, 11, 4, 10, 30), Succeeded: 1},
 		{Start: at(2026, 11, 4, 11, 0), Interrupted: 2, Cancelled: 4, Bytes: 1},
 	}
@@ -172,7 +181,8 @@ func TestActivityMergesRows(t *testing.T) {
 	}
 	for i := range want {
 		if g, w := got[i], want[i]; !g.Start.Equal(w.Start) || g.Succeeded != w.Succeeded || g.Failed != w.Failed ||
-			g.Interrupted != w.Interrupted || g.Cancelled != w.Cancelled || g.Bytes != w.Bytes || g.Files != w.Files {
+			g.Interrupted != w.Interrupted || g.Cancelled != w.Cancelled || g.Bytes != w.Bytes || g.Files != w.Files ||
+			g.Started != w.Started || g.RunTime != w.RunTime || g.Dispatched != w.Dispatched || g.QueueWait != w.QueueWait {
 			t.Errorf("bucket %d = %+v, want %+v", i, g, w)
 		}
 	}
@@ -197,7 +207,9 @@ func TestActivityScopesByActor(t *testing.T) {
 		{"no user", domain.Actor{Role: domain.RoleUser}, true, domain.UserID{}, false},
 	}
 	for _, tt := range tests {
-		repo := &fakeActivity{counts: map[domain.JobStatus]int64{domain.JobQueued: 2}}
+		repo := &fakeActivity{unfinished: []jobs.UnfinishedRow{
+			{Status: domain.JobQueued, Kind: "rclone_transfer", Jobs: 1}, {Status: domain.JobQueued, Kind: "restic_backup", Jobs: 1},
+		}}
 		svc := newActivityService(t, e, repo)
 		f.AllUsers = tt.allUsers
 		bs, err := svc.Activity(context.Background(), tt.actor, f)
@@ -324,5 +336,71 @@ func TestActivityWithMemstore(t *testing.T) {
 	counts, err := svc.CountUnfinished(ctx, e.owner, false)
 	if err != nil || !maps.Equal(counts, map[domain.JobStatus]int64{domain.JobQueued: 1}) {
 		t.Errorf("CountUnfinished = (%v, %v)", counts, err)
+	}
+}
+
+func TestTotals(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	admin := e.addUser(t, domain.RoleAdmin)
+	repo := &fakeActivity{totals: []jobs.TotalsRow{
+		{Kind: "rclone_transfer", Status: domain.JobSucceeded, Sums: jobs.Sums{Jobs: 2}},
+		{Kind: "rclone_transfer", Status: domain.JobRunning, Sums: jobs.Sums{Jobs: 9}}, // not terminal: dropped
+	}}
+	svc := newActivityService(t, e, repo)
+	ctx := context.Background()
+	bounds := []time.Duration{time.Second, time.Minute}
+
+	got, err := svc.Totals(ctx, e.owner, jobs.TotalsFilter{AllUsers: true, RunTimeBounds: bounds})
+	if err != nil || len(got) != 1 || got[0].Status != domain.JobSucceeded || got[0].Jobs != 2 {
+		t.Fatalf("Totals = (%+v, %v), want the succeeded row only", got, err)
+	}
+	if _, err := svc.Totals(ctx, admin, jobs.TotalsFilter{AllUsers: true, From: at(2026, 11, 4, 10, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.totalQueries) != 2 {
+		t.Fatalf("queries = %+v", repo.totalQueries)
+	}
+	if q := repo.totalQueries[0]; q.OwnerID != e.owner.UserID || !slices.Equal(q.RunTimeBounds, bounds) || !q.From.IsZero() || !q.Until.IsZero() {
+		t.Errorf("user's query = %+v, want their own jobs over all time", q)
+	}
+	if q := repo.totalQueries[1]; !q.OwnerID.IsZero() || !q.From.Equal(at(2026, 11, 4, 10, 0)) {
+		t.Errorf("admin's query = %+v, want every owner from the bound", q)
+	}
+
+	for name, f := range map[string]jobs.TotalsFilter{
+		"empty range":       {From: at(2026, 11, 4, 10, 0), Until: at(2026, 11, 4, 10, 0)},
+		"zero bound":        {RunTimeBounds: []time.Duration{0}},
+		"descending bounds": {RunTimeBounds: []time.Duration{time.Minute, time.Second}},
+		"repeated bound":    {RunTimeBounds: []time.Duration{time.Second, time.Second}},
+		"too many bounds":   {RunTimeBounds: make([]time.Duration, jobs.MaxRunTimeBounds+1)},
+	} {
+		if _, err := svc.Totals(ctx, e.owner, f); !errors.Is(err, domain.ErrInvalidArgument) {
+			t.Errorf("%s: Totals = %v, want ErrInvalidArgument", name, err)
+		}
+	}
+	if len(repo.totalQueries) != 2 {
+		t.Errorf("invalid filters reached the store: %+v", repo.totalQueries[2:])
+	}
+	if got, err := svc.Totals(ctx, domain.Actor{Role: domain.RoleUser}, jobs.TotalsFilter{}); err != nil || len(got) != 0 || len(repo.totalQueries) != 2 {
+		t.Errorf("Totals without a user = (%v, %v), want nothing without a query", got, err)
+	}
+	if _, err := e.svc.Totals(ctx, e.owner, jobs.TotalsFilter{}); err == nil {
+		t.Error("Totals without an activity repository succeeded")
+	}
+}
+
+func TestUnfinishedCounts(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	rows := []jobs.UnfinishedRow{{Status: domain.JobQueued, Kind: "rclone_transfer", Jobs: 3, OldestQueuedAt: at(2026, 11, 4, 9, 0)}}
+	svc := newActivityService(t, e, &fakeActivity{unfinished: rows})
+	got, err := svc.UnfinishedCounts(context.Background(), e.owner, false)
+	if err != nil || !slices.Equal(got, rows) {
+		t.Errorf("UnfinishedCounts = (%+v, %v), want %+v", got, err, rows)
+	}
+	empty, err := newActivityService(t, e, &fakeActivity{}).UnfinishedCounts(context.Background(), e.owner, false)
+	if err != nil || empty == nil || len(empty) != 0 {
+		t.Errorf("UnfinishedCounts without jobs = (%#v, %v), want an empty slice", empty, err)
 	}
 }

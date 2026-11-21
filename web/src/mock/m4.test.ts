@@ -64,6 +64,18 @@ describe("mock transport, milestone 4", () => {
       expect(d.activity.length).toBe(
         range === DashboardRange.DAY ? 24 : range === DashboardRange.WEEK ? 7 : 30,
       );
+      if (range === DashboardRange.MONTH) {
+        // The breakdowns add up to the totals.
+        const sum = (gs: typeof d.kinds) =>
+          gs.reduce((a, g) => a + g.succeeded + g.failed + g.interrupted + g.cancelled, 0n);
+        const t = d.totals!;
+        const jobs = t.succeeded + t.failed + t.interrupted + t.cancelled;
+        expect(jobs).toBeGreaterThan(0n);
+        expect(sum(d.kinds)).toBe(jobs);
+        expect(sum(d.workerActivity)).toBe(jobs);
+        expect(d.totals?.started).toBeGreaterThan(0n);
+        expect(d.schedules.length).toBeGreaterThan(0);
+      }
     }
 
     const w = await createClient(WorkerAdminService, t).listWorkers({ label: "nas" });

@@ -374,4 +374,26 @@ type ActivityBucket struct {
 	Start                                     time.Time
 	Succeeded, Failed, Interrupted, Cancelled int64
 	Bytes, Files                              int64
+	// Started, RunTime, Dispatched and QueueWait are the run-time and
+	// queue-wait counts and sums of the bucket's jobs (Sums).
+	Started    int64
+	RunTime    time.Duration
+	Dispatched int64
+	QueueWait  time.Duration
 }
+
+// TotalsFilter selects the finished jobs Totals counts.
+type TotalsFilter struct {
+	// From and Until bound the jobs' FinishedAt: [From, Until). Zero
+	// bounds are open, so both zero counts every finished job.
+	From, Until time.Time
+	// AllUsers counts every user's jobs; only admins may (Totals ignores
+	// it for other actors, as List does).
+	AllUsers bool
+	// RunTimeBounds are the run-time buckets' upper bounds (TotalsQuery):
+	// positive, ascending, at most MaxRunTimeBounds.
+	RunTimeBounds []time.Duration
+}
+
+// MaxRunTimeBounds bounds TotalsFilter.RunTimeBounds.
+const MaxRunTimeBounds = 32

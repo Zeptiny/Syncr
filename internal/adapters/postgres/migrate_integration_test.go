@@ -69,7 +69,7 @@ var milestone4Tables = []string{"contacts", "schedules", "schedule_remotes", "sc
 var milestone5Tables = []string{"restic_repositories", "restic_snapshots"}
 
 // allVersions are the versions of the embedded migrations.
-var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+var allVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
 
 func columnExists(t *testing.T, s *Store, table, column string) bool {
 	t.Helper()
@@ -735,11 +735,12 @@ func TestMigrateWrappedRemotes(t *testing.T) {
 	if got := names(unused); len(got) != 0 {
 		t.Errorf("ListRemotesUsing(unused) = %v, want none", got)
 	}
-	// Down is refused while Vault is live, and changes nothing.
+	// Down is refused while Vault is live, and changes nothing of 00012
+	// (the later migrations are undone before it refuses).
 	if _, err := p.DownTo(ctx, 11); err == nil || !strings.Contains(err.Error(), "cannot undo migration 00012: 1 encrypted remote(s) store their data in other remotes") {
 		t.Errorf("down to 11 with a live encrypted remote = %v, want it refused", err)
 	}
-	if got := appliedVersions(t, s); !slices.Equal(got, allVersions) || !columnExists(t, s, "remotes", "wrapped_remote_id") {
+	if got := appliedVersions(t, s); !slices.Equal(got, allVersions[:12]) || !columnExists(t, s, "remotes", "wrapped_remote_id") {
 		t.Errorf("after the refused down: applied versions = %v, wrapped_remote_id exists: %v", got, columnExists(t, s, "remotes", "wrapped_remote_id"))
 	}
 	if got := names(store); !slices.Equal(got, []string{"All", "Vault"}) {
