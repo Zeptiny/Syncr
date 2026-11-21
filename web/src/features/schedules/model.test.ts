@@ -138,8 +138,10 @@ describe("schedule form model", () => {
     const s = scheduleState(stored);
     expect(s.target).toEqual({ kind: "label", workerId: "", label: "nas" });
     expect(s.missed).toEqual({ action: "run_late", within: 6 * HOUR });
+    expect(s.groupId).toBe(fx.ids.groupPhotos);
     expect(toScheduleInput(s)).toMatchObject({
       name: stored.name,
+      groupId: fx.ids.groupPhotos,
       cron: stored.cron,
       timezone: stored.timezone,
       overlap: stored.overlap,
@@ -163,6 +165,7 @@ describe("schedule form model", () => {
         value: {
           violations: [
             { field: "cron", message: "bad cron" },
+            { field: "group_id", message: "is not a valid ID" },
             { field: "target.worker_label", message: "bad label" },
             { field: "missed_run.max_delay", message: "too long" },
             { field: "contacts[1].events", message: "pick one" },
@@ -175,6 +178,7 @@ describe("schedule form model", () => {
     const { errors, rest } = scheduleServerErrors(err);
     expect(errors).toMatchObject({
       cron: "bad cron",
+      group: "is not a valid ID",
       target: "bad label",
       missed: "too long",
       contacts: { 1: "pick one" },

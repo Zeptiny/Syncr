@@ -56,6 +56,8 @@ func (h *scheduleHandler) fail(ctx context.Context, procedure string, err error)
 		return connect.NewError(connect.CodeNotFound, errors.New("contact not found"))
 	case errors.Is(err, schedules.ErrUnknownRepository):
 		return connect.NewError(connect.CodeNotFound, errors.New("repository not found"))
+	case errors.Is(err, schedules.ErrUnknownGroup):
+		return connect.NewError(connect.CodeNotFound, errors.New("group not found"))
 	case errors.Is(err, schedules.ErrRepositoryDeleting):
 		return connect.NewError(connect.CodeFailedPrecondition, errors.New("the repository's data is being deleted"))
 	}
@@ -267,6 +269,13 @@ func (h *scheduleHandler) input(ctx context.Context, procedure string, m *syncrv
 	var v domain.Validation
 	in := schedules.Input{
 		Name: m.GetName(), Description: m.GetDescription(), Cron: m.GetCron(), Timezone: m.GetTimezone(), Enabled: m.GetEnabled(),
+	}
+	if s := m.GetGroupId(); s != "" {
+		id, err := domain.ParseScheduleGroupID(s)
+		if err != nil || id.IsZero() {
+			v.Add("group_id", "is not a valid ID")
+		}
+		in.GroupID = id
 	}
 	switch t := m.GetTarget().GetTarget().(type) {
 	case *syncrv1.ScheduleTarget_WorkerId:

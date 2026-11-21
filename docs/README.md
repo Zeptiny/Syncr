@@ -16,6 +16,7 @@ order.
 ## Using Syncr
 
 - [Remotes](remotes.md): every storage type and what to enter
+- [Schedules](schedules.md): the schedule list, groups and acting on several schedules at once
 - [Encrypted remotes](encrypted-remotes.md): rclone crypt over another remote
 - [Browsing files](browsing.md): the file pages, copy and move, folder sizes
 - [Two-way sync](bisync.md): keeping two folders in step
@@ -28,6 +29,7 @@ order.
 - [Scripting the API](api.md): API tokens and examples
 - [Metrics for Prometheus](metrics.md): `/metrics`, scraping with an API token, every metric and example alerts
 - [Release notes](releases/README.md)
+  - [2.4.0](releases/v2.4.0.md)
   - [2.3.0](releases/v2.3.0.md)
   - [2.2.0](releases/v2.2.0.md)
   - [2.1.0](releases/v2.1.0.md)

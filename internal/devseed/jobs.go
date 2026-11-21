@@ -386,6 +386,10 @@ func (g *seedIDs) NewScheduleRunID() domain.ScheduleRunID {
 	return mustID(domain.ParseScheduleRunID(g.next("run")))
 }
 
+func (g *seedIDs) NewScheduleGroupID() domain.ScheduleGroupID {
+	return mustID(domain.ParseScheduleGroupID(g.next("group")))
+}
+
 func (g *seedIDs) NewDeliveryID() domain.DeliveryID {
 	return mustID(domain.ParseDeliveryID(g.next("delivery")))
 }

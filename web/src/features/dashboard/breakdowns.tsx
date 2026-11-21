@@ -11,7 +11,6 @@ import type {
   RepositoryGrowth,
   ScheduleHealth,
 } from "@/gen/syncr/v1/dashboard_pb";
-import { ScheduleRunStatus, type ScheduleRun } from "@/gen/syncr/v1/schedules_pb";
 import {
   durationSeconds,
   formatBytes,
@@ -20,10 +19,13 @@ import {
   toNumber,
   tsDate,
 } from "@/lib/format";
-import { errorCodeLabel, kindLabel, type StatusMeta } from "@/lib/status";
+import { errorCodeLabel, kindLabel } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
+import { runState } from "../schedules/run-state";
 import type { DashboardRangeKey } from "./search";
+
+export { runState, type RunState } from "../schedules/run-state";
 
 function Empty({ children }: { children: React.ReactNode }) {
   return <p className="px-5 py-8 text-center text-[13px] text-muted-foreground">{children}</p>;
@@ -263,48 +265,6 @@ export function FailureReasons({
       })}
     </ul>
   );
-}
-
-/** RunState is how a schedule's newest run went, for the health list. */
-export interface RunState {
-  meta: StatusMeta;
-  /** problem marks a run that did not succeed and is not going on. */
-  problem: boolean;
-}
-
-/**
- * runState says how run went: its job's outcome once it launched, else the
- * run's own status (missed, could not start, cancelled, still waiting).
- */
-export function runState(run: ScheduleRun | undefined): RunState | undefined {
-  if (!run) return undefined;
-  switch (run.status) {
-    case ScheduleRunStatus.PENDING:
-    case ScheduleRunStatus.LAUNCHING:
-      return { meta: { label: "Starting", tone: "live", pulse: true }, problem: false };
-    case ScheduleRunStatus.MISSED:
-      return { meta: { label: "Missed", tone: "warning" }, problem: true };
-    case ScheduleRunStatus.FAILED:
-      return { meta: { label: "Didn't start", tone: "danger" }, problem: true };
-    case ScheduleRunStatus.CANCELLED:
-      return { meta: { label: "Cancelled", tone: "neutral" }, problem: true };
-    case ScheduleRunStatus.LAUNCHED:
-      switch (run.jobStatus) {
-        case JobStatus.QUEUED:
-        case JobStatus.DISPATCHED:
-        case JobStatus.RUNNING:
-          return { meta: { label: "Running", tone: "live", pulse: true }, problem: false };
-        case JobStatus.SUCCEEDED:
-          return { meta: { label: "Succeeded", tone: "success" }, problem: false };
-        case JobStatus.FAILED:
-          return { meta: { label: "Failed", tone: "danger" }, problem: true };
-        case JobStatus.INTERRUPTED:
-          return { meta: { label: "Interrupted", tone: "warning" }, problem: true };
-        case JobStatus.CANCELLED:
-          return { meta: { label: "Cancelled", tone: "neutral" }, problem: true };
-      }
-  }
-  return undefined;
 }
 
 /** scheduleCounts sums the schedules up for the panel's header. */

@@ -200,12 +200,21 @@ type Schedule struct {
 	UpdatedAt    pgtype.Timestamptz
 	Version      int64
 	RepositoryID pgtype.UUID
+	GroupID      pgtype.UUID
 }
 
 type ScheduleContact struct {
 	ScheduleID pgtype.UUID
 	ContactID  pgtype.UUID
 	Events     []string
+}
+
+type ScheduleGroup struct {
+	ID        pgtype.UUID
+	OwnerID   pgtype.UUID
+	Name      string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
 }
 
 type ScheduleRemote struct {

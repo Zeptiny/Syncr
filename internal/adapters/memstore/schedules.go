@@ -17,7 +17,7 @@ import (
 // Postgres schema (migrations 00003 and 00007): the foreign keys of schedules,
 // schedule_remotes and schedule_contacts, the CHECK constraints, the
 // case-insensitive name index and the one-pending-run index of
-// schedule_runs (migration 00005).
+// schedule_runs (migration 00005). Groups are in schedule_groups.go.
 
 func cloneSchedule(s schedules.Schedule) schedules.Schedule {
 	s.Definition = slices.Clone(s.Definition)
@@ -66,6 +66,12 @@ func (s *Store) checkScheduleLocked(sc *schedules.Schedule) error {
 	if !sc.RepositoryID.IsZero() {
 		if _, ok := s.repos[sc.RepositoryID]; !ok {
 			return fmt.Errorf("repository %s of schedule %s: %w", sc.RepositoryID, sc.ID, domain.ErrNotFound)
+		}
+	}
+	if !sc.GroupID.IsZero() {
+		// The foreign key (group_id, owner_id): the owner's group.
+		if g, ok := s.groups[sc.GroupID]; !ok || g.OwnerID != sc.OwnerID {
+			return fmt.Errorf("group %s of schedule %s: %w", sc.GroupID, sc.ID, domain.ErrNotFound)
 		}
 	}
 	for _, l := range sc.Contacts {

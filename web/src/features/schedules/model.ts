@@ -125,6 +125,8 @@ export interface ContactLink {
 export interface ScheduleFormState {
   name: string;
   description: string;
+  /** groupId is the schedule's group; "" for none. */
+  groupId: string;
   cron: string;
   timezone: string;
   target: TargetState;
@@ -137,23 +139,26 @@ export interface ScheduleFormState {
 
 /** ScheduleErrors are the form's problems, by section. */
 export type ScheduleErrors = DefinitionErrors &
-  Partial<Record<"name" | "cron" | "timezone" | "target" | "missed", string>> & {
+  Partial<Record<"name" | "group" | "cron" | "timezone" | "target" | "missed", string>> & {
     /** contacts holds errors by link index. */
     contacts?: Record<number, string>;
   };
 
 /**
  * emptySchedule is a new schedule: daily at 02:30 in the browser's zone. A
- * kind and a repository start it as that kind of job on that repository.
+ * kind and a repository start it as that kind of job on that repository; a
+ * group puts it in that group.
  */
 export function emptySchedule(
   timezone = browserTimeZone(),
   kind?: EditableKind,
   repositoryId?: string,
+  groupId = "",
 ): ScheduleFormState {
   return {
     name: "",
     description: "",
+    groupId,
     cron: "30 2 * * *",
     timezone,
     target: { kind: "worker", workerId: "", label: "" },
@@ -176,6 +181,7 @@ export function scheduleState(s: Schedule): ScheduleFormState {
   return {
     name: s.name,
     description: s.description,
+    groupId: s.groupId,
     cron: s.cron,
     timezone: s.timezone,
     target: targetState(s.target),
@@ -236,6 +242,7 @@ export function toScheduleInput(
   return {
     name: s.name.trim(),
     description: s.description.trim(),
+    groupId: s.groupId,
     cron: s.cron.trim().replace(/\s+/g, " "),
     timezone: s.timezone,
     target: {
@@ -260,6 +267,7 @@ export function scheduleServerErrors(err: unknown): { errors: ScheduleErrors; re
     const f = v.field;
     const contact = /^contacts\[(\d+)\]/.exec(f);
     if (f === "name" || f === "cron" || f === "timezone") errors[f] = v.message;
+    else if (f === "group_id") errors.group = v.message;
     else if (f.startsWith("target")) errors.target = v.message;
     else if (f.startsWith("missed_run")) errors.missed = v.message;
     else if (contact) errors.contacts = { ...errors.contacts, [Number(contact[1])]: v.message };
@@ -319,4 +327,29 @@ export function targetLabel(
   if (v?.case === "workerLabel") return { kind: "label", text: v.value };
   const w = v?.case === "workerId" ? workers.get(v.value) : undefined;
   return { kind: "worker", text: w?.name ?? "Removed worker", worker: w };
+}
+
+/** asJob shapes a schedule as a job for the job helpers, which read a definition and remotes. */
+export function asJob(s: Schedule): Job {
+  return { definition: s.definition, remotes: s.remotes } as Job;
+}
+
+/** kindOf is the job kind a schedule runs ("" if its definition is unreadable). */
+export function kindOf(s: Schedule): string {
+  switch (s.definition?.operation.case) {
+    case "rcloneTransfer":
+      return "rclone_transfer";
+    case "rcloneBisync":
+      return "rclone_bisync";
+    case "resticBackup":
+      return "restic_backup";
+    case "resticForget":
+      return "restic_forget";
+    case "resticCheck":
+      return "restic_check";
+    case "resticPrune":
+      return "restic_prune";
+    default:
+      return "";
+  }
 }

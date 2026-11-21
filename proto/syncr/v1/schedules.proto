@@ -20,13 +20,14 @@ import "syncr/v1/notify.proto";
 // occurrence that does not exist (the spring-forward gap) runs at the
 // transition; one that exists twice (fall-back) runs once, at the first.
 
-// ScheduleService manages the caller's schedules. Schedules are private to
-// their owner, admins included: another user's schedule is NOT_FOUND. Jobs a
-// schedule launches belong to its owner (admins see them through
-// ListJobs.all_users).
+// ScheduleService manages the caller's schedules and their groups.
+// Schedules and groups are private to their owner, admins included: another
+// user's schedule or group is NOT_FOUND. Jobs a schedule launches belong to
+// its owner (admins see them through ListJobs.all_users). Groups only
+// organize the list (ScheduleGroup).
 //
 // Invalid input fails with INVALID_ARGUMENT carrying a ValidationError
-// detail. Field paths: "name", "cron", "timezone", "target.worker_id",
+// detail. Field paths: "name", "group_id", "cron", "timezone", "target.worker_id",
 // "target.worker_label", "missed_run.max_delay", "contacts[1].contact_id",
 // "contacts[1].events", and "definition...." as for RunJob. Restores cannot
 // be scheduled ("definition.restic_restore": "restores cannot be
@@ -83,6 +84,38 @@ service ScheduleService {
   // next occurrences, for the schedule form.
   rpc PreviewSchedule(PreviewScheduleRequest) returns (PreviewScheduleResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // ListScheduleGroups lists the caller's groups, by name.
+  rpc ListScheduleGroups(ListScheduleGroupsRequest) returns (ListScheduleGroupsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // CreateScheduleGroup creates a group. ALREADY_EXISTS if the caller has a
+  // group with the same name (case-insensitive); INVALID_ARGUMENT ("name")
+  // for an empty or too long name.
+  rpc CreateScheduleGroup(CreateScheduleGroupRequest) returns (CreateScheduleGroupResponse) {}
+
+  // RenameScheduleGroup renames one of the caller's groups, with the errors
+  // of CreateScheduleGroup. Its schedules are unchanged.
+  rpc RenameScheduleGroup(RenameScheduleGroupRequest) returns (RenameScheduleGroupResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // DeleteScheduleGroup deletes one of the caller's groups. Its schedules
+  // are kept, in no group, and run as before; their version changes.
+  rpc DeleteScheduleGroup(DeleteScheduleGroupRequest) returns (DeleteScheduleGroupResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // MoveSchedules moves schedules of the caller into one of the caller's
+  // groups, or out of their group with an empty group_id: all of them or,
+  // on an error, none. Like SetScheduleEnabled it needs no version, and the
+  // version of each moved schedule changes. NOT_FOUND if a schedule or the
+  // group is not the caller's; INVALID_ARGUMENT ("schedule_ids") for no IDs,
+  // more than 500 or an invalid one.
+  rpc MoveSchedules(MoveSchedulesRequest) returns (MoveSchedulesResponse) {
+    option idempotency_level = IDEMPOTENT;
   }
 }
 
@@ -183,6 +216,10 @@ message ScheduleInput {
 
   // Contacts to notify and their events.
   repeated ScheduleContact contacts = 10;
+
+  // One of the caller's groups to list the schedule in; empty for none.
+  // Groups change nothing about how the schedule runs.
+  string group_id = 11;
 }
 
 // Schedule is a configured schedule.
@@ -237,7 +274,10 @@ message Schedule {
   // kinds.
   JobRepositoryRef repository = 21;
 
-  reserved 22 to 39;
+  // See ScheduleInput.
+  string group_id = 22;
+
+  reserved 23 to 39;
 }
 
 // ScheduleRunStatus is where a run is.
@@ -443,4 +483,70 @@ message PreviewScheduleResponse {
   // The expression as the controller stores it (whitespace collapsed,
   // lower case).
   string normalized = 2;
+}
+
+// ScheduleGroup is a named group of the caller's schedules, for organizing
+// the schedule list. A schedule is in at most one group (Schedule.group_id);
+// nothing about how schedules run depends on groups.
+message ScheduleGroup {
+  // Group ID (UUID).
+  string id = 1;
+
+  // Display name, 1 to 64 characters, unique per user (case-insensitive).
+  string name = 2;
+
+  // When the group was created and last renamed.
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+// ListScheduleGroupsRequest lists the caller's groups.
+message ListScheduleGroupsRequest {}
+
+// ListScheduleGroupsResponse lists groups by name.
+message ListScheduleGroupsResponse {
+  repeated ScheduleGroup groups = 1;
+}
+
+// CreateScheduleGroupRequest names the new group.
+message CreateScheduleGroupRequest {
+  string name = 1;
+}
+
+// CreateScheduleGroupResponse returns the new group.
+message CreateScheduleGroupResponse {
+  ScheduleGroup group = 1;
+}
+
+// RenameScheduleGroupRequest gives a group a new name.
+message RenameScheduleGroupRequest {
+  string group_id = 1;
+  string name = 2;
+}
+
+// RenameScheduleGroupResponse returns the renamed group.
+message RenameScheduleGroupResponse {
+  ScheduleGroup group = 1;
+}
+
+// DeleteScheduleGroupRequest names the group to delete.
+message DeleteScheduleGroupRequest {
+  string group_id = 1;
+}
+
+// DeleteScheduleGroupResponse is empty.
+message DeleteScheduleGroupResponse {}
+
+// MoveSchedulesRequest moves schedules into a group.
+message MoveSchedulesRequest {
+  // The schedules to move: 1 to 500; duplicates count once.
+  repeated string schedule_ids = 1;
+
+  // The group to move them into; empty moves them out of their group.
+  string group_id = 2;
+}
+
+// MoveSchedulesResponse returns the moved schedules.
+message MoveSchedulesResponse {
+  repeated Schedule schedules = 1;
 }

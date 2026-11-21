@@ -137,7 +137,7 @@ func (s *Store) UpdateSchedule(ctx context.Context, sc schedules.Schedule, resch
 			WorkerID: pgOptID(sc.Target.WorkerID), WorkerLabel: optText(sc.Target.Label),
 			MissedAction: string(sc.Missed.Action), MaxDelayNs: int64(sc.Missed.MaxDelay), Overlap: string(sc.Overlap),
 			Enabled: sc.Enabled, PausedReason: sc.PausedReason, RepositoryID: pgOptID(sc.RepositoryID),
-			Reschedule: reschedule, NextRunAt: pgOptTime(sc.NextRunAt), UpdatedAt: pgTime(sc.UpdatedAt),
+			GroupID: pgOptID(sc.GroupID), Reschedule: reschedule, NextRunAt: pgOptTime(sc.NextRunAt), UpdatedAt: pgTime(sc.UpdatedAt),
 			ID: pgID(sc.ID), ExpectedVersion: sc.Version,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -546,7 +546,7 @@ func createScheduleParams(sc schedules.Schedule) db.CreateScheduleParams {
 		Enabled: sc.Enabled, PausedReason: sc.PausedReason,
 		NextRunAt: pgOptTime(sc.NextRunAt), LastFiredAt: pgOptTime(sc.LastFiredAt),
 		CreatedAt: pgTime(sc.CreatedAt), UpdatedAt: pgTime(sc.UpdatedAt), Version: sc.Version,
-		RepositoryID: pgOptID(sc.RepositoryID),
+		RepositoryID: pgOptID(sc.RepositoryID), GroupID: pgOptID(sc.GroupID),
 	}
 }
 
@@ -615,7 +615,10 @@ func scheduleFrom(row db.Schedule, remoteIDs []domain.RemoteID, contacts []sched
 	for _, d := range []struct {
 		dst interface{ UnmarshalText([]byte) error }
 		src pgtype.UUID
-	}{{&sc.ID, row.ID}, {&sc.OwnerID, row.OwnerID}, {&sc.Target.WorkerID, row.WorkerID}, {&sc.RepositoryID, row.RepositoryID}} {
+	}{
+		{&sc.ID, row.ID}, {&sc.OwnerID, row.OwnerID}, {&sc.Target.WorkerID, row.WorkerID},
+		{&sc.RepositoryID, row.RepositoryID}, {&sc.GroupID, row.GroupID},
+	} {
 		if err := decodeID(d.dst, d.src); err != nil {
 			return schedules.Schedule{}, err
 		}

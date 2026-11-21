@@ -319,7 +319,7 @@ func inputOf(sc Schedule) Input {
 		terms = strings.Split(sc.SearchText, "\n")
 	}
 	return Input{
-		Name: sc.Name, Description: sc.Description, Cron: sc.Cron, Timezone: sc.Timezone,
+		Name: sc.Name, Description: sc.Description, GroupID: sc.GroupID, Cron: sc.Cron, Timezone: sc.Timezone,
 		Target: sc.Target, Missed: sc.Missed, Overlap: sc.Overlap, Enabled: true,
 		Kind: sc.Kind, Definition: sc.Definition, RemoteIDs: sc.RemoteIDs, SearchTerms: terms,
 		RepositoryID: sc.RepositoryID, Contacts: sc.Contacts,
@@ -342,6 +342,7 @@ type checked struct {
 func (c checked) apply(sc *Schedule, now time.Time) {
 	sc.Name = c.name
 	sc.Description = strings.TrimSpace(c.in.Description)
+	sc.GroupID = c.in.GroupID
 	sc.Cron, sc.Timezone = c.expr.String(), c.in.Timezone
 	sc.Kind, sc.Definition = c.in.Kind, slices.Clone(c.in.Definition)
 	sc.RemoteIDs, sc.SearchText = c.remoteIDs, strings.Join(c.in.SearchTerms, "\n")
@@ -359,8 +360,8 @@ func (c checked) apply(sc *Schedule, now time.Time) {
 
 // check validates in for owner: the fields (a *domain.ValidationError with
 // the API's field paths), then the references, which must be owner's
-// (ErrUnknownRemote, ErrUnknownRepository, ErrRepositoryDeleting,
-// ErrUnknownContact).
+// (ErrUnknownGroup, ErrUnknownRemote, ErrUnknownRepository,
+// ErrRepositoryDeleting, ErrUnknownContact).
 func (s *Service) check(ctx context.Context, owner domain.UserID, in Input) (checked, error) {
 	var v domain.Validation
 	c := checked{in: in, name: checkName(&v, in.Name)}
@@ -406,6 +407,11 @@ func (s *Service) check(ctx context.Context, owner domain.UserID, in Input) (che
 	c.contacts = checkContacts(&v, in.Contacts)
 	if err := v.Err(); err != nil {
 		return checked{}, err
+	}
+	if !in.GroupID.IsZero() {
+		if _, err := s.groupOf(ctx, owner, in.GroupID); err != nil {
+			return checked{}, err
+		}
 	}
 	// The repository's remote counts as one of the schedule's remotes, as
 	// it does for the jobs it launches: the remote's "used by" list and
@@ -520,16 +526,23 @@ func checkContacts(v *domain.Validation, links []ContactLink) []ContactLink {
 // checkName validates a schedule name and returns it without surrounding
 // white space.
 func checkName(v *domain.Validation, name string) string {
+	return checkDisplayName(v, "name", name, MaxNameLen)
+}
+
+// checkDisplayName validates a name of at most maxLen characters (a
+// schedule's or a group's) as field and returns it without surrounding
+// white space.
+func checkDisplayName(v *domain.Validation, field, name string, maxLen int) string {
 	name = strings.TrimSpace(name)
 	switch n := utf8.RuneCountInString(name); {
 	case !utf8.ValidString(name):
-		v.Add("name", "is not valid UTF-8")
+		v.Add(field, "is not valid UTF-8")
 	case n == 0:
-		v.Add("name", "is required")
-	case n > MaxNameLen:
-		v.Add("name", fmt.Sprintf("must be at most %d characters", MaxNameLen))
+		v.Add(field, "is required")
+	case n > maxLen:
+		v.Add(field, fmt.Sprintf("must be at most %d characters", maxLen))
 	case strings.ContainsFunc(name, unicode.IsControl):
-		v.Add("name", "must not contain control characters")
+		v.Add(field, "must not contain control characters")
 	}
 	return name
 }

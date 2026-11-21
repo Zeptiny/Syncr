@@ -48,9 +48,11 @@ import {
   ScheduleRunSchema,
   ScheduleRunStatus,
   ScheduleRunTrigger,
+  ScheduleGroupSchema,
   ScheduleSchema,
   ScheduleService,
   type Schedule,
+  type ScheduleGroup,
   type ScheduleInput,
   type ScheduleRun,
 } from "@/gen/syncr/v1/schedules_pb";
@@ -115,6 +117,7 @@ const statusKey: Partial<Record<JobStatus, "succeeded" | "failed" | "interrupted
 export function registerM4(router: ConnectRouter, d: M4Deps): void {
   const history = d.history;
   const schedules: Schedule[] = history.schedules;
+  const groups: ScheduleGroup[] = history.groups;
   const runs: ScheduleRun[] = history.runs;
   let contacts: Contact[] = fx.contacts(d.now);
   const deliveries: Delivery[] = fx.deliveries(d.now, history);
@@ -181,6 +184,8 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
       if (e instanceof CronError) v.push({ field: e.field, message: e.message });
       else throw e;
     }
+    if (input.groupId && !groups.some((g) => g.id === input.groupId))
+      throw new ConnectError("group not found", Code.NotFound);
     const t = input.target?.target;
     if (t?.case === "workerId") {
       if (!d.workers.some((w) => w.id === t.value))
@@ -258,6 +263,7 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
       ownerId: fx.ids.admin,
       name: input.name.trim(),
       description: input.description.trim(),
+      groupId: input.groupId,
       cron: parseCron(input.cron, input.timezone).normalized,
       timezone: input.timezone,
       target: input.target,
@@ -279,7 +285,68 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
     });
   };
 
+  const byName = (a: ScheduleGroup, b: ScheduleGroup) =>
+    a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+  const group = (groupId: string) => {
+    const g = owner() && groups.find((x) => x.id === groupId);
+    if (!g) throw new ConnectError("group not found", Code.NotFound);
+    return g;
+  };
+  const checkGroupName = (raw: string, selfId?: string): string => {
+    const name = raw.trim();
+    if (!name) throw d.invalid([{ field: "name", message: "is required" }]);
+    if (name.length > 64)
+      throw d.invalid([{ field: "name", message: "must be at most 64 characters" }]);
+    if (groups.some((g) => g.id !== selfId && g.name.toLowerCase() === name.toLowerCase()))
+      throw new ConnectError("group already exists", Code.AlreadyExists);
+    return name;
+  };
+
   router.service(ScheduleService, {
+    listScheduleGroups: () => ({ groups: owner() ? [...groups].sort(byName) : [] }),
+    createScheduleGroup: async (req) => {
+      d.me();
+      await d.sleep(200);
+      const g = create(ScheduleGroupSchema, {
+        id: id("7c3d9e1f"),
+        name: checkGroupName(req.name),
+        createdAt: ts(Date.now()),
+        updatedAt: ts(Date.now()),
+      });
+      groups.push(g);
+      return { group: g };
+    },
+    renameScheduleGroup: async (req) => {
+      const g = group(req.groupId);
+      await d.sleep(200);
+      g.name = checkGroupName(req.name, g.id);
+      g.updatedAt = ts(Date.now());
+      return { group: g };
+    },
+    deleteScheduleGroup: (req) => {
+      const g = group(req.groupId);
+      groups.splice(groups.indexOf(g), 1);
+      for (const s of schedules) {
+        if (s.groupId === g.id) {
+          s.groupId = "";
+          s.version++;
+        }
+      }
+      return {};
+    },
+    moveSchedules: async (req) => {
+      if (!req.scheduleIds.length)
+        throw d.invalid([{ field: "schedule_ids", message: "is required" }]);
+      if (req.groupId) group(req.groupId);
+      const moved = [...new Set(req.scheduleIds)].map((sid) => schedule(sid));
+      await d.sleep(200);
+      for (const s of moved) {
+        s.groupId = req.groupId;
+        s.version++;
+        s.updatedAt = ts(Date.now());
+      }
+      return { schedules: moved.map(withLastRun) };
+    },
     listSchedules: (req) => {
       if (!owner()) return { schedules: [] };
       return {

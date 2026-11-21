@@ -2,7 +2,7 @@
 INSERT INTO schedules (
     id, owner_id, name, description, cron, timezone, kind, definition, search_text,
     worker_id, worker_label, missed_action, max_delay_ns, overlap, enabled, paused_reason,
-    next_run_at, last_fired_at, created_at, updated_at, version, repository_id
+    next_run_at, last_fired_at, created_at, updated_at, version, repository_id, group_id
 ) VALUES (
     sqlc.arg(id)::uuid, sqlc.arg(owner_id)::uuid, sqlc.arg(name)::text, sqlc.arg(description)::text,
     sqlc.arg(cron)::text, sqlc.arg(timezone)::text, sqlc.arg(kind)::text, sqlc.arg(definition)::jsonb,
@@ -11,7 +11,7 @@ INSERT INTO schedules (
     sqlc.arg(enabled)::boolean, sqlc.arg(paused_reason)::text,
     sqlc.narg(next_run_at)::timestamptz, sqlc.narg(last_fired_at)::timestamptz,
     sqlc.arg(created_at)::timestamptz, sqlc.arg(updated_at)::timestamptz, sqlc.arg(version)::bigint,
-    sqlc.narg(repository_id)::uuid
+    sqlc.narg(repository_id)::uuid, sqlc.narg(group_id)::uuid
 );
 
 -- name: InsertScheduleRemote :exec
@@ -106,6 +106,7 @@ UPDATE schedules SET
     enabled = sqlc.arg(enabled)::boolean,
     paused_reason = sqlc.arg(paused_reason)::text,
     repository_id = sqlc.narg(repository_id)::uuid,
+    group_id = sqlc.narg(group_id)::uuid,
     next_run_at = CASE WHEN sqlc.arg(reschedule)::boolean THEN sqlc.narg(next_run_at)::timestamptz ELSE next_run_at END,
     updated_at = sqlc.arg(updated_at)::timestamptz,
     version = version + 1
@@ -311,3 +312,46 @@ SELECT (
         WHERE schedule_id = sqlc.arg(schedule_id)::uuid AND status IN ('queued', 'dispatched', 'running')
     )
 )::boolean AS active;
+
+-- name: CreateScheduleGroup :exec
+-- A missing owner violates the foreign key, a name the owner uses
+-- schedule_groups_owner_name_key.
+INSERT INTO schedule_groups (id, owner_id, name, created_at, updated_at)
+VALUES (
+    sqlc.arg(id)::uuid, sqlc.arg(owner_id)::uuid, sqlc.arg(name)::text,
+    sqlc.arg(created_at)::timestamptz, sqlc.arg(updated_at)::timestamptz
+);
+
+-- name: GetScheduleGroup :one
+SELECT * FROM schedule_groups WHERE id = sqlc.arg(id)::uuid;
+
+-- name: ListScheduleGroups :many
+-- A NULL owner lists every owner's groups.
+SELECT * FROM schedule_groups
+WHERE (sqlc.narg(owner_id)::uuid IS NULL OR owner_id = sqlc.narg(owner_id)::uuid)
+ORDER BY lower(name) COLLATE "C", id;
+
+-- name: RenameScheduleGroup :one
+UPDATE schedule_groups SET name = sqlc.arg(name)::text, updated_at = sqlc.arg(updated_at)::timestamptz
+WHERE id = sqlc.arg(id)::uuid
+RETURNING *;
+
+-- name: UngroupSchedules :exec
+-- DeleteGroup moves the group's schedules out of it first, as a change of
+-- their configuration (schedules_group_idx).
+UPDATE schedules SET group_id = NULL, updated_at = sqlc.arg(updated_at)::timestamptz, version = version + 1
+WHERE group_id = sqlc.arg(group_id)::uuid;
+
+-- name: DeleteScheduleGroup :execrows
+-- A schedule moved into the group after UngroupSchedules is moved out by
+-- the foreign key (ON DELETE SET NULL (group_id)).
+DELETE FROM schedule_groups WHERE id = sqlc.arg(id)::uuid;
+
+-- name: MoveSchedules :execrows
+-- A missing group, or one that is not the schedule's owner's, violates the
+-- foreign key (group_id, owner_id).
+UPDATE schedules SET
+    group_id = sqlc.narg(group_id)::uuid,
+    updated_at = sqlc.arg(updated_at)::timestamptz,
+    version = version + 1
+WHERE id = ANY (sqlc.arg(ids)::uuid[]);

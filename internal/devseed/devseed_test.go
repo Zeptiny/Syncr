@@ -651,6 +651,42 @@ func actorOf(s *devseed.Seed, id domain.UserID) domain.Actor {
 // restic jobs with their results, the schedules on repositories, the live
 // state (a backup waiting behind a running one, a data deletion waiting
 // behind a running check) and the repository whose data was deleted.
+// TestSeedScheduleGroups checks the admin's schedule groups: three, the
+// old laptop's backup and alice's schedule in none.
+func TestSeedScheduleGroups(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	s := e.seed(t)
+	gs, err := e.store.ListGroups(ctx, s.Admin.UserID)
+	if err != nil || len(gs) != 3 || len(s.Groups) != 3 {
+		t.Fatalf("groups = %+v (%v), seeded %v", gs, err, s.Groups)
+	}
+	in := map[string]string{
+		"Nightly photos → B2": "Photos", "Nightly photos backup": "Photos", "Weekly retention: photos": "Photos",
+		"Monthly deep check: photos": "Photos", "Nightly Nextcloud photos backup": "Photos",
+		"Office docs hourly": "Office", "Office documents backup": "Office",
+		"Weekly archive": "NAS", "Offsite mirror": "NAS", "Old NAS sync": "NAS", "Shared folder ⇄ R2": "NAS",
+		"Old laptop weekly backup": "", "Alice's documents": "",
+	}
+	if len(in) != len(s.Schedules) {
+		t.Fatalf("schedules = %v, want the %d named here", s.Schedules, len(in))
+	}
+	for name, id := range s.Schedules {
+		sc, err := e.store.GetSchedule(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		group, ok := in[name]
+		if want := s.Groups[group]; !ok || sc.GroupID != want {
+			t.Errorf("%s is in group %v, want %q", name, sc.GroupID, group)
+		}
+	}
+	if alice, err := e.store.ListGroups(ctx, s.Alice.UserID); err != nil || len(alice) != 0 {
+		t.Errorf("alice's groups = %v (%v), want none", alice, err)
+	}
+}
+
 func TestSeedRestic(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

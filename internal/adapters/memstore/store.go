@@ -59,6 +59,8 @@ type Store struct {
 	// schedules holds schedules with their remote and contact links (the
 	// schedule_remotes and schedule_contacts rows).
 	schedules map[domain.ScheduleID]schedules.Schedule
+	// groups holds the schedule groups.
+	groups map[domain.ScheduleGroupID]schedules.Group
 	// runs holds schedule runs (JobStatus is not stored: it is read from
 	// jobs).
 	runs map[domain.ScheduleRunID]schedules.Run
@@ -106,6 +108,7 @@ func New() *Store {
 		remotes:   make(map[domain.RemoteID]remotes.Remote),
 
 		schedules:   make(map[domain.ScheduleID]schedules.Schedule),
+		groups:      make(map[domain.ScheduleGroupID]schedules.Group),
 		runs:        make(map[domain.ScheduleRunID]schedules.Run),
 		contacts:    make(map[domain.ContactID]contacts.Contact),
 		deliveries:  make(map[domain.DeliveryID]notifications.Delivery),

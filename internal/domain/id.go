@@ -23,6 +23,7 @@ type (
 	remoteKind     struct{}
 	resticRepoKind struct{}
 	scheduleKind   struct{}
+	groupKind      struct{}
 	jobKind        struct{}
 	apiTokenKind   struct{}
 	contactKind    struct{}
@@ -44,6 +45,8 @@ type (
 	ResticRepoID = ID[resticRepoKind]
 	// ScheduleID identifies a schedule.
 	ScheduleID = ID[scheduleKind]
+	// ScheduleGroupID identifies a group of a user's schedules.
+	ScheduleGroupID = ID[groupKind]
 	// JobID identifies a job run.
 	JobID = ID[jobKind]
 	// APITokenID identifies a user's personal API token.
@@ -77,6 +80,9 @@ func NewResticRepoID() ResticRepoID { return newID[resticRepoKind]() }
 
 // NewScheduleID returns a new random ScheduleID.
 func NewScheduleID() ScheduleID { return newID[scheduleKind]() }
+
+// NewScheduleGroupID returns a new random ScheduleGroupID.
+func NewScheduleGroupID() ScheduleGroupID { return newID[groupKind]() }
 
 // NewJobID returns a new random JobID.
 func NewJobID() JobID { return newID[jobKind]() }
@@ -113,6 +119,10 @@ func ParseResticRepoID(s string) (ResticRepoID, error) { return parseID[resticRe
 
 // ParseScheduleID parses a ScheduleID from its canonical string form.
 func ParseScheduleID(s string) (ScheduleID, error) { return parseID[scheduleKind](s) }
+
+// ParseScheduleGroupID parses a ScheduleGroupID from its canonical string
+// form.
+func ParseScheduleGroupID(s string) (ScheduleGroupID, error) { return parseID[groupKind](s) }
 
 // ParseJobID parses a JobID from its canonical string form.
 func ParseJobID(s string) (JobID, error) { return parseID[jobKind](s) }

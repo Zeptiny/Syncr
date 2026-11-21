@@ -17,7 +17,7 @@ export const Route = createFileRoute("/_app/schedules/new")({
 });
 
 function NewSchedule() {
-  const { from, job, kind, repository } = Route.useSearch();
+  const { from, job, kind, repository, group } = Route.useSearch();
   const state = useLocation().state.jobDraft;
   const draft = useMemo(() => readJobDraft({ jobDraft: state }), [state]);
   const src = useQuery(
@@ -58,7 +58,11 @@ function NewSchedule() {
     <ScheduleFormPage
       title={title}
       description={description}
-      initial={draft ? draftSchedule(draft) : emptySchedule(undefined, kind, repository)}
+      initial={
+        draft
+          ? { ...draftSchedule(draft), groupId: group ?? "" }
+          : emptySchedule(undefined, kind, repository, group)
+      }
     />
   );
 }

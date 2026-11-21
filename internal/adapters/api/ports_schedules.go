@@ -40,6 +40,13 @@ type ScheduleService interface {
 	// Health returns every schedule of the actor with its newest run and
 	// last success (the dashboard's schedule health and the metrics).
 	Health(ctx context.Context, actor domain.Actor) ([]schedules.Health, error)
+
+	// The actor's schedule groups (ADR 0024).
+	CreateGroup(ctx context.Context, actor domain.Actor, name string) (schedules.Group, error)
+	Groups(ctx context.Context, actor domain.Actor) ([]schedules.Group, error)
+	RenameGroup(ctx context.Context, actor domain.Actor, id domain.ScheduleGroupID, name string) (schedules.Group, error)
+	DeleteGroup(ctx context.Context, actor domain.Actor, id domain.ScheduleGroupID) error
+	MoveSchedules(ctx context.Context, actor domain.Actor, ids []domain.ScheduleID, group domain.ScheduleGroupID) ([]schedules.Schedule, error)
 }
 
 var _ ScheduleService = (*schedules.Service)(nil)

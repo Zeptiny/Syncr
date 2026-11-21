@@ -137,15 +137,20 @@ func newPolicy() map[string]access {
 		// Schedules and contacts are owner-only (admins included); the use
 		// cases scope them. SendTestNotification is rate limited by the
 		// contacts use case.
-		syncrv1connect.ScheduleServiceListSchedulesProcedure:      user,
-		syncrv1connect.ScheduleServiceGetScheduleProcedure:        user,
-		syncrv1connect.ScheduleServiceCreateScheduleProcedure:     user,
-		syncrv1connect.ScheduleServiceUpdateScheduleProcedure:     user,
-		syncrv1connect.ScheduleServiceSetScheduleEnabledProcedure: user,
-		syncrv1connect.ScheduleServiceDeleteScheduleProcedure:     user,
-		syncrv1connect.ScheduleServiceRunScheduleNowProcedure:     user,
-		syncrv1connect.ScheduleServiceListScheduleRunsProcedure:   user,
-		syncrv1connect.ScheduleServicePreviewScheduleProcedure:    user,
+		syncrv1connect.ScheduleServiceListSchedulesProcedure:       user,
+		syncrv1connect.ScheduleServiceGetScheduleProcedure:         user,
+		syncrv1connect.ScheduleServiceCreateScheduleProcedure:      user,
+		syncrv1connect.ScheduleServiceUpdateScheduleProcedure:      user,
+		syncrv1connect.ScheduleServiceSetScheduleEnabledProcedure:  user,
+		syncrv1connect.ScheduleServiceDeleteScheduleProcedure:      user,
+		syncrv1connect.ScheduleServiceRunScheduleNowProcedure:      user,
+		syncrv1connect.ScheduleServiceListScheduleRunsProcedure:    user,
+		syncrv1connect.ScheduleServicePreviewScheduleProcedure:     user,
+		syncrv1connect.ScheduleServiceListScheduleGroupsProcedure:  user,
+		syncrv1connect.ScheduleServiceCreateScheduleGroupProcedure: user,
+		syncrv1connect.ScheduleServiceRenameScheduleGroupProcedure: user,
+		syncrv1connect.ScheduleServiceDeleteScheduleGroupProcedure: user,
+		syncrv1connect.ScheduleServiceMoveSchedulesProcedure:       user,
 
 		syncrv1connect.ChannelServiceListChannelsProcedure: user,
 

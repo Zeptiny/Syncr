@@ -341,8 +341,9 @@ func (c schedTestClock) Now() time.Time { return c.t }
 
 type schedTestIDs struct{}
 
-func (schedTestIDs) NewScheduleID() domain.ScheduleID       { return domain.NewScheduleID() }
-func (schedTestIDs) NewScheduleRunID() domain.ScheduleRunID { return domain.NewScheduleRunID() }
+func (schedTestIDs) NewScheduleID() domain.ScheduleID           { return domain.NewScheduleID() }
+func (schedTestIDs) NewScheduleRunID() domain.ScheduleRunID     { return domain.NewScheduleRunID() }
+func (schedTestIDs) NewScheduleGroupID() domain.ScheduleGroupID { return domain.NewScheduleGroupID() }
 
 type schedTestRemotes struct{}
 

@@ -40,6 +40,9 @@ func (UUIDv7) NewScheduleID() domain.ScheduleID { return domain.NewScheduleID() 
 // NewScheduleRunID returns a new random ScheduleRunID.
 func (UUIDv7) NewScheduleRunID() domain.ScheduleRunID { return domain.NewScheduleRunID() }
 
+// NewScheduleGroupID returns a new random ScheduleGroupID.
+func (UUIDv7) NewScheduleGroupID() domain.ScheduleGroupID { return domain.NewScheduleGroupID() }
+
 // NewContactID returns a new random ContactID.
 func (UUIDv7) NewContactID() domain.ContactID { return domain.NewContactID() }
 
@@ -83,6 +86,11 @@ func (s *Sequential) NewScheduleID() domain.ScheduleID { return mint(domain.Pars
 // NewScheduleRunID returns the next ScheduleRunID.
 func (s *Sequential) NewScheduleRunID() domain.ScheduleRunID {
 	return mint(domain.ParseScheduleRunID, s.next())
+}
+
+// NewScheduleGroupID returns the next ScheduleGroupID.
+func (s *Sequential) NewScheduleGroupID() domain.ScheduleGroupID {
+	return mint(domain.ParseScheduleGroupID, s.next())
 }
 
 // NewContactID returns the next ContactID.

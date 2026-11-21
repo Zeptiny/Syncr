@@ -150,6 +150,8 @@ type Seed struct {
 	// Contacts and Schedules are the demo contacts and schedules by name.
 	Contacts  map[string]domain.ContactID
 	Schedules map[string]domain.ScheduleID
+	// Groups are the demo schedule groups by name (the admin's).
+	Groups map[string]domain.ScheduleGroupID
 	// Jobs are the seeded jobs (manual and scheduled), oldest first.
 	Jobs []domain.JobID
 	// Running is the job that Animate keeps running.
@@ -186,6 +188,7 @@ func Run(ctx context.Context, d Deps) (*Seed, error) {
 		d: d, log: log, Workers: map[string]domain.WorkerID{}, Remotes: map[string]domain.RemoteID{},
 		Repositories: map[string]domain.ResticRepoID{},
 		Contacts:     map[string]domain.ContactID{}, Schedules: map[string]domain.ScheduleID{},
+		Groups: map[string]domain.ScheduleGroupID{},
 	}
 	now := d.Clock.Now()
 	steps := []struct {

@@ -121,7 +121,8 @@ func (s *Store) CountActiveAdmins(context.Context) (int, error) {
 
 // DeleteUser implements users.Repository. Like the database's foreign keys,
 // it refuses to delete a user who owns remotes (deleted ones included) or
-// jobs, and removes the user's sessions and API tokens with the user.
+// jobs, and removes the user's sessions, API tokens and schedule groups
+// with the user.
 func (s *Store) DeleteUser(_ context.Context, id domain.UserID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -166,6 +167,11 @@ func (s *Store) DeleteUser(_ context.Context, id domain.UserID) error {
 	for tid, t := range s.apiTokens {
 		if t.UserID == id {
 			delete(s.apiTokens, tid)
+		}
+	}
+	for gid, g := range s.groups {
+		if g.OwnerID == id {
+			delete(s.groups, gid)
 		}
 	}
 	delete(s.users, id)

@@ -53,8 +53,10 @@ import {
   ScheduleRunSchema,
   ScheduleRunStatus,
   ScheduleRunTrigger,
+  ScheduleGroupSchema,
   ScheduleSchema,
   type Schedule,
+  type ScheduleGroup,
   type ScheduleRun,
 } from "@/gen/syncr/v1/schedules_pb";
 import { UserRole, UserSchema, type User } from "@/gen/syncr/v1/users_pb";
@@ -595,6 +597,8 @@ export const ids = {
   gcsBackups: "9e7d6c5b-2a1f-4b3c-8d9e-0f1a2b3c4d0c",
   runningJob: "c3d2e1f0-7a6b-4c5d-8e9f-a0b1c2d3e401",
   removedLaptop: "5a1e2b7c-1d3f-4e8a-9b0c-2d4f6a8b0c09",
+  groupPhotos: "7c3d9e1f-2a4b-4c6d-8e0f-1a2b3c4d5e01",
+  groupOffsite: "7c3d9e1f-2a4b-4c6d-8e0f-1a2b3c4d5e02",
   nightly: "4b8f0d2a-6c1e-4f3a-9d5b-7e2c1a0f3b01",
   officeHourly: "4b8f0d2a-6c1e-4f3a-9d5b-7e2c1a0f3b02",
   weekly: "4b8f0d2a-6c1e-4f3a-9d5b-7e2c1a0f3b03",
@@ -1424,6 +1428,8 @@ const H = HOUR;
 interface ScheduleSeed {
   id: string;
   name: string;
+  /** group is the schedule's group (ids.group*), if any. */
+  group?: string;
   description: string;
   cron: string;
   timezone: string;
@@ -1444,6 +1450,7 @@ function scheduleSeeds(now: number): ScheduleSeed[] {
     {
       id: ids.nightly,
       name: "Nightly photos → B2",
+      group: ids.groupPhotos,
       description: "Mirror this year's photo library to Backblaze every night.",
       cron: "30 2 * * *",
       timezone: "Europe/Berlin",
@@ -1480,6 +1487,7 @@ function scheduleSeeds(now: number): ScheduleSeed[] {
     },
     {
       id: ids.weekly,
+      group: ids.groupOffsite,
       name: "Weekly archive",
       description: "",
       cron: "0 3 * * 0",
@@ -1496,6 +1504,7 @@ function scheduleSeeds(now: number): ScheduleSeed[] {
     },
     {
       id: ids.offsite,
+      group: ids.groupOffsite,
       name: "Offsite mirror",
       description: "Pull the database dumps to the offsite box four times a day.",
       cron: "15 */6 * * *",
@@ -1561,6 +1570,8 @@ function remoteRefs(...idList: string[]) {
 
 /** History is the scheduled side of the dev seed: schedules, runs and jobs. */
 export interface History {
+  /** groups are the admin's schedule groups. */
+  groups: ScheduleGroup[];
   schedules: Schedule[];
   runs: ScheduleRun[];
   jobs: Job[];
@@ -1816,6 +1827,7 @@ export function history(now: number): History {
         id: s.id,
         ownerId: ids.admin,
         name: s.name,
+        groupId: s.group ?? "",
         description: s.description,
         cron: s.cron,
         timezone: s.timezone,
@@ -1846,7 +1858,25 @@ export function history(now: number): History {
   }
   runs.sort((a, b) => Number((b.scheduledFor?.seconds ?? 0n) - (a.scheduledFor?.seconds ?? 0n)));
   jobList.sort((a, b) => Number((b.createdAt?.seconds ?? 0n) - (a.createdAt?.seconds ?? 0n)));
-  return { schedules, runs, jobs: jobList };
+  return { groups: scheduleGroups(now), schedules, runs, jobs: jobList };
+}
+
+/** scheduleGroups are the admin's schedule groups. */
+export function scheduleGroups(now: number): ScheduleGroup[] {
+  return [
+    create(ScheduleGroupSchema, {
+      id: ids.groupOffsite,
+      name: "Offsite",
+      createdAt: ts(now - 30 * DAY),
+      updatedAt: ts(now - 30 * DAY),
+    }),
+    create(ScheduleGroupSchema, {
+      id: ids.groupPhotos,
+      name: "Photos",
+      createdAt: ts(now - 30 * DAY),
+      updatedAt: ts(now - 30 * DAY),
+    }),
+  ];
 }
 
 /**

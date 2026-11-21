@@ -129,6 +129,10 @@ func Run(t *testing.T, open func(t *testing.T) Store) {
 		{"ScheduleLists", testScheduleLists},
 		{"ScheduleDeleteCascades", testScheduleDeleteCascades},
 		{"ScheduleNoAliasing", testScheduleNoAliasing},
+		{"ScheduleGroups", testScheduleGroups},
+		{"ScheduleGroupReferences", testScheduleGroupReferences},
+		{"ScheduleMove", testScheduleMove},
+		{"ScheduleGroupDelete", testScheduleGroupDelete},
 
 		{"ContactCreateGetList", testContactCreateGetList},
 		{"ContactUpdateVersioned", testContactUpdateVersioned},
