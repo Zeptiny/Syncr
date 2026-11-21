@@ -85,6 +85,19 @@ describe("auth flow", () => {
     const { router } = renderApp("/jobs", transport);
     expect(await screen.findByRole("heading", { name: "Set up Syncr" })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/setup");
+    // Where the code is, in a new tab: the wizard keeps what was typed.
+    const where = screen.getByRole("link", { name: /Where is the setup code\?/ });
+    expect(where).toHaveAttribute("href", "/docs/deployment#first-start");
+    expect(where).toHaveAttribute("target", "_blank");
+  });
+
+  it("links the sign-in page to the documentation, in the same tab", async () => {
+    const { transport } = api({ signedIn: false });
+    renderApp("/login", transport);
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    const docs = screen.getByRole("link", { name: "Read the documentation" });
+    expect(docs).toHaveAttribute("href", "/docs");
+    expect(docs).not.toHaveAttribute("target");
   });
 
   it("lets a signed-in user through and away from /login", async () => {

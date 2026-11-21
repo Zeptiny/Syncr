@@ -12,6 +12,7 @@ import { forgetSession } from "@/hooks/use-session";
 import { errorMessage, fieldViolations } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { AuthLayout } from "@/features/auth/auth-layout";
+import { DocLink } from "@/features/docs/doc-link";
 import { MIN_PASSWORD } from "@/features/users/users-page";
 import { ActiveEnrollment } from "@/features/workers/enrollment";
 import { formatSetupCode, MIN_SETUP_CODE_LEN, setupCodeLength } from "./setup-code";
@@ -135,6 +136,16 @@ export function SetupPage({ step }: { step: SetupStep }) {
               To prove you run this controller, enter the setup code it wrote to its log when it
               started. Look for the line <span className="text-foreground">“first-run setup”</span>.
             </p>
+            <p className="mt-2 text-[13px]">
+              <DocLink
+                page="deployment"
+                anchor="first-start"
+                newTab
+                className="font-medium text-primary hover:underline"
+              >
+                Where is the setup code?
+              </DocLink>
+            </p>
           </div>
           <FieldShell id="setup-code" label="Setup code" error={errors.setup_code}>
             <Input
@@ -232,6 +243,27 @@ export function SetupPage({ step }: { step: SetupStep }) {
             <p className="mt-1 text-muted-foreground">
               Run this on a machine that holds files you want to move or back up. You can also do it
               later from Workers.
+            </p>
+            <p className="mt-2 text-[13px] text-muted-foreground">
+              Step by step, with user mode and troubleshooting: the{" "}
+              <DocLink
+                page="setup-linux"
+                anchor="quick-path-one-command"
+                newTab
+                className="font-medium text-primary hover:underline"
+              >
+                Linux guide
+              </DocLink>{" "}
+              and the{" "}
+              <DocLink
+                page="setup-windows"
+                anchor="quick-path-one-command"
+                newTab
+                className="font-medium text-primary hover:underline"
+              >
+                Windows guide
+              </DocLink>
+              .
             </p>
           </div>
           <ActiveEnrollment onConnected={() => setWorkerConnected(true)} workerLink="secondary" />

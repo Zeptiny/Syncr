@@ -7,6 +7,7 @@ import { FileBrowser } from "@/components/app/file-browser/file-browser";
 import { copyPathItem } from "@/components/app/file-browser/helpers";
 import { useBrowserSelection } from "@/components/app/file-browser/use-selection";
 import { PageHeader } from "@/components/app/page-header";
+import { HelpLink } from "@/features/docs/doc-link";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WorkerAdminService } from "@/gen/syncr/v1/api_pb";
@@ -81,12 +82,15 @@ export function RemoteFilesPage({
           </span>
         }
         actions={
-          <Button variant="outline" asChild>
-            <Link to="/remotes/$remoteId" params={{ remoteId }}>
-              <Pencil aria-hidden />
-              Edit remote
-            </Link>
-          </Button>
+          <>
+            <HelpLink page="browsing" />
+            <Button variant="outline" asChild>
+              <Link to="/remotes/$remoteId" params={{ remoteId }}>
+                <Pencil aria-hidden />
+                Edit remote
+              </Link>
+            </Button>
+          </>
         }
       />
       <FileBrowser

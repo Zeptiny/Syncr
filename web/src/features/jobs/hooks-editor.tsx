@@ -3,6 +3,7 @@ import { Plus, X } from "lucide-react";
 import { FieldShell } from "@/components/app/descriptor-form";
 import { Panel } from "@/components/app/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { HelpLink } from "@/features/docs/doc-link";
 import { formatLimit } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -224,6 +225,7 @@ export function HooksPanel(props: HooksPanelProps) {
     <Panel
       title="Hooks"
       description="Commands the worker's operator prepared, run on the worker around the job: stop an app or dump a database before a backup, and start the app again afterwards."
+      actions={<HelpLink page="hooks" anchor="using-hooks-in-a-job" />}
     >
       {empty ? (
         <p className="text-[13px] text-muted-foreground">{empty}</p>

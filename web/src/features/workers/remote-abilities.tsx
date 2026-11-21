@@ -1,6 +1,7 @@
 import { Check, X } from "lucide-react";
 
 import type { Worker } from "@/gen/syncr/v1/api_pb";
+import { DocLink } from "@/features/docs/doc-link";
 import { workerAbilities } from "@/lib/remote-sources";
 import { cn } from "@/lib/utils";
 
@@ -8,17 +9,20 @@ import { cn } from "@/lib/utils";
  * RemoteAbilities shows what a worker can do for backups of a remote:
  * "Mirror ✓ · Mount ✗ – /dev/fuse is missing". A worker that reported
  * nothing (an older release, or one not connected yet) shows empty.
- * stacked puts each method on its own line, for narrow places.
+ * stacked puts each method on its own line, for narrow places. help adds,
+ * when the worker cannot mount, a link to what a mount needs.
  */
 export function RemoteAbilities({
   worker,
   empty = null,
   stacked,
+  help,
   className,
 }: {
   worker: Worker;
   empty?: React.ReactNode;
   stacked?: boolean;
+  help?: boolean;
   className?: string;
 }) {
   const rows = workerAbilities(worker);
@@ -53,6 +57,16 @@ export function RemoteAbilities({
           )}
         </span>
       ))}
+      {help && rows.some((r) => r.label === "Mount" && !r.ok) && (
+        <DocLink
+          page="restic"
+          anchor="what-a-worker-needs-for-the-mount"
+          newTab
+          className="text-xs font-medium text-primary hover:underline"
+        >
+          What a mount needs
+        </DocLink>
+      )}
     </span>
   );
 }

@@ -8,6 +8,7 @@ import { WorkerPicker } from "@/components/app/worker-picker";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { DocLink } from "@/features/docs/doc-link";
 import { JobService, type Worker } from "@/gen/syncr/v1/api_pb";
 import {
   ResticService,
@@ -199,6 +200,16 @@ function Body({
             </div>
           </>
         )}
+        <p className="text-[13px]">
+          <DocLink
+            page="restic"
+            anchor="deleting-a-repository"
+            newTab
+            className="font-medium text-primary hover:underline"
+          >
+            What forgetting and deleting do
+          </DocLink>
+        </p>
       </div>
     </TypedConfirmDialog>
   );

@@ -31,6 +31,7 @@ export interface DocAnchors {
     | "limits-and-known-gaps";
   "configuration": never;
   "deployment":
+    | "first-start"
     | "versions-and-the-compose-file"
     | "https-and-reverse-proxies"
     | "backups"
@@ -104,6 +105,7 @@ export interface DocAnchors {
     | "whats-new"
     | "encrypted-remotes"
     | "more-remote-types"
+    | "documentation-in-the-controller"
     | "remotes"
     | "fixes"
     | "known-limitations";

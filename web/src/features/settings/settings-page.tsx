@@ -13,6 +13,7 @@ import { FieldShell } from "@/components/app/descriptor-form";
 import { EmptyState } from "@/components/app/empty-state";
 import { KeyValueList } from "@/components/app/key-value-list";
 import { PageHeader } from "@/components/app/page-header";
+import { HelpLink } from "@/features/docs/doc-link";
 import { Panel } from "@/components/app/panel";
 import { RelativeTime } from "@/components/app/relative-time";
 import { Button } from "@/components/ui/button";
@@ -304,12 +305,15 @@ function TokensPanel() {
       title="API tokens"
       description="For scripts and automation that call the API as you."
       actions={
-        !viaToken && (
-          <Button size="sm" onClick={() => setCreating(true)}>
-            <Plus aria-hidden />
-            Create token
-          </Button>
-        )
+        <>
+          <HelpLink page="api" />
+          {!viaToken && (
+            <Button size="sm" onClick={() => setCreating(true)}>
+              <Plus aria-hidden />
+              Create token
+            </Button>
+          )}
+        </>
       }
     >
       <DataTable

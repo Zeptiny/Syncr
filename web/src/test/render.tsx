@@ -10,6 +10,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  RouterContextProvider,
   RouterProvider,
 } from "@tanstack/react-router";
 import { render, type RenderResult } from "@testing-library/react";
@@ -31,16 +32,26 @@ export function testQueryClient(): QueryClient {
   });
 }
 
-/** renderWithProviders renders a component with the app's providers. */
+/**
+ * renderWithProviders renders a component with the app's providers. A
+ * router context without routes lets it render links (such as help links)
+ * at once; use renderInRouter to follow a navigation.
+ */
 export function renderWithProviders(
   ui: React.ReactElement,
   { transport = mockTransport(() => {}), queryClient = testQueryClient() } = {},
 ): RenderResult & { queryClient: QueryClient } {
+  const router = createRouter({
+    routeTree: createRootRoute(),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
   const result = render(
     <ThemeProvider>
       <TransportProvider transport={transport}>
         <QueryClientProvider client={queryClient}>
-          <TooltipProvider>{ui}</TooltipProvider>
+          <RouterContextProvider router={router as never}>
+            <TooltipProvider>{ui}</TooltipProvider>
+          </RouterContextProvider>
         </QueryClientProvider>
       </TransportProvider>
     </ThemeProvider>,

@@ -18,6 +18,7 @@ import type { RowMenuItem } from "@/components/app/file-table";
 import { useBrowserSelection } from "@/components/app/file-browser/use-selection";
 import { KeyValueList } from "@/components/app/key-value-list";
 import { PageHeader } from "@/components/app/page-header";
+import { HelpLink } from "@/features/docs/doc-link";
 import { Panel } from "@/components/app/panel";
 import { RelativeTime } from "@/components/app/relative-time";
 import { ShortId } from "@/components/app/short-id";
@@ -194,6 +195,7 @@ export function SnapshotBrowserPage({
         }
         actions={
           <>
+            <HelpLink page="restic" anchor="browsing-a-snapshot" />
             <SnapshotSwitcher
               snapshots={snaps.data?.snapshots ?? []}
               current={snapshot}

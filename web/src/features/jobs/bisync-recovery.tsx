@@ -8,6 +8,7 @@ import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/app/confirm-dialog";
 import { Button } from "@/components/ui/button";
+import { HelpLink } from "@/features/docs/doc-link";
 import { JobService, type Job, type Worker } from "@/gen/syncr/v1/api_pb";
 import { ScheduleService, type Schedule } from "@/gen/syncr/v1/schedules_pb";
 import { invalidateService } from "@/lib/invalidate";
@@ -127,23 +128,26 @@ export function BisyncRecovery({ job, canRun, schedule, workers }: BisyncRecover
     <div className="mt-2 flex flex-col items-start gap-3">
       <p className="text-[13px] leading-5 text-foreground">{recoveryHint(recovery)}</p>
       {plan.block && <Blocked block={plan.block} />}
-      {target && recovery === "resync" && (
-        <Button size="sm" onClick={() => setAsking("resync")}>
-          <RefreshCw aria-hidden />
-          Resync now
-        </Button>
-      )}
-      {target && recovery === "force" && (
-        <Button
-          size="sm"
-          variant="outline"
-          className="bg-card text-danger hover:text-danger"
-          onClick={() => setAsking("force")}
-        >
-          <ShieldAlert aria-hidden />
-          Run once anyway
-        </Button>
-      )}
+      <div className="flex flex-wrap items-center gap-2">
+        {target && recovery === "resync" && (
+          <Button size="sm" onClick={() => setAsking("resync")}>
+            <RefreshCw aria-hidden />
+            Resync now
+          </Button>
+        )}
+        {target && recovery === "force" && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="bg-card text-danger hover:text-danger"
+            onClick={() => setAsking("force")}
+          >
+            <ShieldAlert aria-hidden />
+            Run once anyway
+          </Button>
+        )}
+        <HelpLink page="bisync" anchor="when-a-run-fails" />
+      </div>
 
       <ConfirmDialog
         open={asking === "resync"}

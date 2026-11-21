@@ -6,7 +6,7 @@ their order.
 
 ## Get started
 
-- [Running the controller](deployment.md): Docker Compose, versions, HTTPS, backups, upgrades and the images
+- [Running the controller](deployment.md): Docker Compose, the first start, versions, HTTPS, backups, upgrades and the images
 - [Configuration](configuration.md): every controller setting
 - [A worker on Linux](setup-linux.md): install, user mode, passive workers, troubleshooting
 - [A worker on Windows](setup-windows.md): the same on Windows

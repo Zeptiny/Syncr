@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DocLink } from "@/features/docs/doc-link";
 import { AuthService } from "@/gen/syncr/v1/auth_pb";
 import { endSession } from "@/hooks/use-session";
 import { errorMessage, hasCode } from "@/lib/errors";
@@ -86,9 +87,15 @@ export function LoginPage({ redirect }: { redirect?: string }) {
           {login.isPending ? "Signing in…" : "Sign in"}
         </Button>
       </form>
-      <p className="mt-8 text-xs leading-5 text-muted-foreground">
-        Forgot your password? An administrator can reset it from the Users page.
-      </p>
+      <div className="mt-8 flex flex-col gap-2 text-xs leading-5 text-muted-foreground">
+        <p>Forgot your password? An administrator can reset it from the Users page.</p>
+        <p>
+          New here?{" "}
+          <DocLink page="" className="font-medium text-primary hover:underline">
+            Read the documentation
+          </DocLink>
+        </p>
+      </div>
     </AuthLayout>
   );
 }
