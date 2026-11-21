@@ -9,6 +9,7 @@ package syncrv1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	durationpb "google.golang.org/protobuf/types/known/durationpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -161,7 +162,22 @@ type GetDashboardResponse struct {
 	// The latest failed or interrupted jobs, newest first.
 	RecentFailures []*Job `protobuf:"bytes,8,rep,name=recent_failures,json=recentFailures,proto3" json:"recent_failures,omitempty"`
 	// The latest missed or failed scheduled runs, newest first.
-	RecentMissed  []*ScheduleRun `protobuf:"bytes,9,rep,name=recent_missed,json=recentMissed,proto3" json:"recent_missed,omitempty"`
+	RecentMissed []*ScheduleRun `protobuf:"bytes,9,rep,name=recent_missed,json=recentMissed,proto3" json:"recent_missed,omitempty"`
+	// The jobs that finished in the range by job kind (key: the kind, e.g.
+	// "rclone_transfer"), most jobs first.
+	Kinds []*ActivityGroup `protobuf:"bytes,10,rep,name=kinds,proto3" json:"kinds,omitempty"`
+	// The jobs that finished in the range by worker (key: the worker ID,
+	// name: its name; removed workers included), most jobs first.
+	WorkerActivity []*ActivityGroup `protobuf:"bytes,11,rep,name=worker_activity,json=workerActivity,proto3" json:"worker_activity,omitempty"`
+	// The error codes of the failed and interrupted jobs that finished in
+	// the range, most jobs first; at most eight.
+	FailureReasons []*FailureReason `protobuf:"bytes,12,rep,name=failure_reasons,json=failureReasons,proto3" json:"failure_reasons,omitempty"`
+	// The caller's schedules with how their runs went: those whose newest
+	// run did not succeed first, then by name.
+	Schedules []*ScheduleHealth `protobuf:"bytes,13,rep,name=schedules,proto3" json:"schedules,omitempty"`
+	// The caller's restic repositories with what their successful backups
+	// that finished in the range added, by name.
+	Repositories  []*RepositoryGrowth `protobuf:"bytes,14,rep,name=repositories,proto3" json:"repositories,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -259,6 +275,41 @@ func (x *GetDashboardResponse) GetRecentMissed() []*ScheduleRun {
 	return nil
 }
 
+func (x *GetDashboardResponse) GetKinds() []*ActivityGroup {
+	if x != nil {
+		return x.Kinds
+	}
+	return nil
+}
+
+func (x *GetDashboardResponse) GetWorkerActivity() []*ActivityGroup {
+	if x != nil {
+		return x.WorkerActivity
+	}
+	return nil
+}
+
+func (x *GetDashboardResponse) GetFailureReasons() []*FailureReason {
+	if x != nil {
+		return x.FailureReasons
+	}
+	return nil
+}
+
+func (x *GetDashboardResponse) GetSchedules() []*ScheduleHealth {
+	if x != nil {
+		return x.Schedules
+	}
+	return nil
+}
+
+func (x *GetDashboardResponse) GetRepositories() []*RepositoryGrowth {
+	if x != nil {
+		return x.Repositories
+	}
+	return nil
+}
+
 // JobTotals counts jobs that finished in the range, by status.
 type JobTotals struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
@@ -275,7 +326,15 @@ type JobTotals struct {
 	Running int64 `protobuf:"varint,8,opt,name=running,proto3" json:"running,omitempty"`
 	Queued  int64 `protobuf:"varint,9,opt,name=queued,proto3" json:"queued,omitempty"`
 	// Scheduled runs missed in the range.
-	MissedRuns    int64 `protobuf:"varint,10,opt,name=missed_runs,json=missedRuns,proto3" json:"missed_runs,omitempty"`
+	MissedRuns int64 `protobuf:"varint,10,opt,name=missed_runs,json=missedRuns,proto3" json:"missed_runs,omitempty"`
+	// The run time (start to end, the worker's clock) of the finished jobs
+	// that started, and how many started.
+	RunTime *durationpb.Duration `protobuf:"bytes,11,opt,name=run_time,json=runTime,proto3" json:"run_time,omitempty"`
+	Started int64                `protobuf:"varint,12,opt,name=started,proto3" json:"started,omitempty"`
+	// The queue wait (creation to a worker accepting it) of the finished
+	// jobs a worker accepted, and how many it accepted.
+	QueueWait     *durationpb.Duration `protobuf:"bytes,13,opt,name=queue_wait,json=queueWait,proto3" json:"queue_wait,omitempty"`
+	Dispatched    int64                `protobuf:"varint,14,opt,name=dispatched,proto3" json:"dispatched,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -380,6 +439,34 @@ func (x *JobTotals) GetMissedRuns() int64 {
 	return 0
 }
 
+func (x *JobTotals) GetRunTime() *durationpb.Duration {
+	if x != nil {
+		return x.RunTime
+	}
+	return nil
+}
+
+func (x *JobTotals) GetStarted() int64 {
+	if x != nil {
+		return x.Started
+	}
+	return 0
+}
+
+func (x *JobTotals) GetQueueWait() *durationpb.Duration {
+	if x != nil {
+		return x.QueueWait
+	}
+	return nil
+}
+
+func (x *JobTotals) GetDispatched() int64 {
+	if x != nil {
+		return x.Dispatched
+	}
+	return 0
+}
+
 // ActivityBucket counts the jobs that finished in one bucket.
 type ActivityBucket struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -391,8 +478,13 @@ type ActivityBucket struct {
 	Interrupted int64                  `protobuf:"varint,4,opt,name=interrupted,proto3" json:"interrupted,omitempty"`
 	Cancelled   int64                  `protobuf:"varint,5,opt,name=cancelled,proto3" json:"cancelled,omitempty"`
 	// Bytes and files transferred by those jobs.
-	Bytes         int64 `protobuf:"varint,6,opt,name=bytes,proto3" json:"bytes,omitempty"`
-	Files         int64 `protobuf:"varint,7,opt,name=files,proto3" json:"files,omitempty"`
+	Bytes int64 `protobuf:"varint,6,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	Files int64 `protobuf:"varint,7,opt,name=files,proto3" json:"files,omitempty"`
+	// Their run time and queue wait, as in JobTotals.
+	RunTime       *durationpb.Duration `protobuf:"bytes,8,opt,name=run_time,json=runTime,proto3" json:"run_time,omitempty"`
+	Started       int64                `protobuf:"varint,9,opt,name=started,proto3" json:"started,omitempty"`
+	QueueWait     *durationpb.Duration `protobuf:"bytes,10,opt,name=queue_wait,json=queueWait,proto3" json:"queue_wait,omitempty"`
+	Dispatched    int64                `protobuf:"varint,11,opt,name=dispatched,proto3" json:"dispatched,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -476,6 +568,471 @@ func (x *ActivityBucket) GetFiles() int64 {
 	return 0
 }
 
+func (x *ActivityBucket) GetRunTime() *durationpb.Duration {
+	if x != nil {
+		return x.RunTime
+	}
+	return nil
+}
+
+func (x *ActivityBucket) GetStarted() int64 {
+	if x != nil {
+		return x.Started
+	}
+	return 0
+}
+
+func (x *ActivityBucket) GetQueueWait() *durationpb.Duration {
+	if x != nil {
+		return x.QueueWait
+	}
+	return nil
+}
+
+func (x *ActivityBucket) GetDispatched() int64 {
+	if x != nil {
+		return x.Dispatched
+	}
+	return 0
+}
+
+// ActivityGroup counts the jobs of one job kind or one worker that finished
+// in the range.
+type ActivityGroup struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The kind or the worker ID.
+	Key string `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	// The worker's name; empty for a kind.
+	Name        string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Succeeded   int64  `protobuf:"varint,3,opt,name=succeeded,proto3" json:"succeeded,omitempty"`
+	Failed      int64  `protobuf:"varint,4,opt,name=failed,proto3" json:"failed,omitempty"`
+	Interrupted int64  `protobuf:"varint,5,opt,name=interrupted,proto3" json:"interrupted,omitempty"`
+	Cancelled   int64  `protobuf:"varint,6,opt,name=cancelled,proto3" json:"cancelled,omitempty"`
+	Bytes       int64  `protobuf:"varint,7,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	Files       int64  `protobuf:"varint,8,opt,name=files,proto3" json:"files,omitempty"`
+	// Run time and queue wait, as in JobTotals.
+	RunTime       *durationpb.Duration `protobuf:"bytes,9,opt,name=run_time,json=runTime,proto3" json:"run_time,omitempty"`
+	Started       int64                `protobuf:"varint,10,opt,name=started,proto3" json:"started,omitempty"`
+	QueueWait     *durationpb.Duration `protobuf:"bytes,11,opt,name=queue_wait,json=queueWait,proto3" json:"queue_wait,omitempty"`
+	Dispatched    int64                `protobuf:"varint,12,opt,name=dispatched,proto3" json:"dispatched,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ActivityGroup) Reset() {
+	*x = ActivityGroup{}
+	mi := &file_syncr_v1_dashboard_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActivityGroup) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActivityGroup) ProtoMessage() {}
+
+func (x *ActivityGroup) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_dashboard_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActivityGroup.ProtoReflect.Descriptor instead.
+func (*ActivityGroup) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_dashboard_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ActivityGroup) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *ActivityGroup) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ActivityGroup) GetSucceeded() int64 {
+	if x != nil {
+		return x.Succeeded
+	}
+	return 0
+}
+
+func (x *ActivityGroup) GetFailed() int64 {
+	if x != nil {
+		return x.Failed
+	}
+	return 0
+}
+
+func (x *ActivityGroup) GetInterrupted() int64 {
+	if x != nil {
+		return x.Interrupted
+	}
+	return 0
+}
+
+func (x *ActivityGroup) GetCancelled() int64 {
+	if x != nil {
+		return x.Cancelled
+	}
+	return 0
+}
+
+func (x *ActivityGroup) GetBytes() int64 {
+	if x != nil {
+		return x.Bytes
+	}
+	return 0
+}
+
+func (x *ActivityGroup) GetFiles() int64 {
+	if x != nil {
+		return x.Files
+	}
+	return 0
+}
+
+func (x *ActivityGroup) GetRunTime() *durationpb.Duration {
+	if x != nil {
+		return x.RunTime
+	}
+	return nil
+}
+
+func (x *ActivityGroup) GetStarted() int64 {
+	if x != nil {
+		return x.Started
+	}
+	return 0
+}
+
+func (x *ActivityGroup) GetQueueWait() *durationpb.Duration {
+	if x != nil {
+		return x.QueueWait
+	}
+	return nil
+}
+
+func (x *ActivityGroup) GetDispatched() int64 {
+	if x != nil {
+		return x.Dispatched
+	}
+	return 0
+}
+
+// FailureReason counts the failed and interrupted jobs of the range with
+// one error code.
+type FailureReason struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// UNSPECIFIED for jobs that ended without a known code.
+	Code        JobErrorCode `protobuf:"varint,1,opt,name=code,proto3,enum=syncr.v1.JobErrorCode" json:"code,omitempty"`
+	Failed      int64        `protobuf:"varint,2,opt,name=failed,proto3" json:"failed,omitempty"`
+	Interrupted int64        `protobuf:"varint,3,opt,name=interrupted,proto3" json:"interrupted,omitempty"`
+	// The job kinds those jobs were, most jobs first.
+	Kinds         []string `protobuf:"bytes,4,rep,name=kinds,proto3" json:"kinds,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FailureReason) Reset() {
+	*x = FailureReason{}
+	mi := &file_syncr_v1_dashboard_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FailureReason) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FailureReason) ProtoMessage() {}
+
+func (x *FailureReason) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_dashboard_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FailureReason.ProtoReflect.Descriptor instead.
+func (*FailureReason) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_dashboard_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *FailureReason) GetCode() JobErrorCode {
+	if x != nil {
+		return x.Code
+	}
+	return JobErrorCode_JOB_ERROR_CODE_UNSPECIFIED
+}
+
+func (x *FailureReason) GetFailed() int64 {
+	if x != nil {
+		return x.Failed
+	}
+	return 0
+}
+
+func (x *FailureReason) GetInterrupted() int64 {
+	if x != nil {
+		return x.Interrupted
+	}
+	return 0
+}
+
+func (x *FailureReason) GetKinds() []string {
+	if x != nil {
+		return x.Kinds
+	}
+	return nil
+}
+
+// ScheduleHealth is one of the caller's schedules with how its runs went.
+type ScheduleHealth struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	ScheduleId   string                 `protobuf:"bytes,1,opt,name=schedule_id,json=scheduleId,proto3" json:"schedule_id,omitempty"`
+	ScheduleName string                 `protobuf:"bytes,2,opt,name=schedule_name,json=scheduleName,proto3" json:"schedule_name,omitempty"`
+	// The job kind it runs.
+	Kind    string `protobuf:"bytes,3,opt,name=kind,proto3" json:"kind,omitempty"`
+	Enabled bool   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	// The newest run (with its job's status); unset if it never ran.
+	LatestRun *ScheduleRun `protobuf:"bytes,5,opt,name=latest_run,json=latestRun,proto3" json:"latest_run,omitempty"`
+	// When the newest successful job it launched finished; unset if none
+	// did.
+	LastSuccessAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=last_success_at,json=lastSuccessAt,proto3" json:"last_success_at,omitempty"`
+	// When it runs next; unset while paused.
+	NextRunAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=next_run_at,json=nextRunAt,proto3" json:"next_run_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ScheduleHealth) Reset() {
+	*x = ScheduleHealth{}
+	mi := &file_syncr_v1_dashboard_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ScheduleHealth) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ScheduleHealth) ProtoMessage() {}
+
+func (x *ScheduleHealth) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_dashboard_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ScheduleHealth.ProtoReflect.Descriptor instead.
+func (*ScheduleHealth) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_dashboard_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ScheduleHealth) GetScheduleId() string {
+	if x != nil {
+		return x.ScheduleId
+	}
+	return ""
+}
+
+func (x *ScheduleHealth) GetScheduleName() string {
+	if x != nil {
+		return x.ScheduleName
+	}
+	return ""
+}
+
+func (x *ScheduleHealth) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ScheduleHealth) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *ScheduleHealth) GetLatestRun() *ScheduleRun {
+	if x != nil {
+		return x.LatestRun
+	}
+	return nil
+}
+
+func (x *ScheduleHealth) GetLastSuccessAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastSuccessAt
+	}
+	return nil
+}
+
+func (x *ScheduleHealth) GetNextRunAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.NextRunAt
+	}
+	return nil
+}
+
+// RepositoryGrowth is one of the caller's restic repositories and what its
+// successful backups that finished in the range added. Pruning frees space
+// that these figures do not show: they are what backups wrote, not the
+// repository's size.
+type RepositoryGrowth struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	RepositoryId string                 `protobuf:"bytes,1,opt,name=repository_id,json=repositoryId,proto3" json:"repository_id,omitempty"`
+	Name         string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// Snapshots as of the snapshot list's last refresh, and when the newest
+	// one was taken (unset if none).
+	SnapshotCount    int32                  `protobuf:"varint,3,opt,name=snapshot_count,json=snapshotCount,proto3" json:"snapshot_count,omitempty"`
+	LatestSnapshotAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=latest_snapshot_at,json=latestSnapshotAt,proto3" json:"latest_snapshot_at,omitempty"`
+	// The backups, and the bytes they added to the repository after
+	// deduplication and compression (restic's data_added_packed).
+	Backups    int64 `protobuf:"varint,5,opt,name=backups,proto3" json:"backups,omitempty"`
+	AddedBytes int64 `protobuf:"varint,6,opt,name=added_bytes,json=addedBytes,proto3" json:"added_bytes,omitempty"`
+	// The size of what the first and the last of those backups backed up
+	// (restic's total_bytes_processed); 0 without backups.
+	FirstSourceBytes int64 `protobuf:"varint,7,opt,name=first_source_bytes,json=firstSourceBytes,proto3" json:"first_source_bytes,omitempty"`
+	LastSourceBytes  int64 `protobuf:"varint,8,opt,name=last_source_bytes,json=lastSourceBytes,proto3" json:"last_source_bytes,omitempty"`
+	// The bytes added per activity bucket, aligned with
+	// GetDashboardResponse.activity.
+	Added []int64 `protobuf:"varint,9,rep,packed,name=added,proto3" json:"added,omitempty"`
+	// Whether the range held more backups than the dashboard reads: the
+	// figures then cover the newest ones only.
+	Truncated     bool `protobuf:"varint,10,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RepositoryGrowth) Reset() {
+	*x = RepositoryGrowth{}
+	mi := &file_syncr_v1_dashboard_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RepositoryGrowth) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RepositoryGrowth) ProtoMessage() {}
+
+func (x *RepositoryGrowth) ProtoReflect() protoreflect.Message {
+	mi := &file_syncr_v1_dashboard_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RepositoryGrowth.ProtoReflect.Descriptor instead.
+func (*RepositoryGrowth) Descriptor() ([]byte, []int) {
+	return file_syncr_v1_dashboard_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *RepositoryGrowth) GetRepositoryId() string {
+	if x != nil {
+		return x.RepositoryId
+	}
+	return ""
+}
+
+func (x *RepositoryGrowth) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *RepositoryGrowth) GetSnapshotCount() int32 {
+	if x != nil {
+		return x.SnapshotCount
+	}
+	return 0
+}
+
+func (x *RepositoryGrowth) GetLatestSnapshotAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LatestSnapshotAt
+	}
+	return nil
+}
+
+func (x *RepositoryGrowth) GetBackups() int64 {
+	if x != nil {
+		return x.Backups
+	}
+	return 0
+}
+
+func (x *RepositoryGrowth) GetAddedBytes() int64 {
+	if x != nil {
+		return x.AddedBytes
+	}
+	return 0
+}
+
+func (x *RepositoryGrowth) GetFirstSourceBytes() int64 {
+	if x != nil {
+		return x.FirstSourceBytes
+	}
+	return 0
+}
+
+func (x *RepositoryGrowth) GetLastSourceBytes() int64 {
+	if x != nil {
+		return x.LastSourceBytes
+	}
+	return 0
+}
+
+func (x *RepositoryGrowth) GetAdded() []int64 {
+	if x != nil {
+		return x.Added
+	}
+	return nil
+}
+
+func (x *RepositoryGrowth) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
+}
+
 // UpcomingRun is the next occurrence of a schedule.
 type UpcomingRun struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
@@ -495,7 +1052,7 @@ type UpcomingRun struct {
 
 func (x *UpcomingRun) Reset() {
 	*x = UpcomingRun{}
-	mi := &file_syncr_v1_dashboard_proto_msgTypes[4]
+	mi := &file_syncr_v1_dashboard_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -507,7 +1064,7 @@ func (x *UpcomingRun) String() string {
 func (*UpcomingRun) ProtoMessage() {}
 
 func (x *UpcomingRun) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_dashboard_proto_msgTypes[4]
+	mi := &file_syncr_v1_dashboard_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -520,7 +1077,7 @@ func (x *UpcomingRun) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpcomingRun.ProtoReflect.Descriptor instead.
 func (*UpcomingRun) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_dashboard_proto_rawDescGZIP(), []int{4}
+	return file_syncr_v1_dashboard_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *UpcomingRun) GetScheduleId() string {
@@ -579,7 +1136,7 @@ type WorkerHealth struct {
 
 func (x *WorkerHealth) Reset() {
 	*x = WorkerHealth{}
-	mi := &file_syncr_v1_dashboard_proto_msgTypes[5]
+	mi := &file_syncr_v1_dashboard_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -591,7 +1148,7 @@ func (x *WorkerHealth) String() string {
 func (*WorkerHealth) ProtoMessage() {}
 
 func (x *WorkerHealth) ProtoReflect() protoreflect.Message {
-	mi := &file_syncr_v1_dashboard_proto_msgTypes[5]
+	mi := &file_syncr_v1_dashboard_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -604,7 +1161,7 @@ func (x *WorkerHealth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerHealth.ProtoReflect.Descriptor instead.
 func (*WorkerHealth) Descriptor() ([]byte, []int) {
-	return file_syncr_v1_dashboard_proto_rawDescGZIP(), []int{5}
+	return file_syncr_v1_dashboard_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *WorkerHealth) GetOnline() int32 {
@@ -639,11 +1196,11 @@ var File_syncr_v1_dashboard_proto protoreflect.FileDescriptor
 
 const file_syncr_v1_dashboard_proto_rawDesc = "" +
 	"\n" +
-	"\x18syncr/v1/dashboard.proto\x12\bsyncr.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x12syncr/v1/api.proto\x1a\x18syncr/v1/schedules.proto\"~\n" +
+	"\x18syncr/v1/dashboard.proto\x12\bsyncr.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x12syncr/v1/api.proto\x1a\x13syncr/v1/link.proto\x1a\x18syncr/v1/schedules.proto\"~\n" +
 	"\x13GetDashboardRequest\x12.\n" +
 	"\x05range\x18\x01 \x01(\x0e2\x18.syncr.v1.DashboardRangeR\x05range\x12\x1a\n" +
 	"\btimezone\x18\x02 \x01(\tR\btimezone\x12\x1b\n" +
-	"\tall_users\x18\x03 \x01(\bR\ballUsers\"\xdb\x03\n" +
+	"\tall_users\x18\x03 \x01(\bR\ballUsers\"\x86\x06\n" +
 	"\x14GetDashboardResponse\x12.\n" +
 	"\x04from\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x04from\x120\n" +
 	"\x05until\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x05until\x12\x1f\n" +
@@ -654,8 +1211,13 @@ const file_syncr_v1_dashboard_proto_rawDesc = "" +
 	"\bupcoming\x18\x06 \x03(\v2\x15.syncr.v1.UpcomingRunR\bupcoming\x120\n" +
 	"\aworkers\x18\a \x01(\v2\x16.syncr.v1.WorkerHealthR\aworkers\x126\n" +
 	"\x0frecent_failures\x18\b \x03(\v2\r.syncr.v1.JobR\x0erecentFailures\x12:\n" +
-	"\rrecent_missed\x18\t \x03(\v2\x15.syncr.v1.ScheduleRunR\frecentMissedJ\x04\b\n" +
-	"\x10\x14\"\xa3\x02\n" +
+	"\rrecent_missed\x18\t \x03(\v2\x15.syncr.v1.ScheduleRunR\frecentMissed\x12-\n" +
+	"\x05kinds\x18\n" +
+	" \x03(\v2\x17.syncr.v1.ActivityGroupR\x05kinds\x12@\n" +
+	"\x0fworker_activity\x18\v \x03(\v2\x17.syncr.v1.ActivityGroupR\x0eworkerActivity\x12@\n" +
+	"\x0ffailure_reasons\x18\f \x03(\v2\x17.syncr.v1.FailureReasonR\x0efailureReasons\x126\n" +
+	"\tschedules\x18\r \x03(\v2\x18.syncr.v1.ScheduleHealthR\tschedules\x12>\n" +
+	"\frepositories\x18\x0e \x03(\v2\x1a.syncr.v1.RepositoryGrowthR\frepositoriesJ\x04\b\x0f\x10\x14\"\xcd\x03\n" +
 	"\tJobTotals\x12\x1c\n" +
 	"\tsucceeded\x18\x01 \x01(\x03R\tsucceeded\x12\x16\n" +
 	"\x06failed\x18\x02 \x01(\x03R\x06failed\x12 \n" +
@@ -668,7 +1230,14 @@ const file_syncr_v1_dashboard_proto_rawDesc = "" +
 	"\x06queued\x18\t \x01(\x03R\x06queued\x12\x1f\n" +
 	"\vmissed_runs\x18\n" +
 	" \x01(\x03R\n" +
-	"missedRuns\"\xe4\x01\n" +
+	"missedRuns\x124\n" +
+	"\brun_time\x18\v \x01(\v2\x19.google.protobuf.DurationR\arunTime\x12\x18\n" +
+	"\astarted\x18\f \x01(\x03R\astarted\x128\n" +
+	"\n" +
+	"queue_wait\x18\r \x01(\v2\x19.google.protobuf.DurationR\tqueueWait\x12\x1e\n" +
+	"\n" +
+	"dispatched\x18\x0e \x01(\x03R\n" +
+	"dispatched\"\x8e\x03\n" +
 	"\x0eActivityBucket\x120\n" +
 	"\x05start\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x05start\x12\x1c\n" +
 	"\tsucceeded\x18\x02 \x01(\x03R\tsucceeded\x12\x16\n" +
@@ -676,7 +1245,60 @@ const file_syncr_v1_dashboard_proto_rawDesc = "" +
 	"\vinterrupted\x18\x04 \x01(\x03R\vinterrupted\x12\x1c\n" +
 	"\tcancelled\x18\x05 \x01(\x03R\tcancelled\x12\x14\n" +
 	"\x05bytes\x18\x06 \x01(\x03R\x05bytes\x12\x14\n" +
-	"\x05files\x18\a \x01(\x03R\x05files\"\x8f\x02\n" +
+	"\x05files\x18\a \x01(\x03R\x05files\x124\n" +
+	"\brun_time\x18\b \x01(\v2\x19.google.protobuf.DurationR\arunTime\x12\x18\n" +
+	"\astarted\x18\t \x01(\x03R\astarted\x128\n" +
+	"\n" +
+	"queue_wait\x18\n" +
+	" \x01(\v2\x19.google.protobuf.DurationR\tqueueWait\x12\x1e\n" +
+	"\n" +
+	"dispatched\x18\v \x01(\x03R\n" +
+	"dispatched\"\x81\x03\n" +
+	"\rActivityGroup\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
+	"\tsucceeded\x18\x03 \x01(\x03R\tsucceeded\x12\x16\n" +
+	"\x06failed\x18\x04 \x01(\x03R\x06failed\x12 \n" +
+	"\vinterrupted\x18\x05 \x01(\x03R\vinterrupted\x12\x1c\n" +
+	"\tcancelled\x18\x06 \x01(\x03R\tcancelled\x12\x14\n" +
+	"\x05bytes\x18\a \x01(\x03R\x05bytes\x12\x14\n" +
+	"\x05files\x18\b \x01(\x03R\x05files\x124\n" +
+	"\brun_time\x18\t \x01(\v2\x19.google.protobuf.DurationR\arunTime\x12\x18\n" +
+	"\astarted\x18\n" +
+	" \x01(\x03R\astarted\x128\n" +
+	"\n" +
+	"queue_wait\x18\v \x01(\v2\x19.google.protobuf.DurationR\tqueueWait\x12\x1e\n" +
+	"\n" +
+	"dispatched\x18\f \x01(\x03R\n" +
+	"dispatched\"\x8b\x01\n" +
+	"\rFailureReason\x12*\n" +
+	"\x04code\x18\x01 \x01(\x0e2\x16.syncr.v1.JobErrorCodeR\x04code\x12\x16\n" +
+	"\x06failed\x18\x02 \x01(\x03R\x06failed\x12 \n" +
+	"\vinterrupted\x18\x03 \x01(\x03R\vinterrupted\x12\x14\n" +
+	"\x05kinds\x18\x04 \x03(\tR\x05kinds\"\xba\x02\n" +
+	"\x0eScheduleHealth\x12\x1f\n" +
+	"\vschedule_id\x18\x01 \x01(\tR\n" +
+	"scheduleId\x12#\n" +
+	"\rschedule_name\x18\x02 \x01(\tR\fscheduleName\x12\x12\n" +
+	"\x04kind\x18\x03 \x01(\tR\x04kind\x12\x18\n" +
+	"\aenabled\x18\x04 \x01(\bR\aenabled\x124\n" +
+	"\n" +
+	"latest_run\x18\x05 \x01(\v2\x15.syncr.v1.ScheduleRunR\tlatestRun\x12B\n" +
+	"\x0flast_success_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\rlastSuccessAt\x12:\n" +
+	"\vnext_run_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tnextRunAt\"\x85\x03\n" +
+	"\x10RepositoryGrowth\x12#\n" +
+	"\rrepository_id\x18\x01 \x01(\tR\frepositoryId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12%\n" +
+	"\x0esnapshot_count\x18\x03 \x01(\x05R\rsnapshotCount\x12H\n" +
+	"\x12latest_snapshot_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x10latestSnapshotAt\x12\x18\n" +
+	"\abackups\x18\x05 \x01(\x03R\abackups\x12\x1f\n" +
+	"\vadded_bytes\x18\x06 \x01(\x03R\n" +
+	"addedBytes\x12,\n" +
+	"\x12first_source_bytes\x18\a \x01(\x03R\x10firstSourceBytes\x12*\n" +
+	"\x11last_source_bytes\x18\b \x01(\x03R\x0flastSourceBytes\x12\x14\n" +
+	"\x05added\x18\t \x03(\x03R\x05added\x12\x1c\n" +
+	"\ttruncated\x18\n" +
+	" \x01(\bR\ttruncated\"\x8f\x02\n" +
 	"\vUpcomingRun\x12\x1f\n" +
 	"\vschedule_id\x18\x01 \x01(\tR\n" +
 	"scheduleId\x12#\n" +
@@ -713,44 +1335,66 @@ func file_syncr_v1_dashboard_proto_rawDescGZIP() []byte {
 }
 
 var file_syncr_v1_dashboard_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_syncr_v1_dashboard_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_syncr_v1_dashboard_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_syncr_v1_dashboard_proto_goTypes = []any{
 	(DashboardRange)(0),           // 0: syncr.v1.DashboardRange
 	(*GetDashboardRequest)(nil),   // 1: syncr.v1.GetDashboardRequest
 	(*GetDashboardResponse)(nil),  // 2: syncr.v1.GetDashboardResponse
 	(*JobTotals)(nil),             // 3: syncr.v1.JobTotals
 	(*ActivityBucket)(nil),        // 4: syncr.v1.ActivityBucket
-	(*UpcomingRun)(nil),           // 5: syncr.v1.UpcomingRun
-	(*WorkerHealth)(nil),          // 6: syncr.v1.WorkerHealth
-	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
-	(*Job)(nil),                   // 8: syncr.v1.Job
-	(*ScheduleRun)(nil),           // 9: syncr.v1.ScheduleRun
-	(*ScheduleTarget)(nil),        // 10: syncr.v1.ScheduleTarget
-	(WorkerStatus)(0),             // 11: syncr.v1.WorkerStatus
-	(*Worker)(nil),                // 12: syncr.v1.Worker
+	(*ActivityGroup)(nil),         // 5: syncr.v1.ActivityGroup
+	(*FailureReason)(nil),         // 6: syncr.v1.FailureReason
+	(*ScheduleHealth)(nil),        // 7: syncr.v1.ScheduleHealth
+	(*RepositoryGrowth)(nil),      // 8: syncr.v1.RepositoryGrowth
+	(*UpcomingRun)(nil),           // 9: syncr.v1.UpcomingRun
+	(*WorkerHealth)(nil),          // 10: syncr.v1.WorkerHealth
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
+	(*Job)(nil),                   // 12: syncr.v1.Job
+	(*ScheduleRun)(nil),           // 13: syncr.v1.ScheduleRun
+	(*durationpb.Duration)(nil),   // 14: google.protobuf.Duration
+	(JobErrorCode)(0),             // 15: syncr.v1.JobErrorCode
+	(*ScheduleTarget)(nil),        // 16: syncr.v1.ScheduleTarget
+	(WorkerStatus)(0),             // 17: syncr.v1.WorkerStatus
+	(*Worker)(nil),                // 18: syncr.v1.Worker
 }
 var file_syncr_v1_dashboard_proto_depIdxs = []int32{
 	0,  // 0: syncr.v1.GetDashboardRequest.range:type_name -> syncr.v1.DashboardRange
-	7,  // 1: syncr.v1.GetDashboardResponse.from:type_name -> google.protobuf.Timestamp
-	7,  // 2: syncr.v1.GetDashboardResponse.until:type_name -> google.protobuf.Timestamp
+	11, // 1: syncr.v1.GetDashboardResponse.from:type_name -> google.protobuf.Timestamp
+	11, // 2: syncr.v1.GetDashboardResponse.until:type_name -> google.protobuf.Timestamp
 	3,  // 3: syncr.v1.GetDashboardResponse.totals:type_name -> syncr.v1.JobTotals
 	4,  // 4: syncr.v1.GetDashboardResponse.activity:type_name -> syncr.v1.ActivityBucket
-	5,  // 5: syncr.v1.GetDashboardResponse.upcoming:type_name -> syncr.v1.UpcomingRun
-	6,  // 6: syncr.v1.GetDashboardResponse.workers:type_name -> syncr.v1.WorkerHealth
-	8,  // 7: syncr.v1.GetDashboardResponse.recent_failures:type_name -> syncr.v1.Job
-	9,  // 8: syncr.v1.GetDashboardResponse.recent_missed:type_name -> syncr.v1.ScheduleRun
-	7,  // 9: syncr.v1.ActivityBucket.start:type_name -> google.protobuf.Timestamp
-	7,  // 10: syncr.v1.UpcomingRun.at:type_name -> google.protobuf.Timestamp
-	10, // 11: syncr.v1.UpcomingRun.target:type_name -> syncr.v1.ScheduleTarget
-	11, // 12: syncr.v1.UpcomingRun.worker_status:type_name -> syncr.v1.WorkerStatus
-	12, // 13: syncr.v1.WorkerHealth.workers:type_name -> syncr.v1.Worker
-	1,  // 14: syncr.v1.DashboardService.GetDashboard:input_type -> syncr.v1.GetDashboardRequest
-	2,  // 15: syncr.v1.DashboardService.GetDashboard:output_type -> syncr.v1.GetDashboardResponse
-	15, // [15:16] is the sub-list for method output_type
-	14, // [14:15] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	9,  // 5: syncr.v1.GetDashboardResponse.upcoming:type_name -> syncr.v1.UpcomingRun
+	10, // 6: syncr.v1.GetDashboardResponse.workers:type_name -> syncr.v1.WorkerHealth
+	12, // 7: syncr.v1.GetDashboardResponse.recent_failures:type_name -> syncr.v1.Job
+	13, // 8: syncr.v1.GetDashboardResponse.recent_missed:type_name -> syncr.v1.ScheduleRun
+	5,  // 9: syncr.v1.GetDashboardResponse.kinds:type_name -> syncr.v1.ActivityGroup
+	5,  // 10: syncr.v1.GetDashboardResponse.worker_activity:type_name -> syncr.v1.ActivityGroup
+	6,  // 11: syncr.v1.GetDashboardResponse.failure_reasons:type_name -> syncr.v1.FailureReason
+	7,  // 12: syncr.v1.GetDashboardResponse.schedules:type_name -> syncr.v1.ScheduleHealth
+	8,  // 13: syncr.v1.GetDashboardResponse.repositories:type_name -> syncr.v1.RepositoryGrowth
+	14, // 14: syncr.v1.JobTotals.run_time:type_name -> google.protobuf.Duration
+	14, // 15: syncr.v1.JobTotals.queue_wait:type_name -> google.protobuf.Duration
+	11, // 16: syncr.v1.ActivityBucket.start:type_name -> google.protobuf.Timestamp
+	14, // 17: syncr.v1.ActivityBucket.run_time:type_name -> google.protobuf.Duration
+	14, // 18: syncr.v1.ActivityBucket.queue_wait:type_name -> google.protobuf.Duration
+	14, // 19: syncr.v1.ActivityGroup.run_time:type_name -> google.protobuf.Duration
+	14, // 20: syncr.v1.ActivityGroup.queue_wait:type_name -> google.protobuf.Duration
+	15, // 21: syncr.v1.FailureReason.code:type_name -> syncr.v1.JobErrorCode
+	13, // 22: syncr.v1.ScheduleHealth.latest_run:type_name -> syncr.v1.ScheduleRun
+	11, // 23: syncr.v1.ScheduleHealth.last_success_at:type_name -> google.protobuf.Timestamp
+	11, // 24: syncr.v1.ScheduleHealth.next_run_at:type_name -> google.protobuf.Timestamp
+	11, // 25: syncr.v1.RepositoryGrowth.latest_snapshot_at:type_name -> google.protobuf.Timestamp
+	11, // 26: syncr.v1.UpcomingRun.at:type_name -> google.protobuf.Timestamp
+	16, // 27: syncr.v1.UpcomingRun.target:type_name -> syncr.v1.ScheduleTarget
+	17, // 28: syncr.v1.UpcomingRun.worker_status:type_name -> syncr.v1.WorkerStatus
+	18, // 29: syncr.v1.WorkerHealth.workers:type_name -> syncr.v1.Worker
+	1,  // 30: syncr.v1.DashboardService.GetDashboard:input_type -> syncr.v1.GetDashboardRequest
+	2,  // 31: syncr.v1.DashboardService.GetDashboard:output_type -> syncr.v1.GetDashboardResponse
+	31, // [31:32] is the sub-list for method output_type
+	30, // [30:31] is the sub-list for method input_type
+	30, // [30:30] is the sub-list for extension type_name
+	30, // [30:30] is the sub-list for extension extendee
+	0,  // [0:30] is the sub-list for field type_name
 }
 
 func init() { file_syncr_v1_dashboard_proto_init() }
@@ -759,6 +1403,7 @@ func file_syncr_v1_dashboard_proto_init() {
 		return
 	}
 	file_syncr_v1_api_proto_init()
+	file_syncr_v1_link_proto_init()
 	file_syncr_v1_schedules_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -766,7 +1411,7 @@ func file_syncr_v1_dashboard_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_syncr_v1_dashboard_proto_rawDesc), len(file_syncr_v1_dashboard_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   6,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

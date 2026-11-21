@@ -42,7 +42,7 @@ const (
 type DashboardServiceClient interface {
 	// GetDashboard returns the dashboard of the caller's jobs and schedules
 	// (with all_users, an admin's statistics cover every user's jobs;
-	// schedules stay the caller's own).
+	// schedules and repositories stay the caller's own).
 	GetDashboard(context.Context, *connect.Request[v1.GetDashboardRequest]) (*connect.Response[v1.GetDashboardResponse], error)
 }
 
@@ -81,7 +81,7 @@ func (c *dashboardServiceClient) GetDashboard(ctx context.Context, req *connect.
 type DashboardServiceHandler interface {
 	// GetDashboard returns the dashboard of the caller's jobs and schedules
 	// (with all_users, an admin's statistics cover every user's jobs;
-	// schedules stay the caller's own).
+	// schedules and repositories stay the caller's own).
 	GetDashboard(context.Context, *connect.Request[v1.GetDashboardRequest]) (*connect.Response[v1.GetDashboardResponse], error)
 }
 

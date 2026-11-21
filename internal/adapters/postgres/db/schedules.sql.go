@@ -417,6 +417,45 @@ func (q *Queries) InsertScheduleRemote(ctx context.Context, arg InsertScheduleRe
 	return err
 }
 
+const lastSucceededJobs = `-- name: LastSucceededJobs :many
+SELECT ids.schedule_id::uuid AS schedule_id, j.finished_at::timestamptz AS finished_at
+FROM (SELECT DISTINCT unnest($1::uuid[]) AS schedule_id) ids
+JOIN LATERAL (
+    SELECT finished_at FROM jobs
+    WHERE jobs.schedule_id = ids.schedule_id AND status = 'succeeded'
+    ORDER BY id DESC
+    LIMIT 1
+) j ON true
+`
+
+type LastSucceededJobsRow struct {
+	ScheduleID pgtype.UUID
+	FinishedAt pgtype.Timestamptz
+}
+
+// The newest succeeded job of each schedule in schedule_ids that has one:
+// one walk of jobs_schedule_idx per schedule, newest first, up to its first
+// succeeded job.
+func (q *Queries) LastSucceededJobs(ctx context.Context, scheduleIds []pgtype.UUID) ([]LastSucceededJobsRow, error) {
+	rows, err := q.db.Query(ctx, lastSucceededJobs, scheduleIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LastSucceededJobsRow{}
+	for rows.Next() {
+		var i LastSucceededJobsRow
+		if err := rows.Scan(&i.ScheduleID, &i.FinishedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const latestRuns = `-- name: LatestRuns :many
 SELECT r.id, r.schedule_id, r.trigger, r.scheduled_for, r.deadline, r.coalesced, r.status, r.reason, r.message, r.worker_id, r.job_id, r.created_at, r.updated_at, r.notified_at, j.status AS job_status
 FROM (SELECT DISTINCT unnest($1::uuid[]) AS schedule_id) ids

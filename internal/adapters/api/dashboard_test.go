@@ -22,13 +22,22 @@ import (
 type fakeDashSchedules struct {
 	ScheduleService
 
-	mu       sync.Mutex
-	upcoming []schedules.Upcoming
-	problems []schedules.Run
-	missed   int64
-	actors   []domain.Actor
-	from     time.Time
-	until    time.Time
+	mu        sync.Mutex
+	upcoming  []schedules.Upcoming
+	problems  []schedules.Run
+	health    []schedules.Health
+	healthErr error
+	missed    int64
+	actors    []domain.Actor
+	from      time.Time
+	until     time.Time
+}
+
+func (f *fakeDashSchedules) Health(_ context.Context, actor domain.Actor) ([]schedules.Health, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.actors = append(f.actors, actor)
+	return f.health, f.healthErr
 }
 
 func (f *fakeDashSchedules) Upcoming(_ context.Context, actor domain.Actor, limit int) ([]schedules.Upcoming, error) {

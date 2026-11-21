@@ -8,6 +8,7 @@ import {
   durationFromMs,
   timestampFromMs,
   timestampMs,
+  type Duration,
   type Timestamp,
 } from "@bufbuild/protobuf/wkt";
 import { Code, ConnectError, type ConnectRouter } from "@connectrpc/connect";
@@ -21,10 +22,16 @@ import {
 } from "@/gen/syncr/v1/api_pb";
 import {
   ActivityBucketSchema,
+  ActivityGroupSchema,
   DashboardRange,
   DashboardService,
+  FailureReasonSchema,
+  ScheduleHealthSchema,
   UpcomingRunSchema,
+  type ActivityGroup,
+  type FailureReason,
 } from "@/gen/syncr/v1/dashboard_pb";
+import { durationFromSeconds, durationSeconds } from "@/lib/format";
 import {
   ChannelService,
   ContactSchema,
@@ -88,6 +95,12 @@ const ts = timestampFromMs;
 
 function isActive(s: JobStatus): boolean {
   return s === JobStatus.QUEUED || s === JobStatus.DISPATCHED || s === JobStatus.RUNNING;
+}
+
+/** sortGroups orders the dashboard's groups, most jobs first. */
+function sortGroups(m: Map<string, ActivityGroup>): ActivityGroup[] {
+  const n = (g: ActivityGroup) => g.succeeded + g.failed + g.interrupted + g.cancelled;
+  return [...m.values()].sort((a, b) => Number(n(b) - n(a)) || a.key.localeCompare(b.key));
 }
 
 const statusKey: Partial<Record<JobStatus, "succeeded" | "failed" | "interrupted" | "cancelled">> =
@@ -633,7 +646,27 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
     const from = starts[0];
     const until = last.getTime();
     const buckets = starts.map((start) => create(ActivityBucketSchema, { start: ts(start) }));
-    const totals = {
+    const kinds = new Map<string, ActivityGroup>();
+    const byWorker = new Map<string, ActivityGroup>();
+    const reasons = new Map<number, FailureReason>();
+    const totals: {
+      succeeded: bigint;
+      failed: bigint;
+      interrupted: bigint;
+      cancelled: bigint;
+      bytes: bigint;
+      files: bigint;
+      successRate: number;
+      running: bigint;
+      queued: bigint;
+      missedRuns: bigint;
+      runTime?: Duration;
+      started: bigint;
+      queueWait?: Duration;
+      dispatched: bigint;
+    } = {
+      started: 0n,
+      dispatched: 0n,
       succeeded: 0n,
       failed: 0n,
       interrupted: 0n,
@@ -663,6 +696,47 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
       if (key) {
         b[key]++;
         totals[key]++;
+      }
+      // Run time from start to end, queue wait from creation to dispatch.
+      const started = ms(j.startedAt);
+      const run = started && fin >= started ? (fin - started) / 1000 : undefined;
+      const dispatched = ms(j.dispatchedAt);
+      const created = ms(j.createdAt);
+      const wait = dispatched && dispatched >= created ? (dispatched - created) / 1000 : undefined;
+      const addTimes = (g: {
+        runTime?: Duration;
+        started: bigint;
+        queueWait?: Duration;
+        dispatched: bigint;
+      }) => {
+        if (run !== undefined) {
+          g.runTime = durationFromSeconds(durationSeconds(g.runTime) + run);
+          g.started++;
+        }
+        if (wait !== undefined) {
+          g.queueWait = durationFromSeconds(durationSeconds(g.queueWait) + wait);
+          g.dispatched++;
+        }
+      };
+      addTimes(b);
+      addTimes(totals);
+      const group = (m: Map<string, ActivityGroup>, k: string, name = "") => {
+        let g = m.get(k);
+        if (!g) m.set(k, (g = create(ActivityGroupSchema, { key: k, name })));
+        if (key) g[key]++;
+        g.bytes += bytes;
+        g.files += files;
+        addTimes(g);
+      };
+      group(kinds, j.kind);
+      group(byWorker, j.workerId, d.workers.find((w) => w.id === j.workerId)?.name ?? j.workerId);
+      if (j.status === JobStatus.FAILED || j.status === JobStatus.INTERRUPTED) {
+        const code = j.error?.code ?? 0;
+        let r = reasons.get(code);
+        if (!r) reasons.set(code, (r = create(FailureReasonSchema, { code })));
+        if (j.status === JobStatus.FAILED) r.failed++;
+        else r.interrupted++;
+        if (!r.kinds.includes(j.kind)) r.kinds.push(j.kind);
       }
     }
     const done = totals.succeeded + totals.failed + totals.interrupted;
@@ -720,6 +794,33 @@ export function registerM4(router: ConnectRouter, d: M4Deps): void {
           (r) => r.status === ScheduleRunStatus.MISSED || r.status === ScheduleRunStatus.FAILED,
         )
         .slice(0, 5),
+      kinds: sortGroups(kinds),
+      workerActivity: sortGroups(byWorker),
+      failureReasons: [...reasons.values()]
+        .sort((a, b) => Number(b.failed + b.interrupted - (a.failed + a.interrupted)))
+        .slice(0, 8),
+      schedules: (owner() ? schedules : []).map((sc) => {
+        const latest = runs
+          .filter((r) => r.scheduleId === sc.id)
+          .sort((a, b) => ms(b.scheduledFor) - ms(a.scheduledFor))[0];
+        const success = d.jobs
+          .filter((j) => j.schedule?.id === sc.id && j.status === JobStatus.SUCCEEDED)
+          .sort((a, b) => ms(b.finishedAt) - ms(a.finishedAt))[0];
+        return create(ScheduleHealthSchema, {
+          scheduleId: sc.id,
+          scheduleName: sc.name,
+          // The definition's operation names the kind: resticBackup is restic_backup.
+          kind: (sc.definition?.operation.case ?? "").replace(
+            /[A-Z]/g,
+            (c) => `_${c.toLowerCase()}`,
+          ),
+          enabled: sc.enabled,
+          latestRun: latest,
+          lastSuccessAt: success?.finishedAt,
+          nextRunAt: sc.nextRunAt,
+        });
+      }),
+      repositories: [],
     };
   };
 }

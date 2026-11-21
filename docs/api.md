@@ -18,6 +18,9 @@ curl -sS -H "Authorization: Bearer $SYNCR_TOKEN" -H 'Content-Type: application/j
 # {"job":{"id":"01a1a7c0-...", "status":"JOB_STATUS_QUEUED", ...}}
 ```
 
+The same token scrapes the controller's Prometheus metrics at
+`GET /metrics` ([metrics](metrics.md)).
+
 A definition may name hooks of the worker to run around the job
 (`"hooks":{"before":["dump-db"],"after":["start-app"]}` next to the
 operation; the lists are `before`, `onSuccess`, `onFailure` and `after`).

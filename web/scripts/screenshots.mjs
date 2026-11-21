@@ -9,8 +9,8 @@
 //   SYNCR_UI_USER           sign-in user (default admin)
 //   SYNCR_UI_PASSWORD       sign-in password (default syncr-demo-admin)
 //   SYNCR_SCREENSHOT_SET    m6 (default), m5, m4, m3, hooks, bisync, browser,
-//                           remote-backup, crypt, remote-types or readme:
-//                           which shot list
+//                           remote-backup, crypt, remote-types, dashboard or
+//                           readme: which shot list
 //   SYNCR_SCREENSHOT_DIR    output directory (default ../docs/screenshots/<set>)
 //   SYNCR_SCREENSHOT_ONLY   comma-separated shot names to take (default all)
 //   SYNCR_SCREENSHOT_MOBILE 1 to also take 390px-wide shots
@@ -44,6 +44,7 @@ const set = [
   "remote-backup",
   "crypt",
   "remote-types",
+  "dashboard",
   "readme",
 ].includes(process.env.SYNCR_SCREENSHOT_SET)
   ? process.env.SYNCR_SCREENSHOT_SET
@@ -1642,6 +1643,69 @@ async function remoteTypesSet(browser) {
   }
 }
 
+// scrollToPanel scrolls the panel titled title to the top of the viewport.
+async function scrollToPanel(page, title) {
+  await scrollTo(page, page.getByRole("heading", { name: title, exact: true }), 72);
+  await settle(page, 300);
+}
+
+// The dashboard shots: the overview with the run time and queue wait
+// charts, the breakdowns by kind, worker and failure reason, the
+// schedules' health and the repositories' growth, in light and dark, and
+// the whole page at phone width.
+const dashboardShots = [
+  ["01-overview", {}, (p) => dashboardAt(p, "7d")],
+  [
+    "02-run-time-and-wait",
+    {},
+    async (p) => {
+      await dashboardAt(p, "7d");
+      await scrollToPanel(p, "Activity");
+      await p.mouse.wheel(0, 380);
+      await settle(p, 400);
+    },
+  ],
+  [
+    "03-breakdowns",
+    {},
+    async (p) => {
+      await dashboardAt(p, "30d");
+      await scrollToPanel(p, "By job kind");
+    },
+  ],
+  [
+    "04-schedules-and-repositories",
+    {},
+    async (p) => {
+      await dashboardAt(p, "30d");
+      await scrollToPanel(p, "Schedules");
+    },
+  ],
+  ["05-full-dark", { dark: true }, (p) => dashboardAt(p, "30d"), true],
+  ["06-mobile", { width: 390, height: 844 }, (p) => dashboardAt(p, "7d"), true],
+];
+
+// dashboardAt opens the dashboard over a range ("7d", "30d").
+async function dashboardAt(page, range) {
+  await page.goto(`${base}/?range=${range}`);
+  await settle(page, 900);
+}
+
+// dashboardSet signs in once and reuses the session for every shot.
+async function dashboardSet(browser) {
+  const first = await newPage(browser);
+  await signIn(first);
+  const storageState = await first.context().storageState();
+  await first.context().close();
+  for (const [name, opts, go, full] of dashboardShots) {
+    if (!wanted(name)) continue;
+    const p = await newPage(browser, { ...opts, storageState });
+    await go(p);
+    await shot(p, name, full ? { full: true } : undefined);
+    await p.context().close();
+  }
+}
+
 // The README shots: one page per feature from the same seeded controller,
 // each in light and dark so the README can follow the reader's theme.
 const readmeShots = [
@@ -1718,6 +1782,10 @@ async function main() {
     }
     if (set === "remote-types") {
       await remoteTypesSet(browser);
+      return;
+    }
+    if (set === "dashboard") {
+      await dashboardSet(browser);
       return;
     }
     if (set === "m5") {

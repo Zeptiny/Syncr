@@ -2,16 +2,20 @@ syntax = "proto3";
 
 package syncr.v1;
 
+import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 import "syncr/v1/api.proto";
+import "syncr/v1/link.proto";
 import "syncr/v1/schedules.proto";
 
 // DashboardService serves the overview page: job statistics over a time
-// range, upcoming scheduled runs, worker health and recent problems.
+// range (by outcome, job kind, worker and failure reason, with run times
+// and queue waits), upcoming scheduled runs, worker health, schedule
+// health, restic repository growth and recent problems.
 service DashboardService {
   // GetDashboard returns the dashboard of the caller's jobs and schedules
   // (with all_users, an admin's statistics cover every user's jobs;
-  // schedules stay the caller's own).
+  // schedules and repositories stay the caller's own).
   rpc GetDashboard(GetDashboardRequest) returns (GetDashboardResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
@@ -67,7 +71,27 @@ message GetDashboardResponse {
   // The latest missed or failed scheduled runs, newest first.
   repeated ScheduleRun recent_missed = 9;
 
-  reserved 10 to 19;
+  // The jobs that finished in the range by job kind (key: the kind, e.g.
+  // "rclone_transfer"), most jobs first.
+  repeated ActivityGroup kinds = 10;
+
+  // The jobs that finished in the range by worker (key: the worker ID,
+  // name: its name; removed workers included), most jobs first.
+  repeated ActivityGroup worker_activity = 11;
+
+  // The error codes of the failed and interrupted jobs that finished in
+  // the range, most jobs first; at most eight.
+  repeated FailureReason failure_reasons = 12;
+
+  // The caller's schedules with how their runs went: those whose newest
+  // run did not succeed first, then by name.
+  repeated ScheduleHealth schedules = 13;
+
+  // The caller's restic repositories with what their successful backups
+  // that finished in the range added, by name.
+  repeated RepositoryGrowth repositories = 14;
+
+  reserved 15 to 19;
 }
 
 // JobTotals counts jobs that finished in the range, by status.
@@ -90,6 +114,16 @@ message JobTotals {
 
   // Scheduled runs missed in the range.
   int64 missed_runs = 10;
+
+  // The run time (start to end, the worker's clock) of the finished jobs
+  // that started, and how many started.
+  google.protobuf.Duration run_time = 11;
+  int64 started = 12;
+
+  // The queue wait (creation to a worker accepting it) of the finished
+  // jobs a worker accepted, and how many it accepted.
+  google.protobuf.Duration queue_wait = 13;
+  int64 dispatched = 14;
 }
 
 // ActivityBucket counts the jobs that finished in one bucket.
@@ -106,6 +140,102 @@ message ActivityBucket {
   // Bytes and files transferred by those jobs.
   int64 bytes = 6;
   int64 files = 7;
+
+  // Their run time and queue wait, as in JobTotals.
+  google.protobuf.Duration run_time = 8;
+  int64 started = 9;
+  google.protobuf.Duration queue_wait = 10;
+  int64 dispatched = 11;
+}
+
+// ActivityGroup counts the jobs of one job kind or one worker that finished
+// in the range.
+message ActivityGroup {
+  // The kind or the worker ID.
+  string key = 1;
+
+  // The worker's name; empty for a kind.
+  string name = 2;
+
+  int64 succeeded = 3;
+  int64 failed = 4;
+  int64 interrupted = 5;
+  int64 cancelled = 6;
+
+  int64 bytes = 7;
+  int64 files = 8;
+
+  // Run time and queue wait, as in JobTotals.
+  google.protobuf.Duration run_time = 9;
+  int64 started = 10;
+  google.protobuf.Duration queue_wait = 11;
+  int64 dispatched = 12;
+}
+
+// FailureReason counts the failed and interrupted jobs of the range with
+// one error code.
+message FailureReason {
+  // UNSPECIFIED for jobs that ended without a known code.
+  JobErrorCode code = 1;
+
+  int64 failed = 2;
+  int64 interrupted = 3;
+
+  // The job kinds those jobs were, most jobs first.
+  repeated string kinds = 4;
+}
+
+// ScheduleHealth is one of the caller's schedules with how its runs went.
+message ScheduleHealth {
+  string schedule_id = 1;
+  string schedule_name = 2;
+
+  // The job kind it runs.
+  string kind = 3;
+
+  bool enabled = 4;
+
+  // The newest run (with its job's status); unset if it never ran.
+  ScheduleRun latest_run = 5;
+
+  // When the newest successful job it launched finished; unset if none
+  // did.
+  google.protobuf.Timestamp last_success_at = 6;
+
+  // When it runs next; unset while paused.
+  google.protobuf.Timestamp next_run_at = 7;
+}
+
+// RepositoryGrowth is one of the caller's restic repositories and what its
+// successful backups that finished in the range added. Pruning frees space
+// that these figures do not show: they are what backups wrote, not the
+// repository's size.
+message RepositoryGrowth {
+  string repository_id = 1;
+  string name = 2;
+
+  // Snapshots as of the snapshot list's last refresh, and when the newest
+  // one was taken (unset if none).
+  int32 snapshot_count = 3;
+  google.protobuf.Timestamp latest_snapshot_at = 4;
+
+  // The backups, and the bytes they added to the repository after
+  // deduplication and compression (restic's data_added_packed).
+  int64 backups = 5;
+  int64 added_bytes = 6;
+
+  // The size of what the first and the last of those backups backed up
+  // (restic's total_bytes_processed); 0 without backups.
+  int64 first_source_bytes = 7;
+  int64 last_source_bytes = 8;
+
+  // The bytes added per activity bucket, aligned with
+  // GetDashboardResponse.activity.
+  repeated int64 added = 9;
+
+  // Whether the range held more backups than the dashboard reads: the
+  // figures then cover the newest ones only.
+  bool truncated = 10;
 }
 
 // UpcomingRun is the next occurrence of a schedule.

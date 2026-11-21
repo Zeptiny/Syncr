@@ -11,50 +11,27 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countUnfinishedJobs = `-- name: CountUnfinishedJobs :many
-SELECT status, count(*)::bigint AS jobs
-FROM jobs
-WHERE status IN ('queued', 'dispatched', 'running')
-  AND ($1::uuid IS NULL OR owner_id = $1::uuid)
-GROUP BY status
-ORDER BY status
-`
-
-type CountUnfinishedJobsRow struct {
-	Status string
-	Jobs   int64
-}
-
-func (q *Queries) CountUnfinishedJobs(ctx context.Context, ownerID pgtype.UUID) ([]CountUnfinishedJobsRow, error) {
-	rows, err := q.db.Query(ctx, countUnfinishedJobs, ownerID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []CountUnfinishedJobsRow{}
-	for rows.Next() {
-		var i CountUnfinishedJobsRow
-		if err := rows.Scan(&i.Status, &i.Jobs); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const jobActivity = `-- name: JobActivity :many
 SELECT date_trunc($1::text, finished_at, $2::text)::timestamptz AS bucket,
        status,
        count(*)::bigint AS jobs,
        coalesce(sum(stat_bytes), 0)::bigint AS bytes,
-       coalesce(sum(stat_files), 0)::bigint AS files
-FROM jobs
-WHERE finished_at IS NOT NULL
-  AND finished_at >= $3 AND finished_at < $4
-  AND ($5::uuid IS NULL OR owner_id = $5::uuid)
+       coalesce(sum(stat_files), 0)::bigint AS files,
+       count(run_us)::bigint AS started,
+       coalesce(sum(run_us), 0)::bigint AS run_us,
+       count(wait_us)::bigint AS dispatched,
+       coalesce(sum(wait_us), 0)::bigint AS wait_us
+FROM (
+    SELECT finished_at, status, stat_bytes, stat_files,
+           CASE WHEN started_at IS NOT NULL AND finished_at >= started_at
+                THEN (extract(epoch FROM finished_at - started_at) * 1000000)::bigint END AS run_us,
+           CASE WHEN dispatched_at IS NOT NULL AND dispatched_at >= created_at
+                THEN (extract(epoch FROM dispatched_at - created_at) * 1000000)::bigint END AS wait_us
+    FROM jobs
+    WHERE finished_at IS NOT NULL
+      AND finished_at >= $3 AND finished_at < $4
+      AND ($5::uuid IS NULL OR owner_id = $5::uuid)
+) j
 GROUP BY 1, 2
 ORDER BY 1, 2
 `
@@ -68,16 +45,21 @@ type JobActivityParams struct {
 }
 
 type JobActivityRow struct {
-	Bucket pgtype.Timestamptz
-	Status string
-	Jobs   int64
-	Bytes  int64
-	Files  int64
+	Bucket     pgtype.Timestamptz
+	Status     string
+	Jobs       int64
+	Bytes      int64
+	Files      int64
+	Started    int64
+	RunUs      int64
+	Dispatched int64
+	WaitUs     int64
 }
 
 // The time-zone form of date_trunc (PostgreSQL 12+) buckets by local hours
 // and days, so 23- and 25-hour DST days and +05:30 zones come out right.
-// jobs_finished_idx and jobs_owner_finished_idx serve the range.
+// jobs_finished_idx and jobs_totals_idx serve the range. Run times and
+// queue waits are whole microseconds (jobs.ActivityRepository).
 func (q *Queries) JobActivity(ctx context.Context, arg JobActivityParams) ([]JobActivityRow, error) {
 	rows, err := q.db.Query(ctx, jobActivity,
 		arg.Unit,
@@ -99,6 +81,150 @@ func (q *Queries) JobActivity(ctx context.Context, arg JobActivityParams) ([]Job
 			&i.Jobs,
 			&i.Bytes,
 			&i.Files,
+			&i.Started,
+			&i.RunUs,
+			&i.Dispatched,
+			&i.WaitUs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const jobTotals = `-- name: JobTotals :many
+SELECT kind, worker_id, status, error_code, run_bucket,
+       count(*)::bigint AS jobs,
+       coalesce(sum(stat_bytes), 0)::bigint AS bytes,
+       coalesce(sum(stat_files), 0)::bigint AS files,
+       count(run_us)::bigint AS started,
+       coalesce(sum(run_us), 0)::bigint AS run_us,
+       count(wait_us)::bigint AS dispatched,
+       coalesce(sum(wait_us), 0)::bigint AS wait_us
+FROM (
+    SELECT kind, worker_id, status, error_code, stat_bytes, stat_files, run_us, wait_us,
+           (CASE WHEN run_us IS NULL THEN -1
+                 ELSE (SELECT count(*) FROM unnest($1::bigint[]) AS b WHERE b < run_us)
+            END)::integer AS run_bucket
+    FROM (
+        SELECT kind, worker_id, status, error_code, stat_bytes, stat_files,
+               CASE WHEN started_at IS NOT NULL AND finished_at >= started_at
+                    THEN (extract(epoch FROM finished_at - started_at) * 1000000)::bigint END AS run_us,
+               CASE WHEN dispatched_at IS NOT NULL AND dispatched_at >= created_at
+                    THEN (extract(epoch FROM dispatched_at - created_at) * 1000000)::bigint END AS wait_us
+        FROM jobs
+        WHERE finished_at IS NOT NULL
+          AND ($2::timestamptz IS NULL OR finished_at >= $2::timestamptz)
+          AND ($3::timestamptz IS NULL OR finished_at < $3::timestamptz)
+          AND ($4::uuid IS NULL OR owner_id = $4::uuid)
+    ) f
+) j
+GROUP BY kind, worker_id, status, error_code, run_bucket
+`
+
+type JobTotalsParams struct {
+	BoundsUs []int64
+	FromT    pgtype.Timestamptz
+	UntilT   pgtype.Timestamptz
+	OwnerID  pgtype.UUID
+}
+
+type JobTotalsRow struct {
+	Kind       string
+	WorkerID   pgtype.UUID
+	Status     string
+	ErrorCode  string
+	RunBucket  int32
+	Jobs       int64
+	Bytes      int64
+	Files      int64
+	Started    int64
+	RunUs      int64
+	Dispatched int64
+	WaitUs     int64
+}
+
+// The finished jobs of the range (a NULL bound is open) by kind, worker,
+// status, error code and run-time bucket: the number of bounds (whole
+// microseconds, ascending) below the run time, so a bound counts the run
+// times at most it as Prometheus's "le" buckets do; -1 for jobs without a
+// run time. jobs_totals_idx holds every column read, so the metrics'
+// all-time totals are an index-only scan, not a scan of the jobs' rows.
+func (q *Queries) JobTotals(ctx context.Context, arg JobTotalsParams) ([]JobTotalsRow, error) {
+	rows, err := q.db.Query(ctx, jobTotals,
+		arg.BoundsUs,
+		arg.FromT,
+		arg.UntilT,
+		arg.OwnerID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []JobTotalsRow{}
+	for rows.Next() {
+		var i JobTotalsRow
+		if err := rows.Scan(
+			&i.Kind,
+			&i.WorkerID,
+			&i.Status,
+			&i.ErrorCode,
+			&i.RunBucket,
+			&i.Jobs,
+			&i.Bytes,
+			&i.Files,
+			&i.Started,
+			&i.RunUs,
+			&i.Dispatched,
+			&i.WaitUs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const unfinishedJobs = `-- name: UnfinishedJobs :many
+SELECT status, kind, worker_id, count(*)::bigint AS jobs, min(queued_at)::timestamptz AS oldest_queued_at
+FROM jobs
+WHERE status IN ('queued', 'dispatched', 'running')
+  AND ($1::uuid IS NULL OR owner_id = $1::uuid)
+GROUP BY status, kind, worker_id
+`
+
+type UnfinishedJobsRow struct {
+	Status         string
+	Kind           string
+	WorkerID       pgtype.UUID
+	Jobs           int64
+	OldestQueuedAt pgtype.Timestamptz
+}
+
+// jobs_worker_unfinished_idx's predicate: the planner may read only the
+// unfinished jobs.
+func (q *Queries) UnfinishedJobs(ctx context.Context, ownerID pgtype.UUID) ([]UnfinishedJobsRow, error) {
+	rows, err := q.db.Query(ctx, unfinishedJobs, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []UnfinishedJobsRow{}
+	for rows.Next() {
+		var i UnfinishedJobsRow
+		if err := rows.Scan(
+			&i.Status,
+			&i.Kind,
+			&i.WorkerID,
+			&i.Jobs,
+			&i.OldestQueuedAt,
 		); err != nil {
 			return nil, err
 		}
