@@ -587,6 +587,61 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  android:
+    # syncr-worker, rclone and restic for Android (make android-worker):
+    # cgo with the NDK pinned in scripts/android/ndk-version, rclone and
+    # restic from source at the versions the worker pins. The script fails
+    # unless each binary is a PIE whose LOAD segments are 16 KB aligned.
+    # The host build proves that the worker's own version check accepts
+    # rclone and restic built this way. The phone test kit of the Android
+    # spike (android/spike, temporary) is uploaded for a manual run in
+    # Termux.
+    name: android (worker, rclone, restic)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true # modules and build cache, keyed by go.sum
+          cache-dependency-path: go.sum
+      - name: The pinned Android NDK
+        # The runner image has the Android SDK (ANDROID_HOME) and its
+        # sdkmanager, which verifies the download against Google's
+        # repository manifest. A runner without them fails here with its
+        # cause rather than in the build.
+        run: |
+          version=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' scripts/android/ndk-version)
+          sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}
+          if [ -z "$sdk" ] || [ ! -d "$sdk" ]; then
+            echo "::error::no Android SDK on this runner (ANDROID_HOME is not set); the android job needs an image with the Android SDK"
+            exit 1
+          fi
+          ndk="$sdk/ndk/$version"
+          if [ ! -f "$ndk/source.properties" ]; then
+            sdkmanager="$sdk/cmdline-tools/latest/bin/sdkmanager"
+            if [ ! -x "$sdkmanager" ]; then
+              sdkmanager=$(command -v sdkmanager) || { echo "::error::sdkmanager is not in $sdk/cmdline-tools/latest/bin or on PATH"; exit 1; }
+            fi
+            "$sdkmanager" --install "ndk;$version" > "$RUNNER_TEMP/sdkmanager.log" || { tail -n 20 "$RUNNER_TEMP/sdkmanager.log"; echo "::error::sdkmanager could not install ndk;$version"; exit 1; }
+          fi
+          grep -qx "Pkg.Revision = $version" "$ndk/source.properties" || { echo "::error::$ndk is not NDK $version"; exit 1; }
+          echo "ANDROID_NDK_ROOT=$ndk" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
+      - name: make android-worker (arm64-v8a)
+        run: make android-worker ANDROID_ABIS=arm64-v8a
+      - name: The worker accepts rclone and restic built from source (host build)
+        run: make android-worker ANDROID_ABIS=host
+      - name: Phone test kit (android/spike)
+        run: android/spike/build-kit.sh arm64-v8a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: syncr-android-spike-arm64
+          path: dist/android/spike/
+          if-no-files-found: error
+          retention-days: 14
+
   docker-images:
     name: docker images (${{ matrix.image }})
     runs-on: ubuntu-latest

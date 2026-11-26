@@ -1,0 +1,5 @@
+# The Android NDK of the worker's Android build: the Pkg.Revision of its
+# source.properties, as `sdkmanager "ndk;<version>"` installs it (r29).
+# scripts/android/lib.sh and the android job in .github/workflows/ci.yml
+# read the one line below. NDK r28 and newer link 16 KB-aligned by default.
+29.0.14206865

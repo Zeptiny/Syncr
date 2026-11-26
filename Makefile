@@ -114,6 +114,17 @@ build: ## Build both binaries into $(BIN_DIR)/ (GOOS/GOARCH to cross-compile; `m
 			-ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$$bin$(EXE) ./cmd/$$bin || exit 1; \
 	done
 
+# Android: syncr-worker, and rclone and restic from source at the pinned
+# versions, built with cgo and the NDK pinned in scripts/android/ndk-version
+# (ANDROID_NDK_ROOT or ANDROID_NDK_HOME), into dist/android/<abi>/.
+# ANDROID_ABIS: arm64-v8a, x86_64 (the emulator), or host (this machine,
+# without cgo, followed by the worker's version check of rclone and restic).
+ANDROID_ABIS ?= arm64-v8a
+
+.PHONY: android-worker
+android-worker: ## Build syncr-worker, rclone and restic for Android into dist/android/<abi>/ (needs the pinned NDK)
+	scripts/android/build-worker.sh $(ANDROID_ABIS)
+
 # The release build of .goreleaser.yaml without publishing anything: dist/
 # gets the six archives and checksums.txt a release would have, with
 # binaries that report dev-<commit>. It builds the web UI itself.
